@@ -691,9 +691,7 @@ async fn truncate_forked_remote_file() {
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork_in_connection(&mut conn, &local_branch)
-        .await
-        .unwrap();
+    file.fork(&mut conn, &local_branch).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
 }
 
@@ -886,34 +884,28 @@ async fn version_vector_fork_file() {
         .reopen(repo.secrets().keys().unwrap());
 
     let mut conn = repo.db().acquire().await.unwrap();
+
     let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     let remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await
         .unwrap();
     let mut file = create_file_in_directory(&mut conn, &remote_parent, "foo.txt", &[]).await;
-    drop(conn);
 
     let remote_file_vv = file.version_vector().await;
 
-    file.fork(&local_branch).await.unwrap();
+    file.fork(&mut conn, &local_branch).await.unwrap();
 
     let local_parent = file.parent();
     let local_root = local_parent.parent().await.unwrap();
 
     assert_eq!(file.version_vector().await, remote_file_vv);
     assert_eq!(
-        local_parent
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
-            .await
-            .unwrap(),
+        local_parent.version_vector(&mut conn).await.unwrap(),
         vv![local_id => 2]
     );
     assert_eq!(
-        local_root
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
-            .await
-            .unwrap(),
+        local_root.version_vector(&mut conn).await.unwrap(),
         vv![local_id => 2]
     );
 }
@@ -964,33 +956,31 @@ async fn file_conflict_modify_local() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
+    let mut conn = repo.db().acquire().await.unwrap();
+
     // Create two concurrent versions of the same file.
-    let local_file = create_file_in_branch(
-        &mut *repo.db().acquire().await.unwrap(),
-        &local_branch,
-        "test.txt",
-        b"local v1",
-    )
-    .await;
+    let local_file = create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
     assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
     drop(local_file);
 
-    let remote_file = create_file_in_branch(
-        &mut *repo.db().acquire().await.unwrap(),
-        &remote_branch,
-        "test.txt",
-        b"remote v1",
-    )
-    .await;
+    let remote_file =
+        create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
     drop(remote_file);
+
+    drop(conn);
 
     repo.force_garbage_collection().await.unwrap();
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    local_file.write(b"local v2").await.unwrap();
-    local_file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    local_file
+        .write_in_connection(&mut conn, b"local v2")
+        .await
+        .unwrap();
+    local_file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
     drop(local_file);
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
@@ -1046,8 +1036,9 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     assert_matches!(
-        remote_file.fork(&local_branch).await,
+        remote_file.fork(&mut conn, &local_branch).await,
         Err(Error::EntryExists)
     );
 }
@@ -1082,7 +1073,9 @@ async fn remove_branch() {
     drop(conn);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    file.fork(&local_branch).await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.fork(&mut conn, &local_branch).await.unwrap();
+    drop(conn);
     drop(file);
 
     repo.shared.remove_branch(&remote_id).await.unwrap();

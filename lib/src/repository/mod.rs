@@ -354,7 +354,7 @@ impl Repository {
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
 
-                file.fork_in_connection(&mut conn, &local_branch).await?;
+                file.fork(&mut conn, &local_branch).await?;
 
                 (file.parent(), Cow::Owned(src_name))
             }

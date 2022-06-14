@@ -154,11 +154,7 @@ impl File {
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
-    pub async fn fork_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-        local_branch: &Branch,
-    ) -> Result<()> {
+    pub async fn fork(&mut self, conn: &mut db::Connection, local_branch: &Branch) -> Result<()> {
         if self.blob.branch().id() == local_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
@@ -172,14 +168,6 @@ impl File {
         self.parent = new_parent;
 
         Ok(())
-    }
-
-    /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
-    /// in the local branch as well. Should be called before any mutable operation.
-    #[deprecated]
-    pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
-        let mut conn = self.blob.branch().db_pool().acquire().await?;
-        self.fork_in_connection(&mut conn, local_branch).await
     }
 
     pub async fn version_vector(&self) -> VersionVector {
@@ -237,7 +225,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork_in_connection(&mut conn, &branch1).await.unwrap();
+        file1.fork(&mut conn, &branch1).await.unwrap();
         file1
             .write_in_connection(&mut conn, b"large")
             .await
@@ -307,7 +295,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork_in_connection(&mut conn, &branch1).await.unwrap();
+        file1.fork(&mut conn, &branch1).await.unwrap();
 
         for _ in 0..2 {
             file1.write_in_connection(&mut conn, b"oink").await.unwrap();

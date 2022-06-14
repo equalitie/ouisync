@@ -196,7 +196,7 @@ impl JointDirectory {
 
         // Fork files.
         for mut file in files {
-            match file.fork_in_connection(conn, local_branch).await {
+            match file.fork(conn, local_branch).await {
                 Ok(()) => (),
                 Err(Error::EntryExists) => {
                     // Ignore conflicts

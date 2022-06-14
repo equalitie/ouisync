@@ -74,13 +74,10 @@ async fn remove_remote_file() {
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     // Create a file by A and wait until B sees it.
-    repo_a
-        .create_file("test.txt")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    let mut file = repo_a.create_file("test.txt").await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
 
     time::timeout(
         DEFAULT_TIMEOUT,
