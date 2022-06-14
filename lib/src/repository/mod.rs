@@ -473,7 +473,7 @@ impl Repository {
         }
 
         let local_branch = self.local_branch().await;
-        let branches = self.shared.branches().await?;
+        let branches = self.shared.collect_branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -614,8 +614,7 @@ impl Shared {
         self.inflate(data).await
     }
 
-    // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
-    pub async fn branches(&self) -> Result<Vec<Branch>> {
+    pub async fn collect_branches(&self) -> Result<Vec<Branch>> {
         future::try_join_all(
             self.store
                 .index

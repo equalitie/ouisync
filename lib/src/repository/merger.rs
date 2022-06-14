@@ -95,7 +95,7 @@ impl Merger {
 }
 
 async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
-    let branches = shared.branches().await?;
+    let branches = shared.collect_branches().await?;
     let mut roots = Vec::with_capacity(branches.len());
 
     for branch in branches {
