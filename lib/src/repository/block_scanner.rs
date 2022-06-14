@@ -81,7 +81,7 @@ impl BlockScanner {
             // directory version is up to date.
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            let mut conn = self.shared.store.db_pool().acquire().await?;
+            let mut conn = self.shared.store.db().acquire().await?;
             match branch.open_root(&mut conn).await {
                 Ok(dir) => versions.push(dir),
                 // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
@@ -105,7 +105,7 @@ impl BlockScanner {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
 
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
@@ -141,7 +141,7 @@ impl BlockScanner {
     }
 
     async fn remove_outdated_branches(&self) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
         let outdated_branches =
             utils::outdated_branches(&mut conn, self.shared.branches().await?).await?;
         drop(conn);
@@ -154,12 +154,12 @@ impl BlockScanner {
     }
 
     async fn prepare_reachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
         block::clear_reachable(&mut conn).await
     }
 
     async fn remove_unreachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
         let count = block::remove_unreachable(&mut conn).await?;
 
         if count > 0 {
@@ -170,7 +170,7 @@ impl BlockScanner {
     }
 
     async fn process_blocks(&self, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
             block::mark_reachable(&mut conn, &block_id).await?;

@@ -399,7 +399,7 @@ impl Inner {
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
-        let mut conn = self.repository.store().db_pool().acquire().await?;
+        let mut conn = self.repository.db().acquire().await?;
         let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;

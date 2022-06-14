@@ -35,7 +35,7 @@ impl Client {
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let pool = store.db_pool().clone();
+        let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
 
         Self {

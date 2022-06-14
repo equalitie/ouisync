@@ -351,10 +351,7 @@ impl Directory {
         &self.branch_id
     }
 
-    pub(crate) async fn version_vector_in_connection(
-        &self,
-        conn: &mut db::Connection,
-    ) -> Result<VersionVector> {
+    pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         self.read().await.version_vector(conn).await
     }
 }

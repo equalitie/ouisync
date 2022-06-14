@@ -231,6 +231,10 @@ impl Repository {
         &self.shared.store
     }
 
+    pub fn db(&self) -> &db::Pool {
+        self.shared.store.db()
+    }
+
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
@@ -248,7 +252,7 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
 
         self.cd(&mut conn, parent)
             .await?
@@ -268,7 +272,7 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
 
         self.cd(&mut conn, parent)
             .await?
@@ -281,14 +285,14 @@ impl Repository {
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         self.cd(&mut conn, path).await
     }
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         local_branch
             .ensure_file_exists(&mut conn, path.as_ref())
             .await
@@ -297,7 +301,7 @@ impl Repository {
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         local_branch
             .ensure_directory_exists(&mut conn, path.as_ref())
             .await
@@ -309,7 +313,7 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(&mut conn, parent).await?;
         parent.remove_entry(&mut conn, name).await
     }
@@ -318,7 +322,7 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(&mut conn, parent).await?;
         parent.remove_entry_recursively(&mut conn, name).await
     }
@@ -336,7 +340,7 @@ impl Repository {
 
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
 
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
@@ -403,7 +407,7 @@ impl Repository {
 
         let dst_dir = self.create_directory(dst_dir_path).await?;
 
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
         src_dir
             .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
             .await
@@ -507,7 +511,7 @@ impl Repository {
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) {
-        self.shared.store.db_pool().close().await;
+        self.shared.store.db().close().await;
     }
 
     pub async fn debug_print_root(&self) {
@@ -517,7 +521,7 @@ impl Repository {
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
 
-        let mut conn = match self.shared.store.db_pool().acquire().await {
+        let mut conn = match self.db().acquire().await {
             Ok(conn) => conn,
             Err(error) => {
                 print.display(&format_args!(
@@ -649,7 +653,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(self.store.db_pool().clone(), data.clone(), keys);
+                let branch = Branch::new(self.store.db().clone(), data.clone(), keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }

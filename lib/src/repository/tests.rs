@@ -24,7 +24,7 @@ async fn root_directory_always_exists() {
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
     let store = repo.store();
     let branch = repo.local_branch().await.unwrap();
-    let mut conn = store.db_pool().acquire().await.unwrap();
+    let mut conn = store.db().acquire().await.unwrap();
     branch.data().count_leaf_nodes(&mut conn).await.unwrap()
 }
 
@@ -95,13 +95,13 @@ async fn merge() {
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = {
-        let mut conn = repo.store().db_pool().acquire().await.unwrap();
+        let mut conn = repo.db().acquire().await.unwrap();
         local_branch.open_or_create_root(&mut conn).await.unwrap()
     };
 
     repo.force_merge().await.unwrap();
 
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     let content = local_root
         .read()
         .await
@@ -695,7 +695,7 @@ async fn version_vector_create_file() {
     // +1 for the file insert
     assert_eq!(
         file.parent()
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -709,7 +709,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -722,7 +722,7 @@ async fn version_vector_create_file() {
     // +1 for the parent modify due to the file vv bump
     assert_eq!(
         file.parent()
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 3]
@@ -733,7 +733,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 3]
@@ -755,7 +755,7 @@ async fn version_vector_deep_hierarchy() {
     let local_id = *local_branch.id();
 
     let depth = 10;
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     let mut dirs = Vec::new();
     dirs.push(local_branch.open_or_create_root(&mut conn).await.unwrap());
 
@@ -772,7 +772,7 @@ async fn version_vector_deep_hierarchy() {
     // Each directory's local version is one less than its parent.
     for (index, dir) in dirs.iter().skip(1).enumerate() {
         assert_eq!(
-            dir.version_vector_in_connection(&mut conn).await.unwrap(),
+            dir.version_vector(&mut conn).await.unwrap(),
             vv![local_id => (depth - index) as u64]
         );
     }
@@ -822,7 +822,7 @@ async fn version_vector_fork_file() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     let remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
@@ -841,14 +841,14 @@ async fn version_vector_fork_file() {
     assert_eq!(file.version_vector().await, remote_file_vv);
     assert_eq!(
         local_parent
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
     );
     assert_eq!(
         local_root
-            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+            .version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -872,7 +872,7 @@ async fn version_vector_empty_directory() {
 
     let dir = repo.create_directory("stuff").await.unwrap();
     assert_eq!(
-        dir.version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
+        dir.version_vector(&mut *repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 1]
@@ -903,7 +903,7 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in_branch(
-        &mut *repo.store().db_pool().acquire().await.unwrap(),
+        &mut *repo.db().acquire().await.unwrap(),
         &local_branch,
         "test.txt",
         b"local v1",
@@ -913,7 +913,7 @@ async fn file_conflict_modify_local() {
     drop(local_file);
 
     let remote_file = create_file_in_branch(
-        &mut *repo.store().db_pool().acquire().await.unwrap(),
+        &mut *repo.db().acquire().await.unwrap(),
         &remote_branch,
         "test.txt",
         b"remote v1",
@@ -965,7 +965,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
     create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
     drop(conn);
@@ -1003,7 +1003,7 @@ async fn remove_branch() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     create_file_in_directory(&mut conn, &remote_root, "foo.txt", b"foo").await;
     create_file_in_directory(&mut conn, &remote_root, "bar.txt", b"bar").await;
@@ -1039,7 +1039,7 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
 
     create_file_in_branch(&mut conn, &remote_branch, name, content).await;
 }

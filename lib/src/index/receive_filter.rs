@@ -8,16 +8,16 @@ use tokio::task;
 /// compared to the last time we received that same node.
 pub(crate) struct ReceiveFilter {
     id: u64,
-    db_pool: db::Pool,
+    db: db::Pool,
 }
 
 impl ReceiveFilter {
-    pub fn new(db_pool: db::Pool) -> Self {
+    pub fn new(db: db::Pool) -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            db_pool,
+            db,
         }
     }
 
@@ -47,7 +47,7 @@ impl ReceiveFilter {
 
 impl Drop for ReceiveFilter {
     fn drop(&mut self) {
-        task::spawn(remove_all(self.db_pool.clone(), self.id));
+        task::spawn(remove_all(self.db.clone(), self.id));
     }
 }
 
