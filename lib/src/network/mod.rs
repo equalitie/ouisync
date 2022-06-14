@@ -12,6 +12,7 @@ mod message_dispatcher;
 mod message_io;
 mod options;
 mod protocol;
+mod quic;
 mod raw;
 mod request;
 mod server;
