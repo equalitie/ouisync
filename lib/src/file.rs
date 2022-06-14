@@ -61,18 +61,7 @@ impl File {
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.
-    #[deprecated]
-    pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        let mut conn = self.blob.branch().db_pool().acquire().await?;
-        self.blob.read(&mut conn, buffer).await
-    }
-
-    /// Reads data from this file. See [`Blob::read`] for more info.
-    pub async fn read_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-        buffer: &mut [u8],
-    ) -> Result<usize> {
+    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
         self.blob.read(conn, buffer).await
     }
 
@@ -185,7 +174,7 @@ impl File {
         let mut buffer = vec![0; BLOCK_SIZE];
 
         loop {
-            let len = self.read_in_connection(conn, &mut buffer).await?;
+            let len = self.read(conn, &mut buffer).await?;
             dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
 
             if len < buffer.len() {

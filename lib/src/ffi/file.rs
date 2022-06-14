@@ -130,7 +130,7 @@ pub unsafe extern "C" fn file_read(
                 .await?;
 
             let buffer = slice::from_raw_parts_mut(buffer.into_inner(), len);
-            let len = g.file.read_in_connection(&mut conn, buffer).await? as u64;
+            let len = g.file.read(&mut conn, buffer).await? as u64;
 
             Ok(len)
         })

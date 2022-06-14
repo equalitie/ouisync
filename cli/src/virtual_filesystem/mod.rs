@@ -778,7 +778,7 @@ impl Inner {
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read_in_connection(&mut conn, &mut buffer).await?;
+        let len = file.read(&mut conn, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)

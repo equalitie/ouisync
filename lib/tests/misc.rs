@@ -224,9 +224,7 @@ async fn read_in_chunks(db: &DbPool, file: &mut File, chunk_size: usize) -> Resu
         let mut conn = db.acquire().await?;
 
         let end = (offset + chunk_size).min(content.len());
-        let size = file
-            .read_in_connection(&mut conn, &mut content[offset..end])
-            .await?;
+        let size = file.read(&mut conn, &mut content[offset..end]).await?;
         offset += size;
     }
 

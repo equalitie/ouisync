@@ -277,7 +277,7 @@ impl Directory {
                     match file {
                         Ok(mut file) => {
                             let mut buf = [0; 32];
-                            let lenght_result = file.read_in_connection(conn, &mut buf).await;
+                            let lenght_result = file.read(conn, &mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len().await;
