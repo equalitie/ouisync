@@ -795,7 +795,7 @@ async fn update_file(
     let mut file = open_file(conn, parent, name).await;
 
     file.fork_in_connection(conn, local_branch).await.unwrap();
-    file.truncate_in_connection(conn, 0).await.unwrap();
+    file.truncate(conn, 0).await.unwrap();
     file.write_in_connection(conn, content).await.unwrap();
     file.flush_in_connection(conn).await.unwrap();
 }

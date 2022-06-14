@@ -694,7 +694,7 @@ async fn truncate_forked_remote_file() {
     file.fork_in_connection(&mut conn, &local_branch)
         .await
         .unwrap();
-    file.truncate_in_connection(&mut conn, 0).await.unwrap();
+    file.truncate(&mut conn, 0).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -722,11 +722,20 @@ async fn attempt_to_modify_remote_file() {
     repo.force_garbage_collection().await.unwrap();
 
     let mut file = repo.open_file("test.txt").await.unwrap();
-    assert_matches!(file.truncate(0).await, Err(Error::PermissionDenied));
+    let mut conn = repo.db().acquire().await.unwrap();
+    assert_matches!(
+        file.truncate(&mut conn, 0).await,
+        Err(Error::PermissionDenied)
+    );
+    drop(conn);
 
     let mut file = repo.open_file("test.txt").await.unwrap();
-    file.write(b"bar").await.unwrap();
-    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"bar").await.unwrap();
+    assert_matches!(
+        file.flush_in_connection(&mut conn).await,
+        Err(Error::PermissionDenied)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -769,16 +778,16 @@ async fn version_vector_create_file() {
         vv![local_id => 2]
     );
 
-    file.write(b"blah").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+
+    file.write_in_connection(&mut conn, b"blah").await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+
     // +1 for the file update
     assert_eq!(file.version_vector().await, vv![local_id => 2]);
     // +1 for the parent modify due to the file vv bump
     assert_eq!(
-        file.parent()
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
-            .await
-            .unwrap(),
+        file.parent().version_vector(&mut conn).await.unwrap(),
         vv![local_id => 3]
     );
     // +1 for the root modify due to parent vv bump
@@ -787,7 +796,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
+            .version_vector(&mut conn)
             .await
             .unwrap(),
         vv![local_id => 3]

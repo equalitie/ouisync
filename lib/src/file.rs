@@ -93,18 +93,7 @@ impl File {
     }
 
     /// Truncates the file to the given length.
-    #[deprecated = "use `truncate_in_connection` instead"]
-    pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut conn = self.blob.branch().db_pool().acquire().await?;
-        self.blob.truncate(&mut conn, len).await
-    }
-
-    /// Truncates the file to the given length.
-    pub async fn truncate_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-        len: u64,
-    ) -> Result<()> {
+    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
         self.blob.truncate(conn, len).await
     }
 

@@ -105,7 +105,7 @@ async fn local_truncate_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 3);
 
     let mut conn = repo.db().acquire().await.unwrap();
-    file.truncate_in_connection(&mut conn, 0).await.unwrap();
+    file.truncate(&mut conn, 0).await.unwrap();
     file.flush_in_connection(&mut conn).await.unwrap();
     drop(conn);
 
@@ -147,7 +147,7 @@ async fn local_truncate_remote_file() {
     )
     .await
     .unwrap();
-    file.truncate_in_connection(&mut conn, 0).await.unwrap();
+    file.truncate(&mut conn, 0).await.unwrap();
     file.flush_in_connection(&mut conn).await.unwrap();
     drop(conn);
 
@@ -186,7 +186,7 @@ async fn remote_truncate_remote_file() {
         .unwrap();
 
     let mut conn = repo_r.db().acquire().await.unwrap();
-    file.truncate_in_connection(&mut conn, 0).await.unwrap();
+    file.truncate(&mut conn, 0).await.unwrap();
     file.flush_in_connection(&mut conn).await.unwrap();
     drop(conn);
 

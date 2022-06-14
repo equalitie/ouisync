@@ -183,7 +183,7 @@ pub unsafe extern "C" fn file_truncate(
             let mut conn = g.repo.db().acquire().await?;
 
             g.file.fork_in_connection(&mut conn, &local_branch).await?;
-            g.file.truncate_in_connection(&mut conn, len).await
+            g.file.truncate(&mut conn, len).await
         })
     })
 }

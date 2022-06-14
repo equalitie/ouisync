@@ -499,9 +499,11 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            file.fork(&local_branch).await?;
-            file.truncate(size).await?;
-            file.flush().await?;
+            let mut conn = self.repository.db().acquire().await?;
+
+            file.fork_in_connection(&mut conn, &local_branch).await?;
+            file.truncate(&mut conn, size).await?;
+            file.flush_in_connection(&mut conn).await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
@@ -683,8 +685,8 @@ impl Inner {
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
-
-        file.flush().await?;
+        let mut conn = self.repository.db().acquire().await?;
+        file.flush_in_connection(&mut conn).await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -708,10 +710,11 @@ impl Inner {
 
         if flags.contains(libc::O_TRUNC) {
             let local_branch = self.repository.get_or_create_local_branch().await?;
+            let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&local_branch).await?;
-            file.truncate(0).await?;
-            file.flush().await?;
+            file.fork_in_connection(&mut conn, &local_branch).await?;
+            file.truncate(&mut conn, 0).await?;
+            file.flush_in_connection(&mut conn).await?;
         }
 
         // TODO: what about other flags (parameter)?
