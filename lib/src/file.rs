@@ -225,8 +225,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (branch0, branch1) = setup().await;
-        let mut conn = branch0.db_pool().acquire().await.unwrap();
+        let (pool, branch0, branch1) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
 
         // Create a file owned by branch 0
         let mut file0 = branch0
@@ -308,8 +308,8 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (branch0, branch1) = setup().await;
-        let mut conn = branch0.db_pool().acquire().await.unwrap();
+        let (pool, branch0, branch1) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
 
         let mut file0 = branch0
             .ensure_file_exists(&mut conn, "/pig.jpg".into())
@@ -339,11 +339,12 @@ mod tests {
         }
     }
 
-    async fn setup() -> (Branch, Branch) {
+    async fn setup() -> (db::Pool, Branch, Branch) {
         let pool = db::create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
 
         (
+            pool.clone(),
             create_branch(pool.clone(), keys.clone()).await,
             create_branch(pool, keys).await,
         )

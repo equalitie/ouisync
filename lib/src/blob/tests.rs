@@ -16,8 +16,8 @@ use test_strategy::proptest;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
-    let (_, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (_, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
     blob.flush(&mut conn).await.unwrap();
@@ -51,7 +51,8 @@ async fn write_and_read_case(
     read_len: usize,
     rng_seed: u64,
 ) {
-    let (mut rng, branch) = setup(rng_seed).await;
+    let (mut rng, pool, branch) = setup(rng_seed).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator = if is_root {
         Locator::ROOT
@@ -63,8 +64,6 @@ async fn write_and_read_case(
     let mut blob = Blob::create(branch.clone(), locator, Shared::uninit());
 
     let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
-
-    let mut conn = branch.db_pool().acquire().await.unwrap();
 
     for chunk in orig_content.chunks(write_len) {
         blob.write(&mut conn, chunk).await.unwrap();
@@ -100,8 +99,8 @@ fn len(
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(async {
-        let (rng, branch) = setup(rng_seed).await;
-        let mut conn = branch.db_pool().acquire().await.unwrap();
+        let (rng, pool, branch) = setup(rng_seed).await;
+        let mut conn = pool.acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
@@ -148,8 +147,8 @@ fn seek_from_end(
 }
 
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
-    let (rng, branch) = setup(rng_seed).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (rng, pool, branch) = setup(rng_seed).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
@@ -171,8 +170,8 @@ fn seek_from_current(
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(async {
-        let (rng, branch) = setup(rng_seed).await;
-        let mut conn = branch.db_pool().acquire().await.unwrap();
+        let (rng, pool, branch) = setup(rng_seed).await;
+        let mut conn = pool.acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
@@ -198,8 +197,8 @@ fn seek_from_current(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_after_end() {
-    let (_, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (_, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let content = b"content";
 
@@ -220,8 +219,8 @@ async fn seek_after_end() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_before_start() {
-    let (_, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (_, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let content = b"content";
 
@@ -242,8 +241,8 @@ async fn seek_before_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_blob() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -295,8 +294,8 @@ async fn remove_blob() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_empty() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -347,8 +346,8 @@ async fn truncate_to_empty() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_shorter() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -387,8 +386,8 @@ async fn truncate_to_shorter() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_marks_as_dirty() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
 
@@ -407,8 +406,8 @@ async fn truncate_marks_as_dirty() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn modify_blob() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -446,8 +445,8 @@ async fn modify_blob() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
     let mut blob = Blob::create(branch.clone(), locator, Shared::uninit());
@@ -472,8 +471,8 @@ async fn append() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn write_reopen_and_read() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
     let shared = Shared::uninit();
@@ -514,12 +513,13 @@ async fn fork_case(
     src_locator_is_root: bool,
     rng_seed: u64,
 ) {
-    let (mut rng, src_branch) = setup(rng_seed).await;
+    let (mut rng, pool, src_branch) = setup(rng_seed).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let notify_tx = broadcast::Sender::new(1);
     let dst_branch = Arc::new(
         BranchData::create(
-            &mut src_branch.db_pool().acquire().await.unwrap(),
+            &mut conn,
             PublicKey::random(),
             src_branch.keys().write().unwrap(),
             notify_tx,
@@ -527,19 +527,13 @@ async fn fork_case(
         .await
         .unwrap(),
     );
-    let dst_branch = Branch::new(
-        src_branch.db_pool().clone(),
-        dst_branch,
-        src_branch.keys().clone(),
-    );
+    let dst_branch = Branch::new(pool.clone(), dst_branch, src_branch.keys().clone());
 
     let src_locator = if src_locator_is_root {
         Locator::ROOT
     } else {
         Locator::head(rng.gen())
     };
-
-    let mut conn = src_branch.db_pool().acquire().await.unwrap();
 
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
@@ -586,8 +580,8 @@ async fn fork_case(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
-    let (mut rng, branch) = setup(0).await;
-    let mut conn = branch.db_pool().acquire().await.unwrap();
+    let (mut rng, pool, branch) = setup(0).await;
+    let mut conn = pool.acquire().await.unwrap();
 
     let blob_id: BlobId = rng.gen();
     let head_locator = Locator::head(blob_id);
@@ -610,7 +604,7 @@ async fn block_ids_test() {
     assert_eq!(actual_count, 3);
 }
 
-async fn setup(rng_seed: u64) -> (StdRng, Branch) {
+async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
     let pool = db::create(&db::Store::Temporary).await.unwrap();
@@ -624,9 +618,9 @@ async fn setup(rng_seed: u64) -> (StdRng, Branch) {
     )
     .await
     .unwrap();
-    let branch = Branch::new(pool, Arc::new(branch), secrets.into());
+    let branch = Branch::new(pool.clone(), Arc::new(branch), secrets.into());
 
-    (rng, branch)
+    (rng, pool, branch)
 }
 
 fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {

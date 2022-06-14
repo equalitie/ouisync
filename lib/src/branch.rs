@@ -41,6 +41,7 @@ impl Branch {
         &self.branch_data
     }
 
+    #[deprecated]
     pub(crate) fn db_pool(&self) -> &db::Pool {
         &self.pool
     }
@@ -153,8 +154,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
-        let branch = setup().await;
-        let mut conn = branch.db_pool().acquire().await.unwrap();
+        let (pool, branch) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
         let dir = branch
             .ensure_directory_exists(&mut conn, "/".into())
             .await
@@ -164,8 +165,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
-        let branch = setup().await;
-        let mut conn = branch.db_pool().acquire().await.unwrap();
+        let (pool, branch) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
 
         let root = branch.open_or_create_root(&mut conn).await.unwrap();
 
@@ -177,7 +178,7 @@ mod tests {
         let _ = root.read().await.lookup("dir").unwrap();
     }
 
-    async fn setup() -> Branch {
+    async fn setup() -> (db::Pool, Branch) {
         let pool = db::create(&db::Store::Temporary).await.unwrap();
 
         let writer_id = PublicKey::random();
@@ -188,7 +189,8 @@ mod tests {
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
+        let branch = Branch::new(pool.clone(), branch, secrets.into());
 
-        Branch::new(pool, branch, secrets.into())
+        (pool, branch)
     }
 }

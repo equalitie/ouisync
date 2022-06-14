@@ -95,13 +95,13 @@ async fn merge() {
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
     let local_root = {
-        let mut conn = local_branch.db_pool().acquire().await.unwrap();
+        let mut conn = repo.store().db_pool().acquire().await.unwrap();
         local_branch.open_or_create_root(&mut conn).await.unwrap()
     };
 
     repo.force_merge().await.unwrap();
 
-    let mut conn = local_branch.db_pool().acquire().await.unwrap();
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
     let content = local_root
         .read()
         .await
@@ -695,7 +695,7 @@ async fn version_vector_create_file() {
     // +1 for the file insert
     assert_eq!(
         file.parent()
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -709,7 +709,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -722,7 +722,7 @@ async fn version_vector_create_file() {
     // +1 for the parent modify due to the file vv bump
     assert_eq!(
         file.parent()
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 3]
@@ -733,7 +733,7 @@ async fn version_vector_create_file() {
             .parent()
             .await
             .unwrap()
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 3]
@@ -841,14 +841,14 @@ async fn version_vector_fork_file() {
     assert_eq!(file.version_vector().await, remote_file_vv);
     assert_eq!(
         local_parent
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
     );
     assert_eq!(
         local_root
-            .version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+            .version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 2]
@@ -872,7 +872,7 @@ async fn version_vector_empty_directory() {
 
     let dir = repo.create_directory("stuff").await.unwrap();
     assert_eq!(
-        dir.version_vector_in_connection(&mut *local_branch.db_pool().acquire().await.unwrap())
+        dir.version_vector_in_connection(&mut *repo.store().db_pool().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 1]
@@ -902,11 +902,23 @@ async fn file_conflict_modify_local() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    let local_file = create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
+    let local_file = create_file_in_branch(
+        &mut *repo.store().db_pool().acquire().await.unwrap(),
+        &local_branch,
+        "test.txt",
+        b"local v1",
+    )
+    .await;
     assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
     drop(local_file);
 
-    let remote_file = create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
+    let remote_file = create_file_in_branch(
+        &mut *repo.store().db_pool().acquire().await.unwrap(),
+        &remote_branch,
+        "test.txt",
+        b"remote v1",
+    )
+    .await;
     assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
     drop(remote_file);
 
@@ -953,8 +965,10 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
-    create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+    create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
+    create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
+    drop(conn);
 
     // Attempt to fork the remote version (fork is required to modify it)
     let mut remote_file = repo
@@ -1025,13 +1039,19 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    create_file_in_branch(&remote_branch, name, content).await;
+    let mut conn = repo.store().db_pool().acquire().await.unwrap();
+
+    create_file_in_branch(&mut conn, &remote_branch, name, content).await;
 }
 
-async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
-    let mut conn = branch.db_pool().acquire().await.unwrap();
-    let root = branch.open_or_create_root(&mut conn).await.unwrap();
-    create_file_in_directory(&mut conn, &root, name, content).await
+async fn create_file_in_branch(
+    conn: &mut db::Connection,
+    branch: &Branch,
+    name: &str,
+    content: &[u8],
+) -> File {
+    let root = branch.open_or_create_root(conn).await.unwrap();
+    create_file_in_directory(conn, &root, name, content).await
 }
 
 async fn create_file_in_directory(
