@@ -231,6 +231,10 @@ impl Repository {
         &self.shared.store
     }
 
+    pub fn db(&self) -> &db::Pool {
+        self.shared.store.db()
+    }
+
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
@@ -248,19 +252,16 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
-        // future, to avoid deadlocks.
-        let open = {
-            self.open_directory(parent)
-                .await?
-                .read()
-                .await
-                .lookup_unique(name)?
-                .file()?
-                .open()
-        };
+        let mut conn = self.db().acquire().await?;
 
-        open.await
+        self.cd(&mut conn, parent)
+            .await?
+            .read()
+            .await
+            .lookup_unique(name)?
+            .file()?
+            .open(&mut conn)
+            .await
     }
 
     /// Open a specific version of the file at the given path.
@@ -271,35 +272,39 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        // IMPORTANT: make sure the parent directory is unlocked before `await`-ing the `open`
-        // future, to avoid deadlocks.
-        let open = {
-            self.open_directory(parent)
-                .await?
-                .read()
-                .await
-                .lookup_version(name, branch_id)?
-                .open()
-        };
+        let mut conn = self.db().acquire().await?;
 
-        open.await
+        self.cd(&mut conn, parent)
+            .await?
+            .read()
+            .await
+            .lookup_version(name, branch_id)?
+            .open(&mut conn)
+            .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        self.joint_root().await?.cd(path).await
+        let mut conn = self.db().acquire().await?;
+        self.cd(&mut conn, path).await
     }
 
     /// Creates a new file at the given path.
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
-        local_branch.ensure_file_exists(path.as_ref()).await
+        let mut conn = self.db().acquire().await?;
+        local_branch
+            .ensure_file_exists(&mut conn, path.as_ref())
+            .await
     }
 
     /// Creates a new directory at the given path.
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
-        local_branch.ensure_directory_exists(path.as_ref()).await
+        let mut conn = self.db().acquire().await?;
+        local_branch
+            .ensure_directory_exists(&mut conn, path.as_ref())
+            .await
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
@@ -308,18 +313,18 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut parent = self.open_directory(parent).await?;
-        parent.remove_entry(name).await
+        let mut conn = self.db().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry(&mut conn, name).await
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-        let mut parent = self.open_directory(parent).await?;
 
-        // TODO: fork the parent dir
-
-        parent.remove_entry_recursively(name).await
+        let mut conn = self.db().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry_recursively(&mut conn, name).await
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -334,29 +339,35 @@ impl Repository {
         use std::borrow::Cow;
 
         let local_branch = self.get_or_create_local_branch().await?;
+        let mut conn = self.db().acquire().await?;
 
-        let src_joint_dir = self.open_directory(src_dir_path).await?;
+        let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
 
         let (src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
-                let mut file = entry.open().await?;
+                let mut file = entry.open(&mut conn).await?;
 
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
 
-                file.fork(&local_branch).await?;
+                file.fork(&mut conn, &local_branch).await?;
 
                 (file.parent(), Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let dir_to_move = entry
-                    .open(MissingVersionStrategy::Skip)
-                    .await?
-                    .merge()
-                    .await?;
+                let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
+
+                // `merge` takes `Pool`, not `Connection` (to avoid holding the connection for too
+                // long) and so to avoid deadlock we need to temporarily release `conn`...
+                drop(conn);
+
+                let dir_to_move = dir_to_move.merge(self.db()).await?;
+
+                // ...and acquire it back again once `merge` is done.
+                conn = self.db().acquire().await?;
 
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
@@ -377,7 +388,7 @@ impl Repository {
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
         let src_entry = src_dir.read().await.lookup(&src_name)?.clone_data();
 
-        let dst_joint_dir = self.open_directory(&dst_dir_path).await?;
+        let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;
 
         let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
@@ -395,9 +406,11 @@ impl Repository {
         drop(dst_joint_reader);
         drop(dst_joint_dir);
 
-        let dst_dir = self.create_directory(dst_dir_path).await?;
+        let dst_dir = local_branch
+            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
+            .await?;
         src_dir
-            .move_entry(&src_name, src_entry, &dst_dir, dst_name, dst_vv)
+            .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
             .await
     }
 
@@ -453,7 +466,7 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn joint_root(&self) -> Result<JointDirectory> {
+    async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
         // If we have only blind access we can cut this short. Also this check is necessary to
         // distinguish *empty* repository with blind access from one with read access.
         if !self.shared.secrets.can_read() {
@@ -461,11 +474,11 @@ impl Repository {
         }
 
         let local_branch = self.local_branch().await;
-        let branches = self.shared.branches().await?;
+        let branches = self.shared.collect_branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root().await {
+            let dir = match branch.open_root(conn).await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll
@@ -488,10 +501,18 @@ impl Repository {
         Ok(JointDirectory::new(local_branch, dirs))
     }
 
+    async fn cd<P: AsRef<Utf8Path>>(
+        &self,
+        conn: &mut db::Connection,
+        path: P,
+    ) -> Result<JointDirectory> {
+        self.root(conn).await?.cd(conn, path).await
+    }
+
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) {
-        self.shared.store.db_pool().close().await;
+        self.shared.store.db().close().await;
     }
 
     pub async fn debug_print_root(&self) {
@@ -500,6 +521,18 @@ impl Repository {
 
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
+
+        let mut conn = match self.db().acquire().await {
+            Ok(conn) => conn,
+            Err(error) => {
+                print.display(&format_args!(
+                    "failed to acquire db connection: {:?}",
+                    error
+                ));
+                return;
+            }
+        };
+
         let branches = self.shared.branches.lock().await;
         for (writer_id, branch) in &*branches {
             let print = print.indent();
@@ -512,15 +545,17 @@ impl Repository {
                 "Branch ID: {:?}{}, root block ID:{:?}",
                 writer_id,
                 local,
-                branch.root_block_id().await
+                branch.root_block_id(&mut conn).await
             ));
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",
-                branch.version_vector().await.unwrap_or_default()
+                branch.version_vector(&mut conn).await.unwrap_or_default()
             ));
-            branch.debug_print(print.indent()).await;
+            branch.debug_print(&mut conn, print.indent()).await;
         }
+
+        drop(conn);
 
         print.display(&"Index");
         let print = print.indent();
@@ -541,7 +576,7 @@ impl Repository {
         let proof = Proof::first(remote_id, write_keys);
         let branch = self.shared.store.index.create_branch(proof).await?;
 
-        self.shared.inflate(&branch).await
+        self.shared.inflate(branch).await
     }
 }
 
@@ -561,39 +596,32 @@ struct Shared {
 
 impl Shared {
     pub async fn local_branch(&self) -> Option<Branch> {
-        match self.store.index.branches().await.get(&self.this_writer_id) {
-            None => None,
+        match self.store.index.get_branch(&self.this_writer_id).await {
             Some(data) => self.inflate(data).await.ok(),
+            None => None,
         }
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let branches = self.store.index.branches().await;
-
-        let data = if let Some(data) = branches.get(&self.this_writer_id) {
-            data.clone()
+        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id).await {
+            data
+        } else if let Some(write_keys) = self.secrets.write_keys() {
+            let proof = Proof::first(self.this_writer_id, write_keys);
+            self.store.index.create_branch(proof).await?
         } else {
-            drop(branches);
-
-            if let Some(write_keys) = self.secrets.write_keys() {
-                let proof = Proof::first(self.this_writer_id, write_keys);
-                self.store.index.create_branch(proof).await?
-            } else {
-                return Err(Error::PermissionDenied);
-            }
+            return Err(Error::PermissionDenied);
         };
 
-        self.inflate(&data).await
+        self.inflate(data).await
     }
 
-    // TODO: consider rewriting this to return `impl Stream` to avoid the Vec allocation.
-    pub async fn branches(&self) -> Result<Vec<Branch>> {
+    pub async fn collect_branches(&self) -> Result<Vec<Branch>> {
         future::try_join_all(
             self.store
                 .index
-                .branches()
+                .collect_branches()
                 .await
-                .values()
+                .into_iter()
                 .map(|data| self.inflate(data)),
         )
         .await
@@ -606,7 +634,7 @@ impl Shared {
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache if it does not.
-    async fn inflate(&self, data: &Arc<BranchData>) -> Result<Branch> {
+    async fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
         match self.branches.lock().await.entry(*data.id()) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
@@ -619,7 +647,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(self.store.db_pool().clone(), data.clone(), keys);
+                let branch = Branch::new(data, keys);
                 entry.insert(branch.clone());
                 Ok(branch)
             }

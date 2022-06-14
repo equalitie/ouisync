@@ -83,20 +83,20 @@ impl BranchData {
     /// it doesn't execute at all.
     pub async fn insert(
         &self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let root = self.load_root(tx).await?;
-        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
+        let root = self.load_root(conn).await?;
+        let mut path = load_path(conn, &root.proof.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
-        save_path(tx, &root, &path, write_keys).await?;
+        save_path(conn, &root, &path, write_keys).await?;
 
         Ok(())
     }
@@ -212,7 +212,7 @@ async fn load_path(
 }
 
 async fn save_path(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     old_root: &RootNode,
     path: &Path,
     write_keys: &Keypair,
@@ -220,7 +220,7 @@ async fn save_path(
     for (i, inner_layer) in path.inner.iter().enumerate() {
         if let Some(parent_hash) = path.hash_at_layer(i) {
             for (bucket, node) in inner_layer {
-                node.save(tx, &parent_hash, bucket).await?;
+                node.save(conn, &parent_hash, bucket).await?;
             }
         }
     }
@@ -228,7 +228,7 @@ async fn save_path(
     let layer = Path::total_layer_count() - 1;
     if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
         for leaf in &path.leaves {
-            leaf.save(tx, &parent_hash).await?;
+            leaf.save(conn, &parent_hash).await?;
         }
     }
 
@@ -239,12 +239,12 @@ async fn save_path(
         write_keys,
     );
 
-    let new_root = RootNode::create(tx, new_proof, old_root.summary).await?;
+    let new_root = RootNode::create(conn, new_proof, old_root.summary).await?;
 
     // NOTE: It is not enough to remove only the old_root because there may be a non zero
     // number of incomplete roots that have been downloaded prior to new_root becoming
     // complete.
-    new_root.remove_recursively_all_older(tx).await?;
+    new_root.remove_recursively_all_older(conn).await?;
 
     Ok(())
 }

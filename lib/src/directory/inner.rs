@@ -41,12 +41,13 @@ impl Inner {
     }
 
     pub async fn open(
+        conn: &mut db::Connection,
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
-        let mut blob = Blob::open(owner_branch, locator, Shared::uninit().into()).await?;
-        let buffer = blob.read_to_end().await?;
+        let mut blob = Blob::open(conn, owner_branch, locator, Shared::uninit().into()).await?;
+        let buffer = blob.read_to_end(conn).await?;
         let entries = content::deserialize(&buffer)?;
 
         Ok(Self {
@@ -72,10 +73,8 @@ impl Inner {
         }
 
         if self.pending_entry.is_some() {
-            self.blob
-                .seek_in_transaction(tx, SeekFrom::Start(0))
-                .await?;
-            let buffer = self.blob.read_to_end_in_connection(tx).await?;
+            self.blob.seek(tx, SeekFrom::Start(0)).await?;
+            let buffer = self.blob.read_to_end(tx).await?;
             self.entries = content::deserialize(&buffer)?;
         }
 
@@ -95,13 +94,7 @@ impl Inner {
                     .get(&pending.name)
                     .and_then(|data| data.blob_id())
                 {
-                    match Blob::remove_in_transaction(
-                        tx,
-                        self.branch(),
-                        Locator::head(*old_blob_id),
-                    )
-                    .await
-                    {
+                    match Blob::remove(tx, self.branch(), Locator::head(*old_blob_id)).await {
                         // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
                         // blob is already removed which can legitimately happen due to several
                         // reasons so we don't treat it as an error.
@@ -119,9 +112,9 @@ impl Inner {
                 .as_ref()
                 .map(|pending| (pending.name.as_str(), &pending.data)),
         );
-        self.blob.truncate_in_transaction(tx, 0).await?;
-        self.blob.write_in_transaction(tx, &buffer).await?;
-        self.blob.flush_in_transaction(tx).await?;
+        self.blob.truncate(tx, 0).await?;
+        self.blob.write(tx, &buffer).await?;
+        self.blob.flush(tx).await?;
 
         Ok(())
     }
@@ -205,10 +198,6 @@ impl Inner {
         });
 
         Ok(())
-    }
-
-    pub fn db_pool(&self) -> &db::Pool {
-        self.blob.db_pool()
     }
 
     pub fn branch(&self) -> &Branch {

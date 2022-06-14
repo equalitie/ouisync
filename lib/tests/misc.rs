@@ -1,4 +1,4 @@
-use ouisync::{AccessMode, ConfigStore, Error, File, Network, Repository};
+use ouisync::{AccessMode, ConfigStore, DbPool, Error, File, Network, Repository};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Duration;
 use tokio::time;
@@ -23,8 +23,10 @@ async fn relink_repository() {
 
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-    file_a.write(b"first").await.unwrap();
-    file_a.flush().await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file_a.write(&mut conn, b"first").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
+    drop(conn);
 
     // Wait until the file is seen by B
     time::timeout(
@@ -38,9 +40,11 @@ async fn relink_repository() {
     drop(reg_b);
 
     // Update the file while B's repo is unlinked
-    file_a.truncate(0).await.unwrap();
-    file_a.write(b"second").await.unwrap();
-    file_a.flush().await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file_a.truncate(&mut conn, 0).await.unwrap();
+    file_a.write(&mut conn, b"second").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
+    drop(conn);
 
     // Re-register B's repo
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -64,13 +68,10 @@ async fn remove_remote_file() {
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     // Create a file by A and wait until B sees it.
-    repo_a
-        .create_file("test.txt")
-        .await
-        .unwrap()
-        .flush()
-        .await
-        .unwrap();
+    let mut file = repo_a.create_file("test.txt").await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+    drop(conn);
 
     time::timeout(
         DEFAULT_TIMEOUT,
@@ -124,8 +125,10 @@ async fn relay() {
     // are not connected to each other.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     // file.write(&content).await.unwrap();
-    write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
+    write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
+    file.flush(&mut *repo_a.db().acquire().await.unwrap())
+        .await
+        .unwrap();
     drop(file);
 
     time::timeout(
@@ -152,8 +155,10 @@ async fn transfer_large_file() {
 
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
+    write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
+    file.flush(&mut *repo_a.db().acquire().await.unwrap())
+        .await
+        .unwrap();
     drop(file);
 
     time::timeout(
@@ -167,6 +172,8 @@ async fn transfer_large_file() {
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
+    let db = repo.db().clone();
+
     common::eventually(repo, || async {
         let mut file = match repo.open_file(path).await {
             Ok(file) => file,
@@ -178,7 +185,7 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
-        let actual_content = match read_in_chunks(&mut file, 4096).await {
+        let actual_content = match read_in_chunks(&db, &mut file, 4096).await {
             Ok(content) => content,
             // `EntryNotFound` can still happen even here if merge runs in the middle of reading
             // the file - we opened the file while it was still in the remote branch but then that
@@ -199,10 +206,12 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
     .await
 }
 
-async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
+async fn write_in_chunks(db: &DbPool, file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
+        let mut conn = db.acquire().await.unwrap();
+
         let end = (offset + chunk_size).min(content.len());
-        file.write(&content[offset..end]).await.unwrap();
+        file.write(&mut conn, &content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             log::debug!(
@@ -214,13 +223,15 @@ async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     }
 }
 
-async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
+async fn read_in_chunks(db: &DbPool, file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
     let mut content = vec![0; file.len().await as usize];
     let mut offset = 0;
 
     while offset < content.len() {
+        let mut conn = db.acquire().await?;
+
         let end = (offset + chunk_size).min(content.len());
-        let size = file.read(&mut content[offset..end]).await?;
+        let size = file.read(&mut conn, &mut content[offset..end]).await?;
         offset += size;
     }
 

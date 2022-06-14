@@ -26,7 +26,7 @@ use crate::{
     debug_printer::DebugPrinter,
     error::{Error, Result},
     repository::RepositoryId,
-    sync::{broadcast, RwLock, RwLockReadGuard},
+    sync::{broadcast, RwLock},
 };
 use futures_util::TryStreamExt;
 use std::{
@@ -63,19 +63,20 @@ impl Index {
         &self.shared.repository_id
     }
 
-    pub async fn branches(&self) -> RwLockReadGuard<'_, Branches> {
-        self.shared.branches.read().await
+    pub async fn get_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
+        self.shared.branches.read().await.get(id).cloned()
     }
 
     pub async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
+        // IMPORTANT: Make sure to always acquire a db connection before the `branches` lock, to
+        // avoid deadlock.
+        let mut conn = self.pool.acquire().await?;
         let mut branches = self.shared.branches.write().await;
 
         match branches.entry(proof.writer_id) {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
-                let root_node =
-                    RootNode::create(&mut *self.pool.acquire().await?, proof, Summary::FULL)
-                        .await?;
+                let root_node = RootNode::create(&mut conn, proof, Summary::FULL).await?;
                 let branch =
                     BranchData::new(root_node.proof.writer_id, self.shared.notify_tx.clone());
                 let branch = Arc::new(branch);
@@ -85,6 +86,16 @@ impl Index {
                 Ok(branch)
             }
         }
+    }
+
+    pub async fn collect_branches(&self) -> Vec<Arc<BranchData>> {
+        self.shared
+            .branches
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Remove the branch including all its blocks, except those that are also referenced from

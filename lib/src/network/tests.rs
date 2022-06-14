@@ -401,7 +401,7 @@ async fn create_changeset(
 ) {
     use sqlx::Connection;
 
-    let branch = index.branches().await.get(writer_id).unwrap().clone();
+    let branch = index.get_branch(writer_id).await.unwrap();
 
     for _ in 0..size {
         create_block(rng, index, &branch, write_keys).await;

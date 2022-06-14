@@ -16,18 +16,18 @@ pub struct Store {
 }
 
 impl Store {
-    pub(crate) fn db_pool(&self) -> &db::Pool {
+    pub fn db(&self) -> &db::Pool {
         &self.index.pool
     }
 
     pub(crate) async fn count_blocks(&self) -> Result<usize> {
-        block::count(&mut *self.db_pool().acquire().await?).await
+        block::count(&mut *self.db().acquire().await?).await
     }
 
     /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub(crate) async fn sync_progress(&self) -> Result<Progress> {
-        let mut conn = self.db_pool().acquire().await?;
+        let mut conn = self.db().acquire().await?;
 
         // TODO: should we use `COUNT(DISTINCT ... )` ?
         Ok(sqlx::query(
@@ -55,7 +55,7 @@ impl Store {
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<()> {
-        let mut cx = self.db_pool().acquire().await?;
+        let mut cx = self.db().acquire().await?;
         let mut tx = cx.begin().await?;
 
         let writer_ids = match index::receive_block(&mut tx, &data.id).await {
@@ -76,11 +76,9 @@ impl Store {
 
         self.block_tracker.complete(&data.id);
 
-        let branches = self.index.branches().await;
-
         // Notify affected branches.
         for writer_id in &writer_ids {
-            if let Some(branch) = branches.get(writer_id) {
+            if let Some(branch) = self.index.get_branch(writer_id).await {
                 branch.notify();
             }
         }
@@ -201,7 +199,7 @@ mod tests {
         .await;
         receive_blocks(&store, &snapshot).await;
 
-        let mut conn = store.db_pool().acquire().await.unwrap();
+        let mut conn = store.db().acquire().await.unwrap();
 
         for (id, block) in snapshot.blocks() {
             let mut content = vec![0; BLOCK_SIZE];
@@ -233,7 +231,7 @@ mod tests {
             );
         }
 
-        let mut conn = store.db_pool().acquire().await.unwrap();
+        let mut conn = store.db().acquire().await.unwrap();
         for id in snapshot.blocks().keys() {
             assert!(!block::exists(&mut conn, id).await.unwrap());
         }

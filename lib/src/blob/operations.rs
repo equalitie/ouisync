@@ -98,7 +98,7 @@ impl<'a> Operations<'a> {
     }
 
     /// Writes into the blob in db transaction.
-    pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
+    pub async fn write(&mut self, conn: &mut db::Connection, mut buffer: &[u8]) -> Result<()> {
         loop {
             let len = self.unique.current_block.content.write(buffer);
 
@@ -123,7 +123,7 @@ impl<'a> Operations<'a> {
             let locator = self.unique.current_block.locator.next();
             let (id, content) = if locator.number() < self.shared.block_count() {
                 read_block(
-                    tx,
+                    conn,
                     self.unique.branch.data(),
                     self.unique.branch.keys().read(),
                     &locator,
@@ -133,7 +133,8 @@ impl<'a> Operations<'a> {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
-            self.replace_current_block(tx, locator, id, content).await?;
+            self.replace_current_block(conn, locator, id, content)
+                .await?;
         }
 
         Ok(())
@@ -145,7 +146,7 @@ impl<'a> Operations<'a> {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, tx: &mut db::Transaction<'_>, pos: SeekFrom) -> Result<u64> {
+    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.shared.len),
             SeekFrom::End(n) => {
@@ -174,13 +175,14 @@ impl<'a> Operations<'a> {
             let locator = self.locator_at(block_number);
 
             let (id, content) = read_block(
-                tx,
+                conn,
                 self.unique.branch.data(),
                 self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
-            self.replace_current_block(tx, locator, id, content).await?;
+            self.replace_current_block(conn, locator, id, content)
+                .await?;
         }
 
         self.unique.current_block.content.pos = block_offset;
@@ -189,7 +191,7 @@ impl<'a> Operations<'a> {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
+    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
         if len == self.shared.len {
             return Ok(());
         }
@@ -207,11 +209,11 @@ impl<'a> Operations<'a> {
         let new_block_count = self.shared.block_count();
 
         if self.seek_position() > self.shared.len {
-            self.seek(tx, SeekFrom::End(0)).await?;
+            self.seek(conn, SeekFrom::End(0)).await?;
         }
 
         remove_blocks(
-            tx,
+            conn,
             &self.unique.branch,
             self.unique
                 .head_locator
@@ -225,25 +227,25 @@ impl<'a> Operations<'a> {
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     /// Return true if was dirty and the flush actually took place
-    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
+    pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
 
-        self.write_len(tx).await?;
-        self.write_current_block(tx).await?;
+        self.write_len(conn).await?;
+        self.write_current_block(conn).await?;
 
         Ok(true)
     }
 
     async fn replace_current_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         locator: Locator,
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        self.write_current_block(tx).await?;
+        self.write_current_block(conn).await?;
 
         let mut content = Cursor::new(content);
 
@@ -263,7 +265,7 @@ impl<'a> Operations<'a> {
     }
 
     // Write the current block into the store.
-    async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn write_current_block(&mut self, conn: &mut db::Connection) -> Result<()> {
         if !self.unique.current_block.dirty {
             return Ok(());
         }
@@ -277,7 +279,7 @@ impl<'a> Operations<'a> {
             .ok_or(Error::PermissionDenied)?;
 
         let block_id = write_block(
-            tx,
+            conn,
             self.unique.branch.data(),
             read_key,
             write_keys,
@@ -293,7 +295,7 @@ impl<'a> Operations<'a> {
     }
 
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn write_len(&mut self, conn: &mut db::Connection) -> Result<()> {
         if !self.unique.len_dirty {
             return Ok(());
         }
@@ -315,7 +317,7 @@ impl<'a> Operations<'a> {
         } else {
             let locator = self.locator_at(0);
             let (_, buffer) = read_block(
-                tx,
+                conn,
                 self.unique.branch.data(),
                 self.unique.branch.keys().read(),
                 &locator,
@@ -327,7 +329,7 @@ impl<'a> Operations<'a> {
             cursor.write_u64(self.shared.len);
 
             write_block(
-                tx,
+                conn,
                 self.unique.branch.data(),
                 read_key,
                 write_keys,
@@ -392,7 +394,7 @@ pub(super) async fn load_block(
 }
 
 async fn write_block(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &BranchData,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,
@@ -407,16 +409,16 @@ async fn write_block(
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
     branch
-        .insert(tx, &id, &locator.encode(read_key), write_keys)
+        .insert(conn, &id, &locator.encode(read_key), write_keys)
         .await?;
-    block::write(tx, &id, &buffer, &nonce).await?;
+    block::write(conn, &id, &buffer, &nonce).await?;
 
     // Pin locally created blocks so they are not prematurelly collected. All pinned blocks are
     // unpinned when the current changeset is flushed at which point the block should already be
     // reachable. The pins are not persistent so if the app is terminated or crashes before the
     // current changeset is flushed, all unreachable blocks will be subject to collection on the
     // next app start.
-    block::pin(tx, &id).await?;
+    block::pin(conn, &id).await?;
 
     Ok(id)
 }
@@ -440,7 +442,7 @@ pub(super) fn encrypt_block(
 }
 
 pub(super) async fn remove_blocks<T>(
-    tx: &mut db::Transaction<'_>,
+    conn: &mut db::Connection,
     branch: &Branch,
     locators: T,
 ) -> Result<()>
@@ -450,12 +452,16 @@ where
     let read_key = branch.keys().read();
     let write_keys = branch.keys().write().ok_or(Error::PermissionDenied)?;
 
+    let mut tx = conn.begin().await?;
+
     for locator in locators {
         branch
             .data()
-            .remove(tx, &locator.encode(read_key), write_keys)
+            .remove(&mut tx, &locator.encode(read_key), write_keys)
             .await?;
     }
+
+    tx.commit().await?;
 
     Ok(())
 }

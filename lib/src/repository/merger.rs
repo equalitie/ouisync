@@ -95,11 +95,12 @@ impl Merger {
 }
 
 async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
-    let branches = shared.branches().await?;
+    let branches = shared.collect_branches().await?;
     let mut roots = Vec::with_capacity(branches.len());
 
     for branch in branches {
-        match branch.open_root().await {
+        let mut conn = shared.store.db().acquire().await?;
+        match branch.open_root(&mut conn).await {
             Ok(dir) => roots.push(dir),
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
             Err(error) => return Err(error),
@@ -107,7 +108,7 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
     }
 
     JointDirectory::new(Some(local_branch.clone()), roots)
-        .merge()
+        .merge(shared.store.db())
         .await?;
     Ok(())
 }

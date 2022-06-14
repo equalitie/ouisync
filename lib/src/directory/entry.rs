@@ -9,12 +9,13 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     error::{Error, Result},
     file::File,
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, future::Future};
+use std::fmt;
 
 /// Info about a directory entry.
 #[derive(Copy, Clone, Debug)]
@@ -144,10 +145,7 @@ impl<'a> FileRef<'a> {
         &self.entry_data.version_vector
     }
 
-    /// This function deliberately returns a future that does NOT borrow from `self`. This is why
-    /// it's not a regular `async` function but rather returns explicit `impl Future`. The reason
-    /// for this is to prevent deadlocks when opening a file while its parent directory is locked.
-    pub fn open(&self) -> impl Future<Output = Result<File>> {
+    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
         let shared = {
             let mut slot = self.entry_data.blob_shared.lock().unwrap();
             if let Some(shared) = slot.upgrade() {
@@ -163,8 +161,7 @@ impl<'a> FileRef<'a> {
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
 
-        // Only this function is async and nothing we pass to it is borrowed from self.
-        File::open(branch, locator, parent_context, shared)
+        File::open(conn, branch, locator, parent_context, shared).await
     }
 
     pub fn branch(&self) -> &Branch {
@@ -209,11 +206,12 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub async fn open(&self) -> Result<Directory> {
+    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.inner
             .parent_inner
             .open_directories
             .open(
+                conn,
                 self.inner.parent_inner.blob.branch().clone(),
                 self.locator(),
                 self.inner.parent_context(),

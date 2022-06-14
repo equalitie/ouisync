@@ -5,6 +5,7 @@ pub(crate) mod versioned;
 use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
@@ -15,13 +16,10 @@ use crate::{
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
 use either::Either;
-use futures_util::future;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque},
-    fmt,
-    future::Future,
-    iter, mem,
+    fmt, iter, mem,
 };
 
 /// Unified view over multiple concurrent versions of a directory.
@@ -67,7 +65,7 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
+    pub async fn cd(&self, conn: &mut db::Connection, path: impl AsRef<Utf8Path>) -> Result<Self> {
         let mut curr = Cow::Borrowed(self);
 
         for component in path.as_ref().components() {
@@ -80,7 +78,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open(MissingVersionStrategy::Skip)
+                        .open(conn, MissingVersionStrategy::Skip)
                         .await?;
                     curr = Cow::Owned(next);
                 }
@@ -95,19 +93,28 @@ impl JointDirectory {
 
     /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
     /// be empty. Use [Self::remove_entry_recursively] to remove non-empty subdirectories.
-    pub async fn remove_entry(&mut self, name: &str) -> Result<()> {
-        self.remove_entries(Pattern::Unique(name)).await
+    pub async fn remove_entry(&mut self, conn: &mut db::Connection, name: &str) -> Result<()> {
+        self.remove_entries(conn, Pattern::Unique(name)).await
     }
 
     /// Removes the specified entry from this directory, including all its content if it is a
     /// subdirectory.
-    pub async fn remove_entry_recursively(&mut self, name: &str) -> Result<()> {
-        self.remove_entries_recursively(Pattern::Unique(name)).await
+    pub async fn remove_entry_recursively(
+        &mut self,
+        conn: &mut db::Connection,
+        name: &str,
+    ) -> Result<()> {
+        self.remove_entries_recursively(conn, Pattern::Unique(name))
+            .await
     }
 
-    async fn remove_entries(&mut self, pattern: Pattern<'_>) -> Result<()> {
+    async fn remove_entries(
+        &mut self,
+        conn: &mut db::Connection,
+        pattern: Pattern<'_>,
+    ) -> Result<()> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let local = fork(&mut self.versions, local_branch).await?;
+        let local = fork(conn, &mut self.versions, local_branch).await?;
 
         let entries: Vec<_> = pattern
             .apply(&self.read().await)?
@@ -124,27 +131,32 @@ impl JointDirectory {
             .collect();
 
         for (name, branch_id, vv) in entries {
-            local.remove_entry(&name, &branch_id, vv).await?;
+            local.remove_entry(conn, &name, &branch_id, vv).await?;
         }
 
         Ok(())
     }
 
     #[async_recursion]
-    async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
-        let dirs = future::try_join_all(
-            pattern
-                .apply(&self.read().await)?
-                .filter_map(|e| e.directory().ok())
-                .map(|e| async move { e.open(MissingVersionStrategy::Skip).await }),
-        )
-        .await?;
+    async fn remove_entries_recursively<'a>(
+        &'a mut self,
+        conn: &mut db::Connection,
+        pattern: Pattern<'a>,
+    ) -> Result<()> {
+        let mut dirs = Vec::new();
 
-        for mut dir in dirs {
-            dir.remove_entries_recursively(Pattern::All).await?;
+        for entry in pattern
+            .apply(&self.read().await)?
+            .filter_map(|e| e.directory().ok())
+        {
+            dirs.push(entry.open(conn, MissingVersionStrategy::Skip).await?);
         }
 
-        self.remove_entries(pattern).await
+        for mut dir in dirs {
+            dir.remove_entries_recursively(conn, Pattern::All).await?;
+        }
+
+        self.remove_entries(conn, pattern).await
     }
 
     /// Merge all versions of this `JointDirectory` into a single `Directory`.
@@ -152,14 +164,21 @@ impl JointDirectory {
     /// In the presence of conflicts (multiple concurrent versions of the same file) this function
     /// still proceeds as far as it can, but the conflicting files remain unmerged.
     ///
+    /// Note: unlikely all the other methods in `JointDirectory`, this one takes `db::Pool`, not
+    /// `db::Connection`. The reason is that for large repositories, this function can take long
+    /// time to complete and this allows it to periodically release (and re-acquire) the connection
+    /// to prevent starving other tasks.
+    ///
     /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
-    pub async fn merge(&mut self) -> Result<Directory> {
-        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let local_version = fork(&mut self.versions, local_branch).await?;
+    pub async fn merge(&mut self, db: &db::Pool) -> Result<Directory> {
+        let mut conn = db.acquire().await?;
 
-        let new_version_vector = self.merge_version_vectors().await?;
-        let old_version_vector = local_version.version_vector().await?;
+        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
+        let local_version = fork(&mut conn, &mut self.versions, local_branch).await?;
+
+        let new_version_vector = self.merge_version_vectors(&mut conn).await?;
+        let old_version_vector = local_version.version_vector(&mut conn).await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
@@ -173,16 +192,22 @@ impl JointDirectory {
 
         for entry in self.read().await.entries() {
             match entry {
-                JointEntryRef::File(entry) => files.push(entry.open().await?),
+                JointEntryRef::File(entry) => files.push(entry.open(&mut conn).await?),
                 JointEntryRef::Directory(entry) => {
-                    subdirs.push(entry.open(MissingVersionStrategy::Fail).await?)
+                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Fail).await?)
                 }
             }
         }
 
+        // Drop the connection now and re-acquire it for each file/subdirectory separately, to give
+        // other tasks chance to acquire it too.
+        drop(conn);
+
         // Fork files.
         for mut file in files {
-            match file.fork(local_branch).await {
+            let mut conn = db.acquire().await?;
+
+            match file.fork(&mut conn, local_branch).await {
                 Ok(()) => (),
                 Err(Error::EntryExists) => {
                     // Ignore conflicts
@@ -193,20 +218,21 @@ impl JointDirectory {
 
         // Merge subdirectories
         for mut dir in subdirs {
-            dir.merge().await?;
+            dir.merge(db).await?;
         }
 
-        local_version.bump(new_version_vector).await?;
+        let mut conn = db.acquire().await?;
+        local_version.bump(&mut conn, new_version_vector).await?;
 
         Ok(local_version)
     }
 
     // Merge the version vectors of all the versions in this joint directory.
-    async fn merge_version_vectors(&self) -> Result<VersionVector> {
+    async fn merge_version_vectors(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         let mut outcome = VersionVector::new();
 
         for version in self.versions.values() {
-            outcome.merge(&version.version_vector().await?);
+            outcome.merge(&version.version_vector(conn).await?);
         }
 
         Ok(outcome)
@@ -216,6 +242,7 @@ impl JointDirectory {
 // Ensures this joint directory contains a local version and returns it.
 // Note this is not a method to work around borrow checker.
 async fn fork(
+    conn: &mut db::Connection,
     versions: &mut BTreeMap<PublicKey, Directory>,
     local_branch: &Branch,
 ) -> Result<Directory> {
@@ -225,7 +252,7 @@ async fn fork(
 
     // Grab any version and fork it to create the local one.
     let remote = versions.values().next().ok_or(Error::EntryNotFound)?;
-    let local = remote.clone().fork(local_branch).await?;
+    let local = remote.clone().fork(conn, local_branch).await?;
 
     versions.insert(*local_branch.id(), local.clone());
 
@@ -432,10 +459,8 @@ impl<'a> JointFileRef<'a> {
         }
     }
 
-    // NOTE: deliberately returning explicit `impl Future` instead of using `async` to make it so
-    // the returned future does NOT borrow from `self`. See [FileRef::open] for details.
-    pub fn open(&self) -> impl Future<Output = Result<File>> {
-        self.file.open()
+    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
+        self.file.open(conn).await
     }
 
     pub fn version_vector(&self) -> &'a VersionVector {
@@ -490,15 +515,17 @@ impl<'a> JointDirectoryRef<'a> {
 
     pub async fn open(
         &self,
+        conn: &mut db::Connection,
         missing_version_strategy: MissingVersionStrategy,
     ) -> Result<JointDirectory> {
-        let directories = future::try_join_all(self.versions.iter().map(|dir| async move {
-            match dir.open().await {
-                Ok(open_dir) => Ok(Some(open_dir)),
+        let mut versions = Vec::new();
+        for version in &self.versions {
+            match version.open(conn).await {
+                Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self
                         .local_branch
-                        .map(|local_branch| dir.branch().id() == local_branch.id())
+                        .map(|local_branch| version.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
                     log::error!(
@@ -506,7 +533,7 @@ impl<'a> JointDirectoryRef<'a> {
                         self.name(),
                         e
                     );
-                    Err(e)
+                    return Err(e);
                 }
                 Err(Error::EntryNotFound | Error::BlockNotFound(_))
                     if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>
@@ -514,7 +541,7 @@ impl<'a> JointDirectoryRef<'a> {
                     // Some of the directories on remote branches may fail due to them not yet
                     // being fully downloaded from remote peers. This is OK and we'll treat such
                     // cases as if this replica doesn't know about those directories.
-                    Ok(None)
+                    continue;
                 }
                 Err(e) => {
                     log::error!(
@@ -522,15 +549,12 @@ impl<'a> JointDirectoryRef<'a> {
                         self.name(),
                         e
                     );
-                    Err(e)
+                    return Err(e);
                 }
             }
-        }))
-        .await?
-        .into_iter()
-        .flatten();
+        }
 
-        Ok(JointDirectory::new(self.local_branch.cloned(), directories))
+        Ok(JointDirectory::new(self.local_branch.cloned(), versions))
     }
 
     pub(crate) fn versions(&self) -> &[DirectoryRef] {

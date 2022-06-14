@@ -318,7 +318,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(store.db_pool().clone());
+    let mut receive_filter = ReceiveFilter::new(store.db().clone());
 
     for layer in snapshot0.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
@@ -345,17 +345,11 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
             .unwrap();
     }
 
-    let remote_branch = store
-        .index
-        .branches()
-        .await
-        .get(&remote_id)
-        .unwrap()
-        .clone();
+    let remote_branch = store.index.get_branch(&remote_id).await.unwrap();
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut store.db_pool().acquire().await.unwrap(),
+        &mut store.db().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -377,7 +371,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut store.db_pool().acquire().await.unwrap(),
+        &mut store.db().acquire().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )

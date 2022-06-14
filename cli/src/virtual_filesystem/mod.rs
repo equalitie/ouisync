@@ -398,17 +398,19 @@ impl Inner {
 
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
+
+        let mut conn = self.repository.db().acquire().await?;
         let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
-                entry.open().await?.len().await,
+                entry.open(&mut conn).await?.len().await,
                 Representation::File(*entry.branch_id()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry
-                    .open(MissingVersionStrategy::Skip)
+                    .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
                     .read()
                     .await
@@ -497,9 +499,11 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            file.fork(&local_branch).await?;
-            file.truncate(size).await?;
-            file.flush().await?;
+            let mut conn = self.repository.db().acquire().await?;
+
+            file.fork(&mut conn, &local_branch).await?;
+            file.truncate(&mut conn, size).await?;
+            file.flush(&mut conn).await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
@@ -681,8 +685,8 @@ impl Inner {
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
-
-        file.flush().await?;
+        let mut conn = self.repository.db().acquire().await?;
+        file.flush(&mut conn).await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -706,10 +710,11 @@ impl Inner {
 
         if flags.contains(libc::O_TRUNC) {
             let local_branch = self.repository.get_or_create_local_branch().await?;
+            let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&local_branch).await?;
-            file.truncate(0).await?;
-            file.flush().await?;
+            file.fork(&mut conn, &local_branch).await?;
+            file.truncate(&mut conn, 0).await?;
+            file.flush(&mut conn).await?;
         }
 
         // TODO: what about other flags (parameter)?
@@ -740,7 +745,8 @@ impl Inner {
         let file = self.entries.get_file_mut(handle)?;
 
         if flush {
-            file.flush().await?;
+            let mut conn = self.repository.db().acquire().await?;
+            file.flush(&mut conn).await?;
         }
 
         self.entries.remove(handle);
@@ -767,14 +773,16 @@ impl Inner {
 
         // TODO: what about flags?
 
+        let mut conn = self.repository.db().acquire().await?;
+
         let file = self.entries.get_file_mut(handle)?;
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        file.seek(SeekFrom::Start(offset)).await?;
+        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read(&mut buffer).await?;
+        let len = file.read(&mut conn, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -799,11 +807,12 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         let local_branch = self.repository.get_or_create_local_branch().await?;
+        let mut conn = self.repository.db().acquire().await?;
 
         let file = self.entries.get_file_mut(handle)?;
-        file.seek(SeekFrom::Start(offset)).await?;
-        file.fork(&local_branch).await?;
-        file.write(data).await?;
+        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+        file.fork(&mut conn, &local_branch).await?;
+        file.write(&mut conn, data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
@@ -814,7 +823,9 @@ impl Inner {
             self.inodes.path_display(inode, None),
             handle
         );
-        self.entries.get_file_mut(handle)?.flush().await
+
+        let mut conn = self.repository.db().acquire().await?;
+        self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
@@ -826,7 +837,8 @@ impl Inner {
         );
 
         // TODO: what about `datasync`?
-        self.entries.get_file_mut(handle)?.flush().await
+        let mut conn = self.repository.db().acquire().await?;
+        self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {

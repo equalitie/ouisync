@@ -22,6 +22,7 @@ use crate::{
     blob::Shared,
     branch::Branch,
     crypto::sign::PublicKey,
+    db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
     file::File,
@@ -45,18 +46,20 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(owner_branch: Branch) -> Result<Self> {
-        Self::open(owner_branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(conn: &mut db::Connection, owner_branch: Branch) -> Result<Self> {
+        Self::open(conn, owner_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
-    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
+    pub(crate) async fn open_or_create_root(
+        conn: &mut db::Connection,
+        branch: Branch,
+    ) -> Result<Self> {
         // TODO: make sure this is atomic
-
         let locator = Locator::ROOT;
 
-        match Self::open(branch.clone(), locator, None).await {
+        match Self::open(conn, branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -78,13 +81,15 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub async fn create_file(&self, name: String) -> Result<File> {
-        self.write().await.create_file(name).await
+    pub async fn create_file(&self, conn: &mut db::Connection, name: String) -> Result<File> {
+        let tx = conn.begin().await?;
+        self.write().await.create_file(tx, name).await
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&self, name: String) -> Result<Self> {
-        self.write().await.create_directory(name).await
+    pub async fn create_directory(&self, conn: &mut db::Connection, name: String) -> Result<Self> {
+        let tx = conn.begin().await?;
+        self.write().await.create_directory(tx, name).await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -96,13 +101,15 @@ impl Directory {
     /// tombstone is created.
     pub async fn remove_entry(
         &self,
+        conn: &mut db::Connection,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
+        let tx = conn.begin().await?;
         self.write()
             .await
-            .remove_entry(name, branch_id, vv, OverwriteStrategy::Remove)
+            .remove_entry(tx, name, branch_id, vv, OverwriteStrategy::Remove)
             .await
     }
 
@@ -132,6 +139,7 @@ impl Directory {
     /// proper hard links.
     pub(crate) async fn move_entry(
         &self,
+        conn: &mut db::Connection,
         src_name: &str,
         src_data: EntryData,
         dst_dir: &Directory,
@@ -142,17 +150,19 @@ impl Directory {
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
         {
+            let tx = conn.begin().await?;
             let mut dst_writer = dst_dir.write().await;
             dst_writer
-                .insert_entry(dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
+                .insert_entry(tx, dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
                 .await?;
         }
 
         {
+            let tx = conn.begin().await?;
             let mut src_writer = self.write().await;
             let branch_id = *src_writer.branch().id();
             src_writer
-                .remove_entry(src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
+                .remove_entry(tx, src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
                 .await?;
         }
 
@@ -161,7 +171,11 @@ impl Directory {
 
     // Forks this directory into the local branch.
     #[async_recursion]
-    pub async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
+    pub(crate) async fn fork(
+        &self,
+        conn: &mut db::Connection,
+        local_branch: &Branch,
+    ) -> Result<Directory> {
         let inner = self.read().await;
 
         if local_branch.id() == inner.branch().id() {
@@ -180,31 +194,31 @@ impl Directory {
         // Prevent deadlock
         drop(inner);
 
-        if let Some((parent_dir, parent_entry_name)) = parent {
-            let parent_dir = parent_dir.fork(local_branch).await?;
-            let mut parent_dir = parent_dir.write().await;
+        if let Some((parent_dir, entry_name)) = parent {
+            let parent_dir = parent_dir.fork(conn, local_branch).await?;
+            let mut writer = parent_dir.write().await;
 
-            match parent_dir.lookup(&parent_entry_name) {
-                Ok(EntryRef::Directory(entry)) => entry.open().await,
+            match writer.lookup(&entry_name) {
+                Ok(EntryRef::Directory(entry)) => entry.open(conn).await,
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
                     Err(Error::EntryIsFile)
                 }
                 Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    parent_dir.create_directory(parent_entry_name).await
+                    let tx = conn.begin().await?;
+                    writer.create_directory(tx, entry_name).await
                 }
                 Err(error) => Err(error),
             }
         } else {
-            local_branch.open_or_create_root().await
+            local_branch.open_or_create_root(conn).await
         }
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn bump(&self, vv: VersionVector) -> Result<()> {
-        let mut writer = self.write().await;
-        let mut conn = writer.inner.db_pool().acquire().await?;
+    pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
         let tx = conn.begin().await?;
+        let mut writer = self.write().await;
         writer.inner.commit(tx, vv).await
     }
 
@@ -218,6 +232,7 @@ impl Directory {
     }
 
     async fn open(
+        conn: &mut db::Connection,
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
@@ -225,7 +240,7 @@ impl Directory {
         Ok(Self {
             branch_id: *owner_branch.id(),
             inner: Arc::new(RwLock::new(
-                Inner::open(owner_branch, locator, parent).await?,
+                Inner::open(conn, owner_branch, locator, parent).await?,
             )),
         })
     }
@@ -238,7 +253,7 @@ impl Directory {
     }
 
     #[async_recursion]
-    pub async fn debug_print(&self, print: DebugPrinter) {
+    pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
         for (name, entry_data) in inner.entries() {
@@ -251,6 +266,7 @@ impl Directory {
                     let parent_context = ParentContext::new(self.clone(), name.into());
 
                     let file = File::open(
+                        conn,
                         inner.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
@@ -261,7 +277,7 @@ impl Directory {
                     match file {
                         Ok(mut file) => {
                             let mut buf = [0; 32];
-                            let lenght_result = file.read(&mut buf).await;
+                            let lenght_result = file.read(conn, &mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len().await;
@@ -290,6 +306,7 @@ impl Directory {
                     let dir = inner
                         .open_directories
                         .open(
+                            conn,
                             inner.blob.branch().clone(),
                             Locator::head(data.blob_id),
                             parent_context,
@@ -298,7 +315,7 @@ impl Directory {
 
                     match dir {
                         Ok(dir) => {
-                            dir.debug_print(print).await;
+                            dir.debug_print(conn, print).await;
                         }
                         Err(e) => {
                             print.display(&format!("Failed to open {:?}", e));
@@ -314,20 +331,8 @@ impl Directory {
         &self.branch_id
     }
 
-    pub(crate) async fn version_vector(&self) -> Result<VersionVector> {
-        let reader = self.read().await;
-
-        if let Some(vv) = reader.version_vector().await {
-            return Ok(vv);
-        }
-
-        let branch = reader.inner.branch().clone();
-
-        // Make sure we don't hold the directory lock while retrieving the root version vector
-        // (which involves db access), to avoid deadlocks.
-        drop(reader);
-
-        branch.version_vector().await
+    pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+        self.read().await.version_vector(conn).await
     }
 }
 
@@ -372,16 +377,12 @@ impl Reader<'_> {
         self.inner.blob.branch()
     }
 
-    /// Version vector of this directory or `None` if this is the root. To return version vector of
-    /// any directory, use the more convenient and higher-level `Directory::version_vector`. The
-    /// reason it works like this is that because retrieving the root version vector requires
-    /// database access, we can enforce the order in which the directory lock and the database
-    /// connection are acquired to avoid deadlocks.
-    pub async fn version_vector(&self) -> Option<VersionVector> {
+    /// Version vector of this directory.
+    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         if let Some(parent) = &self.inner.parent {
-            Some(parent.entry_version_vector().await)
+            Ok(parent.entry_version_vector().await)
         } else {
-            None
+            self.branch().data().load_version_vector(conn).await
         }
     }
 
@@ -399,7 +400,7 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    async fn create_file(&mut self, name: String) -> Result<File> {
+    async fn create_file(&mut self, mut tx: db::Transaction<'_>, name: String) -> Result<File> {
         let blob_id = rand::random();
         let shared = Shared::uninit();
         let data = EntryData::file(
@@ -416,9 +417,6 @@ impl Writer<'_> {
             shared,
         );
 
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, data, OverwriteStrategy::Remove)?;
         file.save(&mut tx).await?;
@@ -428,7 +426,11 @@ impl Writer<'_> {
         Ok(file)
     }
 
-    async fn create_directory(&mut self, name: String) -> Result<Directory> {
+    async fn create_directory(
+        &mut self,
+        mut tx: db::Transaction<'_>,
+        name: String,
+    ) -> Result<Directory> {
         let blob_id = rand::random();
         let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
@@ -438,9 +440,6 @@ impl Writer<'_> {
             .open_directories
             .create(self.branch(), Locator::head(blob_id), parent)
             .await?;
-
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
 
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, data, OverwriteStrategy::Remove)?;
@@ -453,6 +452,7 @@ impl Writer<'_> {
 
     async fn remove_entry(
         &mut self,
+        mut tx: db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
@@ -461,7 +461,7 @@ impl Writer<'_> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
+            Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };
@@ -498,7 +498,7 @@ impl Writer<'_> {
             }
         };
 
-        self.insert_entry(name.to_owned(), new_entry, overwrite)
+        self.insert_entry(tx, name.to_owned(), new_entry, overwrite)
             .await
     }
 
@@ -513,13 +513,11 @@ impl Writer<'_> {
     /// Atomically inserts the given entry into this directory and commits the change.
     async fn insert_entry(
         &mut self,
+        mut tx: db::Transaction<'_>,
         name: String,
         entry: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let mut conn = self.inner.db_pool().acquire().await?;
-        let mut tx = conn.begin().await?;
-
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, entry, overwrite)?;
         self.inner.save(&mut tx).await?;

@@ -72,7 +72,7 @@ impl BlockScanner {
     }
 
     async fn traverse_root(&self, mode: Mode) -> Result<()> {
-        let branches = self.shared.branches().await?;
+        let branches = self.shared.collect_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
 
@@ -81,7 +81,8 @@ impl BlockScanner {
             // directory version is up to date.
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root().await {
+            let mut conn = self.shared.store.db().acquire().await?;
+            match branch.open_root(&mut conn).await {
                 Ok(dir) => versions.push(dir),
                 // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
                 // have the root directory yet. It's safe to skip those.
@@ -104,6 +105,8 @@ impl BlockScanner {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
+        let mut conn = self.shared.store.db().acquire().await?;
+
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
         for entry in dir.read().await.entries() {
@@ -119,10 +122,12 @@ impl BlockScanner {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    subdirs.push(entry.open(MissingVersionStrategy::Skip).await?);
+                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Skip).await?);
                 }
             }
         }
+
+        drop(conn);
 
         for entry in entries {
             self.process_blocks(mode, entry).await?;
@@ -136,7 +141,10 @@ impl BlockScanner {
     }
 
     async fn remove_outdated_branches(&self) -> Result<()> {
-        let outdated_branches = utils::outdated_branches(self.shared.branches().await?).await?;
+        let mut conn = self.shared.store.db().acquire().await?;
+        let outdated_branches =
+            utils::outdated_branches(&mut conn, self.shared.collect_branches().await?).await?;
+        drop(conn);
 
         for branch in outdated_branches {
             self.shared.remove_branch(branch.id()).await?;
@@ -146,12 +154,12 @@ impl BlockScanner {
     }
 
     async fn prepare_reachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
         block::clear_reachable(&mut conn).await
     }
 
     async fn remove_unreachable_blocks(&self) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
         let count = block::remove_unreachable(&mut conn).await?;
 
         if count > 0 {
@@ -162,7 +170,7 @@ impl BlockScanner {
     }
 
     async fn process_blocks(&self, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
-        let mut conn = self.shared.store.db_pool().acquire().await?;
+        let mut conn = self.shared.store.db().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
             block::mark_reachable(&mut conn, &block_id).await?;
