@@ -20,18 +20,12 @@ async fn create_and_list_entries() {
     let dir = branch.open_or_create_root(&mut conn).await.unwrap();
 
     let mut file_dog = dir.create_file(&mut conn, "dog.txt".into()).await.unwrap();
-    file_dog
-        .write_in_connection(&mut conn, b"woof")
-        .await
-        .unwrap();
-    file_dog.flush_in_connection(&mut conn).await.unwrap();
+    file_dog.write(&mut conn, b"woof").await.unwrap();
+    file_dog.flush(&mut conn).await.unwrap();
 
     let mut file_cat = dir.create_file(&mut conn, "cat.txt".into()).await.unwrap();
-    file_cat
-        .write_in_connection(&mut conn, b"meow")
-        .await
-        .unwrap();
-    file_cat.flush_in_connection(&mut conn).await.unwrap();
+    file_cat.write(&mut conn, b"meow").await.unwrap();
+    file_cat.flush(&mut conn).await.unwrap();
 
     // Reopen the dir and try to read the files.
     let dir = branch.open_root(&mut conn).await.unwrap();
@@ -89,7 +83,7 @@ async fn remove_file() {
         .create_file(&mut conn, name.into())
         .await
         .unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     let file_vv = file.version_vector().await;
     let file_locator = *file.locator();
@@ -130,7 +124,7 @@ async fn remove_file() {
         .create_file(&mut conn, name.into())
         .await
         .unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 }
 
 // Rename a file without moving it to another directory.
@@ -149,8 +143,8 @@ async fn rename_file() {
         .create_file(&mut conn, src_name.into())
         .await
         .unwrap();
-    file.write_in_connection(&mut conn, content).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.write(&mut conn, content).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -219,8 +213,8 @@ async fn move_file_within_branch() {
         .create_file(&mut conn, file_name.into())
         .await
         .unwrap();
-    file.write_in_connection(&mut conn, content).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.write(&mut conn, content).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -344,8 +338,8 @@ async fn move_non_empty_directory() {
         .unwrap();
 
     let mut file = dir.create_file(&mut conn, file_name.into()).await.unwrap();
-    file.write_in_connection(&mut conn, content).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.write(&mut conn, content).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     let file_locator = *file.locator();
 
     let dst_dir = root_dir
@@ -600,11 +594,8 @@ async fn modify_directory_concurrently() {
         .create_file(&mut conn, "file.txt".to_owned())
         .await
         .unwrap();
-    file0
-        .write_in_connection(&mut conn, b"hello")
-        .await
-        .unwrap();
-    file0.flush_in_connection(&mut conn).await.unwrap();
+    file0.write(&mut conn, b"hello").await.unwrap();
+    file0.flush(&mut conn).await.unwrap();
 
     let mut file1 = dir1
         .read()
@@ -654,7 +645,7 @@ async fn remove_concurrent_remote_file() {
     root.create_file(&mut conn, name.to_owned())
         .await
         .unwrap()
-        .flush_in_connection(&mut conn)
+        .flush(&mut conn)
         .await
         .unwrap();
 

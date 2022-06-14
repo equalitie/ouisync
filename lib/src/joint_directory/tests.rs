@@ -106,16 +106,13 @@ async fn conflict_forked_files() {
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
     file1.fork(&mut conn, &branches[1]).await.unwrap();
-    file1.write_in_connection(&mut conn, b"two").await.unwrap();
-    file1.flush_in_connection(&mut conn).await.unwrap();
+    file1.write(&mut conn, b"two").await.unwrap();
+    file1.flush(&mut conn).await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file(&mut conn, &root0, "file.txt").await;
-    file0
-        .write_in_connection(&mut conn, b"three")
-        .await
-        .unwrap();
-    file0.flush_in_connection(&mut conn).await.unwrap();
+    file0.write(&mut conn, b"three").await.unwrap();
+    file0.flush(&mut conn).await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
     let root1 = branches[1].open_root(&mut conn).await.unwrap();
@@ -772,10 +769,10 @@ async fn create_file(
 
     if !content.is_empty() {
         file.fork(conn, local_branch).await.unwrap();
-        file.write_in_connection(conn, content).await.unwrap();
+        file.write(conn, content).await.unwrap();
     }
 
-    file.flush_in_connection(conn).await.unwrap();
+    file.flush(conn).await.unwrap();
     file
 }
 
@@ -790,8 +787,8 @@ async fn update_file(
 
     file.fork(conn, local_branch).await.unwrap();
     file.truncate(conn, 0).await.unwrap();
-    file.write_in_connection(conn, content).await.unwrap();
-    file.flush_in_connection(conn).await.unwrap();
+    file.write(conn, content).await.unwrap();
+    file.flush(conn).await.unwrap();
 }
 
 async fn open_file(conn: &mut db::Connection, parent: &Directory, name: &str) -> File {

@@ -24,11 +24,8 @@ async fn relink_repository() {
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    file_a
-        .write_in_connection(&mut conn, b"first")
-        .await
-        .unwrap();
-    file_a.flush_in_connection(&mut conn).await.unwrap();
+    file_a.write(&mut conn, b"first").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // Wait until the file is seen by B
@@ -45,11 +42,8 @@ async fn relink_repository() {
     // Update the file while B's repo is unlinked
     let mut conn = repo_a.db().acquire().await.unwrap();
     file_a.truncate(&mut conn, 0).await.unwrap();
-    file_a
-        .write_in_connection(&mut conn, b"second")
-        .await
-        .unwrap();
-    file_a.flush_in_connection(&mut conn).await.unwrap();
+    file_a.write(&mut conn, b"second").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // Re-register B's repo
@@ -76,7 +70,7 @@ async fn remove_remote_file() {
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.txt").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     time::timeout(
@@ -132,7 +126,7 @@ async fn relay() {
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     // file.write(&content).await.unwrap();
     write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
-    file.flush_in_connection(&mut *repo_a.db().acquire().await.unwrap())
+    file.flush(&mut *repo_a.db().acquire().await.unwrap())
         .await
         .unwrap();
     drop(file);
@@ -162,7 +156,7 @@ async fn transfer_large_file() {
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
-    file.flush_in_connection(&mut *repo_a.db().acquire().await.unwrap())
+    file.flush(&mut *repo_a.db().acquire().await.unwrap())
         .await
         .unwrap();
     drop(file);
@@ -217,9 +211,7 @@ async fn write_in_chunks(db: &DbPool, file: &mut File, content: &[u8], chunk_siz
         let mut conn = db.acquire().await.unwrap();
 
         let end = (offset + chunk_size).min(content.len());
-        file.write_in_connection(&mut conn, &content[offset..end])
-            .await
-            .unwrap();
+        file.write(&mut conn, &content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             log::debug!(

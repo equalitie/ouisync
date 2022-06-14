@@ -43,7 +43,7 @@ async fn local_delete_remote_file() {
         2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
     )
     .await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -98,7 +98,7 @@ async fn local_truncate_local_file() {
         2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
     )
     .await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 2 blocks for the file + 1 block for the root directory
@@ -106,7 +106,7 @@ async fn local_truncate_local_file() {
 
     let mut conn = repo.db().acquire().await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 1 block for the file + 1 block for the root directory
@@ -131,7 +131,7 @@ async fn local_truncate_remote_file() {
         2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
     )
     .await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -148,7 +148,7 @@ async fn local_truncate_remote_file() {
     .await
     .unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     repo_l.force_merge().await.unwrap();
@@ -177,7 +177,7 @@ async fn remote_truncate_remote_file() {
         2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
     )
     .await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 2 blocks for the file + 1 block for the remote root
@@ -187,7 +187,7 @@ async fn remote_truncate_remote_file() {
 
     let mut conn = repo_r.db().acquire().await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 1 block for the file + 1 block for the remote root
@@ -217,7 +217,7 @@ async fn concurrent_delete_update() {
         BLOCK_SIZE - BLOB_HEADER_SIZE,
     )
     .await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // 1 for the remote root + 1 for the file
@@ -241,7 +241,7 @@ async fn concurrent_delete_update() {
     let mut conn = repo_r.db().acquire().await.unwrap();
     file.seek(&mut conn, SeekFrom::End(-64)).await.unwrap();
     write_to_file(&mut rng, &mut conn, &mut file, 64).await;
-    file.flush_in_connection(&mut conn).await.unwrap();
+    file.flush(&mut conn).await.unwrap();
     drop(conn);
 
     // Re-connect
@@ -274,5 +274,5 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
 async fn write_to_file(rng: &mut StdRng, conn: &mut DbConnection, file: &mut File, size: usize) {
     let mut buffer = vec![0; size];
     rng.fill(&mut buffer[..]);
-    file.write_in_connection(conn, &buffer).await.unwrap();
+    file.write(conn, &buffer).await.unwrap();
 }

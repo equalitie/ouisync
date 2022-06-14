@@ -54,7 +54,7 @@ pub unsafe extern "C" fn file_create(
         ctx.spawn(async move {
             let mut file = repo.create_file(&path).await?;
             let mut conn = repo.db().acquire().await?;
-            file.flush_in_connection(&mut conn).await?;
+            file.flush(&mut conn).await?;
 
             Ok(SharedHandle::new(Arc::new(Mutex::new(FfiFile {
                 file,
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn file_close(handle: SharedHandle<Mutex<FfiFile>>, port: 
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
             let mut conn = g.repo.db().acquire().await?;
-            g.file.flush_in_connection(&mut conn).await
+            g.file.flush(&mut conn).await
         })
     })
 }
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn file_flush(handle: SharedHandle<Mutex<FfiFile>>, port: 
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
             let mut conn = g.repo.db().acquire().await?;
-            g.file.flush_in_connection(&mut conn).await
+            g.file.flush(&mut conn).await
         })
     })
 }
@@ -160,7 +160,7 @@ pub unsafe extern "C" fn file_write(
 
             g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
             g.file.fork(&mut conn, &local_branch).await?;
-            g.file.write_in_connection(&mut conn, buffer).await?;
+            g.file.write(&mut conn, buffer).await?;
 
             Ok(())
         })
