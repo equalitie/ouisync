@@ -451,9 +451,7 @@ async fn append_to_file() {
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.seek_in_connection(&mut conn, SeekFrom::End(0))
-        .await
-        .unwrap();
+    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
     file.write_in_connection(&mut conn, b"bar").await.unwrap();
     file.flush_in_connection(&mut conn).await.unwrap();
     drop(conn);
@@ -602,9 +600,7 @@ async fn read_access_same_replica() {
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
-    file.seek_in_connection(&mut conn, SeekFrom::Start(0))
-        .await
-        .unwrap();
+    file.seek(&mut conn, SeekFrom::Start(0)).await.unwrap();
     // short writes that don't cross block boundaries don't trigger the permission check which is
     // why the following works...
     file.write_in_connection(&mut conn, b"hello universe")

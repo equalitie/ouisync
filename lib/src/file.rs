@@ -88,18 +88,7 @@ impl File {
     }
 
     /// Seeks to an offset in the file.
-    #[deprecated]
-    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut conn = self.blob.branch().db_pool().acquire().await?;
-        self.blob.seek(&mut conn, pos).await
-    }
-
-    /// Seeks to an offset in the file.
-    pub async fn seek_in_connection(
-        &mut self,
-        conn: &mut db::Connection,
-        pos: SeekFrom,
-    ) -> Result<u64> {
+    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
         self.blob.seek(conn, pos).await
     }
 
