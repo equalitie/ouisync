@@ -61,13 +61,24 @@ impl File {
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.
+    #[deprecated]
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.read(&mut conn, buffer).await
     }
 
+    /// Reads data from this file. See [`Blob::read`] for more info.
+    pub async fn read_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+        buffer: &mut [u8],
+    ) -> Result<usize> {
+        self.blob.read(conn, buffer).await
+    }
+
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
+    #[deprecated]
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.read_to_end(&mut conn).await
@@ -99,9 +110,19 @@ impl File {
     }
 
     /// Seeks to an offset in the file.
+    #[deprecated]
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.blob.seek(&mut conn, pos).await
+    }
+
+    /// Seeks to an offset in the file.
+    pub async fn seek_in_connection(
+        &mut self,
+        conn: &mut db::Connection,
+        pos: SeekFrom,
+    ) -> Result<u64> {
+        self.blob.seek(conn, pos).await
     }
 
     /// Truncates the file to the given length.
@@ -156,11 +177,15 @@ impl File {
 
     /// Copy the entire contents of this file into the provided writer (e.g. a file on a regular
     /// filesystem)
-    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(&mut self, dst: &mut W) -> Result<()> {
+    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(
+        &mut self,
+        conn: &mut db::Connection,
+        dst: &mut W,
+    ) -> Result<()> {
         let mut buffer = vec![0; BLOCK_SIZE];
 
         loop {
-            let len = self.read(&mut buffer).await?;
+            let len = self.read_in_connection(conn, &mut buffer).await?;
             dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
 
             if len < buffer.len() {
@@ -195,6 +220,7 @@ impl File {
 
     /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
     /// in the local branch as well. Should be called before any mutable operation.
+    #[deprecated]
     pub async fn fork(&mut self, local_branch: &Branch) -> Result<()> {
         let mut conn = self.blob.branch().db_pool().acquire().await?;
         self.fork_in_connection(&mut conn, local_branch).await

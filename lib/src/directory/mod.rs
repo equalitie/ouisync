@@ -253,7 +253,7 @@ impl Directory {
     }
 
     #[async_recursion]
-    pub async fn debug_print(&self, print: DebugPrinter) {
+    pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         let inner = self.inner.read().await;
 
         for (name, entry_data) in inner.entries() {
@@ -265,16 +265,8 @@ impl Directory {
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
 
-                    let mut conn = match inner.branch().db_pool().acquire().await {
-                        Ok(conn) => conn,
-                        Err(e) => {
-                            print.display(&format_args!("Failed to acquire db connection {:?}", e));
-                            continue;
-                        }
-                    };
-
                     let file = File::open(
-                        &mut conn,
+                        conn,
                         inner.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
@@ -282,12 +274,10 @@ impl Directory {
                     )
                     .await;
 
-                    drop(conn);
-
                     match file {
                         Ok(mut file) => {
                             let mut buf = [0; 32];
-                            let lenght_result = file.read(&mut buf).await;
+                            let lenght_result = file.read_in_connection(conn, &mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len().await;
@@ -313,29 +303,19 @@ impl Directory {
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
 
-                    let mut conn = match inner.branch().db_pool().acquire().await {
-                        Ok(conn) => conn,
-                        Err(e) => {
-                            print.display(&format_args!("Failed to acquire db connection {:?}", e));
-                            continue;
-                        }
-                    };
-
                     let dir = inner
                         .open_directories
                         .open(
-                            &mut conn,
+                            conn,
                             inner.blob.branch().clone(),
                             Locator::head(data.blob_id),
                             parent_context,
                         )
                         .await;
 
-                    drop(conn);
-
                     match dir {
                         Ok(dir) => {
-                            dir.debug_print(print).await;
+                            dir.debug_print(conn, print).await;
                         }
                         Err(e) => {
                             print.display(&format!("Failed to open {:?}", e));

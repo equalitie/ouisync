@@ -48,7 +48,7 @@ pub use self::{
     branch::Branch,
     config::ConfigStore,
     crypto::{cipher, sign, Password},
-    db::Store as DbStore,
+    db::{Pool as DbPool, Store as DbStore},
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     file::File,

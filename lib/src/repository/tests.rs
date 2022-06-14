@@ -48,10 +48,12 @@ async fn count_leaf_nodes_sanity_checks() {
     // Create a small file in the root.
 
     let mut file = repo.create_file(file_name).await.unwrap();
-    file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, &random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
         .await
         .unwrap();
-    file.flush().await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
 
     // 2 = one for the root + one for the file.
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 2);
@@ -59,8 +61,12 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
     // Make the file bigger to expand to two blocks
 
-    file.write(&random_bytes(1)).await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, &random_bytes(1))
+        .await
+        .unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
 
     // 3 = one for the root + two for the file.
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
@@ -133,8 +139,10 @@ async fn recreate_previously_deleted_file() {
 
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"foo").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"foo").await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
     drop(file);
 
     // Read it back and check the content
@@ -147,8 +155,10 @@ async fn recreate_previously_deleted_file() {
 
     // Create a file with the same name but different content
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"bar").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"bar").await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
     drop(file);
 
     // Read it back and check the content
@@ -265,10 +275,13 @@ async fn concurrent_write_and_read_file() {
 
             for _ in 0..chunk_count {
                 rand::thread_rng().fill(&mut buffer[..]);
-                file.write(&buffer).await.unwrap();
+
+                let mut conn = repo.db().acquire().await.unwrap();
+                file.write_in_connection(&mut conn, &buffer).await.unwrap();
             }
 
-            file.flush().await.unwrap();
+            let mut conn = repo.db().acquire().await.unwrap();
+            file.flush_in_connection(&mut conn).await.unwrap();
         }
     });
 
@@ -366,23 +379,34 @@ async fn interleaved_flush() {
         let file_name = "test.txt";
 
         let mut file0 = repo.create_file(file_name).await.unwrap();
-        file0.flush().await.unwrap();
+        let mut conn = repo.db().acquire().await.unwrap();
+        file0.flush_in_connection(&mut conn).await.unwrap();
+        drop(conn);
 
         let mut file1 = repo.open_file(file_name).await.unwrap();
+        let mut conn = repo.db().acquire().await.unwrap();
 
-        file0.write(content0).await.unwrap();
-        file1.write(content1).await.unwrap();
+        file0
+            .write_in_connection(&mut conn, content0)
+            .await
+            .unwrap();
+        file1
+            .write_in_connection(&mut conn, content1)
+            .await
+            .unwrap();
 
         match flush_order {
             FlushOrder::FirstThenSecond => {
-                file0.flush().await.unwrap();
-                file1.flush().await.unwrap();
+                file0.flush_in_connection(&mut conn).await.unwrap();
+                file1.flush_in_connection(&mut conn).await.unwrap();
             }
             FlushOrder::SecondThenFirst => {
-                file1.flush().await.unwrap();
-                file0.flush().await.unwrap();
+                file1.flush_in_connection(&mut conn).await.unwrap();
+                file0.flush_in_connection(&mut conn).await.unwrap();
             }
         }
+
+        drop(conn);
 
         assert_eq!(
             count_local_index_leaf_nodes(&repo).await,
@@ -420,16 +444,23 @@ async fn append_to_file() {
     .unwrap();
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
-    file.write(b"foo").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"foo").await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    file.seek(SeekFrom::End(0)).await.unwrap();
-    file.write(b"bar").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.seek_in_connection(&mut conn, SeekFrom::End(0))
+        .await
+        .unwrap();
+    file.write_in_connection(&mut conn, b"bar").await.unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
+    drop(conn);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    let content = file.read_to_end().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
 }
 
@@ -450,9 +481,13 @@ async fn blind_access_non_empty_repo() {
     .unwrap();
 
     let mut file = repo.create_file("secret.txt").await.unwrap();
-    file.write(b"redacted").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"redacted")
+        .await
+        .unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
 
+    drop(conn);
     drop(file);
     drop(repo);
 
@@ -538,9 +573,13 @@ async fn read_access_same_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"hello world")
+        .await
+        .unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
 
+    drop(conn);
     drop(file);
     drop(repo);
 
@@ -557,16 +596,27 @@ async fn read_access_same_replica() {
 
     // Reading files is allowed.
     let mut file = repo.open_file("public.txt").await.unwrap();
-    let content = file.read_to_end().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+
+    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
-    file.seek(SeekFrom::Start(0)).await.unwrap();
+    file.seek_in_connection(&mut conn, SeekFrom::Start(0))
+        .await
+        .unwrap();
     // short writes that don't cross block boundaries don't trigger the permission check which is
     // why the following works...
-    file.write(b"hello universe").await.unwrap();
+    file.write_in_connection(&mut conn, b"hello universe")
+        .await
+        .unwrap();
     // ...but flushing the file is not allowed.
-    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+    assert_matches!(
+        file.flush_in_connection(&mut conn).await,
+        Err(Error::PermissionDenied)
+    );
+
+    drop(conn);
 
     // Creating files is not allowed.
     assert_matches!(
@@ -598,9 +648,13 @@ async fn read_access_different_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world").await.unwrap();
-    file.flush().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write_in_connection(&mut conn, b"hello world")
+        .await
+        .unwrap();
+    file.flush_in_connection(&mut conn).await.unwrap();
 
+    drop(conn);
     drop(file);
     drop(repo);
 
@@ -619,7 +673,8 @@ async fn read_access_different_replica() {
     assert_matches!(repo.local_branch().await.map(|_| ()), None);
 
     let mut file = repo.open_file("public.txt").await.unwrap();
-    let content = file.read_to_end().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    let content = file.read_to_end_in_connection(&mut conn).await.unwrap();
     assert_eq!(content, b"hello world");
 }
 
@@ -639,8 +694,11 @@ async fn truncate_forked_remote_file() {
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
-    file.fork(&local_branch).await.unwrap();
-    file.truncate(0).await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.fork_in_connection(&mut conn, &local_branch)
+        .await
+        .unwrap();
+    file.truncate_in_connection(&mut conn, 0).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1024,12 +1082,9 @@ async fn remove_branch() {
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
-    repo.open_file(path)
-        .await
-        .unwrap()
-        .read_to_end()
-        .await
-        .unwrap()
+    let mut file = repo.open_file(path).await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.read_to_end_in_connection(&mut conn).await.unwrap()
 }
 
 async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str, content: &[u8]) {

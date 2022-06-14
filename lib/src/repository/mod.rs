@@ -354,7 +354,7 @@ impl Repository {
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
 
-                file.fork(&local_branch).await?;
+                file.fork_in_connection(&mut conn, &local_branch).await?;
 
                 (file.parent(), Cow::Owned(src_name))
             }
@@ -551,7 +551,7 @@ impl Repository {
                 "/, vv: {:?}",
                 branch.version_vector(&mut conn).await.unwrap_or_default()
             ));
-            branch.debug_print(print.indent()).await;
+            branch.debug_print(&mut conn, print.indent()).await;
         }
 
         drop(conn);

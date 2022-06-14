@@ -1,4 +1,4 @@
-use ouisync::{AccessMode, ConfigStore, Error, File, Network, Repository};
+use ouisync::{AccessMode, ConfigStore, DbPool, Error, File, Network, Repository};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Duration;
 use tokio::time;
@@ -167,6 +167,8 @@ async fn transfer_large_file() {
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
+    let db = repo.db().clone();
+
     common::eventually(repo, || async {
         let mut file = match repo.open_file(path).await {
             Ok(file) => file,
@@ -178,7 +180,7 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
             Err(error) => panic!("unexpected error: {:?}", error),
         };
 
-        let actual_content = match read_in_chunks(&mut file, 4096).await {
+        let actual_content = match read_in_chunks(&db, &mut file, 4096).await {
             Ok(content) => content,
             // `EntryNotFound` can still happen even here if merge runs in the middle of reading
             // the file - we opened the file while it was still in the remote branch but then that
@@ -214,13 +216,17 @@ async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     }
 }
 
-async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
+async fn read_in_chunks(db: &DbPool, file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
     let mut content = vec![0; file.len().await as usize];
     let mut offset = 0;
 
     while offset < content.len() {
+        let mut conn = db.acquire().await?;
+
         let end = (offset + chunk_size).min(content.len());
-        let size = file.read(&mut content[offset..end]).await?;
+        let size = file
+            .read_in_connection(&mut conn, &mut content[offset..end])
+            .await?;
         offset += size;
     }
 

@@ -769,14 +769,16 @@ impl Inner {
 
         // TODO: what about flags?
 
+        let mut conn = self.repository.db().acquire().await?;
         let file = self.entries.get_file_mut(handle)?;
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        file.seek(SeekFrom::Start(offset)).await?;
+        file.seek_in_connection(&mut conn, SeekFrom::Start(offset))
+            .await?;
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read(&mut buffer).await?;
+        let len = file.read_in_connection(&mut conn, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)

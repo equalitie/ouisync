@@ -116,18 +116,12 @@ impl Branch {
             .await
     }
 
-    pub async fn debug_print(&self, print: DebugPrinter) {
-        match self.pool.acquire().await {
-            Ok(mut conn) => match self.open_root(&mut conn).await {
-                Ok(root) => root.debug_print(print).await,
-                Err(error) => {
-                    print.display(&format_args!("failed to open root directory: {:?}", error))
-                }
-            },
-            Err(error) => print.display(&format_args!(
-                "failed to open root directory - failed to acquire db connection: {:?}",
-                error
-            )),
+    pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
+        match self.open_root(conn).await {
+            Ok(root) => root.debug_print(conn, print).await,
+            Err(error) => {
+                print.display(&format_args!("failed to open root directory: {:?}", error))
+            }
         }
     }
 
