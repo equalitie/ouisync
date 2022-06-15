@@ -1,5 +1,6 @@
 mod channel_info;
 mod client;
+mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
@@ -33,7 +34,7 @@ use self::{
     protocol::{RuntimeId, Version, MAGIC, VERSION},
 };
 use crate::{
-    config::{ConfigKey, ConfigStore},
+    config::ConfigStore,
     error::Error,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
@@ -56,32 +57,10 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
     task, time,
 };
-
-const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
-    "last_used_tcp_v4_port",
-    "The value stored in this file is the last used TCP IPv4 port for listening on incoming\n\
-     connections. It is used to avoid binding to a random port every time the application starts.\n\
-     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
-     default to manually setting up port forwarding on their routers.\n\
-     \n\
-     The value is not used when the user specifies the --port option on the command line.\n\
-     However, it may still be overwritten.",
-);
-
-const LAST_USED_TCP_V6_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
-    "last_used_tcp_v6_port",
-    "The value stored in this file is the last used TCP IPv6 port for listening on incoming\n\
-     connections. It is used to avoid binding to a random port every time the application starts.\n\
-     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
-     default to manually setting up port forwarding on their routers.\n\
-     \n\
-     The value is not used when the user specifies the --port option on the command line.\n\
-     However, it may still be overwritten.",
-);
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -96,7 +75,7 @@ impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
         let (quic_connector_v4, quic_listener_v4) =
             if let Some(addr) = options.listen_quic_addr_v4() {
-                Self::bind_quic_listener(addr)
+                Self::bind_quic_listener(addr, &config)
                     .await
                     .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
                     .unwrap_or((None, None))
@@ -106,7 +85,7 @@ impl Network {
 
         let (quic_connector_v6, quic_listener_v6) =
             if let Some(addr) = options.listen_quic_addr_v6() {
-                Self::bind_quic_listener(addr)
+                Self::bind_quic_listener(addr, &config)
                     .await
                     .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
                     .unwrap_or((None, None))
@@ -135,7 +114,6 @@ impl Network {
             };
 
         let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| l.local_addr().clone());
-        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| l.local_addr().clone());
 
         let monitor = StateMonitor::make_root();
 
@@ -201,7 +179,6 @@ impl Network {
             quic_connector_v4,
             quic_connector_v6,
             quic_listener_local_addr_v4,
-            quic_listener_local_addr_v6,
             tcp_listener_local_addr_v4,
             tcp_listener_local_addr_v6,
             this_runtime_id: rand::random(),
@@ -305,12 +282,12 @@ impl Network {
         preferred_addr: SocketAddr,
         config: &ConfigStore,
     ) -> Option<(TcpListener, SocketAddr)> {
-        let (proto, config_entry) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", LAST_USED_TCP_V4_PORT_KEY),
-            SocketAddr::V6(_) => ("IPv6", LAST_USED_TCP_V6_PORT_KEY),
+        let (proto, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
         };
 
-        match socket::bind::<TcpListener>(preferred_addr, config.entry(config_entry)).await {
+        match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
             Ok(listener) => match listener.local_addr() {
                 Ok(addr) => {
                     log::info!("Configured {} TCP listener on {:?}", proto, addr);
@@ -337,13 +314,42 @@ impl Network {
         }
     }
 
-    async fn bind_quic_listener(addr: SocketAddr) -> Option<(quic::Connector, quic::Acceptor)> {
-        let proto = match addr {
-            SocketAddr::V4(_) => "IPv4",
-            SocketAddr::V6(_) => "IPv6",
+    async fn bind_quic_listener(
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
+    ) -> Option<(quic::Connector, quic::Acceptor)> {
+        let (proto, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_QUIC_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_QUIC_V6_PORT_KEY),
         };
 
-        match quic::configure(addr) {
+        let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
+        {
+            Ok(socket) => socket,
+            Err(err) => {
+                log::error!(
+                    "Failed to bind {} QUIC socket to {:?}: {:?}",
+                    proto,
+                    preferred_addr,
+                    err
+                );
+                return None;
+            }
+        };
+
+        let socket = match socket.into_std() {
+            Ok(socket) => socket,
+            Err(err) => {
+                log::error!(
+                    "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
+                    proto,
+                    err
+                );
+                return None;
+            }
+        };
+
+        match quic::configure(socket) {
             Ok((connector, listener)) => {
                 log::info!(
                     "Configured {} QUIC stack on {:?}",
@@ -463,7 +469,6 @@ struct Inner {
     quic_connector_v4: Option<quic::Connector>,
     quic_connector_v6: Option<quic::Connector>,
     quic_listener_local_addr_v4: Option<SocketAddr>,
-    quic_listener_local_addr_v6: Option<SocketAddr>,
     tcp_listener_local_addr_v4: Option<SocketAddr>,
     tcp_listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,

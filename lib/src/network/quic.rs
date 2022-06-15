@@ -223,9 +223,13 @@ impl Drop for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub fn configure(addr: SocketAddr) -> Result<(Connector, Acceptor)> {
+pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor)> {
     let server_config = make_server_config()?;
-    let (mut endpoint, incoming) = quinn::Endpoint::server(server_config, addr)?;
+    let (mut endpoint, incoming) = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket,
+    )?;
     endpoint.set_default_client_config(make_client_config());
 
     let local_addr = endpoint.local_addr()?;
@@ -356,7 +360,9 @@ mod tests {
 
     #[tokio::test]
     async fn small_data_exchange() {
-        let (connector, mut acceptor) = configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+
+        let (connector, mut acceptor) = configure(socket).unwrap();
 
         let addr = *acceptor.local_addr();
 
