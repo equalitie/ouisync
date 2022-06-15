@@ -354,12 +354,13 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         task,
     };
+    use std::net::Ipv4Addr;
 
     #[tokio::test]
     async fn small_data_exchange() {
-        let (connector, mut acceptor) = configure("127.0.0.1:0".parse().unwrap()).unwrap();
+        let (connector, mut acceptor) = configure((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
 
-        let addr = acceptor.local_addr();
+        let addr = *acceptor.local_addr();
 
         let message = b"hello world";
 

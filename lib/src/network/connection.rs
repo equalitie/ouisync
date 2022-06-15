@@ -203,7 +203,7 @@ impl ConnectionPermit {
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
             key: ConnectionKey {
-                addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
+                addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
