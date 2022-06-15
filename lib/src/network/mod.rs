@@ -59,9 +59,20 @@ use tokio::{
     task, time,
 };
 
-const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
-    "last_used_tcp_port",
-    "The value stored in this file is the last used TCP port for listening on incoming\n\
+const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
+    "last_used_tcp_v4_port",
+    "The value stored in this file is the last used TCP IPv4 port for listening on incoming\n\
+     connections. It is used to avoid binding to a random port every time the application starts.\n\
+     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
+     default to manually setting up port forwarding on their routers.\n\
+     \n\
+     The value is not used when the user specifies the --port option on the command line.\n\
+     However, it may still be overwritten.",
+);
+
+const LAST_USED_TCP_V6_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
+    "last_used_tcp_v6_port",
+    "The value stored in this file is the last used TCP IPv6 port for listening on incoming\n\
      connections. It is used to avoid binding to a random port every time the application starts.\n\
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.\n\
@@ -260,7 +271,10 @@ impl Network {
         preferred_addr: SocketAddr,
         config: &ConfigStore,
     ) -> Result<TcpListener, NetworkError> {
-        Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY)).await?)
+        match preferred_addr {
+            SocketAddr::V4(_) => Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V4_PORT_KEY)).await?),
+            SocketAddr::V6(_) => Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V6_PORT_KEY)).await?),
+        }
     }
 
     pub fn current_protocol_version(&self) -> u32 {
