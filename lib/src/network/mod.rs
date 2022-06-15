@@ -49,7 +49,7 @@ use std::{
     fmt,
     future::Future,
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -95,57 +95,47 @@ pub struct Network {
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
         let (quic_connector_v4, quic_listener_v4) =
-            match quic::configure((Ipv4Addr::UNSPECIFIED, 0).into()) {
-                Ok((connector, listener)) => {
-                    log::info!("Configured IPv4 QUIC stack on {:?}", listener.local_addr());
-                    (Some(connector), Some(listener))
-                }
-                Err(e) => {
-                    log::warn!("Failed to configure IPv4 QUIC stack: {}", e);
-                    (None, None)
-                }
+            if let Some(addr) = options.listen_quic_addr_v4() {
+                Self::bind_quic_listener(addr)
+                    .await
+                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
             };
 
         let (quic_connector_v6, quic_listener_v6) =
-            match quic::configure((Ipv6Addr::UNSPECIFIED, 0).into()) {
-                Ok((connector, listener)) => {
-                    log::info!("Configured IPv6 QUIC stack on {:?}", listener.local_addr());
-                    (Some(connector), Some(listener))
-                }
-                Err(e) => {
-                    log::warn!("Failed to configure IPv6 QUIC stack: {}", e);
-                    (None, None)
-                }
+            if let Some(addr) = options.listen_quic_addr_v6() {
+                Self::bind_quic_listener(addr)
+                    .await
+                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
             };
 
-        let tcp_listener_v4 = match Self::bind_listener(options.listen_addr_v4(), &config).await {
-            Ok(listener) => Some(listener),
-            Err(err) => {
-                log::warn!(
-                    "Failed to bind listener to IPv4 address {:?}: {:?}",
-                    options.listen_addr_v4(),
-                    err
-                );
-                None
-            }
-        };
+        let (tcp_listener_v4, tcp_listener_local_addr_v4) =
+            if let Some(addr) = options.listen_tcp_addr_v4() {
+                Self::bind_tcp_listener(addr, &config)
+                    .await
+                    .map(|(listener, addr)| (Some(listener), Some(addr)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
-        let tcp_listener_v6 = match Self::bind_listener(options.listen_addr_v6(), &config).await {
-            Ok(listener) => Some(listener),
-            Err(err) => {
-                log::warn!(
-                    "Failed to bind listener to IPv6 address {:?}: {:?}",
-                    options.listen_addr_v6(),
-                    err
-                );
-                None
-            }
-        };
+        let (tcp_listener_v6, tcp_listener_local_addr_v6) =
+            if let Some(addr) = options.listen_tcp_addr_v6() {
+                Self::bind_tcp_listener(addr, &config)
+                    .await
+                    .map(|(listener, addr)| (Some(listener), Some(addr)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
         let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| l.local_addr().clone());
         let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| l.local_addr().clone());
-        let tcp_listener_local_addr_v4 = tcp_listener_v4.as_ref().and_then(|l| l.local_addr().ok());
-        let tcp_listener_local_addr_v6 = tcp_listener_v6.as_ref().and_then(|l| l.local_addr().ok());
 
         let monitor = StateMonitor::make_root();
 
@@ -311,16 +301,60 @@ impl Network {
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
-    async fn bind_listener(
+    async fn bind_tcp_listener(
         preferred_addr: SocketAddr,
         config: &ConfigStore,
-    ) -> Result<TcpListener, NetworkError> {
-        match preferred_addr {
-            SocketAddr::V4(_) => {
-                Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V4_PORT_KEY)).await?)
+    ) -> Option<(TcpListener, SocketAddr)> {
+        let (proto, config_entry) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", LAST_USED_TCP_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", LAST_USED_TCP_V6_PORT_KEY),
+        };
+
+        match socket::bind::<TcpListener>(preferred_addr, config.entry(config_entry)).await {
+            Ok(listener) => match listener.local_addr() {
+                Ok(addr) => {
+                    log::info!("Configured {} TCP listener on {:?}", proto, addr);
+                    Some((listener, addr))
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to get an address of {} TCP listener: {:?}",
+                        proto,
+                        err
+                    );
+                    None
+                }
+            },
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind listener to {} TCP address {:?}: {:?}",
+                    proto,
+                    preferred_addr,
+                    err
+                );
+                None
             }
-            SocketAddr::V6(_) => {
-                Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V6_PORT_KEY)).await?)
+        }
+    }
+
+    async fn bind_quic_listener(addr: SocketAddr) -> Option<(quic::Connector, quic::Acceptor)> {
+        let proto = match addr {
+            SocketAddr::V4(_) => "IPv4",
+            SocketAddr::V6(_) => "IPv6",
+        };
+
+        match quic::configure(addr) {
+            Ok((connector, listener)) => {
+                log::info!(
+                    "Configured {} QUIC stack on {:?}",
+                    proto,
+                    listener.local_addr()
+                );
+                Some((connector, listener))
+            }
+            Err(e) => {
+                log::warn!("Failed to configure {} QUIC stack: {}", proto, e);
+                None
             }
         }
     }

@@ -1,4 +1,7 @@
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+};
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum PeerAddr {
@@ -20,5 +23,61 @@ impl PeerAddr {
 
     pub fn port(&self) -> u16 {
         self.socket_addr().port()
+    }
+}
+
+impl FromStr for PeerAddr {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (proto, addr) = match s.split_once('/') {
+            Some((proto, addr)) => (proto, addr),
+            None => {
+                return Err(format!(
+                    "Could not find '/' delimiter in the address {:?}",
+                    s
+                ));
+            }
+        };
+
+        let addr = match SocketAddr::from_str(addr) {
+            Ok(addr) => addr,
+            Err(_) => return Err(format!("Failed to parse IP:PORT {:?}", addr)),
+        };
+
+        if proto.eq_ignore_ascii_case("tcp") {
+            Ok(PeerAddr::Tcp(addr))
+        } else if proto.eq_ignore_ascii_case("quic") {
+            Ok(PeerAddr::Quic(addr))
+        } else {
+            Err(format!("Unrecognized protocol {:?} in {:?}", proto, s))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn parse() {
+        assert_eq!(
+            "tcp/0.0.0.0:0".parse::<PeerAddr>().unwrap(),
+            PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into())
+        );
+        assert_eq!(
+            "tcp/[::]:0".parse::<PeerAddr>().unwrap(),
+            PeerAddr::Tcp((Ipv6Addr::UNSPECIFIED, 0).into())
+        );
+
+        assert_eq!(
+            "quic/0.0.0.0:0".parse::<PeerAddr>().unwrap(),
+            PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into())
+        );
+        assert_eq!(
+            "quic/[::]:0".parse::<PeerAddr>().unwrap(),
+            PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into())
+        );
     }
 }
