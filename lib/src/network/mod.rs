@@ -49,7 +49,7 @@ use std::{
     fmt,
     future::Future,
     io,
-    net::{SocketAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -316,8 +316,12 @@ impl Network {
         config: &ConfigStore,
     ) -> Result<TcpListener, NetworkError> {
         match preferred_addr {
-            SocketAddr::V4(_) => Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V4_PORT_KEY)).await?),
-            SocketAddr::V6(_) => Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V6_PORT_KEY)).await?),
+            SocketAddr::V4(_) => {
+                Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V4_PORT_KEY)).await?)
+            }
+            SocketAddr::V6(_) => {
+                Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_V6_PORT_KEY)).await?)
+            }
         }
     }
 

@@ -1,11 +1,11 @@
 use futures_util::StreamExt;
 use std::{
     io,
-    time::Duration,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -321,8 +321,7 @@ fn make_client_config() -> quinn::ClientConfig {
         // being behind a non restrictive NAT, and so that sending the packets from the client side
         // shall assist in hole punching.
         .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_INTERVAL_MS.into())))
-        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()))
-        ;
+        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
 
     client_config
 }
@@ -341,8 +340,7 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
     Arc::get_mut(&mut server_config.transport)
         .unwrap()
         .max_concurrent_uni_streams(0_u8.into())
-        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()))
-        ;
+        .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
 
     Ok(server_config)
 }
@@ -350,11 +348,11 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         task,
     };
-    use std::net::Ipv4Addr;
 
     #[tokio::test]
     async fn small_data_exchange() {
