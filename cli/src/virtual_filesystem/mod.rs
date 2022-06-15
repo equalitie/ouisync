@@ -25,6 +25,7 @@ use std::{
     ffi::OsStr,
     io::{self, SeekFrom},
     os::raw::c_int,
+    panic::{self, AssertUnwindSafe},
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -48,11 +49,41 @@ pub fn mount(
         mount_point,
         &[MountOption::FSName(FS_NAME.into())],
     )?;
-    Ok(MountGuard(session))
+    Ok(MountGuard(Some(session)))
 }
 
 /// Unmounts the virtual filesystem when dropped.
-pub struct MountGuard(BackgroundSession);
+pub struct MountGuard(Option<BackgroundSession>);
+
+impl Drop for MountGuard {
+    fn drop(&mut self) {
+        // Joining the fuse session on drop prevents the following failure:
+        //
+        // 1. A filesystem is mounted inside an async task which is ran using `block_on`
+        // 2. Some time later the task completes and begins to drop
+        // 3. Some other process accesses the mounted filesystem
+        // 4. As part of the task being dropped, the `BackgroundSession` is dropped too which
+        //    unmounts the filesystem, but does not join the background thread
+        // 5. The async task finishes dropping
+        // 6. The async runtime itself begins to shutdown
+        // 7. The background thread begins to process the operations triggered in step 3 and as
+        //    part of this processing it tries to access the async runtime (for example, to
+        //    schedule a timer). The runtime is in the process of shutting down however, and so
+        //    it panics.
+        //
+        // By joining the session here, we modify step 4 to also join the background thread which
+        // ensures any queued operations on the filesystem are completed before the async runtime
+        // shuts down, avoiding the panic.
+        if let Some(session) = self.0.take() {
+            // HACK: `BackgroundSession::join` currently panics if the background thread returns
+            // an error. We don't care about that error (we are shutting down the filesystem
+            // anyway), so it should be ok to just suppress the panic.
+            if panic::catch_unwind(AssertUnwindSafe(move || session.join())).is_err() {
+                log::error!("panic in BackgroundSession::join");
+            }
+        }
+    }
+}
 
 // time-to-live for some fuse reply types.
 // TODO: find out what is this for and whether 0 is OK.

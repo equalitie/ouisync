@@ -157,7 +157,7 @@ async fn append_to_file() {
 #[proptest]
 fn seek_and_read(
     #[strategy(0usize..64 * 1024)] len: usize,
-    #[strategy(0usize..#len)] offset: usize,
+    #[strategy(0usize..=#len)] offset: usize,
     #[strategy(any::<u64>().no_shrink())] rng_seed: u64,
 ) {
     run(seek_and_read_case(len, offset, rng_seed))
