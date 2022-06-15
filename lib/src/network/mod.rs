@@ -2,7 +2,7 @@ mod channel_info;
 mod client;
 mod connection;
 mod crypto;
-mod dht_discovery;
+pub mod dht_discovery;
 mod ip_stack;
 mod keep_alive;
 mod local_discovery;
