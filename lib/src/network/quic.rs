@@ -13,13 +13,15 @@ const CERT_DOMAIN: &str = "ouisync.net";
 const KEEP_ALIVE_INTERVAL_MS: u32 = 15_000;
 const MAX_IDLE_TIMEOUT_MS: u32 = 3 * KEEP_ALIVE_INTERVAL_MS + 2_000;
 
+pub type Result<T> = std::result::Result<T, Error>;
+
 //------------------------------------------------------------------------------
 pub struct Connector {
     endpoint: quinn::Endpoint,
 }
 
 impl Connector {
-    pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection, Error> {
+    pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection> {
         let quinn::NewConnection { connection, .. } =
             self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
         let (tx, rx) = connection.open_bi().await?;
@@ -34,7 +36,7 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub async fn accept(&mut self) -> Result<Connection, Error> {
+    pub async fn accept(&mut self) -> Result<Connection> {
         let incoming_conn = match self.incoming.next().await {
             Some(incoming_conn) => incoming_conn,
             None => return Err(Error::DoneAccepting),
@@ -51,8 +53,8 @@ impl Acceptor {
         Ok(Connection::new(connection, rx, tx))
     }
 
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
+    pub fn local_addr(&self) -> &SocketAddr {
+        &self.local_addr
     }
 }
 
@@ -82,7 +84,8 @@ impl Connection {
     }
 
     /// Make sure all data is sent, no more data can be sent afterwards.
-    pub async fn finish(&mut self) -> Result<(), Error> {
+    #[cfg(test)]
+    pub async fn finish(&mut self) -> Result<()> {
         match self.tx.take() {
             Some(mut tx) => {
                 tx.finish().await?;
@@ -148,7 +151,7 @@ impl Drop for Connection {
 }
 
 //------------------------------------------------------------------------------
-pub fn configure(addr: SocketAddr) -> Result<(Connector, Acceptor), Error> {
+pub fn configure(addr: SocketAddr) -> Result<(Connector, Acceptor)> {
     let server_config = make_server_config()?;
     let (mut endpoint, incoming) = quinn::Endpoint::server(server_config, addr)?;
     endpoint.set_default_client_config(make_client_config());
@@ -225,7 +228,7 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
         _scts: &mut dyn Iterator<Item = &[u8]>,
         _ocsp_response: &[u8],
         _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+    ) -> std::result::Result<rustls::client::ServerCertVerified, rustls::Error> {
         Ok(rustls::client::ServerCertVerified::assertion())
     }
 }
@@ -252,7 +255,7 @@ fn make_client_config() -> quinn::ClientConfig {
     client_config
 }
 
-fn make_server_config() -> Result<quinn::ServerConfig, Error> {
+fn make_server_config() -> Result<quinn::ServerConfig> {
     // Generate self signed certificate, it won't be checked, but QUIC doesn't have an option to
     // get rid of TLS completely.
     let cert = rcgen::generate_simple_self_signed(vec![CERT_DOMAIN.into()]).unwrap();
