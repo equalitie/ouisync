@@ -292,7 +292,8 @@ impl From<rustls::Error> for Error {
 
 //------------------------------------------------------------------------------
 // Dummy certificate verifier that treats any certificate as valid. In our P2P system there are no
-// certification authorities, which makes the whole verification and encryption a dead weight.
+// certification authorities. TODO: I think this still makes the TLS encryption provided by QUIC
+// usefull against passive MitM attacks (eavesdropping), but not against the active ones.
 struct SkipServerVerification;
 
 impl rustls::client::ServerCertVerifier for SkipServerVerification {
