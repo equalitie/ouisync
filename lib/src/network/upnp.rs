@@ -410,10 +410,9 @@ impl PerIGDPortForwarder {
                 ext_port_reported = true;
 
                 log::info!(
-                    "UPnP port forwarding started on external port {}:{} {}",
+                    "UPnP port forwarding started on external port {}:{}",
                     mapping.protocol,
-                    mapping.external,
-                    mapping.protocol
+                    mapping.external
                 );
             }
 

@@ -113,22 +113,29 @@ impl Network {
             };
 
         let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| l.local_addr().clone());
+        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| l.local_addr().clone());
 
         let monitor = StateMonitor::make_root();
 
         let dht_discovery = if !options.disable_dht {
-            let monitor = monitor.make_child("DhtDiscovery");
             // Note: right now we're assuming that the UPnP port forwarder (enabled below) will
             // succeed in mapping internal ports to the same external ports.
-            Some(
-                DhtDiscovery::new(
-                    tcp_listener_local_addr_v4.map(|addr| addr.port()),
-                    tcp_listener_local_addr_v6.map(|addr| addr.port()),
-                    &config,
-                    monitor,
-                )
-                .await,
-            )
+
+            let port_v4 = [quic_listener_local_addr_v4, tcp_listener_local_addr_v4]
+                .iter()
+                .flatten()
+                .next()
+                .map(|addr| addr.port());
+
+            let port_v6 = [quic_listener_local_addr_v6, tcp_listener_local_addr_v6]
+                .iter()
+                .flatten()
+                .next()
+                .map(|addr| addr.port());
+
+            let monitor = monitor.make_child("DhtDiscovery");
+
+            Some(DhtDiscovery::new(port_v4, port_v6, &config, monitor).await)
         } else {
             None
         };
@@ -242,20 +249,12 @@ impl Network {
             }
         });
 
-        if let Some(tcp_listener_v4) = tcp_listener_v4 {
-            inner.spawn(inner.clone().run_tcp_listener(tcp_listener_v4));
+        for listener in [tcp_listener_v4, tcp_listener_v6].into_iter().flatten() {
+            inner.spawn(inner.clone().run_tcp_listener(listener));
         }
 
-        if let Some(tcp_listener_v6) = tcp_listener_v6 {
-            inner.spawn(inner.clone().run_tcp_listener(tcp_listener_v6));
-        }
-
-        if let Some(quic_listener_v4) = quic_listener_v4 {
-            inner.spawn(inner.clone().run_quic_listener(quic_listener_v4));
-        }
-
-        if let Some(quic_listener_v6) = quic_listener_v6 {
-            inner.spawn(inner.clone().run_quic_listener(quic_listener_v6));
+        for listener in [quic_listener_v4, quic_listener_v6].into_iter().flatten() {
+            inner.spawn(inner.clone().run_quic_listener(listener));
         }
 
         inner
