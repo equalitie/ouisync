@@ -2,6 +2,13 @@ use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+pub enum PeerPort {
+    Tcp(u16),
+    Quic(u16),
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum PeerAddr {
@@ -23,6 +30,13 @@ impl PeerAddr {
 
     pub fn port(&self) -> u16 {
         self.socket_addr().port()
+    }
+
+    pub fn peer_port(&self) -> PeerPort {
+        match self {
+            Self::Tcp(addr) => PeerPort::Tcp(addr.port()),
+            Self::Quic(addr) => PeerPort::Quic(addr.port()),
+        }
     }
 }
 

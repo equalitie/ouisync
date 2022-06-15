@@ -29,7 +29,7 @@ use self::{
     ip_stack::Protocol,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
-    peer_addr::PeerAddr,
+    peer_addr::{PeerAddr, PeerPort},
     protocol::{RuntimeId, Version, MAGIC, VERSION},
 };
 use crate::{
@@ -510,23 +510,26 @@ impl Inner {
             return;
         }
 
-        //if let Some(addr) = self.tcp_listener_local_addr_v4 {
-        //    *local_discovery = Some(scoped_task::spawn(
-        //        self.clone().run_local_discovery(addr.port()),
-        //    ));
-        //} else {
-        //    log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
-        //}
-        if let Some(addr) = self.quic_listener_local_addr_v4 {
+        // Arbitrary order of preference.
+        // TODO: Should we support all available?
+        let port = if let Some(addr) = &self.tcp_listener_local_addr_v4 {
+            Some(PeerPort::Tcp(addr.port()))
+        } else if let Some(addr) = &self.quic_listener_local_addr_v4 {
+            Some(PeerPort::Quic(addr.port()))
+        } else {
+            None
+        };
+
+        if let Some(port) = port {
             *local_discovery = Some(scoped_task::spawn(
-                self.clone().run_local_discovery(addr.port()),
+                self.clone().run_local_discovery(port),
             ));
         } else {
             log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
         }
     }
 
-    async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
+    async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
         let monitor = self.monitor.make_child("LocalDiscovery");
 
         let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
@@ -542,7 +545,7 @@ impl Inner {
 
             tasks.other.spawn(
                 self.clone()
-                    .establish_discovered_connection(PeerAddr::Quic(addr)),
+                    .establish_discovered_connection(addr),
             )
         }
     }
