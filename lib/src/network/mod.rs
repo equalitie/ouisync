@@ -11,7 +11,7 @@ mod message_broker;
 mod message_dispatcher;
 mod message_io;
 mod options;
-mod peer_addr;
+pub mod peer_addr;
 mod protocol;
 mod quic;
 mod raw;

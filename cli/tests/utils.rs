@@ -32,6 +32,7 @@ impl Bin {
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
         command.arg("--temp");
+        command.arg("--bind").arg("tcp/127.0.0.1:0");
         command
             .arg("--mount")
             .arg(format!("{}:{}", REPO_NAME, mount_dir.path().display()));

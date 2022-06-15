@@ -1,12 +1,12 @@
 use ouisync::{
     db,
     network::{Network, NetworkOptions},
-    AccessSecrets, ConfigStore, MasterSecret, Repository,
+    AccessSecrets, ConfigStore, MasterSecret, Repository, PeerAddr,
 };
 use rand::{rngs::StdRng, Rng};
 use std::{
     future::Future,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
 };
 
 // Create two `Network` instances connected together.
@@ -62,8 +62,9 @@ pub(crate) async fn create_linked_repos(rng: &mut StdRng) -> (Repository, Reposi
 
 pub(crate) fn test_network_options() -> NetworkOptions {
     NetworkOptions {
-        bind_v4: Ipv4Addr::LOCALHOST,
-        bind_v6: Ipv6Addr::LOCALHOST,
+        bind: vec![
+            PeerAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into())
+        ],
         disable_local_discovery: true,
         disable_upnp: true,
         disable_dht: true,

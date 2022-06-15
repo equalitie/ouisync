@@ -51,6 +51,7 @@ pub use self::{
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
+    network::peer_addr::PeerAddr,
     repository::Repository,
     store::Store as RepositoryStore,
 };
