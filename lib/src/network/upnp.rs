@@ -1,4 +1,4 @@
-use super::ip_stack::Protocol;
+use super::ip;
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
@@ -59,7 +59,7 @@ impl PortForwarder {
         }
     }
 
-    pub fn add_mapping(&self, internal: u16, external: u16, protocol: Protocol) -> Mapping {
+    pub fn add_mapping(&self, internal: u16, external: u16, protocol: ip::Protocol) -> Mapping {
         let data = MappingData {
             internal,
             external,
@@ -260,7 +260,7 @@ impl PortForwarder {
 struct MappingData {
     pub internal: u16,
     pub external: u16,
-    pub protocol: Protocol,
+    pub protocol: ip::Protocol,
 }
 
 // The map value is a reference counter.

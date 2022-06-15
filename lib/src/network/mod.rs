@@ -4,7 +4,7 @@ mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
-mod ip_stack;
+mod ip;
 mod keep_alive;
 mod local_discovery;
 mod message;
@@ -27,7 +27,6 @@ pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
-    ip_stack::Protocol,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
@@ -119,6 +118,8 @@ impl Network {
 
         let dht_discovery = if !options.disable_dht {
             let monitor = monitor.make_child("DhtDiscovery");
+            // Note: right now we're assuming that the UPnP port forwarder (enabled below) will
+            // succeed in mapping internal ports to the same external ports.
             Some(
                 DhtDiscovery::new(
                     tcp_listener_local_addr_v4.map(|addr| addr.port()),
@@ -154,11 +155,11 @@ impl Network {
                 let listener_port_map = port_forwarder.add_mapping(
                     tcp_listener_local_addr_v4.port(), // internal
                     tcp_listener_local_addr_v4.port(), // external
-                    Protocol::Tcp,
+                    ip::Protocol::Tcp,
                 );
 
                 let dht_port_map =
-                    dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
+                    dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, ip::Protocol::Udp));
 
                 (Some(port_forwarder), Some(listener_port_map), dht_port_map)
             } else {
