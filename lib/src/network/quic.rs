@@ -60,9 +60,8 @@ impl Acceptor {
 
 //------------------------------------------------------------------------------
 pub struct Connection {
-    connection: quinn::Connection,
-    rx: quinn::RecvStream,
-    // It's `Option` because we `take` out of it in `Drop` and/or `finish`.
+    connection: Arc<quinn::Connection>,
+    rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
 }
 
@@ -73,14 +72,23 @@ impl Connection {
         tx: quinn::SendStream,
     ) -> Self {
         Self {
-            connection,
-            rx,
+            connection: Arc::new(connection),
+            rx: Some(rx),
             tx: Some(tx),
         }
     }
 
     pub fn remote_address(&self) -> SocketAddr {
         self.connection.remote_address()
+    }
+
+    pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
+        let conn = self.connection.clone();
+        // Unwrap OK because `self` can't be split more than once and we're not `taking` from `rx`
+        // anywhere else.
+        let rx = self.rx.take().unwrap();
+        let tx = self.tx.take();
+        (OwnedReadHalf(rx, conn.clone()), OwnedWriteHalf(tx, conn))
     }
 
     /// Make sure all data is sent, no more data can be sent afterwards.
@@ -102,7 +110,13 @@ impl AsyncRead for Connection {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().rx).poll_read(cx, buf)
+        match &mut self.get_mut().rx {
+            Some(rx) => Pin::new(rx).poll_read(cx, buf),
+            None => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "connection was split",
+            ))),
+        }
     }
 }
 
@@ -145,6 +159,64 @@ impl AsyncWrite for Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         if let Some(mut tx) = self.tx.take() {
+            tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+pub struct OwnedReadHalf(quinn::RecvStream, Arc<quinn::Connection>);
+pub struct OwnedWriteHalf(Option<quinn::SendStream>, Arc<quinn::Connection>);
+
+impl AsyncRead for OwnedReadHalf {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for OwnedWriteHalf {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut self.get_mut().0 {
+            Some(tx) => Pin::new(tx).poll_write(cx, buf),
+            None => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "already finished",
+            ))),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match &mut self.get_mut().0 {
+            Some(tx) => Pin::new(tx).poll_flush(cx),
+            None => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "already finished",
+            ))),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match &mut self.get_mut().0 {
+            Some(tx) => Pin::new(tx).poll_shutdown(cx),
+            None => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "already finished",
+            ))),
+        }
+    }
+}
+
+impl Drop for OwnedWriteHalf {
+    fn drop(&mut self) {
+        if let Some(mut tx) = self.0.take() {
             tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
         }
     }
