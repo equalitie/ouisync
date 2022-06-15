@@ -1,3 +1,6 @@
+// TODO: remove this when we upgrade clap to v4.0
+#![allow(deprecated)]
+
 use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
 use clap::Parser;

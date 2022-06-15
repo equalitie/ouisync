@@ -2,14 +2,15 @@ mod channel_info;
 mod client;
 mod connection;
 mod crypto;
-pub mod dht_discovery;
-pub mod ip_stack;
+mod dht_discovery;
+mod ip_stack;
 mod keep_alive;
 mod local_discovery;
 mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
+mod options;
 mod protocol;
 mod request;
 mod server;
@@ -18,6 +19,7 @@ mod socket;
 mod tests;
 mod upnp;
 
+pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
@@ -37,14 +39,13 @@ use crate::{
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{InfoHash, INFO_HASH_LEN};
-use clap::Parser;
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     future::Future,
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -66,61 +67,6 @@ const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
      The value is not used when the user specifies the --port option on the command line.\n\
      However, it may still be overwritten.",
 );
-
-#[derive(Parser, Debug)]
-pub struct NetworkOptions {
-    /// Port to listen on (0 for random)
-    #[clap(short, long, default_value = "0")]
-    pub port: u16,
-
-    /// IPv4 address to bind to
-    #[clap(long, default_value = "0.0.0.0", value_name = "ip")]
-    pub bind_v4: Ipv4Addr,
-
-    /// IPv6 address to bind to
-    #[clap(long, default_value = "::", value_name = "ip")]
-    pub bind_v6: Ipv6Addr,
-
-    /// Disable local discovery
-    #[clap(short, long)]
-    pub disable_local_discovery: bool,
-
-    /// Disable UPnP
-    #[clap(long)]
-    pub disable_upnp: bool,
-
-    /// Disable DHT
-    #[clap(long)]
-    pub disable_dht: bool,
-
-    /// Explicit list of IP:PORT pairs of peers to connect to
-    #[clap(long)]
-    pub peers: Vec<SocketAddr>,
-}
-
-impl NetworkOptions {
-    pub fn listen_addr_v4(&self) -> SocketAddr {
-        SocketAddr::new(self.bind_v4.into(), self.port)
-    }
-
-    pub fn listen_addr_v6(&self) -> SocketAddr {
-        SocketAddr::new(self.bind_v6.into(), self.port)
-    }
-}
-
-impl Default for NetworkOptions {
-    fn default() -> Self {
-        Self {
-            port: 0,
-            bind_v4: Ipv4Addr::UNSPECIFIED,
-            bind_v6: Ipv6Addr::UNSPECIFIED,
-            disable_local_discovery: false,
-            disable_upnp: false,
-            disable_dht: false,
-            peers: Vec::new(),
-        }
-    }
-}
 
 pub struct Network {
     inner: Arc<Inner>,
