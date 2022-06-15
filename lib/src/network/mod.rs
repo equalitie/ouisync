@@ -11,6 +11,7 @@ mod message_broker;
 mod message_dispatcher;
 mod message_io;
 mod options;
+mod peer_addr;
 mod protocol;
 mod quic;
 mod raw;
@@ -28,6 +29,7 @@ use self::{
     ip_stack::Protocol,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
+    peer_addr::PeerAddr,
     protocol::{RuntimeId, Version, MAGIC, VERSION},
 };
 use crate::{
@@ -47,7 +49,7 @@ use std::{
     fmt,
     future::Future,
     io,
-    net::SocketAddr,
+    net::{SocketAddr, Ipv4Addr, Ipv6Addr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
     time::Duration,
 };
@@ -92,7 +94,31 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
-        let listener_v4 = match Self::bind_listener(options.listen_addr_v4(), &config).await {
+        let (quic_connector_v4, quic_listener_v4) =
+            match quic::configure((Ipv4Addr::UNSPECIFIED, 0).into()) {
+                Ok((connector, listener)) => {
+                    log::info!("Configured IPv4 QUIC stack on {:?}", listener.local_addr());
+                    (Some(connector), Some(listener))
+                }
+                Err(e) => {
+                    log::warn!("Failed to configure IPv4 QUIC stack: {}", e);
+                    (None, None)
+                }
+            };
+
+        let (quic_connector_v6, quic_listener_v6) =
+            match quic::configure((Ipv6Addr::UNSPECIFIED, 0).into()) {
+                Ok((connector, listener)) => {
+                    log::info!("Configured IPv6 QUIC stack on {:?}", listener.local_addr());
+                    (Some(connector), Some(listener))
+                }
+                Err(e) => {
+                    log::warn!("Failed to configure IPv6 QUIC stack: {}", e);
+                    (None, None)
+                }
+            };
+
+        let tcp_listener_v4 = match Self::bind_listener(options.listen_addr_v4(), &config).await {
             Ok(listener) => Some(listener),
             Err(err) => {
                 log::warn!(
@@ -104,7 +130,7 @@ impl Network {
             }
         };
 
-        let listener_v6 = match Self::bind_listener(options.listen_addr_v6(), &config).await {
+        let tcp_listener_v6 = match Self::bind_listener(options.listen_addr_v6(), &config).await {
             Ok(listener) => Some(listener),
             Err(err) => {
                 log::warn!(
@@ -116,8 +142,10 @@ impl Network {
             }
         };
 
-        let listener_local_addr_v4 = listener_v4.as_ref().and_then(|l| l.local_addr().ok());
-        let listener_local_addr_v6 = listener_v6.as_ref().and_then(|l| l.local_addr().ok());
+        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| l.local_addr().clone());
+        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| l.local_addr().clone());
+        let tcp_listener_local_addr_v4 = tcp_listener_v4.as_ref().and_then(|l| l.local_addr().ok());
+        let tcp_listener_local_addr_v6 = tcp_listener_v6.as_ref().and_then(|l| l.local_addr().ok());
 
         let monitor = StateMonitor::make_root();
 
@@ -125,8 +153,8 @@ impl Network {
             let monitor = monitor.make_child("DhtDiscovery");
             Some(
                 DhtDiscovery::new(
-                    listener_local_addr_v4.map(|addr| addr.port()),
-                    listener_local_addr_v6.map(|addr| addr.port()),
+                    tcp_listener_local_addr_v4.map(|addr| addr.port()),
+                    tcp_listener_local_addr_v6.map(|addr| addr.port()),
                     &config,
                     monitor,
                 )
@@ -147,7 +175,7 @@ impl Network {
             .cloned();
 
         let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
-            if let Some(listener_local_addr_v4) = listener_local_addr_v4 {
+            if let Some(tcp_listener_local_addr_v4) = tcp_listener_local_addr_v4 {
                 let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
 
                 // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
@@ -156,8 +184,8 @@ impl Network {
                 let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
                 let listener_port_map = port_forwarder.add_mapping(
-                    listener_local_addr_v4.port(), // internal
-                    listener_local_addr_v4.port(), // external
+                    tcp_listener_local_addr_v4.port(), // internal
+                    tcp_listener_local_addr_v4.port(), // external
                     Protocol::Tcp,
                 );
 
@@ -180,8 +208,12 @@ impl Network {
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
-            listener_local_addr_v4,
-            listener_local_addr_v6,
+            quic_connector_v4,
+            quic_connector_v6,
+            quic_listener_local_addr_v4,
+            quic_listener_local_addr_v6,
+            tcp_listener_local_addr_v4,
+            tcp_listener_local_addr_v6,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
@@ -213,18 +245,30 @@ impl Network {
             async move {
                 while let Some(peer_addr) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
-                        inner.spawn(inner.clone().establish_dht_connection(peer_addr));
+                        inner.spawn(
+                            inner
+                                .clone()
+                                .establish_dht_connection(PeerAddr::Tcp(peer_addr)),
+                        );
                     }
                 }
             }
         });
 
-        if let Some(listener_v4) = listener_v4 {
-            inner.spawn(inner.clone().run_listener(listener_v4));
+        if let Some(tcp_listener_v4) = tcp_listener_v4 {
+            inner.spawn(inner.clone().run_tcp_listener(tcp_listener_v4));
         }
 
-        if let Some(listener_v6) = listener_v6 {
-            inner.spawn(inner.clone().run_listener(listener_v6));
+        if let Some(tcp_listener_v6) = tcp_listener_v6 {
+            inner.spawn(inner.clone().run_tcp_listener(tcp_listener_v6));
+        }
+
+        if let Some(quic_listener_v4) = quic_listener_v4 {
+            inner.spawn(inner.clone().run_quic_listener(quic_listener_v4));
+        }
+
+        if let Some(quic_listener_v6) = quic_listener_v6 {
+            inner.spawn(inner.clone().run_quic_listener(quic_listener_v6));
         }
 
         inner
@@ -239,11 +283,11 @@ impl Network {
     }
 
     pub fn listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.listener_local_addr_v4.as_ref()
+        self.inner.tcp_listener_local_addr_v4.as_ref()
     }
 
     pub fn listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.listener_local_addr_v6.as_ref()
+        self.inner.tcp_listener_local_addr_v6.as_ref()
     }
 
     pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -378,8 +422,12 @@ struct Tasks {
 
 struct Inner {
     monitor: Arc<StateMonitor>,
-    listener_local_addr_v4: Option<SocketAddr>,
-    listener_local_addr_v6: Option<SocketAddr>,
+    quic_connector_v4: Option<quic::Connector>,
+    quic_connector_v6: Option<quic::Connector>,
+    quic_listener_local_addr_v4: Option<SocketAddr>,
+    quic_listener_local_addr_v6: Option<SocketAddr>,
+    tcp_listener_local_addr_v4: Option<SocketAddr>,
+    tcp_listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
     _listener_port_map: Option<upnp::Mapping>,
@@ -424,7 +472,14 @@ impl Inner {
             return;
         }
 
-        if let Some(addr) = self.listener_local_addr_v4 {
+        //if let Some(addr) = self.tcp_listener_local_addr_v4 {
+        //    *local_discovery = Some(scoped_task::spawn(
+        //        self.clone().run_local_discovery(addr.port()),
+        //    ));
+        //} else {
+        //    log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
+        //}
+        if let Some(addr) = self.quic_listener_local_addr_v4 {
             *local_discovery = Some(scoped_task::spawn(
                 self.clone().run_local_discovery(addr.port()),
             ));
@@ -447,13 +502,14 @@ impl Inner {
         while let Some(addr) = discovery.recv().await {
             let tasks = self.tasks.upgrade().unwrap();
 
-            tasks
-                .other
-                .spawn(self.clone().establish_discovered_connection(addr))
+            tasks.other.spawn(
+                self.clone()
+                    .establish_discovered_connection(PeerAddr::Quic(addr)),
+            )
         }
     }
 
-    async fn run_listener(self: Arc<Self>, listener: TcpListener) {
+    async fn run_tcp_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
             let (socket, addr) = match listener.accept().await {
                 Ok(pair) => pair,
@@ -465,10 +521,33 @@ impl Inner {
 
             if let Some(permit) = self
                 .connection_deduplicator
-                .reserve(addr, ConnectionDirection::Incoming)
+                .reserve(PeerAddr::Tcp(addr), ConnectionDirection::Incoming)
             {
                 self.spawn(self.clone().handle_new_connection(
                     raw::Stream::Tcp(socket),
+                    PeerSource::Listener,
+                    permit,
+                ))
+            }
+        }
+    }
+
+    async fn run_quic_listener(self: Arc<Self>, mut listener: quic::Acceptor) {
+        loop {
+            let socket = match listener.accept().await {
+                Ok(socket) => socket,
+                Err(error) => {
+                    log::error!("Failed to accept incoming QUIC connection: {}", error);
+                    break;
+                }
+            };
+
+            if let Some(permit) = self.connection_deduplicator.reserve(
+                PeerAddr::Quic(socket.remote_address()),
+                ConnectionDirection::Incoming,
+            ) {
+                self.spawn(self.clone().handle_new_connection(
+                    raw::Stream::Quic(socket),
                     PeerSource::Listener,
                     permit,
                 ))
@@ -483,6 +562,9 @@ impl Inner {
     }
 
     fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
+        // TODO: We should receive PeerAddr as an argument.
+        let addr = PeerAddr::Tcp(addr);
+
         self.spawn({
             let inner = self.clone();
             async move {
@@ -508,7 +590,7 @@ impl Inner {
                         // Let a discovery mechanism find the address again.
                         None => {
                             log::warn!(
-                                "Failed to create outgoing TCP connection to user provided address {}",
+                                "Failed to create outgoing connection to user provided address {:?}",
                                 addr,
                             );
                             return;
@@ -519,7 +601,7 @@ impl Inner {
         })
     }
 
-    async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
+    async fn establish_discovered_connection(self: Arc<Self>, addr: PeerAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -531,11 +613,11 @@ impl Inner {
 
         permit.mark_as_connecting();
 
-        let socket = match TcpStream::connect(addr).await {
-            Ok(socket) => socket,
+        let conn = match self.connect(addr).await {
+            Ok(conn) => conn,
             Err(error) => {
                 log::error!(
-                    "Failed to create outgoing locally discovered TCP connection to {}: {}",
+                    "Failed to create outgoing locally discovered connection to {:?}: {}",
                     addr,
                     error
                 );
@@ -543,11 +625,35 @@ impl Inner {
             }
         };
 
-        self.handle_new_connection(raw::Stream::Tcp(socket), PeerSource::LocalDiscovery, permit)
+        self.handle_new_connection(conn, PeerSource::LocalDiscovery, permit)
             .await;
     }
 
-    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
+    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
+        match addr {
+            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
+                .await
+                .map(raw::Stream::Tcp)
+                .map_err(ConnectError::Tcp),
+            PeerAddr::Quic(addr) => {
+                let connector = if addr.is_ipv4() {
+                    &self.quic_connector_v4
+                } else {
+                    &self.quic_connector_v6
+                };
+
+                connector
+                    .as_ref()
+                    .ok_or(ConnectError::NoSuitableQuicConnector)?
+                    .connect(addr)
+                    .await
+                    .map(raw::Stream::Quic)
+                    .map_err(ConnectError::Quic)
+            }
+        }
+    }
+
+    async fn establish_dht_connection(self: Arc<Self>, addr: PeerAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -566,13 +672,13 @@ impl Inner {
             // TODO: Check if the address is still reported by the DHT discovery and retry if so.
             // That way we can avoid waiting for the next DHT lookup to start and finish.
             log::warn!(
-                "Failed to create outgoing TCP connection to DHT discovered address {}",
+                "Failed to create outgoing connection to DHT discovered address {:?}",
                 addr,
             );
         }
     }
 
-    async fn connect_with_retries(&self, addr: SocketAddr) -> Option<raw::Stream> {
+    async fn connect_with_retries(&self, addr: PeerAddr) -> Option<raw::Stream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
@@ -580,11 +686,11 @@ impl Inner {
             .build();
 
         loop {
-            match TcpStream::connect(addr).await {
-                Ok(socket) => {
-                    return Some(raw::Stream::Tcp(socket));
+            match self.connect(addr).await.ok() {
+                Some(socket) => {
+                    return Some(socket);
                 }
-                Err(_) => {
+                None => {
                     match backoff.next_backoff() {
                         Some(duration) => {
                             time::sleep(duration).await;
@@ -619,7 +725,7 @@ impl Inner {
     ) {
         let addr = permit.addr();
 
-        log::info!("New {} TCP connection: {}", peer_source, addr);
+        log::info!("New {} connection: {:?}", peer_source, addr);
 
         permit.mark_as_handshaking();
 
@@ -627,16 +733,16 @@ impl Inner {
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
                 Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
                 Err(ref error @ HandshakeError::BadMagic) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
             };
@@ -658,7 +764,7 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    log::info!("Connected to replica {:?} {}", that_runtime_id, addr);
+                    log::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
 
                     let mut broker =
                         MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
@@ -677,7 +783,7 @@ impl Inner {
 
         released.notified().await;
         log::info!(
-            "Lost {} TCP connection: {:?} {}",
+            "Lost {} connection: {:?} {:?}",
             peer_source,
             that_runtime_id,
             addr
@@ -701,6 +807,19 @@ impl Inner {
         self.tasks.upgrade().unwrap().other.spawn(f)
     }
 }
+
+//------------------------------------------------------------------------------
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error("TCP error")]
+    Tcp(std::io::Error),
+    #[error("QUIC error")]
+    Quic(quic::Error),
+    #[error("No corresponding QUIC connector")]
+    NoSuitableQuicConnector,
+}
+
+//------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
