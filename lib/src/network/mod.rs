@@ -143,30 +143,48 @@ impl Network {
             .and_then(|d| d.local_addr_v6())
             .cloned();
 
-        let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
-            if let Some(tcp_listener_local_addr_v4) = tcp_listener_local_addr_v4 {
-                let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
+        let (port_forwarder, tcp_port_map, quic_port_map, dht_port_map) = if !options.disable_upnp {
+            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
-                // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-                // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
-                let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
-
-                let listener_port_map = port_forwarder.add_mapping(
-                    tcp_listener_local_addr_v4.port(), // internal
-                    tcp_listener_local_addr_v4.port(), // external
+            let tcp_port_map = tcp_listener_local_addr_v4.map(|addr| {
+                port_forwarder.add_mapping(
+                    addr.port(), // internal
+                    addr.port(), // external
                     ip::Protocol::Tcp,
-                );
+                )
+            });
 
-                let dht_port_map =
-                    dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, ip::Protocol::Udp));
+            let quic_port_map = quic_listener_local_addr_v4.map(|addr| {
+                port_forwarder.add_mapping(
+                    addr.port(), // internal
+                    addr.port(), // external
+                    ip::Protocol::Udp,
+                )
+            });
 
-                (Some(port_forwarder), Some(listener_port_map), dht_port_map)
+            if tcp_port_map.is_some() || quic_port_map.is_some() {
+                let dht_port_map = dht_local_addr_v4.map(|addr| {
+                    port_forwarder.add_mapping(
+                        addr.port(), // internal
+                        addr.port(), // external
+                        ip::Protocol::Udp,
+                    )
+                });
+
+                (
+                    Some(port_forwarder),
+                    tcp_port_map,
+                    quic_port_map,
+                    dht_port_map,
+                )
             } else {
-                (None, None, None)
+                (None, None, None, None)
             }
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         let tasks = Arc::new(Tasks::default());
@@ -187,7 +205,8 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            _listener_port_map: listener_port_map,
+            _tcp_port_map: tcp_port_map,
+            _quic_port_map: quic_port_map,
             _dht_port_map: dht_port_map,
             dht_local_addr_v4,
             dht_local_addr_v6,
@@ -474,7 +493,8 @@ struct Inner {
     tcp_listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
-    _listener_port_map: Option<upnp::Mapping>,
+    _tcp_port_map: Option<upnp::Mapping>,
+    _quic_port_map: Option<upnp::Mapping>,
     _dht_port_map: Option<upnp::Mapping>,
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
