@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum PeerPort {

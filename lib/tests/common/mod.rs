@@ -62,9 +62,7 @@ pub(crate) async fn create_linked_repos(rng: &mut StdRng) -> (Repository, Reposi
 
 pub(crate) fn test_network_options() -> NetworkOptions {
     NetworkOptions {
-        bind: vec![
-            PeerAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into())
-        ],
+        bind: vec![PeerAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into())],
         disable_local_discovery: true,
         disable_upnp: true,
         disable_dht: true,

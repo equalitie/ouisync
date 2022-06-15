@@ -1,6 +1,6 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
-    protocol::RuntimeId
+    protocol::RuntimeId,
 };
 use crate::{
     scoped_task::ScopedJoinHandle,
@@ -42,7 +42,11 @@ impl LocalDiscovery {
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
     /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
-    pub fn new(id: RuntimeId, listener_port: PeerPort, monitor: Arc<StateMonitor>) -> io::Result<Self> {
+    pub fn new(
+        id: RuntimeId,
+        listener_port: PeerPort,
+        monitor: Arc<StateMonitor>,
+    ) -> io::Result<Self> {
         let socket_provider = Arc::new(SocketProvider::new());
 
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);

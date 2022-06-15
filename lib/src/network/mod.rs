@@ -521,9 +521,7 @@ impl Inner {
         };
 
         if let Some(port) = port {
-            *local_discovery = Some(scoped_task::spawn(
-                self.clone().run_local_discovery(port),
-            ));
+            *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
         } else {
             log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
         }
@@ -543,10 +541,9 @@ impl Inner {
         while let Some(addr) = discovery.recv().await {
             let tasks = self.tasks.upgrade().unwrap();
 
-            tasks.other.spawn(
-                self.clone()
-                    .establish_discovered_connection(addr),
-            )
+            tasks
+                .other
+                .spawn(self.clone().establish_discovered_connection(addr))
         }
     }
 
