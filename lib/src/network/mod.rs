@@ -121,17 +121,14 @@ impl Network {
             // Note: right now we're assuming that the UPnP port forwarder (enabled below) will
             // succeed in mapping internal ports to the same external ports.
 
-            let port_v4 = [quic_listener_local_addr_v4, tcp_listener_local_addr_v4]
-                .iter()
-                .flatten()
-                .next()
-                .map(|addr| addr.port());
-
-            let port_v6 = [quic_listener_local_addr_v6, tcp_listener_local_addr_v6]
-                .iter()
-                .flatten()
-                .next()
-                .map(|addr| addr.port());
+            // Also note that we're now only using quic for the transport discovered over the dht.
+            // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
+            // TCP, UDP or anything else.
+            // TODO: There are ways to address this: e.g. we could try both, or we could include
+            // the protocol information in the info-hash generation. There are pros and cons to
+            // these approaches.
+            let port_v4 = quic_listener_local_addr_v4.map(|addr| addr.port());
+            let port_v6 = quic_listener_local_addr_v6.map(|addr| addr.port());
 
             let monitor = monitor.make_child("DhtDiscovery");
 
@@ -242,7 +239,7 @@ impl Network {
                         inner.spawn(
                             inner
                                 .clone()
-                                .establish_dht_connection(PeerAddr::Tcp(peer_addr)),
+                                .establish_dht_connection(PeerAddr::Quic(peer_addr)),
                         );
                     }
                 }
