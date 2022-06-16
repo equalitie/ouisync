@@ -5,7 +5,10 @@ use crate::APP_NAME;
 use anyhow::{format_err, Context, Error, Result};
 use clap::Parser;
 use ouisync_lib::{
-    cipher::SecretKey, AccessMode, DbStore, MasterSecret, NetworkOptions, Password, ShareToken,
+    crypto::{cipher::SecretKey, Password},
+    db,
+    network::NetworkOptions,
+    AccessMode, MasterSecret, ShareToken,
 };
 use std::{
     path::{Path, PathBuf},
@@ -128,11 +131,11 @@ impl Options {
     }
 
     /// Store of the database of the repository with the specified name.
-    pub fn repository_store(&self, name: &str) -> Result<DbStore> {
+    pub fn repository_store(&self, name: &str) -> Result<db::Store> {
         if self.temp {
-            Ok(DbStore::Temporary)
+            Ok(db::Store::Temporary)
         } else {
-            Ok(DbStore::Permanent(self.repository_path(name)?))
+            Ok(db::Store::Permanent(self.repository_path(name)?))
         }
     }
 

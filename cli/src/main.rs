@@ -4,7 +4,9 @@ mod virtual_filesystem;
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
-use ouisync_lib::{device_id, AccessSecrets, ConfigStore, Network, Repository, ShareToken};
+use ouisync_lib::{
+    device_id, network::Network, AccessSecrets, ConfigStore, Repository, ShareToken,
+};
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,

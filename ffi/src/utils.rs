@@ -1,6 +1,6 @@
 use super::dart::{self, DartCObject};
-use crate::error::{Error, Result};
 use camino::Utf8PathBuf;
+use ouisync_lib::{Error, Result};
 use std::path::PathBuf;
 use std::{
     ffi::{CStr, CString},

@@ -7,7 +7,7 @@ use super::{error::ErrorCode, utils::Bytes};
 use std::{ffi::CString, os::raw::c_char};
 
 #[repr(C)]
-pub struct DartCObject {
+pub(crate) struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
 }
@@ -136,7 +136,7 @@ impl Drop for DartCObject {
 
 #[repr(i32)]
 #[derive(Copy, Clone)]
-pub enum DartCObjectType {
+pub(crate) enum DartCObjectType {
     Null = 0,
     Bool = 1,
     Int32 = 2,
@@ -153,7 +153,7 @@ pub enum DartCObjectType {
 }
 
 #[repr(C)]
-pub union DartCObjectValue {
+pub(crate) union DartCObjectValue {
     as_bool: bool,
     as_int32: i32,
     as_int64: i64,
@@ -167,7 +167,7 @@ pub union DartCObjectValue {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct DartTypedData {
+pub(crate) struct DartTypedData {
     pub type_: DartTypedDataType,
     pub length: isize,
     pub values: *mut u8,
@@ -175,7 +175,7 @@ pub struct DartTypedData {
 
 #[repr(i32)]
 #[derive(Copy, Clone)]
-pub enum DartTypedDataType {
+pub(crate) enum DartTypedDataType {
     // ByteData = 0,
     // Int8 = 1,
     Uint8 = 2,
@@ -192,5 +192,5 @@ pub enum DartTypedDataType {
     // Invalid = 13,
 }
 
-pub type Port = i64;
-pub type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
+pub(crate) type Port = i64;
+pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;

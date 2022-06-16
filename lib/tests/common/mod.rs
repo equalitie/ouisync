@@ -1,5 +1,7 @@
 use ouisync::{
-    AccessSecrets, ConfigStore, DbStore, MasterSecret, Network, NetworkOptions, Repository,
+    db,
+    network::{Network, NetworkOptions},
+    AccessSecrets, ConfigStore, MasterSecret, Repository,
 };
 use rand::{rngs::StdRng, Rng};
 use std::{
@@ -41,7 +43,7 @@ pub(crate) async fn create_repo_with_secrets(
     secrets: AccessSecrets,
 ) -> Repository {
     Repository::create(
-        &DbStore::Temporary,
+        &db::Store::Temporary,
         rng.gen(),
         MasterSecret::generate(rng),
         secrets,

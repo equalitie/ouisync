@@ -4,7 +4,7 @@ mod android;
 mod default;
 
 #[cfg(target_os = "android")]
-pub use self::android::Logger;
+pub(crate) use self::android::Logger;
 
 #[cfg(not(target_os = "android"))]
-pub use self::default::Logger;
+pub(crate) use self::default::Logger;

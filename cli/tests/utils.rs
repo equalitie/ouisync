@@ -1,6 +1,6 @@
 use anyhow::{format_err, Error};
 use backoff::{self, ExponentialBackoffBuilder};
-use ouisync_lib::cipher::SecretKey;
+use ouisync_lib::crypto::cipher::SecretKey;
 use rand::Rng;
 use std::{
     cell::Cell,

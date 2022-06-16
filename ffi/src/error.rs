@@ -1,4 +1,4 @@
-use crate::error::Error;
+use ouisync_lib::Error;
 use std::io;
 
 #[repr(C)]

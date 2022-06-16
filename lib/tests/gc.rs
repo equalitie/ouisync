@@ -1,6 +1,6 @@
 //! Garbage collection tests
 
-use ouisync::{DbConnection, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use ouisync::{db, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{io::SeekFrom, time::Duration};
 use tokio::time;
@@ -271,7 +271,7 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
     .await
 }
 
-async fn write_to_file(rng: &mut StdRng, conn: &mut DbConnection, file: &mut File, size: usize) {
+async fn write_to_file(rng: &mut StdRng, conn: &mut db::Connection, file: &mut File, size: usize) {
     let mut buffer = vec![0; size];
     rng.fill(&mut buffer[..]);
     file.write(conn, &buffer).await.unwrap();
