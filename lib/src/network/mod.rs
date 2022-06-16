@@ -621,10 +621,7 @@ impl Inner {
             .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
-    fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
-        // TODO: We should receive PeerAddr as an argument.
-        let addr = PeerAddr::Tcp(addr);
-
+    fn establish_user_provided_connection(self: Arc<Self>, addr: PeerAddr) {
         self.spawn({
             let inner = self.clone();
             async move {

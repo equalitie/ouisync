@@ -58,7 +58,7 @@ impl Bin {
 
         for peer in peers {
             command.arg("--peers");
-            command.arg(peer.to_string());
+            command.arg(format!("tcp/{}", peer.to_string()));
         }
 
         // Disable log output unless explicitly enabled.

@@ -24,7 +24,7 @@ pub(crate) async fn create_connected_peers() -> (Network, Network) {
 pub(crate) async fn create_peer_connected_to(addr: SocketAddr) -> Network {
     Network::new(
         &NetworkOptions {
-            peers: vec![addr],
+            peers: vec![PeerAddr::Tcp(addr)],
             ..test_network_options()
         },
         ConfigStore::null(),

@@ -25,9 +25,9 @@ pub struct NetworkOptions {
     #[clap(long)]
     pub disable_dht: bool,
 
-    /// Explicit list of IP:PORT pairs of peers to connect to
+    /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
     #[clap(long)]
-    pub peers: Vec<SocketAddr>,
+    pub peers: Vec<PeerAddr>,
 }
 
 impl NetworkOptions {
