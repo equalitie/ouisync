@@ -61,10 +61,10 @@ pub type Connection = SqliteConnection;
 pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
-pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
+pub(crate) type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
 /// Database transaction obtained from `Pool::begin`.
-pub struct PoolTransaction(DeadlockGuard<sqlx::Transaction<'static, Sqlite>>);
+pub(crate) struct PoolTransaction(DeadlockGuard<sqlx::Transaction<'static, Sqlite>>);
 
 impl PoolTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {

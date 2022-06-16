@@ -5,6 +5,7 @@
 mod macros;
 
 pub mod crypto;
+pub mod db;
 pub mod debug_printer;
 pub mod device_id;
 pub mod network;
@@ -17,7 +18,6 @@ mod blob_id;
 mod block;
 mod branch;
 mod config;
-mod db;
 mod deadlock;
 mod directory;
 mod error;
@@ -46,14 +46,11 @@ pub use self::{
     block::BLOCK_SIZE,
     branch::Branch,
     config::ConfigStore,
-    crypto::{cipher, sign, Password},
-    db::{Connection as DbConnection, Pool as DbPool, Store as DbStore},
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
-    network::{Network, NetworkOptions, Registration},
     repository::Repository,
     store::Store as RepositoryStore,
 };

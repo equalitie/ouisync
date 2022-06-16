@@ -21,7 +21,7 @@ use std::{
 // release mode.
 const TAG: &str = concat!("flutter-", env!("CARGO_PKG_NAME"));
 
-pub struct Logger {
+pub(crate) struct Logger {
     _stdout: StdRedirect,
     _stderr: StdRedirect,
 }

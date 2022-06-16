@@ -1,6 +1,7 @@
 use crate::{
     access_control::AccessKeys,
     block::BlockId,
+    crypto::sign::PublicKey,
     db,
     debug_printer::DebugPrinter,
     directory::{Directory, EntryRef, RootDirectoryCache},
@@ -9,7 +10,6 @@ use crate::{
     index::BranchData,
     locator::Locator,
     path,
-    sign::PublicKey,
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};

@@ -1,4 +1,4 @@
-use ouisync::{AccessMode, ConfigStore, DbPool, Error, File, Network, Repository};
+use ouisync::{db, network::Network, AccessMode, ConfigStore, Error, File, Repository};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::time::Duration;
 use tokio::time;
@@ -206,7 +206,7 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
     .await
 }
 
-async fn write_in_chunks(db: &DbPool, file: &mut File, content: &[u8], chunk_size: usize) {
+async fn write_in_chunks(db: &db::Pool, file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let mut conn = db.acquire().await.unwrap();
 
@@ -223,7 +223,11 @@ async fn write_in_chunks(db: &DbPool, file: &mut File, content: &[u8], chunk_siz
     }
 }
 
-async fn read_in_chunks(db: &DbPool, file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
+async fn read_in_chunks(
+    db: &db::Pool,
+    file: &mut File,
+    chunk_size: usize,
+) -> Result<Vec<u8>, Error> {
     let mut content = vec![0; file.len().await as usize];
     let mut offset = 0;
 

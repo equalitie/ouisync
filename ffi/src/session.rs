@@ -6,7 +6,8 @@ use super::{
 };
 use ouisync_lib::{
     device_id::{self, DeviceId},
-    ConfigStore, Error, Network, NetworkOptions, Result,
+    network::{Network, NetworkOptions},
+    ConfigStore, Error, Result,
 };
 use std::{
     future::Future,

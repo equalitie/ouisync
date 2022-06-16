@@ -2,9 +2,9 @@ use super::*;
 use crate::{
     access_control::WriteSecrets,
     block::{self, BLOCK_SIZE},
+    crypto::sign::PublicKey,
     error::Error,
     index::BranchData,
-    sign::PublicKey,
     sync::broadcast,
     test_utils,
 };

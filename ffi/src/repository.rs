@@ -3,8 +3,8 @@ use super::{
     utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
 use ouisync_lib::{
-    path, AccessMode, AccessSecrets, EntryType, Error, MasterSecret, Password, Registration,
-    Repository, Result, ShareToken,
+    crypto::Password, network::Registration, path, AccessMode, AccessSecrets, EntryType, Error,
+    MasterSecret, Repository, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::task::JoinHandle;

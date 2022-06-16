@@ -1,6 +1,6 @@
 use std::{io, sync::Once};
 
-pub struct Logger;
+pub(crate) struct Logger;
 
 impl Logger {
     pub fn new() -> Result<Self, io::Error> {
