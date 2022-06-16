@@ -5,6 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate the C bindings header
 
     let lib_dir = Path::new("lib");
+    let ffi_dir = Path::new("ffi");
     let output_path = Path::new("target").join("bindings.h");
 
     Builder::new()
@@ -16,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             ..Default::default()
         })
-        .with_src(lib_dir.join("src").join("ffi").join("mod.rs"))
+        .with_src(ffi_dir.join("src").join("lib.rs"))
         .with_src(
             lib_dir
                 .join("src")
