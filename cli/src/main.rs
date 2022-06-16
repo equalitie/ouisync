@@ -152,11 +152,18 @@ async fn main() -> Result<()> {
     }
 
     if options.print_port {
-        if let Some(addr) = network.listener_local_addr_v4() {
-            println!("Listening on IPv4 port {}", addr.port());
+        if let Some(addr) = network.tcp_listener_local_addr_v4() {
+            // Be carefull when changing this output as it is used by tests.
+            println!("Listening on TCP IPv4 port {}", addr.port());
         }
-        if let Some(addr) = network.listener_local_addr_v6() {
-            println!("Listening on IPv6 port {}", addr.port());
+        if let Some(addr) = network.tcp_listener_local_addr_v6() {
+            println!("Listening on TCP IPv6 port {}", addr.port());
+        }
+        if let Some(addr) = network.quic_listener_local_addr_v4() {
+            println!("Listening on QUIC/UDP IPv4 port {}", addr.port());
+        }
+        if let Some(addr) = network.quic_listener_local_addr_v6() {
+            println!("Listening on QUIC/UDP IPv6 port {}", addr.port());
         }
     }
 

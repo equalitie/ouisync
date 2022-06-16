@@ -15,7 +15,7 @@ pub(crate) async fn create_connected_peers() -> (Network, Network) {
         .await
         .unwrap();
 
-    let b = create_peer_connected_to(*a.listener_local_addr_v4().unwrap()).await;
+    let b = create_peer_connected_to(*a.tcp_listener_local_addr_v4().unwrap()).await;
 
     (a, b)
 }

@@ -202,6 +202,7 @@ impl Network {
             quic_connector_v4,
             quic_connector_v6,
             quic_listener_local_addr_v4,
+            quic_listener_local_addr_v6,
             tcp_listener_local_addr_v4,
             tcp_listener_local_addr_v6,
             this_runtime_id: rand::random(),
@@ -265,12 +266,20 @@ impl Network {
         Ok(network)
     }
 
-    pub fn listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+    pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
         self.inner.tcp_listener_local_addr_v4.as_ref()
     }
 
-    pub fn listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+    pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
         self.inner.tcp_listener_local_addr_v6.as_ref()
+    }
+
+    pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.inner.quic_listener_local_addr_v4.as_ref()
+    }
+
+    pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.inner.quic_listener_local_addr_v6.as_ref()
     }
 
     pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -485,6 +494,7 @@ struct Inner {
     quic_connector_v4: Option<quic::Connector>,
     quic_connector_v6: Option<quic::Connector>,
     quic_listener_local_addr_v4: Option<SocketAddr>,
+    quic_listener_local_addr_v6: Option<SocketAddr>,
     tcp_listener_local_addr_v4: Option<SocketAddr>,
     tcp_listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,
