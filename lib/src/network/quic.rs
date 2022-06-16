@@ -338,7 +338,7 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
     let cert_der = cert.serialize_der().unwrap();
     let priv_key = cert.serialize_private_key_der();
     let priv_key = rustls::PrivateKey(priv_key);
-    let cert_chain = vec![rustls::Certificate(cert_der.clone())];
+    let cert_chain = vec![rustls::Certificate(cert_der)];
 
     let mut server_config = quinn::ServerConfig::with_single_cert(cert_chain, priv_key)?;
 

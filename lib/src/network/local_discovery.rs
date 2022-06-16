@@ -215,7 +215,7 @@ async fn run_beacon(
 
 async fn send(socket: &UdpSocket, message: Message, addr: SocketAddr) -> io::Result<()> {
     let data = bincode::serialize(&VersionedMessage {
-        magic: PROTOCOL_MAGIC.clone(),
+        magic: *PROTOCOL_MAGIC,
         version: PROTOCOL_VERSION,
         message,
     })

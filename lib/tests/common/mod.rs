@@ -1,7 +1,7 @@
 use ouisync::{
     db,
     network::{Network, NetworkOptions},
-    AccessSecrets, ConfigStore, MasterSecret, Repository, PeerAddr,
+    AccessSecrets, ConfigStore, MasterSecret, PeerAddr, Repository,
 };
 use rand::{rngs::StdRng, Rng};
 use std::{

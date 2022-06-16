@@ -112,8 +112,8 @@ impl Network {
                 (None, None)
             };
 
-        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| l.local_addr().clone());
-        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| l.local_addr().clone());
+        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| *l.local_addr());
+        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| *l.local_addr());
 
         let monitor = StateMonitor::make_root();
 
@@ -542,15 +542,18 @@ impl Inner {
             return;
         }
 
+        let tcp_port = self
+            .tcp_listener_local_addr_v4
+            .as_ref()
+            .map(|addr| PeerPort::Tcp(addr.port()));
+        let quic_port = self
+            .quic_listener_local_addr_v4
+            .as_ref()
+            .map(|addr| PeerPort::Quic(addr.port()));
+
         // Arbitrary order of preference.
         // TODO: Should we support all available?
-        let port = if let Some(addr) = &self.tcp_listener_local_addr_v4 {
-            Some(PeerPort::Tcp(addr.port()))
-        } else if let Some(addr) = &self.quic_listener_local_addr_v4 {
-            Some(PeerPort::Quic(addr.port()))
-        } else {
-            None
-        };
+        let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
             *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
