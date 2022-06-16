@@ -2,7 +2,7 @@ use super::{
     repository, session,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
-use crate::{directory::EntryType, error::Result, repository::Repository};
+use ouisync_lib::{EntryType, Repository, Result};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
 
 // Currently this is only a read-only snapshot of a directory.

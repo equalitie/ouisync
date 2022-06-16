@@ -2,12 +2,7 @@ use super::{
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use crate::{
-    error::{Error, Result},
-    file::File,
-    repository::Repository,
-    sync::Mutex,
-};
+use ouisync_lib::{sync::Mutex, Error, File, Repository, Result};
 use std::{
     convert::TryInto,
     io::SeekFrom,

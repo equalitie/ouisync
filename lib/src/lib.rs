@@ -8,6 +8,8 @@ pub mod crypto;
 pub mod debug_printer;
 pub mod device_id;
 pub mod network;
+pub mod path;
+pub mod sync;
 
 mod access_control;
 mod blob;
@@ -19,7 +21,6 @@ mod db;
 mod deadlock;
 mod directory;
 mod error;
-mod ffi;
 mod file;
 mod format;
 mod index;
@@ -28,13 +29,11 @@ mod joint_directory;
 mod joint_entry;
 mod locator;
 mod metadata;
-mod path;
 mod progress;
 mod repository;
 mod scoped_task;
 mod state_monitor;
 mod store;
-mod sync;
 #[cfg(test)]
 mod test_utils;
 #[cfg_attr(test, macro_use)]
@@ -54,7 +53,7 @@ pub use self::{
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
-    network::{Network, NetworkOptions},
+    network::{Network, NetworkOptions, Registration},
     repository::Repository,
     store::Store as RepositoryStore,
 };

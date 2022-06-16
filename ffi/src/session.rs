@@ -4,11 +4,9 @@ use super::{
     logger::Logger,
     utils::{self, Bytes, Port, UniqueHandle, UniqueNullableHandle},
 };
-use crate::{
-    config::ConfigStore,
+use ouisync_lib::{
     device_id::{self, DeviceId},
-    error::{Error, Result},
-    network::{Network, NetworkOptions},
+    ConfigStore, Error, Network, NetworkOptions, Result,
 };
 use std::{
     future::Future,

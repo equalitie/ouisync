@@ -2,14 +2,9 @@ use super::{
     session,
     utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
-use crate::{
-    access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},
-    crypto::Password,
-    directory::EntryType,
-    error::{Error, Result},
-    network::Registration,
-    path,
-    repository::Repository,
+use ouisync_lib::{
+    path, AccessMode, AccessSecrets, EntryType, Error, MasterSecret, Password, Registration,
+    Repository, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::task::JoinHandle;
