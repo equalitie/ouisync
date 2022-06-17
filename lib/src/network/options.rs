@@ -1,22 +1,17 @@
 // TODO: remove this when we upgrade clap to v4.0
 #![allow(deprecated)]
 
+use super::peer_addr::PeerAddr;
 use clap::Parser;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Parser, Debug)]
 pub struct NetworkOptions {
-    /// Port to listen on (0 for random)
-    #[clap(short, long, default_value = "0")]
-    pub port: u16,
-
-    /// IPv4 address to bind to
-    #[clap(long, default_value = "0.0.0.0", value_name = "ip")]
-    pub bind_v4: Ipv4Addr,
-
-    /// IPv6 address to bind to
-    #[clap(long, default_value = "::", value_name = "ip")]
-    pub bind_v6: Ipv6Addr,
+    /// Addresses to bind to. The expected format is {tcp,quic}/IP:PORT. Note that there may be at
+    /// most one of each (protoco x IP-version) combinations. If more are specified, only the first
+    /// one is used.
+    #[clap(long, default_values = &["quic/0.0.0.0:0", "quic/[::]:0"], value_name = "proto/ip:port")]
+    pub bind: Vec<PeerAddr>,
 
     /// Disable local discovery
     #[clap(short, long)]
@@ -30,27 +25,48 @@ pub struct NetworkOptions {
     #[clap(long)]
     pub disable_dht: bool,
 
-    /// Explicit list of IP:PORT pairs of peers to connect to
+    /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
     #[clap(long)]
-    pub peers: Vec<SocketAddr>,
+    pub peers: Vec<PeerAddr>,
 }
 
 impl NetworkOptions {
-    pub fn listen_addr_v4(&self) -> SocketAddr {
-        SocketAddr::new(self.bind_v4.into(), self.port)
+    pub fn listen_tcp_addr_v4(&self) -> Option<SocketAddr> {
+        self.bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        })
     }
 
-    pub fn listen_addr_v6(&self) -> SocketAddr {
-        SocketAddr::new(self.bind_v6.into(), self.port)
+    pub fn listen_tcp_addr_v6(&self) -> Option<SocketAddr> {
+        self.bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        })
+    }
+
+    pub fn listen_quic_addr_v4(&self) -> Option<SocketAddr> {
+        self.bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        })
+    }
+
+    pub fn listen_quic_addr_v6(&self) -> Option<SocketAddr> {
+        self.bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        })
     }
 }
 
 impl Default for NetworkOptions {
     fn default() -> Self {
         Self {
-            port: 0,
-            bind_v4: Ipv4Addr::UNSPECIFIED,
-            bind_v6: Ipv6Addr::UNSPECIFIED,
+            bind: vec![
+                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
+                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
+            ],
             disable_local_discovery: false,
             disable_upnp: false,
             disable_dht: false,

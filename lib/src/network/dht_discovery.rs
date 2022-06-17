@@ -1,6 +1,6 @@
-use super::socket;
+use super::{config_keys, socket};
 use crate::{
-    config::{ConfigKey, ConfigStore},
+    config::ConfigStore,
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
 };
@@ -38,18 +38,6 @@ pub const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissi
 // other nodes to put us on a blacklist.
 pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
-
-const LAST_USED_PORT_V4: ConfigKey<u16> =
-    ConfigKey::new("last_used_udp_port_v4", LAST_USED_PORT_COMMENT);
-
-const LAST_USED_PORT_V6: ConfigKey<u16> =
-    ConfigKey::new("last_used_udp_port_v6", LAST_USED_PORT_COMMENT);
-
-const LAST_USED_PORT_COMMENT: &str =
-    "The value stored in this file is the last used UDP port for listening on incoming\n\
-     connections. It is used to avoid binding to a random port every time the application starts.\n\
-     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
-     default to manually setting up port forwarding on their routers.";
 
 pub(super) struct DhtDiscovery {
     dht_v4: Option<RestartableDht>,
@@ -336,7 +324,8 @@ impl Lookup {
                     stream::once(async {
                         dht.dht.bootstrapped(Some(Duration::from_secs(10))).await;
                         dht.dht.search(info_hash, true)
-                    }).flatten()
+                    })
+                    .flatten()
                 }));
 
                 *state.get() = Cow::Borrowed("awaiting results");
@@ -387,7 +376,7 @@ async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
         IpVersion::V4 => {
             socket::bind(
                 (Ipv4Addr::UNSPECIFIED, 0).into(),
-                config.entry(LAST_USED_PORT_V4),
+                config.entry(config_keys::LAST_USED_DHT_PORT_V4),
             )
             .await
         }
@@ -399,7 +388,7 @@ async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
             // using the UNSPECIFIED address we can avoid that problem.
             socket::bind(
                 (Ipv6Addr::UNSPECIFIED, 0).into(),
-                config.entry(LAST_USED_PORT_V6),
+                config.entry(config_keys::LAST_USED_DHT_PORT_V6),
             )
             .await
         }

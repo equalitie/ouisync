@@ -1,7 +1,8 @@
+use super::peer_addr::PeerAddr;
 use serde::{Serialize, Serializer};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as SyncMutex,
@@ -54,7 +55,7 @@ impl ConnectionDeduplicator {
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
-    pub fn reserve(&self, addr: SocketAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
+    pub fn reserve(&self, addr: PeerAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
         let key = ConnectionKey { addr, dir };
         let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -190,7 +191,7 @@ impl ConnectionPermit {
         self.on_release.clone()
     }
 
-    pub fn addr(&self) -> SocketAddr {
+    pub fn addr(&self) -> PeerAddr {
         self.key.addr
     }
 
@@ -202,7 +203,7 @@ impl ConnectionPermit {
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
             key: ConnectionKey {
-                addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
+                addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
@@ -231,6 +232,6 @@ pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ConnectionKey {
-    pub addr: SocketAddr,
+    pub addr: PeerAddr,
     pub dir: ConnectionDirection,
 }

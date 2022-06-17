@@ -5,6 +5,7 @@ use super::{
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
+    raw,
 };
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
@@ -15,11 +16,7 @@ use std::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::{
-    net::{tcp, TcpStream},
-    select,
-    sync::watch,
-};
+use tokio::{select, sync::watch};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
@@ -50,7 +47,7 @@ impl MessageDispatcher {
 
     /// Bind this dispatcher to the given TCP socket. Can be bound to multiple sockets and the
     /// failed ones are automatically removed.
-    pub fn bind(&self, stream: TcpStream, permit: ConnectionPermit) {
+    pub fn bind(&self, stream: raw::Stream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
@@ -188,15 +185,15 @@ impl RecvState {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Internal
 
-// Stream of `Message` backed by a `TcpStream`. Closes on first error. Contains a connection
+// Stream of `Message` backed by a `raw::Stream`. Closes on first error. Contains a connection
 // permit which gets released on drop.
 struct PermittedStream {
-    inner: KeepAliveStream<tcp::OwnedReadHalf>,
+    inner: KeepAliveStream<raw::OwnedReadHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedStream {
-    fn new(stream: tcp::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
+    fn new(stream: raw::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveStream::new(MessageStream::new(stream), KEEP_ALIVE_RECV_INTERVAL),
             _permit: permit,
@@ -215,15 +212,15 @@ impl Stream for PermittedStream {
     }
 }
 
-// Sink for `Message` backed by a `TcpStream`.
+// Sink for `Message` backed by a `raw::Stream`.
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
-    inner: KeepAliveSink<tcp::OwnedWriteHalf>,
+    inner: KeepAliveSink<raw::OwnedWriteHalf>,
     _permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
-    fn new(stream: tcp::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
+    fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
             _permit: permit,
@@ -252,7 +249,7 @@ impl Sink<Message> for PermittedSink {
     }
 }
 
-// Stream that reads `Message`s from multiple underlying TCP streams concurrently.
+// Stream that reads `Message`s from multiple underlying raw (byte) streams concurrently.
 struct MultiStream {
     inner: Mutex<MultiStreamInner>,
 }
@@ -574,7 +571,7 @@ mod tests {
         assert!(stream.recv().await.is_none());
     }
 
-    async fn setup() -> (MessageSink<TcpStream>, MessageDispatcher) {
+    async fn setup() -> (MessageSink<raw::Stream>, MessageDispatcher) {
         let (client, server) = create_connected_sockets().await;
         let client_writer = MessageSink::new(client);
 
@@ -584,13 +581,13 @@ mod tests {
         (client_writer, server_dispatcher)
     }
 
-    async fn create_connected_sockets() -> (TcpStream, TcpStream) {
+    async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap())
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
 
-        (client, server)
+        (raw::Stream::Tcp(client), raw::Stream::Tcp(server))
     }
 }

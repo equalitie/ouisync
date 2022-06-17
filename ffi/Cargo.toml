@@ -13,12 +13,12 @@ publish = false
 crate-type = ["cdylib"] # TODO: we might also need `staticlib` for ios
 
 [dependencies]
-camino = "1.0.5"
+camino = "1.0.9"
 env_logger = "0.9.0"
-log = "0.4.14"
+log = "0.4.17"
 ouisync-lib = { package = "ouisync", version = "0.2", path = "../lib" }
-rmp-serde = "1.0.0"
-tokio = "1.19.1"
+rmp-serde = "1.1.0"
+tokio = "1.19.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_log-sys = "0.2.0"

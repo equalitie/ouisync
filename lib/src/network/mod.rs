@@ -1,9 +1,10 @@
 mod channel_info;
 mod client;
+mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
-mod ip_stack;
+mod ip;
 mod keep_alive;
 mod local_discovery;
 mod message;
@@ -11,7 +12,10 @@ mod message_broker;
 mod message_dispatcher;
 mod message_io;
 mod options;
+pub mod peer_addr;
 mod protocol;
+mod quic;
+mod raw;
 mod request;
 mod server;
 mod socket;
@@ -23,13 +27,13 @@ pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
-    ip_stack::Protocol,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
+    peer_addr::{PeerAddr, PeerPort},
     protocol::{RuntimeId, Version, MAGIC, VERSION},
 };
 use crate::{
-    config::{ConfigKey, ConfigStore},
+    config::ConfigStore,
     error::Error,
     repository::RepositoryId,
     scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
@@ -52,21 +56,10 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
     task, time,
 };
-
-const LAST_USED_TCP_PORT_KEY: ConfigKey<u16> = ConfigKey::new(
-    "last_used_tcp_port",
-    "The value stored in this file is the last used TCP port for listening on incoming\n\
-     connections. It is used to avoid binding to a random port every time the application starts.\n\
-     This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
-     default to manually setting up port forwarding on their routers.\n\
-     \n\
-     The value is not used when the user specifies the --port option on the command line.\n\
-     However, it may still be overwritten.",
-);
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -79,46 +72,67 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
-        let listener_v4 = match Self::bind_listener(options.listen_addr_v4(), &config).await {
-            Ok(listener) => Some(listener),
-            Err(err) => {
-                log::warn!(
-                    "Failed to bind listener to IPv4 address {:?}: {:?}",
-                    options.listen_addr_v4(),
-                    err
-                );
-                None
-            }
-        };
+        let (quic_connector_v4, quic_listener_v4) =
+            if let Some(addr) = options.listen_quic_addr_v4() {
+                Self::bind_quic_listener(addr, &config)
+                    .await
+                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
-        let listener_v6 = match Self::bind_listener(options.listen_addr_v6(), &config).await {
-            Ok(listener) => Some(listener),
-            Err(err) => {
-                log::warn!(
-                    "Failed to bind listener to IPv6 address {:?}: {:?}",
-                    options.listen_addr_v6(),
-                    err
-                );
-                None
-            }
-        };
+        let (quic_connector_v6, quic_listener_v6) =
+            if let Some(addr) = options.listen_quic_addr_v6() {
+                Self::bind_quic_listener(addr, &config)
+                    .await
+                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
-        let listener_local_addr_v4 = listener_v4.as_ref().and_then(|l| l.local_addr().ok());
-        let listener_local_addr_v6 = listener_v6.as_ref().and_then(|l| l.local_addr().ok());
+        let (tcp_listener_v4, tcp_listener_local_addr_v4) =
+            if let Some(addr) = options.listen_tcp_addr_v4() {
+                Self::bind_tcp_listener(addr, &config)
+                    .await
+                    .map(|(listener, addr)| (Some(listener), Some(addr)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
+
+        let (tcp_listener_v6, tcp_listener_local_addr_v6) =
+            if let Some(addr) = options.listen_tcp_addr_v6() {
+                Self::bind_tcp_listener(addr, &config)
+                    .await
+                    .map(|(listener, addr)| (Some(listener), Some(addr)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
+
+        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| *l.local_addr());
+        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| *l.local_addr());
 
         let monitor = StateMonitor::make_root();
 
         let dht_discovery = if !options.disable_dht {
+            // Note: right now we're assuming that the UPnP port forwarder (enabled below) will
+            // succeed in mapping internal ports to the same external ports.
+
+            // Also note that we're now only using quic for the transport discovered over the dht.
+            // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
+            // TCP, UDP or anything else.
+            // TODO: There are ways to address this: e.g. we could try both, or we could include
+            // the protocol information in the info-hash generation. There are pros and cons to
+            // these approaches.
+            let port_v4 = quic_listener_local_addr_v4.map(|addr| addr.port());
+            let port_v6 = quic_listener_local_addr_v6.map(|addr| addr.port());
+
             let monitor = monitor.make_child("DhtDiscovery");
-            Some(
-                DhtDiscovery::new(
-                    listener_local_addr_v4.map(|addr| addr.port()),
-                    listener_local_addr_v6.map(|addr| addr.port()),
-                    &config,
-                    monitor,
-                )
-                .await,
-            )
+
+            Some(DhtDiscovery::new(port_v4, port_v6, &config, monitor).await)
         } else {
             None
         };
@@ -133,30 +147,48 @@ impl Network {
             .and_then(|d| d.local_addr_v6())
             .cloned();
 
-        let (port_forwarder, listener_port_map, dht_port_map) = if !options.disable_upnp {
-            if let Some(listener_local_addr_v4) = listener_local_addr_v4 {
-                let dht_port_v4 = dht_local_addr_v4.map(|addr| addr.port());
+        let (port_forwarder, tcp_port_map, quic_port_map, dht_port_map) = if !options.disable_upnp {
+            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
-                // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-                // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
 
-                let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
+            let tcp_port_map = tcp_listener_local_addr_v4.map(|addr| {
+                port_forwarder.add_mapping(
+                    addr.port(), // internal
+                    addr.port(), // external
+                    ip::Protocol::Tcp,
+                )
+            });
 
-                let listener_port_map = port_forwarder.add_mapping(
-                    listener_local_addr_v4.port(), // internal
-                    listener_local_addr_v4.port(), // external
-                    Protocol::Tcp,
-                );
+            let quic_port_map = quic_listener_local_addr_v4.map(|addr| {
+                port_forwarder.add_mapping(
+                    addr.port(), // internal
+                    addr.port(), // external
+                    ip::Protocol::Udp,
+                )
+            });
 
-                let dht_port_map =
-                    dht_port_v4.map(|port| port_forwarder.add_mapping(port, port, Protocol::Udp));
+            if tcp_port_map.is_some() || quic_port_map.is_some() {
+                let dht_port_map = dht_local_addr_v4.map(|addr| {
+                    port_forwarder.add_mapping(
+                        addr.port(), // internal
+                        addr.port(), // external
+                        ip::Protocol::Udp,
+                    )
+                });
 
-                (Some(port_forwarder), Some(listener_port_map), dht_port_map)
+                (
+                    Some(port_forwarder),
+                    tcp_port_map,
+                    quic_port_map,
+                    dht_port_map,
+                )
             } else {
-                (None, None, None)
+                (None, None, None, None)
             }
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         let tasks = Arc::new(Tasks::default());
@@ -167,14 +199,19 @@ impl Network {
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
-            listener_local_addr_v4,
-            listener_local_addr_v6,
+            quic_connector_v4,
+            quic_connector_v6,
+            quic_listener_local_addr_v4,
+            quic_listener_local_addr_v6,
+            tcp_listener_local_addr_v4,
+            tcp_listener_local_addr_v6,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            _listener_port_map: listener_port_map,
+            _tcp_port_map: tcp_port_map,
+            _quic_port_map: quic_port_map,
             _dht_port_map: dht_port_map,
             dht_local_addr_v4,
             dht_local_addr_v6,
@@ -200,18 +237,22 @@ impl Network {
             async move {
                 while let Some(peer_addr) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
-                        inner.spawn(inner.clone().establish_dht_connection(peer_addr));
+                        inner.spawn(
+                            inner
+                                .clone()
+                                .establish_dht_connection(PeerAddr::Quic(peer_addr)),
+                        );
                     }
                 }
             }
         });
 
-        if let Some(listener_v4) = listener_v4 {
-            inner.spawn(inner.clone().run_listener(listener_v4));
+        for listener in [tcp_listener_v4, tcp_listener_v6].into_iter().flatten() {
+            inner.spawn(inner.clone().run_tcp_listener(listener));
         }
 
-        if let Some(listener_v6) = listener_v6 {
-            inner.spawn(inner.clone().run_listener(listener_v6));
+        for listener in [quic_listener_v4, quic_listener_v6].into_iter().flatten() {
+            inner.spawn(inner.clone().run_quic_listener(listener));
         }
 
         inner
@@ -225,12 +266,20 @@ impl Network {
         Ok(network)
     }
 
-    pub fn listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.listener_local_addr_v4.as_ref()
+    pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.inner.tcp_listener_local_addr_v4.as_ref()
     }
 
-    pub fn listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.listener_local_addr_v6.as_ref()
+    pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.inner.tcp_listener_local_addr_v6.as_ref()
+    }
+
+    pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.inner.quic_listener_local_addr_v4.as_ref()
+    }
+
+    pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.inner.quic_listener_local_addr_v6.as_ref()
     }
 
     pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -254,11 +303,91 @@ impl Network {
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
-    async fn bind_listener(
+    async fn bind_tcp_listener(
         preferred_addr: SocketAddr,
         config: &ConfigStore,
-    ) -> Result<TcpListener, NetworkError> {
-        Ok(socket::bind(preferred_addr, config.entry(LAST_USED_TCP_PORT_KEY)).await?)
+    ) -> Option<(TcpListener, SocketAddr)> {
+        let (proto, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
+        };
+
+        match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
+            Ok(listener) => match listener.local_addr() {
+                Ok(addr) => {
+                    log::info!("Configured {} TCP listener on {:?}", proto, addr);
+                    Some((listener, addr))
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to get an address of {} TCP listener: {:?}",
+                        proto,
+                        err
+                    );
+                    None
+                }
+            },
+            Err(err) => {
+                log::warn!(
+                    "Failed to bind listener to {} TCP address {:?}: {:?}",
+                    proto,
+                    preferred_addr,
+                    err
+                );
+                None
+            }
+        }
+    }
+
+    async fn bind_quic_listener(
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
+    ) -> Option<(quic::Connector, quic::Acceptor)> {
+        let (proto, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_QUIC_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_QUIC_V6_PORT_KEY),
+        };
+
+        let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
+        {
+            Ok(socket) => socket,
+            Err(err) => {
+                log::error!(
+                    "Failed to bind {} QUIC socket to {:?}: {:?}",
+                    proto,
+                    preferred_addr,
+                    err
+                );
+                return None;
+            }
+        };
+
+        let socket = match socket.into_std() {
+            Ok(socket) => socket,
+            Err(err) => {
+                log::error!(
+                    "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
+                    proto,
+                    err
+                );
+                return None;
+            }
+        };
+
+        match quic::configure(socket) {
+            Ok((connector, listener)) => {
+                log::info!(
+                    "Configured {} QUIC stack on {:?}",
+                    proto,
+                    listener.local_addr()
+                );
+                Some((connector, listener))
+            }
+            Err(e) => {
+                log::warn!("Failed to configure {} QUIC stack: {}", proto, e);
+                None
+            }
+        }
     }
 
     pub fn current_protocol_version(&self) -> u32 {
@@ -362,11 +491,16 @@ struct Tasks {
 
 struct Inner {
     monitor: Arc<StateMonitor>,
-    listener_local_addr_v4: Option<SocketAddr>,
-    listener_local_addr_v6: Option<SocketAddr>,
+    quic_connector_v4: Option<quic::Connector>,
+    quic_connector_v6: Option<quic::Connector>,
+    quic_listener_local_addr_v4: Option<SocketAddr>,
+    quic_listener_local_addr_v6: Option<SocketAddr>,
+    tcp_listener_local_addr_v4: Option<SocketAddr>,
+    tcp_listener_local_addr_v6: Option<SocketAddr>,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
-    _listener_port_map: Option<upnp::Mapping>,
+    _tcp_port_map: Option<upnp::Mapping>,
+    _quic_port_map: Option<upnp::Mapping>,
     _dht_port_map: Option<upnp::Mapping>,
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
@@ -408,16 +542,27 @@ impl Inner {
             return;
         }
 
-        if let Some(addr) = self.listener_local_addr_v4 {
-            *local_discovery = Some(scoped_task::spawn(
-                self.clone().run_local_discovery(addr.port()),
-            ));
+        let tcp_port = self
+            .tcp_listener_local_addr_v4
+            .as_ref()
+            .map(|addr| PeerPort::Tcp(addr.port()));
+        let quic_port = self
+            .quic_listener_local_addr_v4
+            .as_ref()
+            .map(|addr| PeerPort::Quic(addr.port()));
+
+        // Arbitrary order of preference.
+        // TODO: Should we support all available?
+        let port = tcp_port.or(quic_port);
+
+        if let Some(port) = port {
+            *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
         } else {
             log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
         }
     }
 
-    async fn run_local_discovery(self: Arc<Self>, listener_port: u16) {
+    async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
         let monitor = self.monitor.make_child("LocalDiscovery");
 
         let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
@@ -437,7 +582,7 @@ impl Inner {
         }
     }
 
-    async fn run_listener(self: Arc<Self>, listener: TcpListener) {
+    async fn run_tcp_listener(self: Arc<Self>, listener: TcpListener) {
         loop {
             let (socket, addr) = match listener.accept().await {
                 Ok(pair) => pair,
@@ -449,12 +594,36 @@ impl Inner {
 
             if let Some(permit) = self
                 .connection_deduplicator
-                .reserve(addr, ConnectionDirection::Incoming)
+                .reserve(PeerAddr::Tcp(addr), ConnectionDirection::Incoming)
             {
-                self.spawn(
-                    self.clone()
-                        .handle_new_connection(socket, PeerSource::Listener, permit),
-                )
+                self.spawn(self.clone().handle_new_connection(
+                    raw::Stream::Tcp(socket),
+                    PeerSource::Listener,
+                    permit,
+                ))
+            }
+        }
+    }
+
+    async fn run_quic_listener(self: Arc<Self>, mut listener: quic::Acceptor) {
+        loop {
+            let socket = match listener.accept().await {
+                Ok(socket) => socket,
+                Err(error) => {
+                    log::error!("Failed to accept incoming QUIC connection: {}", error);
+                    break;
+                }
+            };
+
+            if let Some(permit) = self.connection_deduplicator.reserve(
+                PeerAddr::Quic(*socket.remote_address()),
+                ConnectionDirection::Incoming,
+            ) {
+                self.spawn(self.clone().handle_new_connection(
+                    raw::Stream::Quic(socket),
+                    PeerSource::Listener,
+                    permit,
+                ))
             }
         }
     }
@@ -465,7 +634,7 @@ impl Inner {
             .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
-    fn establish_user_provided_connection(self: Arc<Self>, addr: SocketAddr) {
+    fn establish_user_provided_connection(self: Arc<Self>, addr: PeerAddr) {
         self.spawn({
             let inner = self.clone();
             async move {
@@ -491,7 +660,7 @@ impl Inner {
                         // Let a discovery mechanism find the address again.
                         None => {
                             log::warn!(
-                                "Failed to create outgoing TCP connection to user provided address {}",
+                                "Failed to create outgoing connection to user provided address {:?}",
                                 addr,
                             );
                             return;
@@ -502,7 +671,7 @@ impl Inner {
         })
     }
 
-    async fn establish_discovered_connection(self: Arc<Self>, addr: SocketAddr) {
+    async fn establish_discovered_connection(self: Arc<Self>, addr: PeerAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -514,11 +683,11 @@ impl Inner {
 
         permit.mark_as_connecting();
 
-        let socket = match TcpStream::connect(addr).await {
-            Ok(socket) => socket,
+        let conn = match self.connect(addr).await {
+            Ok(conn) => conn,
             Err(error) => {
                 log::error!(
-                    "Failed to create outgoing locally discovered TCP connection to {}: {}",
+                    "Failed to create outgoing locally discovered connection to {:?}: {}",
                     addr,
                     error
                 );
@@ -526,11 +695,35 @@ impl Inner {
             }
         };
 
-        self.handle_new_connection(socket, PeerSource::LocalDiscovery, permit)
+        self.handle_new_connection(conn, PeerSource::LocalDiscovery, permit)
             .await;
     }
 
-    async fn establish_dht_connection(self: Arc<Self>, addr: SocketAddr) {
+    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
+        match addr {
+            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
+                .await
+                .map(raw::Stream::Tcp)
+                .map_err(ConnectError::Tcp),
+            PeerAddr::Quic(addr) => {
+                let connector = if addr.is_ipv4() {
+                    &self.quic_connector_v4
+                } else {
+                    &self.quic_connector_v6
+                };
+
+                connector
+                    .as_ref()
+                    .ok_or(ConnectError::NoSuitableQuicConnector)?
+                    .connect(addr)
+                    .await
+                    .map(raw::Stream::Quic)
+                    .map_err(ConnectError::Quic)
+            }
+        }
+    }
+
+    async fn establish_dht_connection(self: Arc<Self>, addr: PeerAddr) {
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -549,13 +742,13 @@ impl Inner {
             // TODO: Check if the address is still reported by the DHT discovery and retry if so.
             // That way we can avoid waiting for the next DHT lookup to start and finish.
             log::warn!(
-                "Failed to create outgoing TCP connection to DHT discovered address {}",
+                "Failed to create outgoing connection to DHT discovered address {:?}",
                 addr,
             );
         }
     }
 
-    async fn connect_with_retries(&self, addr: SocketAddr) -> Option<TcpStream> {
+    async fn connect_with_retries(&self, addr: PeerAddr) -> Option<raw::Stream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
@@ -563,11 +756,11 @@ impl Inner {
             .build();
 
         loop {
-            match TcpStream::connect(addr).await {
-                Ok(socket) => {
+            match self.connect(addr).await.ok() {
+                Some(socket) => {
                     return Some(socket);
                 }
-                Err(_) => {
+                None => {
                     match backoff.next_backoff() {
                         Some(duration) => {
                             time::sleep(duration).await;
@@ -596,13 +789,13 @@ impl Inner {
 
     async fn handle_new_connection(
         self: Arc<Self>,
-        mut stream: TcpStream,
+        mut stream: raw::Stream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
         let addr = permit.addr();
 
-        log::info!("New {} TCP connection: {}", peer_source, addr);
+        log::info!("New {} connection: {:?}", peer_source, addr);
 
         permit.mark_as_handshaking();
 
@@ -610,16 +803,16 @@ impl Inner {
             match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
                 Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
                 Err(ref error @ HandshakeError::BadMagic) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
-                    log::error!("Failed to perform handshake with {}: {}", addr, error);
+                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
             };
@@ -641,7 +834,7 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    log::info!("Connected to replica {:?} {}", that_runtime_id, addr);
+                    log::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
 
                     let mut broker =
                         MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
@@ -660,7 +853,7 @@ impl Inner {
 
         released.notified().await;
         log::info!(
-            "Lost {} TCP connection: {:?} {}",
+            "Lost {} connection: {:?} {:?}",
             peer_source,
             that_runtime_id,
             addr
@@ -685,9 +878,22 @@ impl Inner {
     }
 }
 
+//------------------------------------------------------------------------------
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error("TCP error")]
+    Tcp(std::io::Error),
+    #[error("QUIC error")]
+    Quic(quic::Error),
+    #[error("No corresponding QUIC connector")]
+    NoSuitableQuicConnector,
+}
+
+//------------------------------------------------------------------------------
+
 // Exchange runtime ids with the peer. Returns their runtime id.
 async fn perform_handshake(
-    stream: &mut TcpStream,
+    stream: &mut raw::Stream,
     this_version: Version,
     this_runtime_id: RuntimeId,
 ) -> Result<RuntimeId, HandshakeError> {

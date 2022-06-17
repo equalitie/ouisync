@@ -32,6 +32,7 @@ impl Bin {
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
         command.arg("--temp");
+        command.arg("--bind").arg("tcp/127.0.0.1:0");
         command
             .arg("--mount")
             .arg(format!("{}:{}", REPO_NAME, mount_dir.path().display()));
@@ -57,7 +58,7 @@ impl Bin {
 
         for peer in peers {
             command.arg("--peers");
-            command.arg(peer.to_string());
+            command.arg(format!("tcp/{}", peer.to_string()));
         }
 
         // Disable log output unless explicitly enabled.
@@ -193,7 +194,7 @@ fn wait_for_ready_message(
     stdout: &mut BufReader<ChildStdout>,
     id: &Id,
 ) -> u16 {
-    const PREFIX: &str = "Listening on IPv4 port ";
+    const PREFIX: &str = "Listening on TCP IPv4 port ";
     if let Some(line) = wait_for_line(stdout, PREFIX, "", id) {
         line[PREFIX.len()..].parse().unwrap()
     } else {

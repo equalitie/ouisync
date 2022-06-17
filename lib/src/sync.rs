@@ -24,7 +24,7 @@ pub(crate) mod broadcast {
 
     impl<T> Sender<T>
     where
-        T: Clone + Send + 'static,
+        T: Clone + Send + Sync + 'static,
     {
         /// Create a broadcast channel with the specified capacity.
         pub fn new(capacity: usize) -> Self {

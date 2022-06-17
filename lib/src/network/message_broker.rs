@@ -5,6 +5,7 @@ use super::{
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
     protocol::RuntimeId,
+    raw,
     request::MAX_PENDING_REQUESTS,
     server::Server,
 };
@@ -17,7 +18,6 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    net::TcpStream,
     select,
     sync::{mpsc, oneshot, Semaphore},
     task,
@@ -43,7 +43,7 @@ impl MessageBroker {
     pub fn new(
         this_runtime_id: RuntimeId,
         that_runtime_id: RuntimeId,
-        stream: TcpStream,
+        stream: raw::Stream,
         permit: ConnectionPermit,
     ) -> Self {
         let this = Self {
@@ -58,7 +58,7 @@ impl MessageBroker {
         this
     }
 
-    pub fn add_connection(&self, stream: TcpStream, permit: ConnectionPermit) {
+    pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
         self.dispatcher.bind(stream, permit)
     }
 

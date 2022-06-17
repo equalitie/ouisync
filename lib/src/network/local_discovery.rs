@@ -1,4 +1,7 @@
-use super::protocol::RuntimeId;
+use super::{
+    peer_addr::{PeerAddr, PeerPort},
+    protocol::RuntimeId,
+};
 use crate::{
     scoped_task::ScopedJoinHandle,
     state_monitor::{MonitoredValue, StateMonitor},
@@ -20,11 +23,14 @@ const MULTICAST_PORT: u16 = 9271;
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
 
+const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
+const PROTOCOL_VERSION: u8 = 0;
+
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub(super) struct LocalDiscovery {
     id: RuntimeId,
-    listener_port: u16,
+    listener_port: PeerPort,
     socket_provider: Arc<SocketProvider>,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
@@ -36,7 +42,11 @@ impl LocalDiscovery {
     /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
     /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
     /// reporting it again.
-    pub fn new(id: RuntimeId, listener_port: u16, monitor: Arc<StateMonitor>) -> io::Result<Self> {
+    pub fn new(
+        id: RuntimeId,
+        listener_port: PeerPort,
+        monitor: Arc<StateMonitor>,
+    ) -> io::Result<Self> {
         let socket_provider = Arc::new(SocketProvider::new());
 
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
@@ -60,7 +70,7 @@ impl LocalDiscovery {
         })
     }
 
-    pub async fn recv(&self) -> Option<SocketAddr> {
+    pub async fn recv(&self) -> Option<PeerAddr> {
         let mut recv_buffer = [0; 64];
 
         let mut recv_error_reported = false;
@@ -84,15 +94,27 @@ impl LocalDiscovery {
                 }
             };
 
-            let message = match bincode::deserialize(&recv_buffer[..size]) {
-                Ok(message) => message,
-                Err(error) => {
-                    log::error!("Malformed discovery message: {}", error);
-                    continue;
-                }
-            };
+            let versioned_message: VersionedMessage =
+                match bincode::deserialize(&recv_buffer[..size]) {
+                    Ok(versioned_message) => versioned_message,
+                    Err(error) => {
+                        log::error!("Malformed discovery message: {}", error);
+                        continue;
+                    }
+                };
 
-            match message {
+            if &versioned_message.magic != PROTOCOL_MAGIC
+                || versioned_message.version != PROTOCOL_VERSION
+            {
+                log::warn!(
+                    "Incompatible protocol version (our:{}, their:{})",
+                    PROTOCOL_VERSION,
+                    versioned_message.version
+                );
+                continue;
+            }
+
+            match versioned_message.message {
                 Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self.id => {
                     continue
                 }
@@ -110,7 +132,7 @@ impl LocalDiscovery {
             };
 
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
-            if let Err(error) = send(&socket, &msg, addr).await {
+            if let Err(error) = send(&socket, msg, addr).await {
                 log::error!("Failed to send discovery message: {}", error);
                 self.socket_provider.mark_bad(socket).await;
             }
@@ -118,7 +140,12 @@ impl LocalDiscovery {
             *self.beacon_responses_received.get() += 1;
         }
 
-        Some(SocketAddr::new(addr.ip(), port))
+        let addr = match port {
+            PeerPort::Tcp(port) => PeerAddr::Tcp(SocketAddr::new(addr.ip(), port)),
+            PeerPort::Quic(port) => PeerAddr::Quic(SocketAddr::new(addr.ip(), port)),
+        };
+
+        Some(addr)
     }
 }
 
@@ -149,7 +176,7 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
 async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: RuntimeId,
-    listener_port: u16,
+    listener_port: PeerPort,
     monitor: Arc<StateMonitor>,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
@@ -165,7 +192,7 @@ async fn run_beacon(
             port: listener_port,
         };
 
-        match send(&socket, &msg, multicast_endpoint).await {
+        match send(&socket, msg, multicast_endpoint).await {
             Ok(()) => {
                 error_shown = false;
                 *beacons_sent.get() += 1;
@@ -186,16 +213,28 @@ async fn run_beacon(
     }
 }
 
-async fn send(socket: &UdpSocket, message: &Message, addr: SocketAddr) -> io::Result<()> {
-    let data = bincode::serialize(message).unwrap();
+async fn send(socket: &UdpSocket, message: Message, addr: SocketAddr) -> io::Result<()> {
+    let data = bincode::serialize(&VersionedMessage {
+        magic: *PROTOCOL_MAGIC,
+        version: PROTOCOL_VERSION,
+        message,
+    })
+    .unwrap();
     socket.send_to(&data, addr).await?;
     Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct VersionedMessage {
+    magic: [u8; 17],
+    version: u8,
+    message: Message,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { id: RuntimeId, port: u16 },
-    Reply { id: RuntimeId, port: u16 },
+    ImHereYouAll { id: RuntimeId, port: PeerPort },
+    Reply { id: RuntimeId, port: PeerPort },
 }
 
 struct SocketProvider {
