@@ -67,6 +67,7 @@ pub struct Connection {
     connection: Arc<quinn::Connection>,
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
+    was_error: bool,
 }
 
 impl Connection {
@@ -79,6 +80,7 @@ impl Connection {
             connection: Arc::new(connection),
             rx: Some(rx),
             tx: Some(tx),
+            was_error: false,
         }
     }
 
@@ -92,12 +94,23 @@ impl Connection {
         // anywhere else.
         let rx = self.rx.take().unwrap();
         let tx = self.tx.take();
-        (OwnedReadHalf(rx, conn.clone()), OwnedWriteHalf(tx, conn))
+        (
+            OwnedReadHalf(rx, conn.clone()),
+            OwnedWriteHalf {
+                connection: conn,
+                tx,
+                was_error: false,
+            }
+        )
     }
 
     /// Make sure all data is sent, no more data can be sent afterwards.
     #[cfg(test)]
     pub async fn finish(&mut self) -> Result<()> {
+        if self.was_error {
+            return Err(Error::Write(quinn::WriteError::UnknownStream));
+        }
+
         match self.tx.take() {
             Some(mut tx) => {
                 tx.finish().await?;
@@ -130,8 +143,17 @@ impl AsyncWrite for Connection {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match &mut self.get_mut().tx {
-            Some(tx) => Pin::new(tx).poll_write(cx, buf),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_write(cx, buf);
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -140,8 +162,17 @@ impl AsyncWrite for Connection {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().tx {
-            Some(tx) => Pin::new(tx).poll_flush(cx),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_flush(cx);
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -150,8 +181,17 @@ impl AsyncWrite for Connection {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().tx {
-            Some(tx) => Pin::new(tx).poll_shutdown(cx),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_shutdown(cx);
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -162,6 +202,9 @@ impl AsyncWrite for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        if self.was_error {
+            return;
+        }
         if let Some(mut tx) = self.tx.take() {
             tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
         }
@@ -170,7 +213,11 @@ impl Drop for Connection {
 
 //------------------------------------------------------------------------------
 pub struct OwnedReadHalf(quinn::RecvStream, Arc<quinn::Connection>);
-pub struct OwnedWriteHalf(Option<quinn::SendStream>, Arc<quinn::Connection>);
+pub struct OwnedWriteHalf {
+    connection: Arc<quinn::Connection>,
+    tx: Option<quinn::SendStream>,
+    was_error: bool,
+}
 
 impl AsyncRead for OwnedReadHalf {
     fn poll_read(
@@ -188,8 +235,19 @@ impl AsyncWrite for OwnedWriteHalf {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match &mut self.get_mut().0 {
-            Some(tx) => Pin::new(tx).poll_write(cx, buf),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_write(cx, buf);
+
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -198,8 +256,19 @@ impl AsyncWrite for OwnedWriteHalf {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().0 {
-            Some(tx) => Pin::new(tx).poll_flush(cx),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_flush(cx);
+
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -208,8 +277,19 @@ impl AsyncWrite for OwnedWriteHalf {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().0 {
-            Some(tx) => Pin::new(tx).poll_shutdown(cx),
+        let this = self.get_mut();
+        match &mut this.tx {
+            Some(tx) => {
+                let poll = Pin::new(tx).poll_shutdown(cx);
+
+                if let Poll::Ready(r) = &poll {
+                    if r.is_err() {
+                        this.was_error = true;
+                    }
+                }
+
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -220,8 +300,12 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if let Some(mut tx) = self.0.take() {
-            let conn = self.1.clone();
+        if self.was_error {
+            return;
+        }
+
+        if let Some(mut tx) = self.tx.take() {
+            let conn = self.connection.clone();
             tokio::task::spawn(async move {
                 let _conn = conn;
                 tx.finish().await.unwrap_or(())
