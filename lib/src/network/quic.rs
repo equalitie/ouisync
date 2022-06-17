@@ -331,47 +331,17 @@ pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor)> {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("connect error")]
-    Connect,
+    Connect(#[from] quinn::ConnectError),
     #[error("connection error")]
-    Connection,
+    Connection(#[from] quinn::ConnectionError),
     #[error("write error")]
-    Write(quinn::WriteError),
+    Write(#[from] quinn::WriteError),
     #[error("done accepting error")]
     DoneAccepting,
     #[error("IO error")]
-    Io(std::io::Error),
+    Io(#[from] std::io::Error),
     #[error("TLS error")]
-    Tls(rustls::Error),
-}
-
-impl From<quinn::ConnectionError> for Error {
-    fn from(_: quinn::ConnectionError) -> Self {
-        Self::Connection
-    }
-}
-
-impl From<quinn::ConnectError> for Error {
-    fn from(_: quinn::ConnectError) -> Self {
-        Self::Connect
-    }
-}
-
-impl From<quinn::WriteError> for Error {
-    fn from(e: quinn::WriteError) -> Self {
-        Self::Write(e)
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-
-impl From<rustls::Error> for Error {
-    fn from(e: rustls::Error) -> Self {
-        Self::Tls(e)
-    }
+    Tls(#[from] rustls::Error),
 }
 
 //------------------------------------------------------------------------------
