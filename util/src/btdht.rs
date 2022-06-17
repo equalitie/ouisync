@@ -90,7 +90,7 @@ async fn main() -> io::Result<()> {
 
 async fn lookup(prefix: &str, dht: &MainlineDht, token: &ShareToken) {
     println!("{} Bootstrapping...", prefix);
-    if dht.bootstrapped().await {
+    if dht.bootstrapped(None).await {
         let mut seen_peers = HashSet::new();
         let info_hash = network::repository_info_hash(token.id());
 

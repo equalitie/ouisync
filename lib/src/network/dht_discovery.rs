@@ -166,7 +166,7 @@ async fn start_dht(
             monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
 
         async move {
-            if dht.bootstrapped().await {
+            if dht.bootstrapped(None).await {
                 *first_bootstrap.get() = "done";
                 log::info!("DHT {} bootstrap complete", protocol);
             } else {
@@ -332,9 +332,15 @@ impl Lookup {
                 // find peers for the repo and also announce that we have it.
                 let dhts = dht_v4.iter().chain(dht_v6.iter());
 
-                let mut peers = stream::iter(dhts).flat_map(|dht| dht.dht.search(info_hash, true));
+                let mut peers = Box::pin(stream::iter(dhts).flat_map(|dht| {
+                    stream::once(async {
+                        dht.dht.bootstrapped(Some(Duration::from_secs(10))).await;
+                        dht.dht.search(info_hash, true)
+                    }).flatten()
+                }));
 
                 *state.get() = Cow::Borrowed("awaiting results");
+
                 while let Some(peer) = peers.next().await {
                     if seen_peers.write().unwrap().insert(peer) {
                         log::debug!("DHT found peer for {:?}: {}", info_hash, peer);
