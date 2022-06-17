@@ -14,15 +14,15 @@ path = "src/main.rs"
 
 [dependencies]
 ouisync-lib = { package = "ouisync", version = "0.2", path = "../lib" }
-anyhow = "1.0.40"
-camino = "1.0.5"
-clap = { version = "3.2.2", features = ["derive"] }
+anyhow = "1.0.57"
+camino = "1.0.9"
+clap = { version = "3.2.5", features = ["derive"] }
 dirs = "4.0.0"
 env_logger = "0.9.0"
-log = "0.4.14"
-slab = "0.4.5"
-tokio = { version = "1.19.1", features = ["signal"] }
-rand = "0.8.4"
+log = "0.4.17"
+slab = "0.4.6"
+tokio = { version = "1.19.2", features = ["signal"] }
+rand = "0.8.5"
 
 [target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]
 fuser = "0.11.0"

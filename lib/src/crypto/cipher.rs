@@ -3,7 +3,7 @@
 use super::{hash::Digest, password::PasswordSalt};
 use argon2::Argon2;
 use chacha20::{
-    cipher::{NewCipher, StreamCipher},
+    cipher::{KeyIvInit, StreamCipher},
     ChaCha20,
 };
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
