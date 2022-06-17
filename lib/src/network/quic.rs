@@ -60,6 +60,10 @@ impl Acceptor {
 
 //------------------------------------------------------------------------------
 pub struct Connection {
+    // TODO: Do we actually have to preserve the lifetime of `quinn::Connection`? I have not seen
+    // it mentioned in the documentation, but it seems plausible and I have also seen some errors
+    // (failed unwrapps inside quinn's code) that seemed as a likely cause of `{Recv,Send}Stream`s
+    // doing `finish` after `connection` got `Drop`ped.
     connection: Arc<quinn::Connection>,
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
@@ -217,7 +221,11 @@ impl AsyncWrite for OwnedWriteHalf {
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
         if let Some(mut tx) = self.0.take() {
-            tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
+            let conn = self.1.clone();
+            tokio::task::spawn(async move {
+                let _conn = conn;
+                tx.finish().await.unwrap_or(())
+            });
         }
     }
 }
