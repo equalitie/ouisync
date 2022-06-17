@@ -63,7 +63,7 @@ pub struct Connection {
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
     remote_address: SocketAddr,
-    was_error: bool,
+    was_write_error: bool,
 }
 
 impl Connection {
@@ -76,7 +76,7 @@ impl Connection {
             rx: Some(rx),
             tx: Some(tx),
             remote_address,
-            was_error: false,
+            was_write_error: false,
         }
     }
 
@@ -93,7 +93,7 @@ impl Connection {
             OwnedReadHalf(rx),
             OwnedWriteHalf {
                 tx,
-                was_error: false,
+                was_write_error: false,
             }
         )
     }
@@ -101,7 +101,7 @@ impl Connection {
     /// Make sure all data is sent, no more data can be sent afterwards.
     #[cfg(test)]
     pub async fn finish(&mut self) -> Result<()> {
-        if self.was_error {
+        if self.was_write_error {
             return Err(Error::Write(quinn::WriteError::UnknownStream));
         }
 
@@ -143,7 +143,7 @@ impl AsyncWrite for Connection {
                 let poll = Pin::new(tx).poll_write(cx, buf);
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
                 poll
@@ -162,7 +162,7 @@ impl AsyncWrite for Connection {
                 let poll = Pin::new(tx).poll_flush(cx);
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
                 poll
@@ -181,7 +181,7 @@ impl AsyncWrite for Connection {
                 let poll = Pin::new(tx).poll_shutdown(cx);
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
                 poll
@@ -196,7 +196,7 @@ impl AsyncWrite for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if self.was_error {
+        if self.was_write_error {
             return;
         }
 
@@ -210,7 +210,7 @@ impl Drop for Connection {
 pub struct OwnedReadHalf(quinn::RecvStream);
 pub struct OwnedWriteHalf {
     tx: Option<quinn::SendStream>,
-    was_error: bool,
+    was_write_error: bool,
 }
 
 impl AsyncRead for OwnedReadHalf {
@@ -236,7 +236,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
 
@@ -257,7 +257,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
 
@@ -278,7 +278,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_error = true;
+                        this.was_write_error = true;
                     }
                 }
 
@@ -294,7 +294,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if self.was_error {
+        if self.was_write_error {
             return;
         }
 
