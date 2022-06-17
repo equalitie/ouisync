@@ -25,7 +25,7 @@ impl Connector {
         let quinn::NewConnection { connection, .. } =
             self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
         let (tx, rx) = connection.open_bi().await?;
-        Ok(Connection::new(connection, rx, tx))
+        Ok(Connection::new(rx, tx, connection.remote_address()))
     }
 }
 
@@ -50,7 +50,7 @@ impl Acceptor {
             Some(r) => r?,
             None => return Err(Error::DoneAccepting),
         };
-        Ok(Connection::new(connection, rx, tx))
+        Ok(Connection::new(rx, tx, connection.remote_address()))
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
@@ -60,44 +60,38 @@ impl Acceptor {
 
 //------------------------------------------------------------------------------
 pub struct Connection {
-    // TODO: Do we actually have to preserve the lifetime of `quinn::Connection`? I have not seen
-    // it mentioned in the documentation, but it seems plausible and I have also seen some errors
-    // (failed unwrapps inside quinn's code) that seemed as a likely cause of `{Recv,Send}Stream`s
-    // doing `finish` after `connection` got `Drop`ped.
-    connection: Arc<quinn::Connection>,
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
+    remote_address: SocketAddr,
     was_error: bool,
 }
 
 impl Connection {
     pub fn new(
-        connection: quinn::Connection,
         rx: quinn::RecvStream,
         tx: quinn::SendStream,
+        remote_address: SocketAddr,
     ) -> Self {
         Self {
-            connection: Arc::new(connection),
             rx: Some(rx),
             tx: Some(tx),
+            remote_address,
             was_error: false,
         }
     }
 
-    pub fn remote_address(&self) -> SocketAddr {
-        self.connection.remote_address()
+    pub fn remote_address(&self) -> &SocketAddr {
+        &self.remote_address
     }
 
     pub fn into_split(mut self) -> (OwnedReadHalf, OwnedWriteHalf) {
-        let conn = self.connection.clone();
         // Unwrap OK because `self` can't be split more than once and we're not `taking` from `rx`
         // anywhere else.
         let rx = self.rx.take().unwrap();
         let tx = self.tx.take();
         (
-            OwnedReadHalf(rx, conn.clone()),
+            OwnedReadHalf(rx),
             OwnedWriteHalf {
-                connection: conn,
                 tx,
                 was_error: false,
             }
@@ -205,6 +199,7 @@ impl Drop for Connection {
         if self.was_error {
             return;
         }
+
         if let Some(mut tx) = self.tx.take() {
             tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
         }
@@ -212,9 +207,8 @@ impl Drop for Connection {
 }
 
 //------------------------------------------------------------------------------
-pub struct OwnedReadHalf(quinn::RecvStream, Arc<quinn::Connection>);
+pub struct OwnedReadHalf(quinn::RecvStream);
 pub struct OwnedWriteHalf {
-    connection: Arc<quinn::Connection>,
     tx: Option<quinn::SendStream>,
     was_error: bool,
 }
@@ -305,9 +299,7 @@ impl Drop for OwnedWriteHalf {
         }
 
         if let Some(mut tx) = self.tx.take() {
-            let conn = self.connection.clone();
             tokio::task::spawn(async move {
-                let _conn = conn;
                 tx.finish().await.unwrap_or(())
             });
         }

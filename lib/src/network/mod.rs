@@ -616,7 +616,7 @@ impl Inner {
             };
 
             if let Some(permit) = self.connection_deduplicator.reserve(
-                PeerAddr::Quic(socket.remote_address()),
+                PeerAddr::Quic(*socket.remote_address()),
                 ConnectionDirection::Incoming,
             ) {
                 self.spawn(self.clone().handle_new_connection(
