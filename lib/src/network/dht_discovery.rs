@@ -324,7 +324,8 @@ impl Lookup {
                     stream::once(async {
                         dht.dht.bootstrapped(Some(Duration::from_secs(10))).await;
                         dht.dht.search(info_hash, true)
-                    }).flatten()
+                    })
+                    .flatten()
                 }));
 
                 *state.get() = Cow::Borrowed("awaiting results");

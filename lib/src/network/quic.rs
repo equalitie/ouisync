@@ -67,11 +67,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(
-        rx: quinn::RecvStream,
-        tx: quinn::SendStream,
-        remote_address: SocketAddr,
-    ) -> Self {
+    pub fn new(rx: quinn::RecvStream, tx: quinn::SendStream, remote_address: SocketAddr) -> Self {
         Self {
             rx: Some(rx),
             tx: Some(tx),
@@ -94,7 +90,7 @@ impl Connection {
             OwnedWriteHalf {
                 tx,
                 was_write_error: false,
-            }
+            },
         )
     }
 
@@ -147,7 +143,7 @@ impl AsyncWrite for Connection {
                     }
                 }
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -166,7 +162,7 @@ impl AsyncWrite for Connection {
                     }
                 }
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -185,7 +181,7 @@ impl AsyncWrite for Connection {
                     }
                 }
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -241,7 +237,7 @@ impl AsyncWrite for OwnedWriteHalf {
                 }
 
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -262,7 +258,7 @@ impl AsyncWrite for OwnedWriteHalf {
                 }
 
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -283,7 +279,7 @@ impl AsyncWrite for OwnedWriteHalf {
                 }
 
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "already finished",
@@ -299,9 +295,7 @@ impl Drop for OwnedWriteHalf {
         }
 
         if let Some(mut tx) = self.tx.take() {
-            tokio::task::spawn(async move {
-                tx.finish().await.unwrap_or(())
-            });
+            tokio::task::spawn(async move { tx.finish().await.unwrap_or(()) });
         }
     }
 }
