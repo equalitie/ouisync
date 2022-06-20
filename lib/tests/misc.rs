@@ -169,6 +169,53 @@ async fn transfer_large_file() {
     .unwrap();
 }
 
+// FIXME: this currently fails due to a bug in garbage collector which sometimes misidentifies
+// some blocks as unreachable if they are referenced through an older version of a directory whose
+// newest version isn't fully downloaded yet.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_multiple_files_sequentially() {
+    let file_sizes = [1024 * 1024usize, 1024];
+
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let (network_a, network_b) = common::create_connected_peers().await;
+    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let contents: Vec<_> = file_sizes
+        .iter()
+        .map(|size| {
+            let mut content = vec![0; *size];
+            rng.fill(&mut content[..]);
+            content
+        })
+        .collect();
+
+    for (index, content) in contents.iter().enumerate() {
+        let name = format!("file-{}.dat", index);
+        let mut file = repo_a.create_file(&name).await.unwrap();
+        write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
+        file.flush(&mut *repo_a.db().acquire().await.unwrap())
+            .await
+            .unwrap();
+        drop(file);
+
+        // Wait until we see all the already transfered files
+        for (index, content) in contents.iter().take(index + 1).enumerate() {
+            let name = format!("file-{}.dat", index);
+
+            time::timeout(
+                Duration::from_secs(60),
+                expect_file_content(&repo_b, &name, content),
+            )
+            .await
+            .unwrap();
+        }
+    }
+}
+
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
