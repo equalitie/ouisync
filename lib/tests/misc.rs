@@ -1,22 +1,22 @@
+mod common;
+
+use self::common::Env;
 use ouisync::{db, network::Network, AccessMode, ConfigStore, Error, File, Repository};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::Rng;
 use std::time::Duration;
 use tokio::time;
-
-mod common;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
     // env_logger::init();
-
-    let mut rng = StdRng::seed_from_u64(0);
+    let mut env = Env::with_seed(0);
 
     // Create two peers and connect them together.
     let (network_a, network_b) = common::create_connected_peers().await;
 
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
 
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let reg_b = network_b.handle().register(repo_b.store().clone());
@@ -60,10 +60,10 @@ async fn relink_repository() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_remote_file() {
-    let mut rng = StdRng::seed_from_u64(0);
+    let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
@@ -95,7 +95,7 @@ async fn relay() {
     // file.
     let file_size = 4 * 1024 * 1024;
 
-    let mut rng = StdRng::seed_from_u64(0);
+    let mut env = Env::with_seed(0);
 
     // The "relay" peer.
     let network_r = Network::new(&common::test_network_options(), ConfigStore::null())
@@ -107,19 +107,19 @@ async fn relay() {
     let network_b =
         common::create_peer_connected_to(*network_r.tcp_listener_local_addr_v4().unwrap()).await;
 
-    let repo_a = common::create_repo(&mut rng).await;
+    let repo_a = env.create_repo().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
 
-    let repo_b = common::create_repo_with_secrets(&mut rng, repo_a.secrets().clone()).await;
+    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
-    let repo_r =
-        common::create_repo_with_secrets(&mut rng, repo_a.secrets().with_mode(AccessMode::Blind))
-            .await;
+    let repo_r = env
+        .create_repo_with_secrets(repo_a.secrets().with_mode(AccessMode::Blind))
+        .await;
     let _reg_r = network_r.handle().register(repo_r.store().clone());
 
     let mut content = vec![0; file_size];
-    rng.fill(&mut content[..]);
+    env.rng.fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
@@ -143,15 +143,15 @@ async fn relay() {
 async fn transfer_large_file() {
     let file_size = 4 * 1024 * 1024;
 
-    let mut rng = StdRng::seed_from_u64(0);
+    let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
     let mut content = vec![0; file_size];
-    rng.fill(&mut content[..]);
+    env.rng.fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
@@ -177,10 +177,10 @@ async fn transfer_large_file() {
 async fn transfer_multiple_files_sequentially() {
     let file_sizes = [1024 * 1024usize, 1024];
 
-    let mut rng = StdRng::seed_from_u64(0);
+    let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers().await;
-    let (repo_a, repo_b) = common::create_linked_repos(&mut rng).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
 
@@ -188,7 +188,7 @@ async fn transfer_multiple_files_sequentially() {
         .iter()
         .map(|size| {
             let mut content = vec![0; *size];
-            rng.fill(&mut content[..]);
+            env.rng.fill(&mut content[..]);
             content
         })
         .collect();
