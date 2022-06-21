@@ -1,4 +1,3 @@
-use futures_util::StreamExt;
 use std::{
     io,
     net::SocketAddr,
@@ -366,8 +365,9 @@ fn make_client_config() -> quinn::ClientConfig {
 
     let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
 
-    Arc::get_mut(&mut client_config.transport)
-        .unwrap()
+    let mut transport_config = quinn::TransportConfig::default();
+
+    transport_config
         .max_concurrent_uni_streams(0_u8.into())
         // Documentation says that only one side needs to set the keep alive interval, chosing this
         // to be on the client side with the reasoning that the server side has a better chance of
@@ -376,6 +376,7 @@ fn make_client_config() -> quinn::ClientConfig {
         .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_INTERVAL_MS.into())))
         .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
 
+    client_config.transport_config(Arc::new(transport_config));
     client_config
 }
 
@@ -390,10 +391,13 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 
     let mut server_config = quinn::ServerConfig::with_single_cert(cert_chain, priv_key)?;
 
-    Arc::get_mut(&mut server_config.transport)
-        .unwrap()
+    let mut transport_config = quinn::TransportConfig::default();
+
+    transport_config
         .max_concurrent_uni_streams(0_u8.into())
         .max_idle_timeout(Some(quinn::VarInt::from_u32(MAX_IDLE_TIMEOUT_MS).into()));
+
+    server_config.transport_config(Arc::new(transport_config));
 
     Ok(server_config)
 }
