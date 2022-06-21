@@ -302,11 +302,16 @@ impl Drop for OwnedWriteHalf {
 //------------------------------------------------------------------------------
 pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor)> {
     let server_config = make_server_config()?;
+
+    let custom_socket = CustomUdpSocket::from_std(socket)?;
+
     let (mut endpoint, incoming) = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
         Some(server_config),
-        socket,
+        Box::new(custom_socket),
+        quinn::TokioRuntime,
     )?;
+
     endpoint.set_default_client_config(make_client_config());
 
     let local_addr = endpoint.local_addr()?;
@@ -401,6 +406,68 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 
     Ok(server_config)
 }
+
+//------------------------------------------------------------------------------
+use futures_util::ready;
+use tokio::io::Interest;
+
+#[derive(Debug)]
+pub struct CustomUdpSocket {
+    io: Arc<tokio::net::UdpSocket>,
+    quinn_socket_state: quinn_udp::UdpSocketState,
+}
+
+impl CustomUdpSocket {
+    pub fn from_std(sock: std::net::UdpSocket) -> io::Result<Self> {
+        quinn_udp::UdpSocketState::configure((&sock).into())?;
+        Ok(Self {
+            io: Arc::new(tokio::net::UdpSocket::from_std(sock)?),
+            quinn_socket_state: quinn_udp::UdpSocketState::new(),
+        })
+    }
+}
+
+impl quinn::AsyncUdpSocket for CustomUdpSocket {
+    fn poll_send(
+        &mut self,
+        state: &quinn_udp::UdpState,
+        cx: &mut Context,
+        transmits: &[quinn_proto::Transmit],
+    ) -> Poll<io::Result<usize>> {
+        let quinn_socket_state = &mut self.quinn_socket_state;
+        let io = &*self.io;
+        loop {
+            ready!(io.poll_send_ready(cx))?;
+            if let Ok(res) = io.try_io(Interest::WRITABLE, || {
+                quinn_socket_state.send(io.into(), state, transmits)
+            }) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+    }
+
+    fn poll_recv(
+        &self,
+        cx: &mut Context,
+        bufs: &mut [std::io::IoSliceMut<'_>],
+        meta: &mut [quinn_udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            ready!(self.io.poll_recv_ready(cx))?;
+            if let Ok(res) = self.io.try_io(Interest::READABLE, || {
+                self.quinn_socket_state.recv((&*self.io).into(), bufs, meta)
+            }) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.io.local_addr()
+    }
+}
+
+//------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
