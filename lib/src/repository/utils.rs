@@ -11,6 +11,7 @@ use crate::{
 pub(super) async fn outdated_branches(
     conn: &mut db::Connection,
     branches: Vec<Branch>,
+    local_id: Option<&PublicKey>,
 ) -> Result<Vec<Branch>> {
     let mut branches_with_vv = Vec::new();
 
@@ -19,7 +20,7 @@ pub(super) async fn outdated_branches(
         branches_with_vv.push((branch, vv));
     }
 
-    let (_, outdated): (_, Vec<_>) = versioned::partition(branches_with_vv, None);
+    let (_, outdated): (_, Vec<_>) = versioned::partition(branches_with_vv, local_id);
 
     Ok(outdated
         .into_iter()

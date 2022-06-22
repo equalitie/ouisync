@@ -146,8 +146,13 @@ impl BlockScanner {
 
     async fn remove_outdated_branches(&self) -> Result<()> {
         let mut conn = self.shared.store.db().acquire().await?;
-        let outdated_branches =
-            utils::outdated_branches(&mut conn, self.shared.collect_branches().await?).await?;
+        let local_id = self.shared.local_branch().await.map(|branch| *branch.id());
+        let outdated_branches = utils::outdated_branches(
+            &mut conn,
+            self.shared.collect_branches().await?,
+            local_id.as_ref(),
+        )
+        .await?;
         drop(conn);
 
         for branch in outdated_branches {
