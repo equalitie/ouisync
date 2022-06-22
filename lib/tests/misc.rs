@@ -1,7 +1,10 @@
 mod common;
 
 use self::common::Env;
-use ouisync::{db, network::Network, AccessMode, ConfigStore, Error, File, Repository};
+use ouisync::{
+    db, network::Network, AccessMode, ConfigStore, Error, File, Repository, BLOB_HEADER_SIZE,
+    BLOCK_SIZE,
+};
 use rand::Rng;
 use std::time::Duration;
 use tokio::time;
@@ -216,6 +219,87 @@ async fn transfer_multiple_files_sequentially() {
     }
 }
 
+// FIXME: this currently fails because unflushed changes don't increment local vv which causes it
+// to be prematurelly garbage collected when a remote branch becomes newer.
+#[ignore]
+// Test for an edge case where a sync happens while we are in the middle of writing a file.
+// This test makes sure that when the sync happens, the local branch which only has a part of the
+// file content in it is not garbage collected prematurelly.
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_during_file_write() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers().await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let mut content = vec![0; 3 * BLOCK_SIZE - BLOB_HEADER_SIZE];
+    env.rng.fill(&mut content[..]);
+
+    // A: Create empty file
+    let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
+
+    // B: Wait until everything gets merged
+    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
+        .await
+        .unwrap();
+
+    // A: Write half of the file content but don't flush yet.
+    write_in_chunks(
+        repo_a.db(),
+        &mut file_a,
+        &content[..content.len() / 2],
+        4096,
+    )
+    .await;
+
+    // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
+    // A's.
+    let mut file_b = repo_b.create_file("bar.txt").await.unwrap();
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    file_b.write(&mut conn, b"bar").await.unwrap();
+    file_b.flush(&mut conn).await.unwrap();
+    drop(conn);
+    drop(file_b);
+
+    // A: Wait until we see the file created by B
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_a, "bar.txt", b"bar"),
+    )
+    .await
+    .unwrap();
+
+    // A: Write the second half of the content and flush.
+    write_in_chunks(
+        repo_a.db(),
+        &mut file_a,
+        &content[content.len() / 2..],
+        4096,
+    )
+    .await;
+    file_a
+        .flush(&mut repo_a.db().acquire().await.unwrap())
+        .await
+        .unwrap();
+
+    // A: Reopen the file and verify it has the expected full content
+    let mut file_a = repo_a.open_file("foo.txt").await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    let actual_content = file_a.read_to_end(&mut conn).await.unwrap();
+    assert_eq!(actual_content, content);
+    drop(conn);
+
+    // B: Wait until we see the file as well
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_b, "foo.txt", &content),
+    )
+    .await
+    .unwrap();
+}
+
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
@@ -249,6 +333,33 @@ async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[
         };
 
         actual_content == expected_content
+    })
+    .await
+}
+
+// Wait until A is in sync with B, that is: both repos have local branches, they have non-empty
+// version vectors and A's version vector is greater or equal to B's.
+async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
+    common::eventually(repo_a, || async {
+        let vv_a = if let Some(branch) = repo_a.local_branch().await {
+            let mut conn = repo_a.db().acquire().await.unwrap();
+            branch.version_vector(&mut conn).await.unwrap()
+        } else {
+            return false;
+        };
+
+        let vv_b = if let Some(branch) = repo_b.local_branch().await {
+            let mut conn = repo_b.db().acquire().await.unwrap();
+            branch.version_vector(&mut conn).await.unwrap()
+        } else {
+            return false;
+        };
+
+        if vv_a.is_empty() || vv_b.is_empty() {
+            return false;
+        }
+
+        vv_a >= vv_b
     })
     .await
 }
