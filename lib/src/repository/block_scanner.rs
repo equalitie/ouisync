@@ -63,7 +63,9 @@ impl BlockScanner {
     }
 
     async fn process(&self, mode: Mode) -> Result<()> {
+        // FIXME: this should run in all access modes but currently it does only in read and write:
         self.remove_outdated_branches().await?;
+
         // self.prepare_reachable_blocks().await?;
         self.traverse_root(mode).await?;
         // self.remove_unreachable_blocks().await?;

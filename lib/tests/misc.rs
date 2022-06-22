@@ -219,9 +219,6 @@ async fn transfer_multiple_files_sequentially() {
     }
 }
 
-// FIXME: this currently fails because unflushed changes don't increment local vv which causes it
-// to be prematurelly garbage collected when a remote branch becomes newer.
-#[ignore]
 // Test for an edge case where a sync happens while we are in the middle of writing a file.
 // This test makes sure that when the sync happens, the local branch which only has a part of the
 // file content in it is not garbage collected prematurelly.
