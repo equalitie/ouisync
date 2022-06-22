@@ -64,9 +64,9 @@ impl BlockScanner {
 
     async fn process(&self, mode: Mode) -> Result<()> {
         self.remove_outdated_branches().await?;
-        self.prepare_reachable_blocks().await?;
+        // self.prepare_reachable_blocks().await?;
         self.traverse_root(mode).await?;
-        self.remove_unreachable_blocks().await?;
+        // self.remove_unreachable_blocks().await?;
 
         Ok(())
     }
@@ -82,7 +82,11 @@ impl BlockScanner {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
             let mut conn = self.shared.store.db().acquire().await?;
-            match branch.open_root(&mut conn).await {
+
+            // Open the directory in read-only mode to bypass the cache (see `directory::Mode` for
+            // more details) to make sure we obtain the most up-to-date version of the directory so
+            // that we can find all the missing blocks.
+            match branch.open_root_read_only(&mut conn).await {
                 Ok(dir) => versions.push(dir),
                 // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
                 // have the root directory yet. It's safe to skip those.
@@ -122,7 +126,11 @@ impl BlockScanner {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Skip).await?);
+                    subdirs.push(
+                        entry
+                            .open_read_only(&mut conn, MissingVersionStrategy::Skip)
+                            .await?,
+                    );
                 }
             }
         }
@@ -173,7 +181,7 @@ impl BlockScanner {
         let mut conn = self.shared.store.db().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
-            block::mark_reachable(&mut conn, &block_id).await?;
+            // block::mark_reachable(&mut conn, &block_id).await?;
 
             if mode.should_request() {
                 self.require_missing_block(&mut conn, block_id).await?;

@@ -175,7 +175,7 @@ async fn transfer_large_file() {
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
-    let file_sizes = [1024 * 1024usize, 1024];
+    let file_sizes = [512 * 1024, 1024];
 
     let mut env = Env::with_seed(0);
 
@@ -207,7 +207,7 @@ async fn transfer_multiple_files_sequentially() {
             let name = format!("file-{}.dat", index);
 
             time::timeout(
-                Duration::from_secs(60),
+                DEFAULT_TIMEOUT,
                 expect_file_content(&repo_b, &name, content),
             )
             .await

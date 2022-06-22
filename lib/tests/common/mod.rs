@@ -47,7 +47,9 @@ impl Env {
             self.rng.gen(),
             MasterSecret::generate(&mut self.rng),
             secrets,
-            true,
+            // DEBUG: temporarily disabling the merger for debugging purposes
+            // true,
+            false,
         )
         .await
         .unwrap()

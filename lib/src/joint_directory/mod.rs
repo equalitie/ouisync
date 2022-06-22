@@ -221,6 +221,7 @@ impl JointDirectory {
             dir.merge(db).await?;
         }
 
+        // FIXME: don't bump if there were conflicts!
         let mut conn = db.acquire().await?;
         local_version.bump(&mut conn, new_version_vector).await?;
 
@@ -519,6 +520,15 @@ impl<'a> JointDirectoryRef<'a> {
         missing_version_strategy: MissingVersionStrategy,
     ) -> Result<JointDirectory> {
         self.open_with_mode(conn, missing_version_strategy, Mode::ReadWrite)
+            .await
+    }
+
+    pub async fn open_read_only(
+        &self,
+        conn: &mut db::Connection,
+        missing_version_strategy: MissingVersionStrategy,
+    ) -> Result<JointDirectory> {
+        self.open_with_mode(conn, missing_version_strategy, Mode::ReadOnly)
             .await
     }
 
