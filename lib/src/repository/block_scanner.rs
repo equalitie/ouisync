@@ -126,11 +126,7 @@ impl BlockScanner {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    subdirs.push(
-                        entry
-                            .open_read_only(&mut conn, MissingVersionStrategy::Skip)
-                            .await?,
-                    );
+                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Skip).await?);
                 }
             }
         }

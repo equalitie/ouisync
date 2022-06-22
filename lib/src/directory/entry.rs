@@ -207,6 +207,13 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
+        match self.inner.parent_outer.mode {
+            Mode::ReadWrite => self.open_read_write(conn).await,
+            Mode::ReadOnly => self.open_read_only(conn).await,
+        }
+    }
+
+    async fn open_read_write(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.inner
             .parent_inner
             .open_directories
@@ -219,7 +226,7 @@ impl<'a> DirectoryRef<'a> {
             .await
     }
 
-    pub(crate) async fn open_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
+    async fn open_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
         Directory::open(
             conn,
             self.branch().clone(),
@@ -228,17 +235,6 @@ impl<'a> DirectoryRef<'a> {
             Mode::ReadOnly,
         )
         .await
-    }
-
-    pub(crate) async fn open_with_mode(
-        &self,
-        conn: &mut db::Connection,
-        mode: Mode,
-    ) -> Result<Directory> {
-        match mode {
-            Mode::ReadWrite => self.open(conn).await,
-            Mode::ReadOnly => self.open_read_only(conn).await,
-        }
     }
 
     pub fn branch(&self) -> &'a Branch {
