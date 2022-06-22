@@ -27,7 +27,7 @@ impl ParentContext {
     ///
     /// TODO: document cancel safety.
     pub async fn commit(&self, mut tx: db::Transaction<'_>, merge: VersionVector) -> Result<()> {
-        let mut writer = self.directory.write().await;
+        let mut writer = self.directory.write().await?;
         writer.inner.prepare(&mut tx).await?;
         writer.inner.bump(&self.entry_name, &merge)?;
         writer.inner.save(&mut tx).await?;
@@ -51,7 +51,7 @@ impl ParentContext {
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
         let directory = self.directory.fork(&mut tx, local_branch).await?;
-        let mut writer = directory.write().await;
+        let mut writer = directory.write().await?;
 
         writer.inner.prepare(&mut tx).await?;
         writer.inner.insert(

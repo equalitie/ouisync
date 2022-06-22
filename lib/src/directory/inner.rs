@@ -69,7 +69,7 @@ impl Inner {
     #[async_recursion]
     pub async fn prepare(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
         if let Some(parent) = &self.parent {
-            parent.directory().write().await.inner.prepare(tx).await?;
+            parent.directory().write().await?.inner.prepare(tx).await?;
         }
 
         if self.pending_entry.is_some() {

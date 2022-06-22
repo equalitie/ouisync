@@ -6,7 +6,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
+    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef, Mode},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -518,9 +518,19 @@ impl<'a> JointDirectoryRef<'a> {
         conn: &mut db::Connection,
         missing_version_strategy: MissingVersionStrategy,
     ) -> Result<JointDirectory> {
+        self.open_with_mode(conn, missing_version_strategy, Mode::ReadWrite)
+            .await
+    }
+
+    pub(crate) async fn open_with_mode(
+        &self,
+        conn: &mut db::Connection,
+        missing_version_strategy: MissingVersionStrategy,
+        mode: Mode,
+    ) -> Result<JointDirectory> {
         let mut versions = Vec::new();
         for version in &self.versions {
-            match version.open(conn).await {
+            match version.open_with_mode(conn, mode).await {
                 Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self

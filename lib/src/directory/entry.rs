@@ -2,7 +2,7 @@ use super::{
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     inner::Inner,
     parent_context::ParentContext,
-    Directory,
+    Directory, Mode,
 };
 use crate::{
     blob::Shared,
@@ -212,11 +212,33 @@ impl<'a> DirectoryRef<'a> {
             .open_directories
             .open(
                 conn,
-                self.inner.parent_inner.blob.branch().clone(),
+                self.branch().clone(),
                 self.locator(),
                 self.inner.parent_context(),
             )
             .await
+    }
+
+    pub(crate) async fn open_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
+        Directory::open(
+            conn,
+            self.branch().clone(),
+            self.locator(),
+            Some(self.inner.parent_context()),
+            Mode::ReadOnly,
+        )
+        .await
+    }
+
+    pub(crate) async fn open_with_mode(
+        &self,
+        conn: &mut db::Connection,
+        mode: Mode,
+    ) -> Result<Directory> {
+        match mode {
+            Mode::ReadWrite => self.open(conn).await,
+            Mode::ReadOnly => self.open_read_only(conn).await,
+        }
     }
 
     pub fn branch(&self) -> &'a Branch {

@@ -34,11 +34,25 @@ use async_recursion::async_recursion;
 use sqlx::Connection;
 use std::{mem, sync::Arc};
 
+/// Directory access mode
+///
+/// Note: when a directory is opening in `ReadOnly` mode, it also bypasses the cache. This is
+/// because the purpose of the cache is to make sure all instances of the same directory are in
+/// sync, but when the directory is read-only, it's not possible to perform any modifications on it
+/// that would affect the other instances so the cache is unnecessary. This is also useful when one
+/// needs to open the most up to date version of the directory.
+#[derive(Clone, Copy)]
+pub(crate) enum Mode {
+    ReadOnly,
+    ReadWrite,
+}
+
 #[derive(Clone)]
 pub struct Directory {
     // `branch_id` is equivalent `inner.read().await.branch().id()`, but access to it doesn't
     // require locking.
     branch_id: PublicKey,
+    mode: Mode,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -46,8 +60,12 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(conn: &mut db::Connection, owner_branch: Branch) -> Result<Self> {
-        Self::open(conn, owner_branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(
+        conn: &mut db::Connection,
+        owner_branch: Branch,
+        mode: Mode,
+    ) -> Result<Self> {
+        Self::open(conn, owner_branch, Locator::ROOT, None, mode).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -59,7 +77,7 @@ impl Directory {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(conn, branch.clone(), locator, None).await {
+        match Self::open(conn, branch.clone(), locator, None, Mode::ReadWrite).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -75,21 +93,26 @@ impl Directory {
     }
 
     /// Lock this directory for writing.
-    async fn write(&self) -> Writer<'_> {
-        let inner = self.inner.write().await;
-        Writer { outer: self, inner }
+    async fn write(&self) -> Result<Writer<'_>> {
+        match self.mode {
+            Mode::ReadWrite => {
+                let inner = self.inner.write().await;
+                Ok(Writer { outer: self, inner })
+            }
+            Mode::ReadOnly => Err(Error::PermissionDenied),
+        }
     }
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&self, conn: &mut db::Connection, name: String) -> Result<File> {
         let tx = conn.begin().await?;
-        self.write().await.create_file(tx, name).await
+        self.write().await?.create_file(tx, name).await
     }
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&self, conn: &mut db::Connection, name: String) -> Result<Self> {
         let tx = conn.begin().await?;
-        self.write().await.create_directory(tx, name).await
+        self.write().await?.create_directory(tx, name).await
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -108,7 +131,7 @@ impl Directory {
     ) -> Result<()> {
         let tx = conn.begin().await?;
         self.write()
-            .await
+            .await?
             .remove_entry(tx, name, branch_id, vv, OverwriteStrategy::Remove)
             .await
     }
@@ -151,7 +174,7 @@ impl Directory {
 
         {
             let tx = conn.begin().await?;
-            let mut dst_writer = dst_dir.write().await;
+            let mut dst_writer = dst_dir.write().await?;
             dst_writer
                 .insert_entry(tx, dst_name.to_owned(), dst_data, OverwriteStrategy::Remove)
                 .await?;
@@ -159,7 +182,7 @@ impl Directory {
 
         {
             let tx = conn.begin().await?;
-            let mut src_writer = self.write().await;
+            let mut src_writer = self.write().await?;
             let branch_id = *src_writer.branch().id();
             src_writer
                 .remove_entry(tx, src_name, &branch_id, src_vv, OverwriteStrategy::Keep)
@@ -196,7 +219,7 @@ impl Directory {
 
         if let Some((parent_dir, entry_name)) = parent {
             let parent_dir = parent_dir.fork(conn, local_branch).await?;
-            let mut writer = parent_dir.write().await;
+            let mut writer = parent_dir.write().await?;
 
             match writer.lookup(&entry_name) {
                 Ok(EntryRef::Directory(entry)) => entry.open(conn).await,
@@ -218,7 +241,7 @@ impl Directory {
     /// Updates the version vector of this directory by merging it with `vv`.
     pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
         let tx = conn.begin().await?;
-        let mut writer = self.write().await;
+        let mut writer = self.write().await?;
         writer.inner.commit(tx, vv).await
     }
 
@@ -236,9 +259,11 @@ impl Directory {
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
+        mode: Mode,
     ) -> Result<Self> {
         Ok(Self {
             branch_id: *owner_branch.id(),
+            mode,
             inner: Arc::new(RwLock::new(
                 Inner::open(conn, owner_branch, locator, parent).await?,
             )),
@@ -248,6 +273,7 @@ impl Directory {
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         Directory {
             branch_id: *owner_branch.id(),
+            mode: Mode::ReadWrite,
             inner: Arc::new(RwLock::new(Inner::create(owner_branch, locator, parent))),
         }
     }
@@ -443,7 +469,7 @@ impl Writer<'_> {
 
         self.inner.prepare(&mut tx).await?;
         self.inner.insert(name, data, OverwriteStrategy::Remove)?;
-        dir.write().await.inner.save(&mut tx).await?;
+        dir.write().await?.inner.save(&mut tx).await?;
         self.inner.save(&mut tx).await?;
         self.inner.commit(tx, VersionVector::new()).await?;
 
