@@ -172,10 +172,6 @@ async fn transfer_large_file() {
     .unwrap();
 }
 
-// FIXME: this currently fails due to a bug in garbage collector which sometimes misidentifies
-// some blocks as unreachable if they are referenced through an older version of a directory whose
-// newest version isn't fully downloaded yet.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
     let file_sizes = [512 * 1024, 1024];
@@ -208,7 +204,6 @@ async fn transfer_multiple_files_sequentially() {
         // Wait until we see all the already transfered files
         for (index, content) in contents.iter().take(index + 1).enumerate() {
             let name = format!("file-{}.dat", index);
-
             time::timeout(
                 DEFAULT_TIMEOUT,
                 expect_file_content(&repo_b, &name, content),

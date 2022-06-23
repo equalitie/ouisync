@@ -66,9 +66,9 @@ impl BlockScanner {
         // FIXME: this should run in all access modes but currently it does only in read and write:
         self.remove_outdated_branches().await?;
 
-        // self.prepare_reachable_blocks().await?;
+        self.prepare_reachable_blocks().await?;
         self.traverse_root(mode).await?;
-        // self.remove_unreachable_blocks().await?;
+        self.remove_unreachable_blocks().await?;
 
         Ok(())
     }
@@ -77,30 +77,43 @@ impl BlockScanner {
         let branches = self.shared.collect_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
+        let mut result = Ok(());
 
         for branch in branches {
             // We already removed outdated branches at this point, so every remaining root
             // directory version is up to date.
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            let mut conn = self.shared.store.db().acquire().await?;
+            if result.is_ok() {
+                let mut conn = self.shared.store.db().acquire().await?;
 
-            // Open the directory in read-only mode to bypass the cache (see `directory::Mode` for
-            // more details) to make sure we obtain the most up-to-date version of the directory so
-            // that we can find all the missing blocks.
-            match branch.open_root_read_only(&mut conn).await {
-                Ok(dir) => versions.push(dir),
-                // `EntryNotFound` is ok because it means it's a newly created branch which doesn't
-                // have the root directory yet. It's safe to skip those.
-                // `BlockNotFound` is ok too as the missing blocks will be requested later.
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
-                Err(error) => return Err(error),
+                // Open the directory in read-only mode to bypass the cache (see `directory::Mode` for
+                // more details) to make sure we obtain the most up-to-date version of the directory so
+                // that we can find all the missing blocks.
+                match branch.open_root_read_only(&mut conn).await {
+                    Ok(dir) => versions.push(dir),
+                    Err(Error::EntryNotFound) => {
+                        // `EntryNotFound` here just means this is a newly created branch with no
+                        // content yet. It is safe to ignore it.
+                        continue;
+                    }
+                    Err(error) => {
+                        // Remember the error but keep processing the remaining branches so that we
+                        // find all the missing blocks.
+                        result = Err(error);
+                    }
+                }
             }
         }
 
         for entry in entries {
             self.process_blocks(mode, entry).await?;
         }
+
+        // If there was en error opening any version of the root directory we can't proceed because
+        // we might not have access to all the entries and we could fail to identify some missing
+        // blocks and/or incorrectly mark some as unreachable.
+        result?;
 
         self.traverse(mode, JointDirectory::new(None, versions))
             .await
@@ -110,6 +123,7 @@ impl BlockScanner {
     async fn traverse(&self, mode: Mode, dir: JointDirectory) -> Result<()> {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
+        let mut result = Ok(());
 
         let mut conn = self.shared.store.db().acquire().await?;
 
@@ -128,7 +142,16 @@ impl BlockScanner {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Skip).await?);
+                    if result.is_ok() {
+                        match entry.open(&mut conn, MissingVersionStrategy::Fail).await {
+                            Ok(dir) => subdirs.push(dir),
+                            Err(error) => {
+                                // Remember the error but keep processing the remaining entries so
+                                // that we find all the missing blocks.
+                                result = Err(error);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -138,6 +161,10 @@ impl BlockScanner {
         for entry in entries {
             self.process_blocks(mode, entry).await?;
         }
+
+        // If there was en error opening any of the subdirectories we can't proceed further because
+        // we might not have access to all the entries.
+        result?;
 
         for dir in subdirs {
             self.traverse(mode, dir).await?;
@@ -184,7 +211,7 @@ impl BlockScanner {
         let mut conn = self.shared.store.db().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
-            // block::mark_reachable(&mut conn, &block_id).await?;
+            block::mark_reachable(&mut conn, &block_id).await?;
 
             if mode.should_request() {
                 self.require_missing_block(&mut conn, block_id).await?;
@@ -199,7 +226,7 @@ impl BlockScanner {
         conn: &mut db::Connection,
         block_id: BlockId,
     ) -> Result<()> {
-        // TODO: check whether the block is already requested to avoid the potentially expensive db
+        // TODO: check whether the block is already required to avoid the potentially expensive db
         // lookup.
         if !block::exists(conn, &block_id).await? {
             self.shared.store.block_tracker.require(block_id);
