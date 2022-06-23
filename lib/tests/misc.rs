@@ -215,8 +215,8 @@ async fn transfer_multiple_files_sequentially() {
 }
 
 // Test for an edge case where a sync happens while we are in the middle of writing a file.
-// This test makes sure that when the sync happens, the local branch which only has a part of the
-// file content in it is not garbage collected prematurelly.
+// This test makes sure that when the sync happens, the partially written file content is not
+// garbage collected prematurelly.
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_write() {
     let mut env = Env::with_seed(0);
@@ -291,6 +291,12 @@ async fn sync_during_file_write() {
     .await
     .unwrap();
 }
+
+// TODO: test similar to the above, but instead of B creating "bar.txt", have it write into
+// "foo.txt". Currently this causes the partially written content by A to be lost (collected)
+// because A's version of the file is outdated compared to B's version even though A's version
+// contains changes that B hasn't observed yet which is wrong. Correct behaviour should be that
+// both versions of the file remain.
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.

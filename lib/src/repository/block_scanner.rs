@@ -75,6 +75,7 @@ impl BlockScanner {
 
     async fn traverse_root(&self, mode: Mode) -> Result<()> {
         let branches = self.shared.collect_branches().await?;
+
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
         let mut result = Ok(());
@@ -115,7 +116,8 @@ impl BlockScanner {
         // blocks and/or incorrectly mark some as unreachable.
         result?;
 
-        self.traverse(mode, JointDirectory::new(None, versions))
+        let local_branch = self.shared.local_branch().await;
+        self.traverse(mode, JointDirectory::new(local_branch, versions))
             .await
     }
 
