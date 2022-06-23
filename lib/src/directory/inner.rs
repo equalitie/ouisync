@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     blob::{Blob, Shared},
-    block,
     branch::Branch,
     db,
     error::{Error, Result},
@@ -124,17 +123,13 @@ impl Inner {
     #[async_recursion]
     pub async fn commit<'a>(
         &'a mut self,
-        mut tx: db::Transaction<'a>,
+        tx: db::Transaction<'a>,
         bump: VersionVector,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(ctx) = self.parent.as_mut() {
             ctx.commit(tx, bump).await?;
         } else {
-            // At this point all local newly created blocks should become reachable so they can be
-            // safely unpinned to become normal subjects of garbage collection.
-            block::unpin_all(&mut tx).await?;
-
             let write_keys = self
                 .branch()
                 .keys()

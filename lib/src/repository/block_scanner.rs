@@ -66,7 +66,7 @@ impl BlockScanner {
         // FIXME: this should run in all access modes but currently it does only in read and write:
         self.remove_outdated_branches().await?;
 
-        self.prepare_reachable_blocks().await?;
+        self.prepare_unreachable_blocks().await?;
         self.traverse_root(mode).await?;
         self.remove_unreachable_blocks().await?;
 
@@ -191,9 +191,9 @@ impl BlockScanner {
         Ok(())
     }
 
-    async fn prepare_reachable_blocks(&self) -> Result<()> {
+    async fn prepare_unreachable_blocks(&self) -> Result<()> {
         let mut conn = self.shared.store.db().acquire().await?;
-        block::clear_reachable(&mut conn).await
+        block::mark_all_unreachable(&mut conn).await
     }
 
     async fn remove_unreachable_blocks(&self) -> Result<()> {
