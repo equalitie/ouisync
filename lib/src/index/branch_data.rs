@@ -232,13 +232,9 @@ async fn save_path(
         }
     }
 
-    let new_proof = Proof::new(
-        old_root.proof.writer_id,
-        old_root.proof.version_vector.clone(),
-        path.root_hash,
-        write_keys,
-    );
-
+    let writer_id = old_root.proof.writer_id;
+    let new_version_vector = old_root.proof.version_vector.clone().incremented(writer_id);
+    let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
     let new_root = RootNode::create(conn, new_proof, old_root.summary).await?;
 
     // NOTE: It is not enough to remove only the old_root because there may be a non zero

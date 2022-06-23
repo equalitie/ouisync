@@ -19,7 +19,7 @@ use std::{
 // Android log tag.
 // HACK: if the tag doesn't start with 'flutter' then the logs won't show up in the app if built in
 // release mode.
-const TAG: &str = concat!("flutter-", env!("CARGO_PKG_NAME"));
+const TAG: &str = "flutter-ouisync";
 
 pub(crate) struct Logger {
     _stdout: StdRedirect,
@@ -153,10 +153,12 @@ fn setup_logger() {
                 FilterBuilder::new()
                     // disable logs from dependencies to avoid log spam
                     .filter(None, LevelFilter::Off)
-                    // but do show DHT routing table stats
-                    .filter(Some("btdht::routing"), LevelFilter::Debug)
-                    // TODO: allow changing the log level
+                    // show logs from ouisync-ffi
                     .filter(Some(env!("CARGO_PKG_NAME")), LevelFilter::Trace)
+                    // show logs from ouisync
+                    .filter(Some("ouisync"), LevelFilter::Trace)
+                    // show DHT routing table stats
+                    .filter(Some("btdht::routing"), LevelFilter::Debug)
                     .build(),
             )
             .format(|f, record| {

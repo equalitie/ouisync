@@ -427,13 +427,26 @@ async fn attempt_to_merge_concurrent_file() {
     let mut conn = pool.acquire().await.unwrap();
     update_file(&mut conn, &local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&mut conn, &remote_root, "cat.jpg", b"v2", &branches[1]).await;
+
+    assert_eq!(
+        local_root
+            .version_vector(&mut conn)
+            .await
+            .unwrap()
+            .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
+        None
+    );
+
     drop(conn);
 
     // Merge succeeds but skips over the conflicting entries.
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-        .merge(&pool)
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
 
     // The local version is unchanged
     let mut conn = pool.acquire().await.unwrap();
@@ -448,6 +461,17 @@ async fn attempt_to_merge_concurrent_file() {
 
     // There is still only the local version in the local branch
     assert_eq!(local_root.read().await.entries().count(), 1);
+
+    // FIXME:
+    // // The branches are still concurrent
+    // assert_eq!(
+    //     local_root
+    //         .version_vector(&mut conn)
+    //         .await
+    //         .unwrap()
+    //         .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
+    //     None
+    // );
 }
 
 #[tokio::test(flavor = "multi_thread")]

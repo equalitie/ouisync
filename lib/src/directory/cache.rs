@@ -1,4 +1,4 @@
-use super::{inner::Inner, parent_context::ParentContext, Directory};
+use super::{inner::Inner, parent_context::ParentContext, Directory, Mode};
 use crate::{
     branch::Branch,
     db,
@@ -25,10 +25,11 @@ impl RootDirectoryCache {
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 branch_id: *owner_branch.id(),
+                mode: Mode::ReadWrite,
                 inner,
             })
         } else {
-            let dir = Directory::open_root(conn, owner_branch).await?;
+            let dir = Directory::open_root(conn, owner_branch, Mode::ReadWrite).await?;
             *inner = Arc::downgrade(&dir.inner);
             Ok(dir)
         }
@@ -44,6 +45,7 @@ impl RootDirectoryCache {
         if let Some(inner) = inner.upgrade() {
             Ok(Directory {
                 branch_id: *branch.id(),
+                mode: Mode::ReadWrite,
                 inner,
             })
         } else {
@@ -76,16 +78,21 @@ impl SubdirectoryCache {
                 if let Some(inner) = entry.get().upgrade() {
                     Directory {
                         branch_id: *owner_branch.id(),
+                        mode: Mode::ReadWrite,
                         inner,
                     }
                 } else {
-                    let dir = Directory::open(conn, owner_branch, locator, Some(parent)).await?;
+                    let dir =
+                        Directory::open(conn, owner_branch, locator, Some(parent), Mode::ReadWrite)
+                            .await?;
                     entry.insert(Arc::downgrade(&dir.inner));
                     dir
                 }
             }
             hash_map::Entry::Vacant(entry) => {
-                let dir = Directory::open(conn, owner_branch, locator, Some(parent)).await?;
+                let dir =
+                    Directory::open(conn, owner_branch, locator, Some(parent), Mode::ReadWrite)
+                        .await?;
                 entry.insert(Arc::downgrade(&dir.inner));
                 dir
             }

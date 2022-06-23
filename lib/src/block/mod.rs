@@ -7,8 +7,8 @@ mod tracker;
 
 pub(crate) use self::{
     store::{
-        clear_reachable, count, exists, mark_reachable, pin, read, remove_unreachable, unpin_all,
-        write, BlockNonce,
+        count, exists, mark_all_unreachable, mark_reachable, read, remove_unreachable, write,
+        BlockNonce,
     },
     tracker::{BlockTracker, BlockTrackerClient},
 };

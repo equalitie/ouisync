@@ -221,6 +221,7 @@ impl JointDirectory {
             dir.merge(db).await?;
         }
 
+        // FIXME: don't bump if there were conflicts!
         let mut conn = db.acquire().await?;
         local_version.bump(&mut conn, new_version_vector).await?;
 

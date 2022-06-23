@@ -726,57 +726,45 @@ async fn version_vector_create_file() {
     .await
     .unwrap();
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
-    let local_id = *local_branch.id();
+
+    let root_vv_0 = {
+        let mut conn = repo.db().acquire().await.unwrap();
+        local_branch.version_vector(&mut conn).await.unwrap()
+    };
 
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 1]);
-    // +1 for create
-    // +1 for the file insert
-    assert_eq!(
-        file.parent()
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
-            .await
-            .unwrap(),
-        vv![local_id => 2]
-    );
-    // +1 for the parent insert
-    // +1 for the parent modify due to the file insert
-    // NOTE: currently the root vv is not bumped when the root directory is created, only when it's
-    // modified.
-    assert_eq!(
-        file.parent()
-            .parent()
-            .await
-            .unwrap()
-            .version_vector(&mut *repo.db().acquire().await.unwrap())
-            .await
-            .unwrap(),
-        vv![local_id => 2]
-    );
-
     let mut conn = repo.db().acquire().await.unwrap();
+
+    let root_vv_1 = file
+        .parent()
+        .parent()
+        .await
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_1 = file.parent().version_vector(&mut conn).await.unwrap();
+    let file_vv_1 = file.version_vector().await;
+
+    assert!(root_vv_1 > root_vv_0);
 
     file.write(&mut conn, b"blah").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
-    // +1 for the file update
-    assert_eq!(file.version_vector().await, vv![local_id => 2]);
-    // +1 for the parent modify due to the file vv bump
-    assert_eq!(
-        file.parent().version_vector(&mut conn).await.unwrap(),
-        vv![local_id => 3]
-    );
-    // +1 for the root modify due to parent vv bump
-    assert_eq!(
-        file.parent()
-            .parent()
-            .await
-            .unwrap()
-            .version_vector(&mut conn)
-            .await
-            .unwrap(),
-        vv![local_id => 3]
-    );
+    let root_vv_2 = file
+        .parent()
+        .parent()
+        .await
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_2 = file.parent().version_vector(&mut conn).await.unwrap();
+    let file_vv_2 = file.version_vector().await;
+
+    assert!(root_vv_2 > root_vv_1);
+    assert!(parent_vv_2 > parent_vv_1);
+    assert!(file_vv_2 > file_vv_1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -853,7 +841,6 @@ async fn version_vector_fork_file() {
     .unwrap();
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
-    let local_id = *local_branch.id();
 
     let remote_branch = repo
         .create_remote_branch(PublicKey::random())
@@ -874,18 +861,7 @@ async fn version_vector_fork_file() {
 
     file.fork(&mut conn, &local_branch).await.unwrap();
 
-    let local_parent = file.parent();
-    let local_root = local_parent.parent().await.unwrap();
-
     assert_eq!(file.version_vector().await, remote_file_vv);
-    assert_eq!(
-        local_parent.version_vector(&mut conn).await.unwrap(),
-        vv![local_id => 2]
-    );
-    assert_eq!(
-        local_root.version_vector(&mut conn).await.unwrap(),
-        vv![local_id => 2]
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

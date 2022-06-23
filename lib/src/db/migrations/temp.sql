@@ -10,10 +10,9 @@
 --------------------------------------------------------------------------------
 
 
--- Reachable blocks
-CREATE TEMPORARY TABLE IF NOT EXISTS reachable_blocks (
-    id     BLOB    NOT NULL PRIMARY KEY,
-    pinned INTEGER NOT NULL
+-- Unreachable blocks
+CREATE TEMPORARY TABLE IF NOT EXISTS unreachable_blocks (
+    id BLOB NOT NULL PRIMARY KEY
 ) WITHOUT ROWID;
 
 -- Receive filter

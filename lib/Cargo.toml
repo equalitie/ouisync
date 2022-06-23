@@ -55,4 +55,5 @@ zeroize = "1.2.0"
 [dev-dependencies]
 assert_matches = "1.5"
 proptest = "1.0"
+tempfile = "3.2"
 test-strategy = "0.2.0"

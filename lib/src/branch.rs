@@ -4,7 +4,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     debug_printer::DebugPrinter,
-    directory::{Directory, EntryRef, RootDirectoryCache},
+    directory::{Directory, EntryRef, Mode, RootDirectoryCache},
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -49,6 +49,10 @@ impl Branch {
 
     pub(crate) async fn open_root(&self, conn: &mut db::Connection) -> Result<Directory> {
         self.root_directory.open(conn, self.clone()).await
+    }
+
+    pub(crate) async fn open_root_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
+        Directory::open_root(conn, self.clone(), Mode::ReadOnly).await
     }
 
     pub(crate) async fn open_or_create_root(&self, conn: &mut db::Connection) -> Result<Directory> {
