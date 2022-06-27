@@ -538,7 +538,7 @@ fn send_to_side_channels(
                         std::ptr::copy_nonoverlapping(
                             buf.as_ptr(),
                             data.as_mut_ptr().cast::<u8>(),
-                            buf.len(),
+                            buf.len().min(data.len()),
                         );
                         data
                     },
