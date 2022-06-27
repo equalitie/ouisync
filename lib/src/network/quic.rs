@@ -562,6 +562,10 @@ impl SideChannel {
         }
         Ok((len, packet.from))
     }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.io.local_addr()
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -614,15 +618,17 @@ mod tests {
             let _connection = acceptor.accept().await.unwrap();
         });
 
-        const MSG : &[u8; 18] = b"hello side channel";
+        const MSG: &[u8; 18] = b"hello side channel";
 
         task::spawn(async move {
-            let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
             socket.send_to(MSG, addr).await.unwrap();
         });
 
         let mut buf = [0; MAX_SIDE_CHANNEL_PACKET_SIZE];
-        let (len, from) = side_channel.recv_from(&mut buf).await.unwrap();
+        let (len, _from) = side_channel.recv_from(&mut buf).await.unwrap();
 
         assert_eq!(len, MSG.len());
         assert_eq!(buf[..len], MSG[..]);
