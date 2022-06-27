@@ -187,6 +187,11 @@ impl BlockScanner {
         drop(conn);
 
         for branch in outdated_branches {
+            // Never remove local branch
+            if Some(branch.id()) == local_id.as_ref() {
+                continue;
+            }
+
             self.shared.remove_branch(branch.id()).await?;
         }
 

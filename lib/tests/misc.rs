@@ -2,11 +2,11 @@ mod common;
 
 use self::common::Env;
 use ouisync::{
-    db, network::Network, AccessMode, ConfigStore, Error, File, Repository, BLOB_HEADER_SIZE,
-    BLOCK_SIZE,
+    db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error, File, MasterSecret,
+    Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::time::Duration;
+use std::{cmp::Ordering, io::SeekFrom, time::Duration};
 use tokio::time;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -297,6 +297,122 @@ async fn sync_during_file_write() {
 // because A's version of the file is outdated compared to B's version even though A's version
 // contains changes that B hasn't observed yet which is wrong. Correct behaviour should be that
 // both versions of the file remain.
+
+// Test that the local version changes monotonically even when the local branch temporarily becomes
+// outdated.
+#[tokio::test(flavor = "multi_thread")]
+async fn recreate_local_branch() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers().await;
+
+    let store_a = env.next_store();
+    let device_id_a = env.rng.gen();
+    let master_secret_a = MasterSecret::generate(&mut env.rng);
+    let access_secrets = AccessSecrets::generate_write(&mut env.rng);
+    let repo_a = Repository::create(
+        &store_a,
+        device_id_a,
+        master_secret_a.clone(),
+        access_secrets.clone(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let repo_b = env.create_repo_with_secrets(access_secrets.clone()).await;
+
+    let mut file = repo_a.create_file("foo.txt").await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file.write(&mut conn, b"hello from A\n").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    let vv_a_0 = repo_a
+        .local_branch()
+        .await
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+
+    drop(conn);
+    drop(file);
+
+    // A: Reopen the repo in read mode to disable merger
+    let repo_a = Repository::open_with_mode(
+        &store_a,
+        device_id_a,
+        Some(master_secret_a.clone()),
+        AccessMode::Read,
+        true,
+    )
+    .await
+    .unwrap();
+
+    // A + B: establish link
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    // B: Sync with A
+    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
+        .await
+        .unwrap();
+
+    // B: Modify the repo. This makes B's branch newer than A's
+    let mut file = repo_b.open_file("foo.txt").await.unwrap();
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    file.write(&mut conn, b"hello from B\n").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    let vv_b = repo_b
+        .local_branch()
+        .await
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+
+    drop(conn);
+    drop(file);
+
+    assert!(vv_b > vv_a_0);
+
+    // A: Sync with B. Afterwards our local branch will become outdated compared to B's
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n"),
+    )
+    .await
+    .unwrap();
+
+    // A: Reopen in write mode
+    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a), true)
+        .await
+        .unwrap();
+
+    // A: Modify the repo
+    repo_a.create_file("bar.txt").await.unwrap();
+
+    // A: Make sure the local version changed monotonically.
+    common::eventually(&repo_a, || async {
+        let mut conn = repo_a.db().acquire().await.unwrap();
+        let vv_a_1 = repo_a
+            .local_branch()
+            .await
+            .unwrap()
+            .version_vector(&mut conn)
+            .await
+            .unwrap();
+
+        match vv_a_1.partial_cmp(&vv_b) {
+            Some(Ordering::Greater) => true,
+            Some(Ordering::Equal | Ordering::Less) => panic!("non-monotonic version progression"),
+            None => false,
+        }
+    })
+    .await
+}
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.

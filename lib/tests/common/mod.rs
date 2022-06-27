@@ -31,19 +31,23 @@ impl Env {
         }
     }
 
+    pub fn next_store(&mut self) -> db::Store {
+        let num = self.next_repo_num;
+        self.next_repo_num += 1;
+
+        let path = self.base_dir.path().join(format!("repo-{}.db", num));
+
+        db::Store::Permanent(path)
+    }
+
     pub async fn create_repo(&mut self) -> Repository {
         let secrets = AccessSecrets::generate_write(&mut self.rng);
         self.create_repo_with_secrets(secrets).await
     }
 
     pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
-        let num = self.next_repo_num;
-        self.next_repo_num += 1;
-
-        let path = self.base_dir.path().join(format!("repo-{}.db", num));
-
         Repository::create(
-            &db::Store::Permanent(path),
+            &self.next_store(),
             self.rng.gen(),
             MasterSecret::generate(&mut self.rng),
             secrets,

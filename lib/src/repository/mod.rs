@@ -100,12 +100,31 @@ impl Repository {
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
     ) -> Result<Self> {
+        Self::open_with_mode(
+            store,
+            device_id,
+            master_secret,
+            AccessMode::Write,
+            enable_merger,
+        )
+        .await
+    }
+
+    /// Opens an existing repository with the provided access mode. This allows to reduce the
+    /// access mode the repository was created with.
+    pub async fn open_with_mode(
+        store: &db::Store,
+        device_id: DeviceId,
+        master_secret: Option<MasterSecret>,
+        max_access_mode: AccessMode,
+        enable_merger: bool,
+    ) -> Result<Self> {
         let pool = db::open(store).await?;
         Self::open_in(
             pool,
             device_id,
             master_secret,
-            AccessMode::Write,
+            max_access_mode,
             enable_merger,
         )
         .await
@@ -627,7 +646,14 @@ impl Shared {
         .await
     }
 
+    /// Removes the branch with the given id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if trying to remove the local branch.
     pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
+        assert_ne!(id, &self.this_writer_id, "can't remove local branch");
+
         self.branches.lock().await.remove(id);
         self.store.index.remove_branch(id).await
     }
