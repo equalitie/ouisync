@@ -216,8 +216,10 @@ impl BlockScanner {
 
     async fn process_blocks(&self, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
         let mut conn = self.shared.store.db().acquire().await?;
+        let local_id = self.shared.local_branch().await.map(|b| *b.id());
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
+            println!("mark reachable {:?}: {:?}", local_id, block_id);
             block::mark_reachable(&mut conn, &block_id).await?;
 
             if mode.should_request() {
