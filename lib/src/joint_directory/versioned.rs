@@ -8,13 +8,18 @@ use crate::{
 use std::cmp::Ordering;
 
 pub trait Versioned {
-    fn version_vector(&self) -> &VersionVector;
+    fn compare_versions(&self, other: &Self) -> Option<Ordering>;
     fn branch_id(&self) -> &PublicKey;
 }
 
 impl Versioned for EntryRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        EntryRef::version_vector(self)
+    fn compare_versions(&self, other: &Self) -> Option<Ordering> {
+        compare_entry_versions(
+            self.version_vector(),
+            self.is_open(),
+            other.version_vector(),
+            other.is_open(),
+        )
     }
 
     fn branch_id(&self) -> &PublicKey {
@@ -23,12 +28,40 @@ impl Versioned for EntryRef<'_> {
 }
 
 impl Versioned for FileRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        FileRef::version_vector(self)
+    fn compare_versions(&self, other: &Self) -> Option<Ordering> {
+        compare_entry_versions(
+            self.version_vector(),
+            self.is_open(),
+            other.version_vector(),
+            other.is_open(),
+        )
     }
 
     fn branch_id(&self) -> &PublicKey {
         self.branch().id()
+    }
+}
+
+// Compare the entries by their version vectors but override the comparison in case any of the
+// entries is open such that the open entry is always included. For example, let's have two entries
+// A and B, where A'a vv is {x:1, y:2} and B's vv is {x:1, y:3}, but A is open and B is not. Even
+// though B's vv is happens-after A's, because A is open the comparison will returns `None` which
+// results in both entries being included.
+fn compare_entry_versions(
+    lhs_vv: &VersionVector,
+    lhs_is_open: bool,
+    rhs_vv: &VersionVector,
+    rhs_is_open: bool,
+) -> Option<Ordering> {
+    match (lhs_vv.partial_cmp(rhs_vv), lhs_is_open, rhs_is_open) {
+        (Some(Ordering::Greater), _, false) => Some(Ordering::Greater),
+        (Some(Ordering::Equal), false, false) => Some(Ordering::Equal),
+        (Some(Ordering::Less), false, _) => Some(Ordering::Less),
+        (Some(Ordering::Greater), _, true)
+        | (Some(Ordering::Equal), true, _)
+        | (Some(Ordering::Equal), _, true)
+        | (Some(Ordering::Less), true, _) => None,
+        (None, _, _) => None,
     }
 }
 
@@ -65,12 +98,7 @@ where
         let mut push = true;
 
         while index < max.len() {
-            match (
-                max[index]
-                    .version_vector()
-                    .partial_cmp(new.version_vector()),
-                new_is_local,
-            ) {
+            match (max[index].compare_versions(&new), new_is_local) {
                 // If both have identical versions, prefer the local one
                 (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
                     // Note: using `Vec::remove` to maintain the original order. Is there a more
@@ -168,8 +196,8 @@ mod tests {
     }
 
     impl Versioned for TestEntry {
-        fn version_vector(&self) -> &VersionVector {
-            &self.version_vector
+        fn compare_versions(&self, other: &Self) -> Option<Ordering> {
+            self.version_vector.partial_cmp(&other.version_vector)
         }
 
         fn branch_id(&self) -> &PublicKey {

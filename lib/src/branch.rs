@@ -125,6 +125,10 @@ impl Branch {
         self.blob_cache.get(*self.id(), blob_id)
     }
 
+    pub(crate) fn is_blob_open(&self, blob_id: BlobId) -> bool {
+        self.blob_cache.is_open(*self.id(), blob_id)
+    }
+
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         match self.open_root(conn).await {
             Ok(root) => root.debug_print(conn, print).await,

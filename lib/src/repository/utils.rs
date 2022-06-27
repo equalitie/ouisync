@@ -31,8 +31,8 @@ pub(super) async fn outdated_branches(
 }
 
 impl Versioned for (Branch, VersionVector) {
-    fn version_vector(&self) -> &VersionVector {
-        &self.1
+    fn compare_versions(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.1.partial_cmp(&other.1)
     }
 
     fn branch_id(&self) -> &PublicKey {

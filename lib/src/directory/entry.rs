@@ -104,6 +104,13 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    pub(crate) fn is_open(&self) -> bool {
+        match self {
+            Self::File(e) => e.is_open(),
+            Self::Directory(_) | Self::Tombstone(_) => false,
+        }
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -155,6 +162,10 @@ impl<'a> FileRef<'a> {
 
     pub(crate) fn data(&self) -> &EntryFileData {
         self.entry_data
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.branch().is_blob_open(*self.blob_id())
     }
 }
 

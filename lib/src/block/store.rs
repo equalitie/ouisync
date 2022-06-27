@@ -123,13 +123,13 @@ pub(crate) async fn mark_reachable(conn: &mut db::Connection, id: &BlockId) -> R
 
 /// Remove all unreachable blocks. Do this at the end of every garbage collection pass.
 pub(crate) async fn remove_unreachable(conn: &mut db::Connection) -> Result<usize> {
-    let count = sqlx::query(
-        "DELETE FROM blocks WHERE id IN (SELECT id FROM unreachable_blocks);
-         DELETE FROM unreachable_blocks",
-    )
-    .execute(conn)
-    .await?
-    .rows_affected();
+    sqlx::query("DELETE FROM blocks WHERE id IN (SELECT id FROM unreachable_blocks)")
+        .execute(&mut *conn)
+        .await?;
+    let count = sqlx::query("DELETE FROM unreachable_blocks")
+        .execute(conn)
+        .await?
+        .rows_affected();
 
     Ok(count as usize)
 }

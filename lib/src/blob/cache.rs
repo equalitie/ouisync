@@ -34,6 +34,15 @@ impl BlobCache {
             shared
         }
     }
+
+    pub fn is_open(&self, branch_id: PublicKey, blob_id: BlobId) -> bool {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(&Key { branch_id, blob_id })
+            .map(|slot| slot.strong_count() > 0)
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]

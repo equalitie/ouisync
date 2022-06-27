@@ -240,6 +240,7 @@ async fn conflict_identical_versions() {
         .await
         .unwrap();
     assert_eq!(file.branch().id(), branches[1].id());
+    drop(file);
 
     // The file can also be retreived using `lookup`...
     let mut versions = root.lookup("file.txt");
@@ -248,6 +249,49 @@ async fn conflict_identical_versions() {
 
     // ...and `lookup_version` using the author branch:
     root.lookup_version("file.txt", branches[0].id()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conflict_open_file() {
+    let (pool, branches) = setup(2).await;
+    let mut conn = pool.acquire().await.unwrap();
+
+    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+
+    let file0 = root0
+        .create_file(&mut conn, "file.txt".into())
+        .await
+        .unwrap();
+    let vv0 = file0.version_vector().await;
+
+    let mut file1 = file0;
+    file1.fork(&mut conn, &branches[1]).await.unwrap();
+    file1.write(&mut conn, b"foo").await.unwrap();
+    file1.flush(&mut conn).await.unwrap();
+    let vv1 = file1.version_vector().await;
+
+    assert!(vv1 > vv0);
+
+    let _file0 = root0
+        .read()
+        .await
+        .lookup("file.txt")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
+
+    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = root.read().await;
+
+    // Despite file1 being newer than file0, both versions are present because file0 is open and
+    // might have unflushed modifications.
+    assert_eq!(root.entries().count(), 2);
+    root.lookup_version("file.txt", branches[0].id()).unwrap();
+    root.lookup_version("file.txt", branches[1].id()).unwrap();
 }
 
 //// TODO: test conflict_forked_directories
