@@ -41,8 +41,9 @@ use crate::{
     store::Store,
     sync::uninitialized_watch,
 };
+use async_trait::async_trait;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use btdht::{InfoHash, INFO_HASH_LEN};
+use btdht::{self, InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -72,24 +73,28 @@ pub struct Network {
 
 impl Network {
     pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
-        let (quic_connector_v4, quic_listener_v4) =
+        let (quic_connector_v4, quic_listener_v4, udp_socket_v4) =
             if let Some(addr) = options.listen_quic_addr_v4() {
                 Self::bind_quic_listener(addr, &config)
                     .await
-                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
-                    .unwrap_or((None, None))
+                    .map(|(connector, acceptor, side_channel)| {
+                        (Some(connector), Some(acceptor), Some(side_channel))
+                    })
+                    .unwrap_or((None, None, None))
             } else {
-                (None, None)
+                (None, None, None)
             };
 
-        let (quic_connector_v6, quic_listener_v6) =
+        let (quic_connector_v6, quic_listener_v6, udp_socket_v6) =
             if let Some(addr) = options.listen_quic_addr_v6() {
                 Self::bind_quic_listener(addr, &config)
                     .await
-                    .map(|(connector, acceptor)| (Some(connector), Some(acceptor)))
-                    .unwrap_or((None, None))
+                    .map(|(connector, acceptor, side_channel)| {
+                        (Some(connector), Some(acceptor), Some(side_channel))
+                    })
+                    .unwrap_or((None, None, None))
             } else {
-                (None, None)
+                (None, None, None)
             };
 
         let (tcp_listener_v4, tcp_listener_local_addr_v4) =
@@ -118,21 +123,16 @@ impl Network {
         let monitor = StateMonitor::make_root();
 
         let dht_discovery = if !options.disable_dht {
-            // Note: right now we're assuming that the UPnP port forwarder (enabled below) will
-            // succeed in mapping internal ports to the same external ports.
-
             // Also note that we're now only using quic for the transport discovered over the dht.
             // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
             // TCP, UDP or anything else.
             // TODO: There are ways to address this: e.g. we could try both, or we could include
             // the protocol information in the info-hash generation. There are pros and cons to
             // these approaches.
-            let port_v4 = quic_listener_local_addr_v4.map(|addr| addr.port());
-            let port_v6 = quic_listener_local_addr_v6.map(|addr| addr.port());
 
             let monitor = monitor.make_child("DhtDiscovery");
 
-            Some(DhtDiscovery::new(port_v4, port_v6, &config, monitor).await)
+            Some(DhtDiscovery::new(udp_socket_v4, udp_socket_v6, monitor).await)
         } else {
             None
         };
@@ -342,10 +342,10 @@ impl Network {
     async fn bind_quic_listener(
         preferred_addr: SocketAddr,
         config: &ConfigStore,
-    ) -> Option<(quic::Connector, quic::Acceptor)> {
+    ) -> Option<(quic::Connector, quic::Acceptor, quic::SideChannel)> {
         let (proto, config_key) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_QUIC_V4_PORT_KEY),
-            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_QUIC_V6_PORT_KEY),
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
         };
 
         let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
@@ -375,13 +375,13 @@ impl Network {
         };
 
         match quic::configure(socket) {
-            Ok((connector, listener)) => {
+            Ok((connector, listener, side_channel)) => {
                 log::info!(
                     "Configured {} QUIC stack on {:?}",
                     proto,
                     listener.local_addr()
                 );
-                Some((connector, listener))
+                Some((connector, listener, side_channel))
             }
             Err(e) => {
                 log::warn!("Failed to configure {} QUIC stack: {}", proto, e);
@@ -964,4 +964,19 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
         .unwrap()
+}
+
+#[async_trait]
+impl btdht::SocketTrait for quic::SideChannel {
+    async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
+        self.send_to(buf, target).await
+    }
+
+    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(buf).await
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr()
+    }
 }

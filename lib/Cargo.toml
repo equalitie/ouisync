@@ -13,12 +13,14 @@ publish = false
 argon2 = "0.4.0"
 async-broadcast = "0.4.0"
 async-recursion = "1.0.0"
+async-trait   = "0.1.56"
 backoff = "0.4.0"
 backtrace = "0.3.65"
 base64 = "0.13.0"
 bincode = "1.3"
 blake3 = { version = "1.3.0", features = ["traits-preview"] }
-btdht = { version = "0.13.0", git = "https://github.com/equalitie/btdht.git" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "8761cf9da16067c03f6bb2166f5e480eff99a86c" }
+bytes = "1.1.0"
 camino = "1.0.5"
 chacha20 = "0.9.0"
 chrono = "0.4.19"
@@ -34,7 +36,9 @@ log = "0.4.17"
 noise-protocol = "0.1.3"
 noise-rust-crypto = { version = "0.5.0", default-features = false, features = ["use-x25519", "use-chacha20poly1305", "use-blake2"] }
 once_cell = "1.12.0"
-quinn = "0.8.3"
+quinn = { git = "https://github.com/equalitie/quinn", rev = "ac844a8a6fbfb14eb216272128992f93c76d65a7" }
+quinn_udp = { package = "quinn-udp", git = "https://github.com/equalitie/quinn", rev = "ac844a8a6fbfb14eb216272128992f93c76d65a7" }
+quinn_proto = { package = "quinn-proto", git = "https://github.com/equalitie/quinn", rev = "ac844a8a6fbfb14eb216272128992f93c76d65a7" }
 rcgen = "0.9.1"
 rand = "0.8.5"
 rupnp = { version = "1.1.0", default-features = false, features = [] }

@@ -1,10 +1,9 @@
-use super::{config_keys, socket};
+use super::quic;
 use crate::{
-    config::ConfigStore,
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
 };
-use btdht::{InfoHash, IpVersion, MainlineDht};
+use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
 use rand::Rng;
@@ -12,8 +11,7 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     future::pending,
-    io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock, Weak,
@@ -21,7 +19,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::{
-    net::UdpSocket,
     select,
     sync::{mpsc, watch},
     time,
@@ -49,19 +46,18 @@ pub(super) struct DhtDiscovery {
 
 impl DhtDiscovery {
     pub async fn new(
-        acceptor_port_v4: Option<u16>,
-        acceptor_port_v6: Option<u16>,
-        config: &ConfigStore,
+        socket_v4: Option<quic::SideChannel>,
+        socket_v6: Option<quic::SideChannel>,
         monitor: Arc<StateMonitor>,
     ) -> Self {
-        let dht_v4 = if let Some(port) = acceptor_port_v4 {
-            Some(start_dht(IpVersion::V4, port, config, &monitor).await)
+        let dht_v4 = if let Some(socket_v4) = socket_v4 {
+            Some(start_dht(socket_v4, &monitor).await)
         } else {
             None
         };
 
-        let dht_v6 = if let Some(port) = acceptor_port_v6 {
-            Some(start_dht(IpVersion::V6, port, config, &monitor).await)
+        let dht_v6 = if let Some(socket_v6) = socket_v6 {
+            Some(start_dht(socket_v6, &monitor).await)
         } else {
             None
         };
@@ -117,34 +113,27 @@ impl DhtDiscovery {
 }
 
 async fn start_dht(
-    ip_v: IpVersion,
-    acceptor_port: u16,
-    config: &ConfigStore,
+    socket: quic::SideChannel,
     monitor: &Arc<StateMonitor>,
 ) -> RestartableDht {
     // TODO: Unwrap
-    let socket = bind(ip_v, config).await.unwrap();
+    let local_addr = socket.local_addr().unwrap();
 
-    // Unwrap OK because `Socket::new` only fails if it can't get `local_addr` out of it, but since
-    // we just succeeded in binding the socket above, that shouldn't happen.
-    let socket = btdht::Socket::new(socket).unwrap();
-
-    let local_addr = socket.local_addr();
-
-    let protocol = match ip_v {
-        IpVersion::V4 => "IPv4",
-        IpVersion::V6 => "IPv6",
+    let protocol = match local_addr {
+        SocketAddr::V4(_) => "IPv4",
+        SocketAddr::V6(_) => "IPv6",
     };
 
     let monitor = monitor.make_child(protocol);
 
     // TODO: load the DHT state from a previous save if it exists.
-    // TODO: Unwrap
     let dht = MainlineDht::builder()
         .add_routers(DHT_ROUTERS.iter().copied())
         .set_read_only(false)
-        .set_announce_port(acceptor_port)
-        .start(socket);
+        .start(socket)
+        // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
+        // since we just succeeded in binding the socket above, that shouldn't happen.
+        .unwrap();
 
     // Spawn a task to monitor the DHT status.
     let monitoring_task = scoped_task::spawn({
@@ -368,29 +357,5 @@ impl Lookup {
                 }
             }
         })
-    }
-}
-
-async fn bind(ip_v: IpVersion, config: &ConfigStore) -> io::Result<UdpSocket> {
-    match ip_v {
-        IpVersion::V4 => {
-            socket::bind(
-                (Ipv4Addr::UNSPECIFIED, 0).into(),
-                config.entry(config_keys::LAST_USED_DHT_PORT_V4),
-            )
-            .await
-        }
-        IpVersion::V6 => {
-            // Note that [BEP-32](https://www.bittorrent.org/beps/bep_0032.html) says we should bind the ipv6
-            // socket to a concrete unicast address, not to an unspecified one. But this would be
-            // problematic on especially on mobile devices when the IP may change (e.g. switch to a
-            // different WiFi or cellular). At which point we would have to restart the DHT, by
-            // using the UNSPECIFIED address we can avoid that problem.
-            socket::bind(
-                (Ipv6Addr::UNSPECIFIED, 0).into(),
-                config.entry(config_keys::LAST_USED_DHT_PORT_V6),
-            )
-            .await
-        }
     }
 }

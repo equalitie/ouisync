@@ -33,7 +33,6 @@ async fn main() -> io::Result<()> {
         UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .await
             .ok()
-            .and_then(|s| btdht::Socket::new(s).ok())
     } else {
         None
     };
@@ -47,7 +46,6 @@ async fn main() -> io::Result<()> {
         UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0))
             .await
             .ok()
-            .and_then(|s| btdht::Socket::new(s).ok())
     } else {
         None
     };
@@ -57,6 +55,7 @@ async fn main() -> io::Result<()> {
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
+            .unwrap()
     });
 
     let dht_v6 = socket_v6.map(|socket| {
@@ -64,6 +63,7 @@ async fn main() -> io::Result<()> {
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(true)
             .start(socket)
+            .unwrap()
     });
 
     if let Some(token) = options.token {
