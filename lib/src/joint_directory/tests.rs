@@ -304,10 +304,13 @@ async fn merge_locally_non_existing_file() {
     drop(conn);
 
     // Construct a joint directory over both root dirs and merge it.
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-        .merge(&pool)
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
 
@@ -318,6 +321,12 @@ async fn merge_locally_non_existing_file() {
         .await
         .unwrap();
     assert_eq!(local_content, content);
+
+    // Local branch is up to date
+    assert!(
+        local_root.version_vector(&mut conn).await.unwrap()
+            >= remote_root.version_vector(&mut conn).await.unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -349,18 +358,35 @@ async fn merge_locally_older_file() {
     update_file(&mut conn, &remote_root, "cat.jpg", content_v1, &branches[1]).await;
     drop(conn);
 
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
-        .merge(&pool)
-        .await
-        .unwrap();
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
-    let reader = local_root.read().await;
-    let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
-
-    let mut file = entry.open(&mut conn).await.unwrap();
-    let local_content = file.read_to_end(&mut conn).await.unwrap();
+    let local_content = local_root
+        .read()
+        .await
+        .lookup("cat.jpg")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read_to_end(&mut conn)
+        .await
+        .unwrap();
     assert_eq!(local_content, content_v1);
+
+    // Local branch is up to date
+    assert!(
+        local_root.version_vector(&mut conn).await.unwrap()
+            >= remote_root.version_vector(&mut conn).await.unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -396,11 +422,19 @@ async fn merge_locally_newer_file() {
         .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
-    let reader = local_root.read().await;
-    let entry = reader.lookup("cat.jpg").unwrap().file().unwrap();
-
-    let mut file = entry.open(&mut conn).await.unwrap();
-    let local_content = file.read_to_end(&mut conn).await.unwrap();
+    let local_content = local_root
+        .read()
+        .await
+        .lookup("cat.jpg")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap()
+        .read_to_end(&mut conn)
+        .await
+        .unwrap();
     assert_eq!(local_content, content_v1);
 }
 
@@ -462,16 +496,15 @@ async fn attempt_to_merge_concurrent_file() {
     // There is still only the local version in the local branch
     assert_eq!(local_root.read().await.entries().count(), 1);
 
-    // FIXME:
-    // // The branches are still concurrent
-    // assert_eq!(
-    //     local_root
-    //         .version_vector(&mut conn)
-    //         .await
-    //         .unwrap()
-    //         .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
-    //     None
-    // );
+    // The branches are still concurrent
+    assert_eq!(
+        local_root
+            .version_vector(&mut conn)
+            .await
+            .unwrap()
+            .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
+        None
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

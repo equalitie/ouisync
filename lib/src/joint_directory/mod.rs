@@ -203,6 +203,8 @@ impl JointDirectory {
         // other tasks chance to acquire it too.
         drop(conn);
 
+        let mut bump = true;
+
         // Fork files.
         for mut file in files {
             let mut conn = db.acquire().await?;
@@ -210,7 +212,11 @@ impl JointDirectory {
             match file.fork(&mut conn, local_branch).await {
                 Ok(()) => (),
                 Err(Error::EntryExists) => {
-                    // Ignore conflicts
+                    // This error indicates the local and the remote files are in conflict and
+                    // so can't be automatically merged. We still proceed with merging the
+                    // remaining entries but we won't mark this directory as merged (by bumping its
+                    // vv) to prevent the conflicting remote file from being collected.
+                    bump = false;
                 }
                 Err(error) => return Err(error),
             }
@@ -221,9 +227,10 @@ impl JointDirectory {
             dir.merge(db).await?;
         }
 
-        // FIXME: don't bump if there were conflicts!
-        let mut conn = db.acquire().await?;
-        local_version.bump(&mut conn, new_version_vector).await?;
+        if bump {
+            let mut conn = db.acquire().await?;
+            local_version.bump(&mut conn, new_version_vector).await?;
+        }
 
         Ok(local_version)
     }
