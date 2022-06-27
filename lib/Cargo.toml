@@ -19,6 +19,7 @@ base64 = "0.13.0"
 bincode = "1.3"
 blake3 = { version = "1.3.0", features = ["traits-preview"] }
 btdht = { version = "0.13.0", git = "https://github.com/equalitie/btdht.git" }
+bytes = "1.1.0"
 camino = "1.0.5"
 chacha20 = "0.9.0"
 chrono = "0.4.19"

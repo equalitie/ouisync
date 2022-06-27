@@ -375,7 +375,7 @@ impl Network {
         };
 
         match quic::configure(socket) {
-            Ok((connector, listener)) => {
+            Ok((connector, listener, _)) => {
                 log::info!(
                     "Configured {} QUIC stack on {:?}",
                     proto,

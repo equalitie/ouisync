@@ -1,3 +1,4 @@
+use bytes::BytesMut;
 use std::{
     io,
     net::SocketAddr,
@@ -6,7 +7,10 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    sync::broadcast,
+};
 
 const CERT_DOMAIN: &str = "ouisync.net";
 const KEEP_ALIVE_INTERVAL_MS: u32 = 15_000;
@@ -300,10 +304,12 @@ impl Drop for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor)> {
+pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor, SideChannel)> {
     let server_config = make_server_config()?;
 
     let custom_socket = CustomUdpSocket::from_std(socket)?;
+
+    let side_channel = custom_socket.create_side_channel();
 
     let (mut endpoint, incoming) = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
@@ -322,7 +328,7 @@ pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor)> {
         local_addr,
     };
 
-    Ok((connector, acceptor))
+    Ok((connector, acceptor, side_channel))
 }
 
 //------------------------------------------------------------------------------
@@ -409,12 +415,28 @@ fn make_server_config() -> Result<quinn::ServerConfig> {
 
 //------------------------------------------------------------------------------
 use futures_util::ready;
+use std::mem::MaybeUninit;
 use tokio::io::Interest;
+
+// TODO: I saw this number mentioned somewhere in quinn as a standard MTU size rounded to 8 bytes.
+// I believe it's also more than is needed for BtDHT, but more rigorous definition of this number
+// would be welcome.
+const MAX_SIDE_CHANNEL_PACKET_SIZE: usize = 1480;
+// TODO: Another made up constant. Can/should it be smaller?
+const MAX_SIDE_CHANNEL_PENDING_PACKETS: usize = 1024;
+
+#[derive(Clone)]
+struct Packet {
+    data: [MaybeUninit<u8>; MAX_SIDE_CHANNEL_PACKET_SIZE],
+    len: usize,
+    from: SocketAddr,
+}
 
 #[derive(Debug)]
 pub struct CustomUdpSocket {
     io: Arc<tokio::net::UdpSocket>,
     quinn_socket_state: quinn_udp::UdpSocketState,
+    side_channel_tx: broadcast::Sender<Packet>,
 }
 
 impl CustomUdpSocket {
@@ -423,7 +445,15 @@ impl CustomUdpSocket {
         Ok(Self {
             io: Arc::new(tokio::net::UdpSocket::from_std(sock)?),
             quinn_socket_state: quinn_udp::UdpSocketState::new(),
+            side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
         })
+    }
+
+    pub fn create_side_channel(&self) -> SideChannel {
+        SideChannel {
+            io: self.io.clone(),
+            packet_receiver: self.side_channel_tx.subscribe(),
+        }
     }
 }
 
@@ -450,12 +480,20 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
         &self,
         cx: &mut Context,
         bufs: &mut [std::io::IoSliceMut<'_>],
-        meta: &mut [quinn_udp::RecvMeta],
+        metas: &mut [quinn_udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
             if let Ok(res) = self.io.try_io(Interest::READABLE, || {
-                self.quinn_socket_state.recv((&*self.io).into(), bufs, meta)
+                let res = self
+                    .quinn_socket_state
+                    .recv((&*self.io).into(), bufs, metas);
+
+                if let Ok(msg_count) = res {
+                    send_to_side_channels(&self.side_channel_tx, bufs, metas, msg_count);
+                }
+
+                res
             }) {
                 return Poll::Ready(Ok(res));
             }
@@ -464,6 +502,65 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 
     fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
         self.io.local_addr()
+    }
+}
+
+fn send_to_side_channels(
+    channel: &broadcast::Sender<Packet>,
+    bufs: &[std::io::IoSliceMut<'_>],
+    metas: &[quinn_udp::RecvMeta],
+    msg_count: usize,
+) {
+    for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
+        let mut data: BytesMut = buf[0..meta.len].into();
+        while !data.is_empty() {
+            let buf = data.split_to(meta.stride.min(data.len()));
+
+            channel
+                .send(Packet {
+                    data: unsafe {
+                        let mut data: [MaybeUninit<u8>; MAX_SIDE_CHANNEL_PACKET_SIZE] =
+                            MaybeUninit::uninit().assume_init();
+                        std::ptr::copy_nonoverlapping(
+                            buf.as_ptr(),
+                            data.as_mut_ptr().cast::<u8>(),
+                            buf.len(),
+                        );
+                        data
+                    },
+                    len: buf.len(),
+                    from: meta.addr,
+                })
+                .map(|_| ())
+                .unwrap_or(());
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+pub struct SideChannel {
+    io: Arc<tokio::net::UdpSocket>,
+    packet_receiver: broadcast::Receiver<Packet>,
+}
+
+impl SideChannel {
+    pub async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
+        self.io.send_to(buf, target).await.map(|_| ())
+    }
+
+    // Note: receiving on side channels will only work when quinn is calling `poll_recv`.  This
+    // normally shouldn't be a problem because by default we'll always be accepting new connections
+    // on the `Acceptor`, but should be kept in mind if we decide to disable QUIC for some reason.
+    pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        let packet = match self.packet_receiver.recv().await {
+            Ok(packet) => packet,
+            Err(err) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, err)),
+        };
+        let len = packet.len.min(buf.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(packet.data.as_ptr().cast::<u8>(), buf.as_mut_ptr(), len);
+        }
+        Ok((len, packet.from))
     }
 }
 
@@ -482,7 +579,7 @@ mod tests {
     async fn small_data_exchange() {
         let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
 
-        let (connector, mut acceptor) = configure(socket).unwrap();
+        let (connector, mut acceptor, _) = configure(socket).unwrap();
 
         let addr = *acceptor.local_addr();
 
@@ -503,5 +600,31 @@ mod tests {
 
         h1.await.unwrap();
         h2.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn side_channel() {
+        let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = socket.local_addr().unwrap();
+
+        let (_connector, mut acceptor, mut side_channel) = configure(socket).unwrap();
+
+        // We must ensure quinn polls on the socket for side channel to be able to receive data.
+        task::spawn(async move {
+            let _connection = acceptor.accept().await.unwrap();
+        });
+
+        const MSG : &[u8; 18] = b"hello side channel";
+
+        task::spawn(async move {
+            let socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            socket.send_to(MSG, addr).await.unwrap();
+        });
+
+        let mut buf = [0; MAX_SIDE_CHANNEL_PACKET_SIZE];
+        let (len, from) = side_channel.recv_from(&mut buf).await.unwrap();
+
+        assert_eq!(len, MSG.len());
+        assert_eq!(buf[..len], MSG[..]);
     }
 }
