@@ -3,7 +3,7 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
     task::{Context, Poll},
     time::Duration,
 };
@@ -66,7 +66,7 @@ pub struct Connection {
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
     remote_address: SocketAddr,
-    was_write_error: bool,
+    was_error: bool,
 }
 
 impl Connection {
@@ -75,7 +75,7 @@ impl Connection {
             rx: Some(rx),
             tx: Some(tx),
             remote_address,
-            was_write_error: false,
+            was_error: false,
         }
     }
 
@@ -88,11 +88,15 @@ impl Connection {
         // anywhere else.
         let rx = self.rx.take().unwrap();
         let tx = self.tx.take();
+        let was_error = Arc::new(RwLock::new(self.was_error));
         (
-            OwnedReadHalf(rx),
+            OwnedReadHalf {
+                rx,
+                was_error: was_error.clone(),
+            },
             OwnedWriteHalf {
                 tx,
-                was_write_error: false,
+                was_error,
             },
         )
     }
@@ -100,7 +104,7 @@ impl Connection {
     /// Make sure all data is sent, no more data can be sent afterwards.
     #[cfg(test)]
     pub async fn finish(&mut self) -> Result<()> {
-        if self.was_write_error {
+        if self.was_error {
             return Err(Error::Write(quinn::WriteError::UnknownStream));
         }
 
@@ -120,8 +124,15 @@ impl AsyncRead for Connection {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        match &mut self.get_mut().rx {
-            Some(rx) => Pin::new(rx).poll_read(cx, buf),
+        let this = self.get_mut();
+        match &mut this.rx {
+            Some(rx) => {
+                let poll = Pin::new(rx).poll_read(cx, buf);
+                if let Poll::Ready(r) = &poll {
+                    this.was_error |= r.is_err();
+                };
+                poll
+            },
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "connection was split",
@@ -141,9 +152,7 @@ impl AsyncWrite for Connection {
             Some(tx) => {
                 let poll = Pin::new(tx).poll_write(cx, buf);
                 if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.was_write_error = true;
-                    }
+                    this.was_error |= r.is_err();
                 }
                 poll
             }
@@ -160,9 +169,7 @@ impl AsyncWrite for Connection {
             Some(tx) => {
                 let poll = Pin::new(tx).poll_flush(cx);
                 if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.was_write_error = true;
-                    }
+                    this.was_error |= r.is_err();
                 }
                 poll
             }
@@ -179,9 +186,7 @@ impl AsyncWrite for Connection {
             Some(tx) => {
                 let poll = Pin::new(tx).poll_shutdown(cx);
                 if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        this.was_write_error = true;
-                    }
+                    this.was_error |= r.is_err();
                 }
                 poll
             }
@@ -195,7 +200,7 @@ impl AsyncWrite for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if self.was_write_error {
+        if self.was_error {
             return;
         }
 
@@ -206,10 +211,13 @@ impl Drop for Connection {
 }
 
 //------------------------------------------------------------------------------
-pub struct OwnedReadHalf(quinn::RecvStream);
+pub struct OwnedReadHalf{
+    rx: quinn::RecvStream,
+    was_error: Arc<RwLock<bool>>,
+}
 pub struct OwnedWriteHalf {
     tx: Option<quinn::SendStream>,
-    was_write_error: bool,
+    was_error: Arc<RwLock<bool>>,
 }
 
 impl AsyncRead for OwnedReadHalf {
@@ -218,7 +226,14 @@ impl AsyncRead for OwnedReadHalf {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.rx).poll_read(cx, buf);
+        if let Poll::Ready(r) = &poll {
+            if r.is_err() {
+                *this.was_error.write().unwrap() = true;
+            }
+        }
+        poll
     }
 }
 
@@ -235,7 +250,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_write_error = true;
+                        *this.was_error.write().unwrap() = true;
                     }
                 }
 
@@ -256,7 +271,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_write_error = true;
+                        *this.was_error.write().unwrap() = true;
                     }
                 }
 
@@ -277,7 +292,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        this.was_write_error = true;
+                        *this.was_error.write().unwrap() = true;
                     }
                 }
 
@@ -293,7 +308,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if self.was_write_error {
+        if *self.was_error.read().unwrap() {
             return;
         }
 
@@ -392,8 +407,7 @@ fn make_client_config() -> quinn::ClientConfig {
 }
 
 fn make_server_config() -> Result<quinn::ServerConfig> {
-    // Generate self signed certificate, it won't be checked, but QUIC doesn't have an option to
-    // get rid of TLS completely.
+    // Generate a self signed certificate.
     let cert = rcgen::generate_simple_self_signed(vec![CERT_DOMAIN.into()]).unwrap();
     let cert_der = cert.serialize_der().unwrap();
     let priv_key = cert.serialize_private_key_der();
