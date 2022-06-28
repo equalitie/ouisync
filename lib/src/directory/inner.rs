@@ -45,7 +45,7 @@ impl Inner {
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
-        let mut blob = Blob::open(conn, owner_branch, locator, Shared::uninit().into()).await?;
+        let mut blob = Blob::open(conn, owner_branch, locator, Shared::uninit()).await?;
         let buffer = blob.read_to_end(conn).await?;
         let entries = content::deserialize(&buffer)?;
 

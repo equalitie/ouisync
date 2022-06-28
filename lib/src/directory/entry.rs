@@ -5,7 +5,6 @@ use super::{
     Directory, Mode,
 };
 use crate::{
-    blob::Shared,
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
@@ -105,14 +104,6 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub(crate) fn fork_data(&self) -> EntryData {
-        match self {
-            Self::File(e) => EntryData::File(e.data().fork()),
-            Self::Directory(e) => EntryData::Directory(e.data().clone()),
-            Self::Tombstone(e) => EntryData::Tombstone(e.data().clone()),
-        }
-    }
-
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -146,17 +137,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
-        let shared = {
-            let mut slot = self.entry_data.blob_shared.lock().unwrap();
-            if let Some(shared) = slot.upgrade() {
-                shared.into()
-            } else {
-                let shared = Shared::uninit();
-                *slot = shared.downgrade();
-                shared.into()
-            }
-        };
-
+        let shared = self.branch().get_blob_shared(*self.blob_id());
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();

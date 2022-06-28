@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db, index::BranchData,
-    sync::broadcast, version_vector::VersionVector,
+    access_control::WriteSecrets, blob::BlobCache, branch::Branch, crypto::sign::PublicKey, db,
+    index::BranchData, sync::broadcast, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
@@ -801,6 +801,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
     let pool = db::create(&db::Store::Temporary).await.unwrap();
     let notify_tx = broadcast::Sender::new(1);
     let secrets = WriteSecrets::generate(&mut rng);
+    let blob_cache = Arc::new(BlobCache::new());
 
     let branches = {
         let pool = &pool;
@@ -808,6 +809,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
             let id = PublicKey::generate(&mut rng);
             let notify_tx = notify_tx.clone();
             let secrets = secrets.clone();
+            let blob_cache = blob_cache.clone();
 
             async move {
                 let data = BranchData::create(
@@ -818,7 +820,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
                 )
                 .await
                 .unwrap();
-                Branch::new(Arc::new(data), secrets.into())
+                Branch::new(Arc::new(data), secrets.into(), blob_cache)
             }
         }))
         .await

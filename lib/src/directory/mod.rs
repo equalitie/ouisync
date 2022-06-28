@@ -296,7 +296,7 @@ impl Directory {
                         inner.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
-                        Shared::uninit().into(),
+                        Shared::uninit(),
                     )
                     .await;
 
@@ -428,13 +428,9 @@ struct Writer<'a> {
 impl Writer<'_> {
     async fn create_file(&mut self, mut tx: db::Transaction<'_>, name: String) -> Result<File> {
         let blob_id = rand::random();
-        let shared = Shared::uninit();
-        let data = EntryData::file(
-            blob_id,
-            VersionVector::first(*self.branch().id()),
-            shared.downgrade(),
-        );
+        let data = EntryData::file(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
+        let shared = self.branch().get_blob_shared(blob_id);
 
         let mut file = File::create(
             self.branch().clone(),

@@ -19,8 +19,11 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub fn uninit() -> UninitShared {
-        UninitShared(Self::new(0))
+    pub fn uninit() -> MaybeInitShared {
+        MaybeInitShared {
+            shared: Self::new(0),
+            init: false,
+        }
     }
 
     pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
@@ -37,21 +40,8 @@ impl Shared {
     }
 }
 
-// Wrapper for `Shared` that's not initialized.
-#[derive(Clone)]
-pub(crate) struct UninitShared(Arc<Mutex<Shared>>);
-
-impl UninitShared {
-    pub(super) fn init(self) -> Arc<Mutex<Shared>> {
-        self.0
-    }
-
-    pub(crate) fn downgrade(&self) -> Weak<Mutex<Shared>> {
-        Arc::downgrade(&self.0)
-    }
-}
-
 // Wrapper for `Shared` that may or might not be initialized.
+#[derive(Clone)]
 pub(crate) struct MaybeInitShared {
     shared: Arc<Mutex<Shared>>,
     init: bool,
@@ -65,20 +55,19 @@ impl MaybeInitShared {
 
         self.shared
     }
+
+    pub(super) fn assume_init(self) -> Arc<Mutex<Shared>> {
+        self.shared
+    }
+
+    pub(crate) fn downgrade(&self) -> Weak<Mutex<Shared>> {
+        Arc::downgrade(&self.shared)
+    }
 }
 
 impl From<Arc<Mutex<Shared>>> for MaybeInitShared {
     fn from(shared: Arc<Mutex<Shared>>) -> Self {
         Self { shared, init: true }
-    }
-}
-
-impl From<UninitShared> for MaybeInitShared {
-    fn from(shared: UninitShared) -> Self {
-        Self {
-            shared: shared.0,
-            init: false,
-        }
     }
 }
 

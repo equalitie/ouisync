@@ -1,5 +1,5 @@
 use crate::{
-    blob::{Blob, MaybeInitShared, UninitShared},
+    blob::{Blob, MaybeInitShared},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -38,7 +38,7 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: UninitShared,
+        blob_shared: MaybeInitShared,
     ) -> Self {
         Self {
             blob: Blob::create(branch, locator, blob_shared),
@@ -160,6 +160,7 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
+        blob::BlobCache,
         crypto::sign::PublicKey,
         db,
         index::BranchData,
@@ -274,14 +275,19 @@ mod tests {
     async fn setup() -> (db::Pool, Branch, Branch) {
         let pool = db::create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
+        let blob_cache = Arc::new(BlobCache::new());
 
-        let branch0 = create_branch(&pool, keys.clone()).await;
-        let branch1 = create_branch(&pool, keys.clone()).await;
+        let branch0 = create_branch(&pool, keys.clone(), blob_cache.clone()).await;
+        let branch1 = create_branch(&pool, keys.clone(), blob_cache).await;
 
         (pool, branch0, branch1)
     }
 
-    async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
+    async fn create_branch(
+        pool: &db::Pool,
+        keys: AccessKeys,
+        blob_cache: Arc<BlobCache>,
+    ) -> Branch {
         let notify_tx = broadcast::Sender::new(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
@@ -291,7 +297,7 @@ mod tests {
         )
         .await
         .unwrap();
-        Branch::new(Arc::new(branch_data), keys)
+        Branch::new(Arc::new(branch_data), keys, blob_cache)
     }
 }
 

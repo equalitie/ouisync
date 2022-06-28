@@ -93,7 +93,7 @@ impl ParentContext {
     }
 
     async fn fork_entry_data(&self) -> EntryData {
-        self.map_entry(|entry| entry.fork_data()).await
+        self.map_entry(|entry| entry.clone_data()).await
     }
 
     async fn map_entry<F, R>(&self, f: F) -> R

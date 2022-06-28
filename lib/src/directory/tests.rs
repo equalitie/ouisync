@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
-    blob::Blob,
+    blob::{Blob, BlobCache},
     crypto::sign::Keypair,
     db,
     index::BranchData,
@@ -103,14 +103,7 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(
-        &mut conn,
-        branch.clone(),
-        file_locator,
-        Shared::uninit().into(),
-    )
-    .await
-    {
+    match Blob::open(&mut conn, branch.clone(), file_locator, Shared::uninit()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
@@ -431,7 +424,7 @@ async fn remove_subdirectory() {
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(&mut conn, branch, dir_locator, Shared::uninit().into()).await {
+    match Blob::open(&mut conn, branch, dir_locator, Shared::uninit()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),
@@ -693,5 +686,5 @@ async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
     )
     .await
     .unwrap();
-    Branch::new(Arc::new(branch_data), keys)
+    Branch::new(Arc::new(branch_data), keys, Arc::new(BlobCache::new()))
 }

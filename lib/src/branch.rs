@@ -1,5 +1,7 @@
 use crate::{
     access_control::AccessKeys,
+    blob::{BlobCache, MaybeInitShared},
+    blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
     db,
@@ -20,14 +22,20 @@ pub struct Branch {
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
     root_directory: Arc<RootDirectoryCache>,
+    blob_cache: Arc<BlobCache>,
 }
 
 impl Branch {
-    pub(crate) fn new(branch_data: Arc<BranchData>, keys: AccessKeys) -> Self {
+    pub(crate) fn new(
+        branch_data: Arc<BranchData>,
+        keys: AccessKeys,
+        blob_cache: Arc<BlobCache>,
+    ) -> Self {
         Self {
             branch_data,
             keys,
             root_directory: Arc::new(RootDirectoryCache::new()),
+            blob_cache,
         }
     }
 
@@ -113,6 +121,10 @@ impl Branch {
             .await
     }
 
+    pub(crate) fn get_blob_shared(&self, blob_id: BlobId) -> MaybeInitShared {
+        self.blob_cache.get(*self.id(), blob_id)
+    }
+
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         match self.open_root(conn).await {
             Ok(root) => root.debug_print(conn, print).await,
@@ -128,6 +140,7 @@ impl Branch {
             branch_data: self.branch_data,
             keys,
             root_directory: self.root_directory,
+            blob_cache: self.blob_cache,
         }
     }
 }
@@ -179,7 +192,7 @@ mod tests {
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
-        let branch = Branch::new(branch, secrets.into());
+        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new()));
 
         (pool, branch)
     }

@@ -23,7 +23,7 @@ async fn empty_blob() {
     blob.flush(&mut conn).await.unwrap();
 
     // Re-open the blob and read its contents.
-    let mut blob = Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
+    let mut blob = Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit())
         .await
         .unwrap();
 
@@ -72,7 +72,7 @@ async fn write_and_read_case(
     blob.flush(&mut conn).await.unwrap();
 
     // Re-open the blob and read from it in chunks of `read_len` bytes
-    let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
+    let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit())
         .await
         .unwrap();
 
@@ -111,7 +111,7 @@ fn len(
         blob.flush(&mut conn).await.unwrap();
         assert_eq!(blob.len().await, content_len as u64);
 
-        let blob = Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit().into())
+        let blob = Blob::open(&mut conn, branch, Locator::ROOT, Shared::uninit())
             .await
             .unwrap();
         assert_eq!(blob.len().await, content_len as u64);
@@ -453,7 +453,7 @@ async fn append() {
     blob.write(&mut conn, b"foo").await.unwrap();
     blob.flush(&mut conn).await.unwrap();
 
-    let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit().into())
+    let mut blob = Blob::open(&mut conn, branch.clone(), locator, Shared::uninit())
         .await
         .unwrap();
 
@@ -461,7 +461,7 @@ async fn append() {
     blob.write(&mut conn, b"bar").await.unwrap();
     blob.flush(&mut conn).await.unwrap();
 
-    let mut blob = Blob::open(&mut conn, branch, locator, Shared::uninit().into())
+    let mut blob = Blob::open(&mut conn, branch, locator, Shared::uninit())
         .await
         .unwrap();
 
@@ -481,7 +481,7 @@ async fn write_reopen_and_read() {
     blob.write(&mut conn, b"foo").await.unwrap();
     blob.flush(&mut conn).await.unwrap();
 
-    let mut blob = Blob::open(&mut conn, branch, locator, shared.init().into())
+    let mut blob = Blob::open(&mut conn, branch, locator, shared)
         .await
         .unwrap();
 
@@ -527,7 +527,11 @@ async fn fork_case(
         .await
         .unwrap(),
     );
-    let dst_branch = Branch::new(dst_branch, src_branch.keys().clone());
+    let dst_branch = Branch::new(
+        dst_branch,
+        src_branch.keys().clone(),
+        Arc::new(BlobCache::new()),
+    );
 
     let src_locator = if src_locator_is_root {
         Locator::ROOT
@@ -552,7 +556,7 @@ async fn fork_case(
     blob.flush(&mut conn).await.unwrap();
 
     // Re-open the orig and verify the content is unchanged
-    let mut orig = Blob::open(&mut conn, src_branch, src_locator, Shared::uninit().into())
+    let mut orig = Blob::open(&mut conn, src_branch, src_locator, Shared::uninit())
         .await
         .unwrap();
 
@@ -561,7 +565,7 @@ async fn fork_case(
     assert!(buffer == src_content);
 
     // Re-open the fork and verify the content is changed
-    let mut fork = Blob::open(&mut conn, dst_branch, src_locator, Shared::uninit().into())
+    let mut fork = Blob::open(&mut conn, dst_branch, src_locator, Shared::uninit())
         .await
         .unwrap();
 
@@ -618,7 +622,7 @@ async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
     )
     .await
     .unwrap();
-    let branch = Branch::new(Arc::new(branch), secrets.into());
+    let branch = Branch::new(Arc::new(branch), secrets.into(), Arc::new(BlobCache::new()));
 
     (rng, pool, branch)
 }

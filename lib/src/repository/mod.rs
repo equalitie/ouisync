@@ -13,6 +13,7 @@ use self::{
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
+    blob::BlobCache,
     block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
@@ -204,6 +205,7 @@ impl Repository {
             this_writer_id,
             secrets,
             branches: Mutex::new(HashMap::new()),
+            blob_cache: Arc::new(BlobCache::new()),
         });
 
         let local_branch = if enable_merger {
@@ -611,6 +613,8 @@ struct Shared {
     secrets: AccessSecrets,
     // Cache for `Branch` instances to make them persistent over the lifetime of the program.
     branches: Mutex<HashMap<PublicKey, Branch>>,
+    // Cache for open blobs to track multiple instances of the same blob.
+    blob_cache: Arc<BlobCache>,
 }
 
 impl Shared {
@@ -673,7 +677,7 @@ impl Shared {
                     keys.read_only()
                 };
 
-                let branch = Branch::new(data, keys);
+                let branch = Branch::new(data, keys, self.blob_cache.clone());
                 entry.insert(branch.clone());
                 Ok(branch)
             }
