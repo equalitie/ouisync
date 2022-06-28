@@ -348,7 +348,7 @@ async fn concurrent_modify_open_file() {
     drop(conn);
     drop(file_a);
 
-    // A: Verify both versions of the file are present
+    // A: Verify both versions of the file are still present
     assert_matches!(
         repo_a.open_file("file.txt").await,
         Err(Error::AmbiguousEntry)
@@ -364,8 +364,8 @@ async fn concurrent_modify_open_file() {
     let actual_content_b = file_b.read_to_end(&mut conn).await.unwrap();
     drop(conn);
 
-    assert_eq!(actual_content_a, content_a);
-    assert_eq!(actual_content_b, content_b);
+    assert!(actual_content_a == content_a);
+    assert!(actual_content_b == content_b);
 }
 
 // Test that the local version changes monotonically even when the local branch temporarily becomes

@@ -72,6 +72,7 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
     // Remove the file, we should end up with just one block for the root.
 
+    drop(file);
     repo.remove_entry(file_name).await.unwrap();
 
     // 1 = one for the root with a tombstone entry
@@ -596,6 +597,7 @@ async fn read_access_same_replica() {
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 
     drop(conn);
+    drop(file);
 
     // Creating files is not allowed.
     assert_matches!(

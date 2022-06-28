@@ -87,6 +87,7 @@ async fn remove_file() {
 
     let file_vv = file.version_vector().await;
     let file_locator = *file.locator();
+    drop(file);
 
     // Reopen and remove the file
     let parent_dir = branch.open_root(&mut conn).await.unwrap();
@@ -140,6 +141,8 @@ async fn rename_file() {
     file.flush(&mut conn).await.unwrap();
 
     let file_locator = *file.locator();
+
+    drop(file);
 
     // Reopen and move the file
     let parent_dir = branch.open_root(&mut conn).await.unwrap();
@@ -211,6 +214,8 @@ async fn move_file_within_branch() {
 
     let file_locator = *file.locator();
 
+    drop(file);
+
     //
     // Move the file from ./ to ./aux/
     //
@@ -262,6 +267,8 @@ async fn move_file_within_branch() {
         &content[..],
         &file.read_to_end(&mut conn).await.unwrap()[..]
     );
+
+    drop(file);
 
     //
     // Now move it back from ./aux/ to ./

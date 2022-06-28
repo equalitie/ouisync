@@ -156,13 +156,18 @@ impl Inner {
     ) -> Result<()> {
         if let Some(old_data) = self.entries.get(&name) {
             match old_data {
-                EntryData::File(_) | EntryData::Directory(_)
-                    if new_data.version_vector() > old_data.version_vector() => {}
-                EntryData::File(_) | EntryData::Directory(_) => {
-                    // Don't allow overwriting existing entry unless it is strictly older than
-                    // the new entry.
-                    return Err(Error::EntryExists);
-                }
+                // Overwrite files only if the new version is more up to date than the old version
+                // and the old version is not currently open.
+                EntryData::File(old_data)
+                    if new_data.version_vector() > &old_data.version_vector
+                        && !self.blob.branch().is_blob_open(&old_data.blob_id) => {}
+                // Overwrite directories only if the new version is more up to date than the old
+                // version.
+                EntryData::Directory(old_data)
+                    if new_data.version_vector() > &old_data.version_vector => {}
+                EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
+                // Always overwrite tombstones but update the new version vector so it's more up to
+                // date than the tombstone.
                 EntryData::Tombstone(old_data) => {
                     let mut vv = old_data.version_vector.clone();
                     vv.bump(new_data.version_vector(), self.branch().id());
