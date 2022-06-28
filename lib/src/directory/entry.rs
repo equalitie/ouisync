@@ -104,6 +104,13 @@ impl<'a> EntryRef<'a> {
         }
     }
 
+    pub(crate) fn is_open(&self) -> bool {
+        match self {
+            Self::File(e) => e.is_open(),
+            Self::Directory(_) | Self::Tombstone(_) => false,
+        }
+    }
+
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -137,7 +144,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
-        let shared = self.branch().get_blob_shared(*self.blob_id());
+        let shared = self.branch().fetch_blob_shared(*self.blob_id());
         let parent_context = self.inner.parent_context();
         let branch = self.inner.parent_inner.blob.branch().clone();
         let locator = self.locator();
@@ -155,6 +162,10 @@ impl<'a> FileRef<'a> {
 
     pub(crate) fn data(&self) -> &EntryFileData {
         self.entry_data
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.branch().is_blob_open(self.blob_id())
     }
 }
 

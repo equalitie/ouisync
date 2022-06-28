@@ -121,8 +121,12 @@ impl Branch {
             .await
     }
 
-    pub(crate) fn get_blob_shared(&self, blob_id: BlobId) -> MaybeInitShared {
-        self.blob_cache.get(*self.id(), blob_id)
+    pub(crate) fn fetch_blob_shared(&self, blob_id: BlobId) -> MaybeInitShared {
+        self.blob_cache.fetch(*self.id(), blob_id)
+    }
+
+    pub(crate) fn is_blob_open(&self, blob_id: &BlobId) -> bool {
+        self.blob_cache.contains(self.id(), blob_id)
     }
 
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {

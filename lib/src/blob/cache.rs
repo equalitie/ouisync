@@ -6,8 +6,11 @@ use std::{
 };
 
 pub(crate) struct BlobCache {
-    slots: BlockingMutex<HashMap<Key, Weak<AsyncMutex<Shared>>>>,
+    slots: BlockingMutex<BranchMap>,
 }
+
+type BlobMap = HashMap<BlobId, Weak<AsyncMutex<Shared>>>;
+type BranchMap = HashMap<PublicKey, BlobMap>;
 
 impl BlobCache {
     pub fn new() -> Self {
@@ -16,14 +19,20 @@ impl BlobCache {
         }
     }
 
-    pub fn get(&self, branch_id: PublicKey, blob_id: BlobId) -> MaybeInitShared {
+    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> MaybeInitShared {
         let mut slots = self.slots.lock().unwrap();
 
         // Cleanup
-        slots.retain(|_, slot| slot.strong_count() > 0);
+        for branch in slots.values_mut() {
+            branch.retain(|_, slot| slot.strong_count() > 0);
+        }
+
+        slots.retain(|_, branch| !branch.is_empty());
 
         let slot = slots
-            .entry(Key { branch_id, blob_id })
+            .entry(branch_id)
+            .or_default()
+            .entry(blob_id)
             .or_insert_with(Weak::new);
 
         if let Some(shared) = slot.upgrade() {
@@ -34,10 +43,14 @@ impl BlobCache {
             shared
         }
     }
-}
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-struct Key {
-    branch_id: PublicKey,
-    blob_id: BlobId,
+    pub fn contains(&self, branch_id: &PublicKey, blob_id: &BlobId) -> bool {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(branch_id)
+            .and_then(|branch| branch.get(blob_id))
+            .map(|slot| slot.strong_count() > 0)
+            .unwrap_or(false)
+    }
 }

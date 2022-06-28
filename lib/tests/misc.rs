@@ -1,9 +1,10 @@
 mod common;
 
 use self::common::Env;
+use assert_matches::assert_matches;
 use ouisync::{
-    db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error, File, MasterSecret,
-    Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error,
+    File, MasterSecret, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, time::Duration};
@@ -292,11 +293,80 @@ async fn sync_during_file_write() {
     .unwrap();
 }
 
-// TODO: test similar to the above, but instead of B creating "bar.txt", have it write into
-// "foo.txt". Currently this causes the partially written content by A to be lost (collected)
-// because A's version of the file is outdated compared to B's version even though A's version
-// contains changes that B hasn't observed yet which is wrong. Correct behaviour should be that
-// both versions of the file remain.
+// FIXME: this currently fails becase the modified but unflushed file is overwritten with the
+// remote version on merge.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_modify_open_file() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers().await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
+    let mut content_b = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
+    env.rng.fill(&mut content_a[..]);
+    env.rng.fill(&mut content_b[..]);
+
+    // A: Create empty file
+    let mut file_a = repo_a.create_file("file.txt").await.unwrap();
+
+    // B: Wait until everything gets merged
+    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
+        .await
+        .unwrap();
+
+    // A: Write to file but don't flush yet
+    write_in_chunks(repo_a.db(), &mut file_a, &content_a, 4096).await;
+
+    // B: Write to the same file and flush
+    let mut file_b = repo_b.open_file("file.txt").await.unwrap();
+    write_in_chunks(repo_b.db(), &mut file_b, &content_b, 4096).await;
+
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    file_b.flush(&mut conn).await.unwrap();
+    drop(conn);
+
+    drop(file_b);
+
+    let id_a = *repo_a.local_branch().await.unwrap().id();
+    let id_b = *repo_b.local_branch().await.unwrap().id();
+
+    // A: Wait until we see B's writes
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b),
+    )
+    .await
+    .unwrap();
+
+    // A: Flush the file
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
+    drop(conn);
+    drop(file_a);
+
+    // A: Verify both versions of the file are still present
+    assert_matches!(
+        repo_a.open_file("file.txt").await,
+        Err(Error::AmbiguousEntry)
+    );
+
+    let mut file_a = repo_a.open_file_version("file.txt", &id_a).await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    let actual_content_a = file_a.read_to_end(&mut conn).await.unwrap();
+    drop(conn);
+
+    let mut file_b = repo_a.open_file_version("file.txt", &id_b).await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    let actual_content_b = file_b.read_to_end(&mut conn).await.unwrap();
+    drop(conn);
+
+    assert!(actual_content_a == content_a);
+    assert!(actual_content_b == content_b);
+}
 
 // Test that the local version changes monotonically even when the local branch temporarily becomes
 // outdated.
@@ -417,10 +487,25 @@ async fn recreate_local_branch() {
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
+    expect_file_version_content(repo, path, None, expected_content).await
+}
+
+async fn expect_file_version_content(
+    repo: &Repository,
+    path: &str,
+    branch_id: Option<&PublicKey>,
+    expected_content: &[u8],
+) {
     let db = repo.db().clone();
 
     common::eventually(repo, || async {
-        let mut file = match repo.open_file(path).await {
+        let result = if let Some(branch_id) = branch_id {
+            repo.open_file_version(path, branch_id).await
+        } else {
+            repo.open_file(path).await
+        };
+
+        let mut file = match result {
             Ok(file) => file,
             // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
             // and so the file entry is not in it yet.

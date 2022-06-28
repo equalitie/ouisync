@@ -430,7 +430,7 @@ impl Writer<'_> {
         let blob_id = rand::random();
         let data = EntryData::file(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
-        let shared = self.branch().get_blob_shared(blob_id);
+        let shared = self.branch().fetch_blob_shared(blob_id);
 
         let mut file = File::create(
             self.branch().clone(),
