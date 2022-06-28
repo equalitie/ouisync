@@ -67,6 +67,7 @@ pub struct Connection {
     tx: Option<quinn::SendStream>,
     remote_address: SocketAddr,
     was_error: bool,
+    was_shutdown: bool,
 }
 
 impl Connection {
@@ -76,6 +77,7 @@ impl Connection {
             tx: Some(tx),
             remote_address,
             was_error: false,
+            was_shutdown: false,
         }
     }
 
@@ -97,6 +99,7 @@ impl Connection {
             OwnedWriteHalf {
                 tx,
                 was_error,
+                was_shutdown: self.was_shutdown,
             },
         )
     }
@@ -104,7 +107,7 @@ impl Connection {
     /// Make sure all data is sent, no more data can be sent afterwards.
     #[cfg(test)]
     pub async fn finish(&mut self) -> Result<()> {
-        if self.was_error {
+        if self.was_error || self.was_shutdown {
             return Err(Error::Write(quinn::WriteError::UnknownStream));
         }
 
@@ -184,6 +187,7 @@ impl AsyncWrite for Connection {
         let this = self.get_mut();
         match &mut this.tx {
             Some(tx) => {
+                this.was_shutdown = true;
                 let poll = Pin::new(tx).poll_shutdown(cx);
                 if let Poll::Ready(r) = &poll {
                     this.was_error |= r.is_err();
@@ -200,7 +204,7 @@ impl AsyncWrite for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if self.was_error {
+        if self.was_error || self.was_shutdown {
             return;
         }
 
@@ -218,6 +222,7 @@ pub struct OwnedReadHalf{
 pub struct OwnedWriteHalf {
     tx: Option<quinn::SendStream>,
     was_error: Arc<RwLock<bool>>,
+    was_shutdown: bool,
 }
 
 impl AsyncRead for OwnedReadHalf {
@@ -288,6 +293,7 @@ impl AsyncWrite for OwnedWriteHalf {
         let this = self.get_mut();
         match &mut this.tx {
             Some(tx) => {
+                this.was_shutdown = true;
                 let poll = Pin::new(tx).poll_shutdown(cx);
 
                 if let Poll::Ready(r) = &poll {
@@ -308,7 +314,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if *self.was_error.read().unwrap() {
+        if self.was_shutdown || *self.was_error.read().unwrap() {
             return;
         }
 
