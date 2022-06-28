@@ -43,10 +43,10 @@ impl Versioned for FileRef<'_> {
 }
 
 // Compare the entries by their version vectors but override the comparison in case any of the
-// entries is open such that the open entry is always included. For example, let's have two entries
-// A and B, where A'a vv is {x:1, y:2} and B's vv is {x:1, y:3}, but A is open and B is not. Even
-// though B's vv is happens-after A's, because A is open the comparison will returns `None` which
-// results in both entries being included.
+// entries is open (in use) such that an open entry is always considered up-to-date. For example,
+// let's have two entries A and B, where A'a vv is {x:1, y:2} and B's vv is {x:1, y:3}, but A is
+// open and B is not. Even though B's vv is happens-after A's, because A is open the comparison
+// will returns `None` which results in both entries being included.
 fn compare_entry_versions(
     lhs_vv: &VersionVector,
     lhs_is_open: bool,
@@ -56,10 +56,11 @@ fn compare_entry_versions(
     match (lhs_vv.partial_cmp(rhs_vv), lhs_is_open, rhs_is_open) {
         (Some(Ordering::Greater), _, false) => Some(Ordering::Greater),
         (Some(Ordering::Equal), false, false) => Some(Ordering::Equal),
+        (Some(Ordering::Equal), true, false) => Some(Ordering::Greater),
+        (Some(Ordering::Equal), false, true) => Some(Ordering::Less),
         (Some(Ordering::Less), false, _) => Some(Ordering::Less),
         (Some(Ordering::Greater), _, true)
-        | (Some(Ordering::Equal), true, _)
-        | (Some(Ordering::Equal), _, true)
+        | (Some(Ordering::Equal), true, true)
         | (Some(Ordering::Less), true, _) => None,
         (None, _, _) => None,
     }
