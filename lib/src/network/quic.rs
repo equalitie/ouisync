@@ -66,8 +66,7 @@ pub struct Connection {
     rx: Option<quinn::RecvStream>,
     tx: Option<quinn::SendStream>,
     remote_address: SocketAddr,
-    was_error: bool,
-    was_shutdown: bool,
+    can_finish: bool,
 }
 
 impl Connection {
@@ -76,8 +75,7 @@ impl Connection {
             rx: Some(rx),
             tx: Some(tx),
             remote_address,
-            was_error: false,
-            was_shutdown: false,
+            can_finish: true,
         }
     }
 
@@ -90,16 +88,15 @@ impl Connection {
         // anywhere else.
         let rx = self.rx.take().unwrap();
         let tx = self.tx.take();
-        let was_error = Arc::new(RwLock::new(self.was_error));
+        let can_finish = Arc::new(RwLock::new(self.can_finish));
         (
             OwnedReadHalf {
                 rx,
-                was_error: was_error.clone(),
+                can_finish: can_finish.clone(),
             },
             OwnedWriteHalf {
                 tx,
-                was_error,
-                was_shutdown: self.was_shutdown,
+                can_finish,
             },
         )
     }
@@ -107,7 +104,7 @@ impl Connection {
     /// Make sure all data is sent, no more data can be sent afterwards.
     #[cfg(test)]
     pub async fn finish(&mut self) -> Result<()> {
-        if self.was_error || self.was_shutdown {
+        if !self.can_finish {
             return Err(Error::Write(quinn::WriteError::UnknownStream));
         }
 
@@ -132,7 +129,7 @@ impl AsyncRead for Connection {
             Some(rx) => {
                 let poll = Pin::new(rx).poll_read(cx, buf);
                 if let Poll::Ready(r) = &poll {
-                    this.was_error |= r.is_err();
+                    this.can_finish &= r.is_ok();
                 };
                 poll
             },
@@ -155,7 +152,7 @@ impl AsyncWrite for Connection {
             Some(tx) => {
                 let poll = Pin::new(tx).poll_write(cx, buf);
                 if let Poll::Ready(r) = &poll {
-                    this.was_error |= r.is_err();
+                    this.can_finish &= r.is_ok();
                 }
                 poll
             }
@@ -172,7 +169,7 @@ impl AsyncWrite for Connection {
             Some(tx) => {
                 let poll = Pin::new(tx).poll_flush(cx);
                 if let Poll::Ready(r) = &poll {
-                    this.was_error |= r.is_err();
+                    this.can_finish &= r.is_ok();
                 }
                 poll
             }
@@ -187,12 +184,8 @@ impl AsyncWrite for Connection {
         let this = self.get_mut();
         match &mut this.tx {
             Some(tx) => {
-                this.was_shutdown = true;
-                let poll = Pin::new(tx).poll_shutdown(cx);
-                if let Poll::Ready(r) = &poll {
-                    this.was_error |= r.is_err();
-                }
-                poll
+                this.can_finish = false;
+                Pin::new(tx).poll_shutdown(cx)
             }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -204,7 +197,7 @@ impl AsyncWrite for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if self.was_error || self.was_shutdown {
+        if !self.can_finish {
             return;
         }
 
@@ -217,12 +210,11 @@ impl Drop for Connection {
 //------------------------------------------------------------------------------
 pub struct OwnedReadHalf{
     rx: quinn::RecvStream,
-    was_error: Arc<RwLock<bool>>,
+    can_finish: Arc<RwLock<bool>>,
 }
 pub struct OwnedWriteHalf {
     tx: Option<quinn::SendStream>,
-    was_error: Arc<RwLock<bool>>,
-    was_shutdown: bool,
+    can_finish: Arc<RwLock<bool>>,
 }
 
 impl AsyncRead for OwnedReadHalf {
@@ -235,7 +227,7 @@ impl AsyncRead for OwnedReadHalf {
         let poll = Pin::new(&mut this.rx).poll_read(cx, buf);
         if let Poll::Ready(r) = &poll {
             if r.is_err() {
-                *this.was_error.write().unwrap() = true;
+                *this.can_finish.write().unwrap() = false;
             }
         }
         poll
@@ -255,7 +247,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        *this.was_error.write().unwrap() = true;
+                        *this.can_finish.write().unwrap() = false;
                     }
                 }
 
@@ -276,7 +268,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        *this.was_error.write().unwrap() = true;
+                        *this.can_finish.write().unwrap() = false;
                     }
                 }
 
@@ -293,16 +285,8 @@ impl AsyncWrite for OwnedWriteHalf {
         let this = self.get_mut();
         match &mut this.tx {
             Some(tx) => {
-                this.was_shutdown = true;
-                let poll = Pin::new(tx).poll_shutdown(cx);
-
-                if let Poll::Ready(r) = &poll {
-                    if r.is_err() {
-                        *this.was_error.write().unwrap() = true;
-                    }
-                }
-
-                poll
+                *this.can_finish.write().unwrap() = false;
+                Pin::new(tx).poll_shutdown(cx)
             }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -314,7 +298,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if self.was_shutdown || *self.was_error.read().unwrap() {
+        if !*self.can_finish.read().unwrap() {
             return;
         }
 
