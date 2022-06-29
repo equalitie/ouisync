@@ -223,7 +223,7 @@ impl Directory {
         }
 
         let parent = if let Some(parent) = &inner.inner.parent {
-            let dir = parent.directory().clone();
+            let dir = parent.directory(conn, inner.branch().clone()).await?;
             let entry_name = parent.entry_name().to_owned();
 
             Some((dir, entry_name))
@@ -262,13 +262,14 @@ impl Directory {
         writer.inner.commit(tx, Content::empty(), vv).await
     }
 
-    pub async fn parent(&self) -> Option<Directory> {
+    pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
         let read = self.read().await;
 
-        read.inner
-            .parent
-            .as_ref()
-            .map(|parent_ctx| parent_ctx.directory().clone())
+        if let Some(parent) = &read.inner.parent {
+            Ok(Some(parent.directory(conn, read.branch().clone()).await?))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn open(

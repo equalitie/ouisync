@@ -209,7 +209,7 @@ impl JointDirectory {
         for mut file in files {
             let mut conn = db.acquire().await?;
 
-            match file.fork(&mut conn, local_branch).await {
+            match file.fork(&mut conn, local_branch.clone()).await {
                 Ok(()) => (),
                 Err(Error::EntryExists) => {
                     // This error indicates the local and the remote files are in conflict and

@@ -675,7 +675,7 @@ async fn truncate_forked_remote_file() {
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
 }
 
@@ -739,14 +739,23 @@ async fn version_vector_create_file() {
     let mut conn = repo.db().acquire().await.unwrap();
 
     let root_vv_1 = file
-        .parent()
-        .parent()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_1 = file
+        .parent(&mut conn)
         .await
         .unwrap()
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let parent_vv_1 = file.parent().version_vector(&mut conn).await.unwrap();
     let file_vv_1 = file.version_vector().await;
 
     assert!(root_vv_1 > root_vv_0);
@@ -755,14 +764,23 @@ async fn version_vector_create_file() {
     file.flush(&mut conn).await.unwrap();
 
     let root_vv_2 = file
-        .parent()
-        .parent()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_2 = file
+        .parent(&mut conn)
         .await
         .unwrap()
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let parent_vv_2 = file.parent().version_vector(&mut conn).await.unwrap();
     let file_vv_2 = file.version_vector().await;
 
     assert!(root_vv_2 > root_vv_1);
@@ -862,7 +880,7 @@ async fn version_vector_fork_file() {
 
     let remote_file_vv = file.version_vector().await;
 
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
 
     assert_eq!(file.version_vector().await, remote_file_vv);
 }
@@ -992,7 +1010,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
     assert_matches!(
-        remote_file.fork(&mut conn, &local_branch).await,
+        remote_file.fork(&mut conn, local_branch).await,
         Err(Error::EntryExists)
     );
 }
@@ -1028,7 +1046,7 @@ async fn remove_branch() {
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
     drop(conn);
     drop(file);
 

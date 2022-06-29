@@ -154,7 +154,7 @@ pub unsafe extern "C" fn file_write(
             let mut conn = g.repo.db().acquire().await?;
 
             g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
-            g.file.fork(&mut conn, &local_branch).await?;
+            g.file.fork(&mut conn, local_branch).await?;
             g.file.write(&mut conn, buffer).await?;
 
             Ok(())
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn file_truncate(
             let local_branch = g.repo.get_or_create_local_branch().await?;
             let mut conn = g.repo.db().acquire().await?;
 
-            g.file.fork(&mut conn, &local_branch).await?;
+            g.file.fork(&mut conn, local_branch).await?;
             g.file.truncate(&mut conn, len).await
         })
     })

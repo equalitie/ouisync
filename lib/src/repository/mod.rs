@@ -374,9 +374,9 @@ impl Repository {
                 // Prevent deadlocks
                 drop(src_joint_dir_r);
 
-                file.fork(&mut conn, &local_branch).await?;
+                file.fork(&mut conn, local_branch.clone()).await?;
 
-                (file.parent(), Cow::Owned(src_name))
+                (file.parent(&mut conn).await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
@@ -394,8 +394,8 @@ impl Repository {
                 drop(src_joint_dir_r);
 
                 let src_dir = dir_to_move
-                    .parent()
-                    .await
+                    .parent(&mut conn)
+                    .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
                 (src_dir, Cow::Borrowed(src_name))

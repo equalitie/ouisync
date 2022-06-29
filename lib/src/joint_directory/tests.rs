@@ -105,7 +105,7 @@ async fn conflict_forked_files() {
 
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
-    file1.fork(&mut conn, &branches[1]).await.unwrap();
+    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
     file1.write(&mut conn, b"two").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
 
@@ -218,7 +218,7 @@ async fn conflict_identical_versions() {
 
     // Fork it into the other branch, creating an identical version of it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
-    file1.fork(&mut conn, &branches[1]).await.unwrap();
+    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
 
     let root1 = branches[1].open_root(&mut conn).await.unwrap();
 
@@ -266,7 +266,7 @@ async fn conflict_open_file() {
     let vv0 = file0.version_vector().await;
 
     let mut file1 = file0;
-    file1.fork(&mut conn, &branches[1]).await.unwrap();
+    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
     file1.write(&mut conn, b"foo").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
     root1.refresh(&mut conn).await.unwrap();
@@ -918,7 +918,7 @@ async fn create_file(
     let mut file = parent.create_file(conn, name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
-        file.fork(conn, local_branch).await.unwrap();
+        file.fork(conn, local_branch.clone()).await.unwrap();
         file.write(conn, content).await.unwrap();
     }
 
@@ -935,7 +935,7 @@ async fn update_file(
 ) {
     let mut file = open_file(conn, parent, name).await;
 
-    file.fork(conn, local_branch).await.unwrap();
+    file.fork(conn, local_branch.clone()).await.unwrap();
     file.truncate(conn, 0).await.unwrap();
     file.write(conn, content).await.unwrap();
     file.flush(conn).await.unwrap();

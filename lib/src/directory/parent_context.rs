@@ -50,12 +50,13 @@ impl ParentContext {
         &self,
         mut tx: db::Transaction<'_>,
         entry_blob: &Blob,
-        local_branch: &Branch,
+        _src_branch: Branch,
+        dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
         let entry_data = self.fork_entry_data().await;
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
-        let directory = self.directory.fork(&mut tx, local_branch).await?;
+        let directory = self.directory.fork(&mut tx, &dst_branch).await?;
         let mut writer = directory.write().await?;
 
         let mut content = writer.inner.load(&mut tx).await?;
@@ -64,7 +65,7 @@ impl ParentContext {
             .inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        let new_blob = entry_blob.try_fork(&mut tx, local_branch.clone()).await?;
+        let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
         writer
             .inner
             .commit(tx, content, VersionVector::new())
@@ -84,9 +85,13 @@ impl ParentContext {
         &self.entry_name
     }
 
-    /// Returns the parent directory of the entry bound to the given local branch.
-    pub fn directory(&self) -> &Directory {
-        &self.directory
+    /// Returns the parent directory of this entry.
+    pub async fn directory(
+        &self,
+        _conn: &mut db::Connection,
+        _branch: Branch,
+    ) -> Result<Directory> {
+        Ok(self.directory.clone())
     }
 
     /// Returns the version vector of this entry.
