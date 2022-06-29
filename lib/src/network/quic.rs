@@ -94,10 +94,7 @@ impl Connection {
                 rx,
                 can_finish: can_finish.clone(),
             },
-            OwnedWriteHalf {
-                tx,
-                can_finish,
-            },
+            OwnedWriteHalf { tx, can_finish },
         )
     }
 
@@ -132,7 +129,7 @@ impl AsyncRead for Connection {
                     this.can_finish &= r.is_ok();
                 };
                 poll
-            },
+            }
             None => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "connection was split",
@@ -208,7 +205,7 @@ impl Drop for Connection {
 }
 
 //------------------------------------------------------------------------------
-pub struct OwnedReadHalf{
+pub struct OwnedReadHalf {
     rx: quinn::RecvStream,
     can_finish: Arc<RwLock<bool>>,
 }
