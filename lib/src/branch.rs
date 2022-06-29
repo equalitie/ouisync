@@ -6,7 +6,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     debug_printer::DebugPrinter,
-    directory::{Directory, EntryRef, Mode, RootDirectoryCache},
+    directory::{Directory, EntryRef, Mode},
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -21,7 +21,6 @@ use std::sync::Arc;
 pub struct Branch {
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
-    root_directory: Arc<RootDirectoryCache>,
     blob_cache: Arc<BlobCache>,
 }
 
@@ -34,7 +33,6 @@ impl Branch {
         Self {
             branch_data,
             keys,
-            root_directory: Arc::new(RootDirectoryCache::new()),
             blob_cache,
         }
     }
@@ -56,7 +54,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_root(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.root_directory.open(conn, self.clone()).await
+        Directory::open_root(conn, self.clone(), Mode::ReadWrite).await
     }
 
     pub(crate) async fn open_root_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
@@ -64,7 +62,7 @@ impl Branch {
     }
 
     pub(crate) async fn open_or_create_root(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.root_directory.open_or_create(conn, self.clone()).await
+        Directory::open_or_create_root(conn, self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -143,7 +141,6 @@ impl Branch {
         Self {
             branch_data: self.branch_data,
             keys,
-            root_directory: self.root_directory,
             blob_cache: self.blob_cache,
         }
     }
@@ -182,6 +179,7 @@ mod tests {
             .await
             .unwrap();
 
+        root.refresh(&mut conn).await.unwrap();
         let _ = root.read().await.lookup("dir").unwrap();
     }
 

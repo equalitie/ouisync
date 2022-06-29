@@ -206,16 +206,14 @@ impl<'a> DirectoryRef<'a> {
     }
 
     async fn open_read_write(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.inner
-            .parent_inner
-            .open_directories
-            .open(
-                conn,
-                self.branch().clone(),
-                self.locator(),
-                self.inner.parent_context(),
-            )
-            .await
+        Directory::open(
+            conn,
+            self.branch().clone(),
+            self.locator(),
+            Some(self.inner.parent_context()),
+            Mode::ReadWrite,
+        )
+        .await
     }
 
     async fn open_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {

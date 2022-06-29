@@ -561,6 +561,7 @@ async fn fork_over_tombstone() {
     dir1.fork(&mut conn, &branches[0]).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
+    root0.refresh(&mut conn).await.unwrap();
     assert_matches!(root0.read().await.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
@@ -572,7 +573,7 @@ async fn modify_directory_concurrently() {
     let root = branch.open_or_create_root(&mut conn).await.unwrap();
 
     // Obtain two instances of the same directory, create a new file in one of them and verify
-    // the file immediately exists in the other one as well.
+    // the file also exists in the other after refresh.
 
     let dir0 = root
         .create_directory(&mut conn, "dir".to_owned())
@@ -597,6 +598,7 @@ async fn modify_directory_concurrently() {
     file0.write(&mut conn, b"hello").await.unwrap();
     file0.flush(&mut conn).await.unwrap();
 
+    dir1.refresh(&mut conn).await.unwrap();
     let mut file1 = dir1
         .read()
         .await

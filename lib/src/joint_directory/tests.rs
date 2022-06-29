@@ -269,8 +269,9 @@ async fn conflict_open_file() {
     file1.fork(&mut conn, &branches[1]).await.unwrap();
     file1.write(&mut conn, b"foo").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
-    let vv1 = file1.version_vector().await;
+    root1.refresh(&mut conn).await.unwrap();
 
+    let vv1 = file1.version_vector().await;
     assert!(vv1 > vv0);
 
     let _file0 = root0
@@ -357,6 +358,7 @@ async fn merge_locally_non_existing_file() {
     .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
 
     // Verify the file now exists in the local branch.
     let local_content = open_file(&mut conn, &local_root, "cat.jpg")
@@ -399,6 +401,7 @@ async fn merge_locally_older_file() {
 
     // Modify the file by the remote branch
     let mut conn = pool.acquire().await.unwrap();
+    remote_root.refresh(&mut conn).await.unwrap();
     update_file(&mut conn, &remote_root, "cat.jpg", content_v1, &branches[1]).await;
     drop(conn);
 
@@ -411,6 +414,7 @@ async fn merge_locally_older_file() {
     .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
     let local_content = local_root
         .read()
         .await
@@ -457,6 +461,7 @@ async fn merge_locally_newer_file() {
 
     // Modify the file by the local branch
     let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
     update_file(&mut conn, &local_root, "cat.jpg", content_v1, &branches[0]).await;
     drop(conn);
 
@@ -501,8 +506,11 @@ async fn attempt_to_merge_concurrent_file() {
     .await
     .unwrap();
 
-    // Modify the file by both branches concurrently
     let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh(&mut conn).await.unwrap();
+
+    // Modify the file by both branches concurrently
     update_file(&mut conn, &local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&mut conn, &remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
@@ -700,10 +708,12 @@ async fn merge_sequential_modifications() {
     .await
     .unwrap();
 
+    let mut conn = pool.acquire().await.unwrap();
+    remote_root.refresh(&mut conn).await.unwrap();
+
     let vv1 = read_version_vector(&remote_root, "dog.jpg").await;
     assert_eq!(vv1, vv0);
 
-    let mut conn = pool.acquire().await.unwrap();
     update_file(&mut conn, &remote_root, "dog.jpg", b"v1", &branches[1]).await;
     drop(conn);
 
@@ -715,12 +725,14 @@ async fn merge_sequential_modifications() {
         .await
         .unwrap();
 
+    let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
+
     let reader = local_root.read().await;
     let entry = reader.lookup("dog.jpg").unwrap().file().unwrap();
 
     assert_eq!(entry.version_vector(), &vv2);
 
-    let mut conn = pool.acquire().await.unwrap();
     let content = entry
         .open(&mut conn)
         .await

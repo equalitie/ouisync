@@ -1,4 +1,3 @@
-mod cache;
 mod content;
 mod entry;
 mod entry_data;
@@ -8,13 +7,12 @@ mod parent_context;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    cache::RootDirectoryCache, entry_data::EntryData, inner::OverwriteStrategy,
-    parent_context::ParentContext,
-};
 pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
+};
+pub(crate) use self::{
+    entry_data::EntryData, inner::OverwriteStrategy, parent_context::ParentContext,
 };
 
 use self::{content::Content, inner::Inner};
@@ -82,6 +80,25 @@ impl Directory {
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
         }
+    }
+
+    /// Reloads this directory from the db.
+    #[cfg(test)]
+    pub(crate) async fn refresh(&self, conn: &mut db::Connection) -> Result<()> {
+        let inner = {
+            let reader = self.read().await;
+            Inner::open(
+                conn,
+                reader.branch().clone(),
+                *reader.locator(),
+                reader.inner.parent.as_ref().cloned(),
+            )
+            .await?
+        };
+
+        *self.inner.write().await = inner;
+
+        Ok(())
     }
 
     /// Lock this directory for reading.
@@ -329,15 +346,14 @@ impl Directory {
 
                     let parent_context = ParentContext::new(self.clone(), name.into());
 
-                    let dir = inner
-                        .open_directories
-                        .open(
-                            conn,
-                            inner.blob.branch().clone(),
-                            Locator::head(data.blob_id),
-                            parent_context,
-                        )
-                        .await;
+                    let dir = Directory::open(
+                        conn,
+                        inner.blob.branch().clone(),
+                        Locator::head(data.blob_id),
+                        Some(parent_context),
+                        Mode::ReadOnly,
+                    )
+                    .await;
 
                     match dir {
                         Ok(dir) => {
@@ -459,11 +475,7 @@ impl Writer<'_> {
         let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
         let parent = ParentContext::new(self.outer.clone(), name.clone());
 
-        let dir = self
-            .inner
-            .open_directories
-            .create(self.branch(), Locator::head(blob_id), parent)
-            .await?;
+        let dir = Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
         let mut content = self.inner.load(&mut tx).await?;
         content.insert(self.branch(), name, data)?;

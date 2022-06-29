@@ -1,5 +1,4 @@
 use super::{
-    cache::SubdirectoryCache,
     content::{self, Content},
     parent_context::ParentContext,
 };
@@ -16,10 +15,6 @@ use async_recursion::async_recursion;
 pub(super) struct Inner {
     pub blob: Blob,
     pub parent: Option<ParentContext>,
-    // Cache of open subdirectories. Used to make sure that multiple instances of the same directory
-    // all share the same internal state.
-    pub open_directories: SubdirectoryCache,
-
     entries: Content,
 }
 
@@ -30,7 +25,6 @@ impl Inner {
         Self {
             blob,
             parent,
-            open_directories: SubdirectoryCache::new(),
             entries: Content::empty(),
         }
     }
@@ -46,7 +40,6 @@ impl Inner {
         Ok(Self {
             blob,
             parent,
-            open_directories: SubdirectoryCache::new(),
             entries,
         })
     }
