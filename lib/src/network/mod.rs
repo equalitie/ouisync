@@ -17,6 +17,7 @@ mod protocol;
 mod quic;
 mod raw;
 mod request;
+mod seen_peers;
 mod server;
 mod socket;
 #[cfg(test)]
