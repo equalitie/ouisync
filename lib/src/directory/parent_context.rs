@@ -100,8 +100,20 @@ impl ParentContext {
     ///
     /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
     /// directory.
-    pub async fn entry_version_vector(&self) -> VersionVector {
-        self.map_entry(|entry| entry.version_vector().clone()).await
+    pub async fn entry_version_vector(
+        &self,
+        conn: &mut db::Connection,
+        branch: Branch,
+    ) -> Result<VersionVector> {
+        Ok(self
+            .directory(conn, branch)
+            .await?
+            .read()
+            .await
+            .lookup(&self.entry_name)
+            .expect("dangling ParentContext")
+            .version_vector()
+            .clone())
     }
 
     async fn fork_entry_data(&self) -> EntryData {

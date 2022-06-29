@@ -263,7 +263,7 @@ async fn conflict_open_file() {
         .create_file(&mut conn, "file.txt".into())
         .await
         .unwrap();
-    let vv0 = file0.version_vector().await;
+    let vv0 = file0.version_vector(&mut conn).await.unwrap();
 
     let mut file1 = file0;
     file1.fork(&mut conn, branches[1].clone()).await.unwrap();
@@ -271,7 +271,7 @@ async fn conflict_open_file() {
     file1.flush(&mut conn).await.unwrap();
     root1.refresh(&mut conn).await.unwrap();
 
-    let vv1 = file1.version_vector().await;
+    let vv1 = file1.version_vector(&mut conn).await.unwrap();
     assert!(vv1 > vv0);
 
     let _file0 = root0

@@ -147,8 +147,10 @@ impl File {
         Ok(())
     }
 
-    pub async fn version_vector(&self) -> VersionVector {
-        self.parent.entry_version_vector().await
+    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+        self.parent
+            .entry_version_vector(conn, self.branch().clone())
+            .await
     }
 
     /// Locator of this file.

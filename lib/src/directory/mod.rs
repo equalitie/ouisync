@@ -425,7 +425,9 @@ impl Reader<'_> {
     /// Version vector of this directory.
     pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         if let Some(parent) = &self.inner.parent {
-            Ok(parent.entry_version_vector().await)
+            parent
+                .entry_version_vector(conn, self.branch().clone())
+                .await
         } else {
             self.branch().data().load_version_vector(conn).await
         }

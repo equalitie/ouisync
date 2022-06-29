@@ -756,7 +756,7 @@ async fn version_vector_create_file() {
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let file_vv_1 = file.version_vector().await;
+    let file_vv_1 = file.version_vector(&mut conn).await.unwrap();
 
     assert!(root_vv_1 > root_vv_0);
 
@@ -781,7 +781,7 @@ async fn version_vector_create_file() {
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let file_vv_2 = file.version_vector().await;
+    let file_vv_2 = file.version_vector(&mut conn).await.unwrap();
 
     assert!(root_vv_2 > root_vv_1);
     assert!(parent_vv_2 > parent_vv_1);
@@ -846,7 +846,11 @@ async fn version_vector_recreate_deleted_file() {
     repo.remove_entry("test.txt").await.unwrap();
 
     let file = repo.create_file("test.txt").await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 3]);
+    let mut conn = repo.db().acquire().await.unwrap();
+    assert_eq!(
+        file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 3]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -878,11 +882,14 @@ async fn version_vector_fork_file() {
         .unwrap();
     let mut file = create_file_in_directory(&mut conn, &remote_parent, "foo.txt", &[]).await;
 
-    let remote_file_vv = file.version_vector().await;
+    let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
     file.fork(&mut conn, local_branch).await.unwrap();
 
-    assert_eq!(file.version_vector().await, remote_file_vv);
+    assert_eq!(
+        file.version_vector(&mut conn).await.unwrap(),
+        remote_file_vv
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -935,12 +942,18 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
-    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+    assert_eq!(
+        local_file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 2]
+    );
     drop(local_file);
 
     let remote_file =
         create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(
+        remote_file.version_vector(&mut conn).await.unwrap(),
+        vv![remote_id => 2]
+    );
     drop(remote_file);
 
     drop(conn);
@@ -961,7 +974,10 @@ async fn file_conflict_modify_local() {
         local_file.read_to_end(&mut conn).await.unwrap(),
         b"local v2"
     );
-    assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
+    assert_eq!(
+        local_file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 3]
+    );
     drop(conn);
 
     let mut remote_file = repo
@@ -973,7 +989,10 @@ async fn file_conflict_modify_local() {
         remote_file.read_to_end(&mut conn).await.unwrap(),
         b"remote v1"
     );
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(
+        remote_file.version_vector(&mut conn).await.unwrap(),
+        vv![remote_id => 2]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

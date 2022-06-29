@@ -85,7 +85,7 @@ async fn remove_file() {
         .unwrap();
     file.flush(&mut conn).await.unwrap();
 
-    let file_vv = file.version_vector().await;
+    let file_vv = file.version_vector(&mut conn).await.unwrap();
     let file_locator = *file.locator();
     drop(file);
 
