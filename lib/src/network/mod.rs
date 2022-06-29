@@ -641,35 +641,7 @@ impl Inner {
                 // Unwrap OK because this is the only `addr` inserted into `seen_peers`.
                 let peer = seen_peers.insert(addr).unwrap();
 
-                let permit = if let Some(permit) = inner
-                    .connection_deduplicator
-                    .reserve(addr, ConnectionDirection::Outgoing)
-                {
-                    permit
-                } else {
-                    return;
-                };
-
-                permit.mark_as_connecting();
-
-                let source = PeerSource::UserProvided;
-
-                match inner.connect_with_retries(peer, source).await {
-                    Some(socket) => {
-                        inner
-                            .clone()
-                            .handle_new_connection(socket, source, permit)
-                            .await;
-                    }
-                    // Let a discovery mechanism find the address again.
-                    None => {
-                        log::warn!(
-                            "Failed to create outgoing connection to user provided address {:?}",
-                            addr,
-                        );
-                        return;
-                    }
-                }
+                inner.establish_connection(peer, PeerSource::UserProvided).await;
             }
         })
     }
