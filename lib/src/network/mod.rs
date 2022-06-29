@@ -32,6 +32,7 @@ use self::{
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
     protocol::{RuntimeId, Version, MAGIC, VERSION},
+    seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
     config::ConfigStore,
@@ -236,13 +237,9 @@ impl Network {
         task::spawn({
             let weak = Arc::downgrade(&inner);
             async move {
-                while let Some(peer_addr) = dht_peer_found_rx.recv().await {
+                while let Some(seen_peer) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
-                        inner.spawn(
-                            inner
-                                .clone()
-                                .establish_dht_connection(PeerAddr::Quic(peer_addr)),
-                        );
+                        inner.spawn(inner.clone().establish_dht_connection(seen_peer));
                     }
                 }
             }
@@ -506,7 +503,7 @@ struct Inner {
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
-    dht_peer_found_tx: mpsc::UnboundedSender<SocketAddr>,
+    dht_peer_found_tx: mpsc::UnboundedSender<SeenPeer>,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
@@ -639,33 +636,35 @@ impl Inner {
         self.spawn({
             let inner = self.clone();
             async move {
-                loop {
-                    let permit = if let Some(permit) = inner
-                        .connection_deduplicator
-                        .reserve(addr, ConnectionDirection::Outgoing)
-                    {
-                        permit
-                    } else {
+                let seen_peers = SeenPeers::new();
+                // Unwrap OK because this is the only `addr` inserted into `seen_peers`.
+                let peer = seen_peers.insert(addr).unwrap();
+
+                let permit = if let Some(permit) = inner
+                    .connection_deduplicator
+                    .reserve(addr, ConnectionDirection::Outgoing)
+                {
+                    permit
+                } else {
+                    return;
+                };
+
+                permit.mark_as_connecting();
+
+                match inner.connect_with_retries(peer).await {
+                    Some(socket) => {
+                        inner
+                            .clone()
+                            .handle_new_connection(socket, PeerSource::UserProvided, permit)
+                            .await;
+                    }
+                    // Let a discovery mechanism find the address again.
+                    None => {
+                        log::warn!(
+                            "Failed to create outgoing connection to user provided address {:?}",
+                            addr,
+                        );
                         return;
-                    };
-
-                    permit.mark_as_connecting();
-
-                    match inner.connect_with_retries(addr).await {
-                        Some(socket) => {
-                            inner
-                                .clone()
-                                .handle_new_connection(socket, PeerSource::UserProvided, permit)
-                                .await;
-                        }
-                        // Let a discovery mechanism find the address again.
-                        None => {
-                            log::warn!(
-                                "Failed to create outgoing connection to user provided address {:?}",
-                                addr,
-                            );
-                            return;
-                        }
                     }
                 }
             }
@@ -724,7 +723,12 @@ impl Inner {
         }
     }
 
-    async fn establish_dht_connection(self: Arc<Self>, addr: PeerAddr) {
+    async fn establish_dht_connection(self: Arc<Self>, peer: SeenPeer) {
+        let addr = match peer.addr() {
+            Some(addr) => *addr,
+            None => return,
+        };
+
         let permit = if let Some(permit) = self
             .connection_deduplicator
             .reserve(addr, ConnectionDirection::Outgoing)
@@ -736,7 +740,7 @@ impl Inner {
 
         permit.mark_as_connecting();
 
-        if let Some(socket) = self.connect_with_retries(addr).await {
+        if let Some(socket) = self.connect_with_retries(peer).await {
             self.handle_new_connection(socket, PeerSource::Dht, permit)
                 .await;
         } else {
@@ -749,14 +753,20 @@ impl Inner {
         }
     }
 
-    async fn connect_with_retries(&self, addr: PeerAddr) -> Option<raw::Stream> {
+    async fn connect_with_retries(&self, peer: SeenPeer) -> Option<raw::Stream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
-            .with_max_elapsed_time(Some(Duration::from_secs(5 * 60)))
+            // We'll continue trying for as long as `peer.addr().is_some()`.
+            .with_max_elapsed_time(None)
             .build();
 
         loop {
+            let addr = match peer.addr() {
+                Some(addr) => *addr,
+                None => return None,
+            };
+
             match self.connect(addr).await.ok() {
                 Some(socket) => {
                     return Some(socket);
@@ -766,9 +776,8 @@ impl Inner {
                         Some(duration) => {
                             time::sleep(duration).await;
                         }
-                        // Max elapsed time was reached, let whatever discovery mechanism found
-                        // this address to find it again.
-                        None => return None,
+                        // We set max elapsed time to None above.
+                        None => unreachable!(),
                     }
                 }
             }

@@ -1,4 +1,8 @@
-use super::quic;
+use super::{
+    peer_addr::PeerAddr,
+    quic,
+    seen_peers::{SeenPeer, SeenPeers},
+};
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
@@ -9,12 +13,12 @@ use futures_util::{stream, StreamExt};
 use rand::Rng;
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     future::pending,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, RwLock, Weak,
+        Arc, Mutex, Weak,
     },
     time::{Duration, SystemTime},
 };
@@ -76,7 +80,7 @@ impl DhtDiscovery {
     pub fn lookup(
         &self,
         info_hash: InfoHash,
-        found_peers_tx: mpsc::UnboundedSender<SocketAddr>,
+        found_peers_tx: mpsc::UnboundedSender<SeenPeer>,
     ) -> LookupRequest {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
@@ -112,10 +116,7 @@ impl DhtDiscovery {
     }
 }
 
-async fn start_dht(
-    socket: quic::SideChannel,
-    monitor: &Arc<StateMonitor>,
-) -> RestartableDht {
+async fn start_dht(socket: quic::SideChannel, monitor: &Arc<StateMonitor>) -> RestartableDht {
     // TODO: Unwrap
     let local_addr = socket.local_addr().unwrap();
 
@@ -234,8 +235,8 @@ impl Drop for LookupRequest {
 }
 
 struct Lookup {
-    seen_peers: Arc<RwLock<HashSet<SocketAddr>>>, // To avoid duplicates
-    requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
+    seen_peers: Arc<SeenPeers>,
+    requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
     _task: ScopedJoinHandle<()>,
 }
@@ -256,7 +257,7 @@ impl Lookup {
             .make_child("lookups")
             .make_child(format!("{:?}", info_hash));
 
-        let seen_peers = Arc::new(RwLock::new(Default::default()));
+        let seen_peers = Arc::new(SeenPeers::new());
         let requests = Arc::new(Mutex::new(HashMap::new()));
 
         let task = Self::start_task(
@@ -277,9 +278,9 @@ impl Lookup {
         }
     }
 
-    fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SocketAddr>) {
-        for peer in self.seen_peers.read().unwrap().iter() {
-            tx.send(*peer).unwrap_or(());
+    fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
+        for peer in self.seen_peers.collect() {
+            tx.send(peer.clone()).unwrap_or(());
         }
 
         self.requests.lock().unwrap().insert(id, tx);
@@ -290,8 +291,8 @@ impl Lookup {
         dht_v4: Option<RestartableDht>,
         dht_v6: Option<RestartableDht>,
         info_hash: InfoHash,
-        seen_peers: Arc<RwLock<HashSet<SocketAddr>>>,
-        requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SocketAddr>>>>,
+        seen_peers: Arc<SeenPeers>,
+        requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
         mut wake_up: watch::Receiver<()>,
         monitor: &Arc<StateMonitor>,
     ) -> ScopedJoinHandle<()> {
@@ -303,6 +304,8 @@ impl Lookup {
             wake_up.changed().await.unwrap_or(());
 
             loop {
+                seen_peers.start_new_round();
+
                 log::debug!("DHT Starting search for info hash: {:?}", info_hash);
                 *state.get() = Cow::Borrowed("making request");
 
@@ -319,17 +322,15 @@ impl Lookup {
 
                 *state.get() = Cow::Borrowed("awaiting results");
 
-                while let Some(peer) = peers.next().await {
-                    if seen_peers.write().unwrap().insert(peer) {
-                        log::debug!("DHT found peer for {:?}: {}", info_hash, peer);
+                while let Some(addr) = peers.next().await {
+                    if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
+                        log::debug!("DHT found peer for {:?}: {:?}", info_hash, peer.addr());
 
                         for tx in requests.lock().unwrap().values() {
-                            tx.send(peer).unwrap_or(());
+                            tx.send(peer.clone()).unwrap_or(());
                         }
                     }
                 }
-
-                seen_peers.write().unwrap().clear();
 
                 // sleep a random duration before the next search, but wake up if there is a new
                 // request.

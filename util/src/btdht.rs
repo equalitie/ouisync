@@ -30,9 +30,7 @@ async fn main() -> io::Result<()> {
     const WITH_IPV6: bool = true;
 
     let socket_v4 = if WITH_IPV4 {
-        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-            .await
-            .ok()
+        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.ok()
     } else {
         None
     };
@@ -43,9 +41,7 @@ async fn main() -> io::Result<()> {
     // addresses (switch to a different wifi, or cellular,...) so we would need a mechanism to
     // restart the DHT with a different socket if that happens.
     let socket_v6 = if WITH_IPV6 {
-        UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0))
-            .await
-            .ok()
+        UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).await.ok()
     } else {
         None
     };
