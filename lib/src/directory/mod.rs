@@ -242,7 +242,7 @@ impl Directory {
     pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
         let tx = conn.begin().await?;
         let mut writer = self.write().await?;
-        writer.inner.commit(tx, Content::default(), vv).await
+        writer.inner.commit(tx, Content::empty(), vv).await
     }
 
     pub async fn parent(&self) -> Option<Directory> {
@@ -440,7 +440,7 @@ impl Writer<'_> {
         );
 
         let mut content = self.inner.load(&mut tx).await?;
-        inner::insert(&mut content, self.branch(), name, data)?;
+        content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
         self.inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
@@ -466,11 +466,11 @@ impl Writer<'_> {
             .await?;
 
         let mut content = self.inner.load(&mut tx).await?;
-        inner::insert(&mut content, self.branch(), name, data)?;
+        content.insert(self.branch(), name, data)?;
         dir.write()
             .await?
             .inner
-            .save(&mut tx, &Content::default(), OverwriteStrategy::Remove)
+            .save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
             .await?;
         self.inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
@@ -549,7 +549,7 @@ impl Writer<'_> {
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
         let mut content = self.inner.load(&mut tx).await?;
-        inner::insert(&mut content, self.branch(), name, entry)?;
+        content.insert(self.branch(), name, entry)?;
         self.inner.save(&mut tx, &content, overwrite).await?;
         self.inner.commit(tx, content, VersionVector::new()).await
     }

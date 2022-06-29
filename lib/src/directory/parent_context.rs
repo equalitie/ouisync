@@ -1,8 +1,4 @@
-use super::{
-    entry::EntryRef,
-    entry_data::EntryData,
-    inner::{self, OverwriteStrategy},
-};
+use super::{entry::EntryRef, entry_data::EntryData, inner::OverwriteStrategy};
 use crate::{
     blob::Blob, branch::Branch, db, directory::Directory, error::Result,
     version_vector::VersionVector,
@@ -33,7 +29,7 @@ impl ParentContext {
     pub async fn commit(&self, mut tx: db::Transaction<'_>, merge: VersionVector) -> Result<()> {
         let mut writer = self.directory.write().await?;
         let mut content = writer.inner.load(&mut tx).await?;
-        inner::bump(&mut content, writer.branch(), &self.entry_name, &merge)?;
+        content.bump(writer.branch(), &self.entry_name, &merge)?;
         writer
             .inner
             .save(&mut tx, &content, OverwriteStrategy::Keep)
@@ -63,12 +59,7 @@ impl ParentContext {
         let mut writer = directory.write().await?;
 
         let mut content = writer.inner.load(&mut tx).await?;
-        inner::insert(
-            &mut content,
-            writer.branch(),
-            self.entry_name.clone(),
-            entry_data,
-        )?;
+        content.insert(writer.branch(), self.entry_name.clone(), entry_data)?;
         writer
             .inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)

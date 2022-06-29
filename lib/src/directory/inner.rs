@@ -1,7 +1,6 @@
 use super::{
     cache::SubdirectoryCache,
     content::{self, Content},
-    entry_data::EntryData,
     parent_context::ParentContext,
 };
 use crate::{
@@ -13,7 +12,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::collections::btree_map::Entry;
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -33,7 +31,7 @@ impl Inner {
             blob,
             parent,
             open_directories: SubdirectoryCache::new(),
-            entries: Default::default(),
+            entries: Content::empty(),
         }
     }
 
@@ -88,7 +86,7 @@ impl Inner {
         }
 
         // Save the directory content into the store
-        let buffer = content::serialize_2(content);
+        let buffer = content.serialize();
         self.blob.truncate(tx, 0).await?;
         self.blob.write(tx, &buffer).await?;
         self.blob.flush(tx).await?;
@@ -130,60 +128,6 @@ impl Inner {
     }
 }
 
-pub(super) fn insert(
-    content: &mut Content,
-    branch: &Branch,
-    name: String,
-    mut new_data: EntryData,
-) -> Result<()> {
-    match content.entry(name) {
-        Entry::Vacant(entry) => {
-            entry.insert(new_data);
-        }
-        Entry::Occupied(mut entry) => {
-            match entry.get() {
-                // Overwrite files only if the new version is more up to date than the old version
-                // and the old version is not currently open.
-                EntryData::File(old_data)
-                    if new_data.version_vector() > &old_data.version_vector
-                        && !branch.is_blob_open(&old_data.blob_id) => {}
-                // Overwrite directories only if the new version is more up to date than the old
-                // version.
-                EntryData::Directory(old_data)
-                    if new_data.version_vector() > &old_data.version_vector => {}
-                EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
-                // Always overwrite tombstones but update the new version vector so it's more up to
-                // date than the tombstone.
-                EntryData::Tombstone(old_data) => {
-                    let mut vv = old_data.version_vector.clone();
-                    vv.bump(new_data.version_vector(), branch.id());
-                    *new_data.version_vector_mut() = vv;
-                }
-            }
-
-            entry.insert(new_data);
-        }
-    }
-
-    Ok(())
-}
-
-/// Updates the version vector of entry at `name`.
-pub(super) fn bump(
-    content: &mut Content,
-    branch: &Branch,
-    name: &str,
-    bump: &VersionVector,
-) -> Result<()> {
-    content
-        .get_mut(name)
-        .ok_or(Error::EntryNotFound)?
-        .version_vector_mut()
-        .bump(bump, branch.id());
-
-    Ok(())
-}
-
 async fn load(
     conn: &mut db::Connection,
     branch: Branch,
@@ -191,7 +135,7 @@ async fn load(
 ) -> Result<(Blob, Content)> {
     let mut blob = Blob::open(conn, branch, locator, Shared::uninit()).await?;
     let buffer = blob.read_to_end(conn).await?;
-    let content = content::deserialize(&buffer)?;
+    let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))
 }
