@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     blob::{Blob, Shared},
+    blob_id::BlobId,
     branch::Branch,
     db,
     error::{Error, Result},
@@ -15,7 +16,7 @@ use async_recursion::async_recursion;
 pub(super) struct Inner {
     pub blob: Blob,
     pub parent: Option<ParentContext>,
-    entries: Content,
+    pub entries: Content,
 }
 
 impl Inner {
@@ -98,7 +99,7 @@ impl Inner {
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(ctx) = self.parent.as_mut() {
-            ctx.commit(tx, bump).await?;
+            ctx.commit(tx, self.blob.branch().clone(), bump).await?;
         } else {
             let write_keys = self
                 .branch()
@@ -118,6 +119,10 @@ impl Inner {
 
     pub fn branch(&self) -> &Branch {
         self.blob.branch()
+    }
+
+    pub fn blob_id(&self) -> &BlobId {
+        self.blob.locator().blob_id()
     }
 }
 

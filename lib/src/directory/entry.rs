@@ -290,7 +290,7 @@ struct RefInner<'a> {
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(
-            self.parent_outer.clone(),
+            *self.parent_inner.blob_id(),
             self.name.into(),
             self.parent_inner.parent.clone(),
         )

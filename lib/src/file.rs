@@ -95,7 +95,9 @@ impl File {
 
         let mut tx = conn.begin().await?;
         self.blob.flush(&mut tx).await?;
-        self.parent.commit(tx, VersionVector::new()).await
+        self.parent
+            .commit(tx, self.branch().clone(), VersionVector::new())
+            .await
     }
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
