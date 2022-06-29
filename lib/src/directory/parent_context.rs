@@ -1,4 +1,8 @@
-use super::{entry::EntryRef, entry_data::EntryData, inner::OverwriteStrategy};
+use super::{
+    entry::EntryRef,
+    entry_data::EntryData,
+    inner::{self, OverwriteStrategy},
+};
 use crate::{
     blob::Blob, branch::Branch, db, directory::Directory, error::Result,
     version_vector::VersionVector,
@@ -28,10 +32,15 @@ impl ParentContext {
     /// TODO: document cancel safety.
     pub async fn commit(&self, mut tx: db::Transaction<'_>, merge: VersionVector) -> Result<()> {
         let mut writer = self.directory.write().await?;
-        writer.inner.prepare(&mut tx).await?;
-        writer.inner.bump(&self.entry_name, &merge)?;
-        writer.inner.save(&mut tx).await?;
-        writer.inner.commit(tx, merge).await
+        let mut content = writer.inner.load(&mut tx).await?;
+        inner::bump(&mut content, writer.branch(), &self.entry_name, &merge)?;
+        writer
+            .inner
+            .save(&mut tx, &content, OverwriteStrategy::Keep)
+            .await?;
+        writer.inner.commit(tx, content, merge).await?;
+
+        Ok(())
     }
 
     /// Atomically forks the blob into the local branch and returns it together with its updated
@@ -53,15 +62,22 @@ impl ParentContext {
         let directory = self.directory.fork(&mut tx, local_branch).await?;
         let mut writer = directory.write().await?;
 
-        writer.inner.prepare(&mut tx).await?;
-        writer.inner.insert(
+        let mut content = writer.inner.load(&mut tx).await?;
+        inner::insert(
+            &mut content,
+            writer.branch(),
             self.entry_name.clone(),
             entry_data,
-            OverwriteStrategy::Remove,
         )?;
-        writer.inner.save(&mut tx).await?;
+        writer
+            .inner
+            .save(&mut tx, &content, OverwriteStrategy::Remove)
+            .await?;
         let new_blob = entry_blob.try_fork(&mut tx, local_branch.clone()).await?;
-        writer.inner.commit(tx, VersionVector::new()).await?;
+        writer
+            .inner
+            .commit(tx, content, VersionVector::new())
+            .await?;
 
         drop(writer);
 

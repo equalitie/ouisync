@@ -17,7 +17,7 @@ pub use self::{
     entry_type::EntryType,
 };
 
-use self::inner::Inner;
+use self::{content::Content, inner::Inner};
 use crate::{
     blob::Shared,
     branch::Branch,
@@ -242,7 +242,7 @@ impl Directory {
     pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
         let tx = conn.begin().await?;
         let mut writer = self.write().await?;
-        writer.inner.commit(tx, vv).await
+        writer.inner.commit(tx, Content::default(), vv).await
     }
 
     pub async fn parent(&self) -> Option<Directory> {
@@ -439,11 +439,13 @@ impl Writer<'_> {
             shared,
         );
 
-        self.inner.prepare(&mut tx).await?;
-        self.inner.insert(name, data, OverwriteStrategy::Remove)?;
+        let mut content = self.inner.load(&mut tx).await?;
+        inner::insert(&mut content, self.branch(), name, data)?;
         file.save(&mut tx).await?;
-        self.inner.save(&mut tx).await?;
-        self.inner.commit(tx, VersionVector::new()).await?;
+        self.inner
+            .save(&mut tx, &content, OverwriteStrategy::Remove)
+            .await?;
+        self.inner.commit(tx, content, VersionVector::new()).await?;
 
         Ok(file)
     }
@@ -463,11 +465,17 @@ impl Writer<'_> {
             .create(self.branch(), Locator::head(blob_id), parent)
             .await?;
 
-        self.inner.prepare(&mut tx).await?;
-        self.inner.insert(name, data, OverwriteStrategy::Remove)?;
-        dir.write().await?.inner.save(&mut tx).await?;
-        self.inner.save(&mut tx).await?;
-        self.inner.commit(tx, VersionVector::new()).await?;
+        let mut content = self.inner.load(&mut tx).await?;
+        inner::insert(&mut content, self.branch(), name, data)?;
+        dir.write()
+            .await?
+            .inner
+            .save(&mut tx, &Content::default(), OverwriteStrategy::Remove)
+            .await?;
+        self.inner
+            .save(&mut tx, &content, OverwriteStrategy::Remove)
+            .await?;
+        self.inner.commit(tx, content, VersionVector::new()).await?;
 
         Ok(dir)
     }
@@ -540,10 +548,10 @@ impl Writer<'_> {
         entry: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        self.inner.prepare(&mut tx).await?;
-        self.inner.insert(name, entry, overwrite)?;
-        self.inner.save(&mut tx).await?;
-        self.inner.commit(tx, VersionVector::new()).await
+        let mut content = self.inner.load(&mut tx).await?;
+        inner::insert(&mut content, self.branch(), name, entry)?;
+        self.inner.save(&mut tx, &content, overwrite).await?;
+        self.inner.commit(tx, content, VersionVector::new()).await
     }
 }
 

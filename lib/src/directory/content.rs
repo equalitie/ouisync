@@ -2,6 +2,7 @@
 
 use super::entry_data::EntryData;
 use crate::{
+    blob_id::BlobId,
     crypto::sign::PublicKey,
     error::{Error, Result},
 };
@@ -16,17 +17,10 @@ pub(super) type Content = ContentV1;
 type ContentV1 = BTreeMap<String, EntryData>;
 type ContentV0 = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
 
-pub(super) fn serialize(old_content: &Content, new_entry: Option<(&str, &EntryData)>) -> Vec<u8> {
+pub(super) fn serialize_2(content: &Content) -> Vec<u8> {
     let mut output = Vec::new();
     output.extend_from_slice(vint64::encode(VERSION).as_ref());
-    bincode::serialize_into(
-        &mut output,
-        &UpdatedContent {
-            old: old_content,
-            new: new_entry,
-        },
-    )
-    .expect("failed to serialize directory content");
+    bincode::serialize_into(&mut output, content).expect("failed to serialize directory content");
     output
 }
 
@@ -40,6 +34,21 @@ pub(super) fn deserialize(mut input: &[u8]) -> Result<Content> {
         )),
         _ => Err(Error::StorageVersionMismatch),
     }
+}
+
+pub(super) fn overwritten<'a>(
+    old: &'a Content,
+    new: &'a Content,
+) -> impl Iterator<Item = &'a BlobId> {
+    old.iter().filter_map(|(name, old_data)| {
+        let new_data = new.get(name)?;
+
+        if new_data.version_vector() > old_data.version_vector() {
+            old_data.blob_id()
+        } else {
+            None
+        }
+    })
 }
 
 fn upgrade_from_v0(v0: ContentV0) -> ContentV1 {

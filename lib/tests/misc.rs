@@ -293,8 +293,7 @@ async fn sync_during_file_write() {
     .unwrap();
 }
 
-// FIXME: this currently fails becase the modified but unflushed file is overwritten with the
-// remote version on merge.
+// TODO: this now passes, remove the `ignore`
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {

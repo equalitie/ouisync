@@ -13,7 +13,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use std::io::SeekFrom;
+use std::collections::btree_map::Entry;
 
 pub(super) struct Inner {
     pub blob: Blob,
@@ -23,7 +23,6 @@ pub(super) struct Inner {
     pub open_directories: SubdirectoryCache,
 
     entries: Content,
-    pending_entry: Option<PendingEntry>,
 }
 
 impl Inner {
@@ -35,7 +34,6 @@ impl Inner {
             parent,
             open_directories: SubdirectoryCache::new(),
             entries: Default::default(),
-            pending_entry: None,
         }
     }
 
@@ -45,16 +43,13 @@ impl Inner {
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
-        let mut blob = Blob::open(conn, owner_branch, locator, Shared::uninit()).await?;
-        let buffer = blob.read_to_end(conn).await?;
-        let entries = content::deserialize(&buffer)?;
+        let (blob, entries) = load(conn, owner_branch, locator).await?;
 
         Ok(Self {
             blob,
             parent,
             open_directories: SubdirectoryCache::new(),
             entries,
-            pending_entry: None,
         })
     }
 
@@ -62,55 +57,38 @@ impl Inner {
         &self.entries
     }
 
-    /// Prepare this directory and its ancestors for modification. This checks whether there are
-    /// any previous uncommited changes (which would indicate an earlier operation failed or was
-    /// cancelled) and if so, reloads the content from the db.
-    #[async_recursion]
-    pub async fn prepare(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if let Some(parent) = &self.parent {
-            parent.directory().write().await?.inner.prepare(tx).await?;
+    pub async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
+        if self.blob.is_dirty() {
+            Ok(self.entries.clone())
+        } else {
+            let (blob, content) =
+                load(conn, self.blob.branch().clone(), *self.blob.locator()).await?;
+            self.blob = blob;
+            Ok(content)
         }
-
-        if self.pending_entry.is_some() {
-            self.blob.seek(tx, SeekFrom::Start(0)).await?;
-            let buffer = self.blob.read_to_end(tx).await?;
-            self.entries = content::deserialize(&buffer)?;
-        }
-
-        // Note: To ensure cancel safety, `pending_entry` is cleared only at the end of `commit`
-        // (after `tx` is committed).
-
-        Ok(())
     }
 
-    /// Saves the content of this directory into the db and removes overwritten blobs, if any.
-    pub async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub async fn save(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        content: &Content,
+        overwrite: OverwriteStrategy,
+    ) -> Result<()> {
         // Remove overwritten blob
-        if let Some(pending) = self.pending_entry.as_ref() {
-            if matches!(pending.overwrite, OverwriteStrategy::Remove) {
-                if let Some(old_blob_id) = self
-                    .entries
-                    .get(&pending.name)
-                    .and_then(|data| data.blob_id())
-                {
-                    match Blob::remove(tx, self.branch(), Locator::head(*old_blob_id)).await {
-                        // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
-                        // blob is already removed which can legitimately happen due to several
-                        // reasons so we don't treat it as an error.
-                        Ok(()) | Err(Error::EntryNotFound | Error::BlockNotFound(_)) => (),
-                        Err(error) => return Err(error),
-                    }
+        if matches!(overwrite, OverwriteStrategy::Remove) {
+            for blob_id in content::overwritten(&self.entries, content) {
+                match Blob::remove(tx, self.branch(), Locator::head(*blob_id)).await {
+                    // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
+                    // blob is already removed which can legitimately happen due to several
+                    // reasons so we don't treat it as an error.
+                    Ok(()) | Err(Error::EntryNotFound | Error::BlockNotFound(_)) => (),
+                    Err(error) => return Err(error),
                 }
             }
         }
 
         // Save the directory content into the store
-        let buffer = content::serialize(
-            &self.entries,
-            self.pending_entry
-                .as_ref()
-                .map(|pending| (pending.name.as_str(), &pending.data)),
-        );
+        let buffer = content::serialize_2(content);
         self.blob.truncate(tx, 0).await?;
         self.blob.write(tx, &buffer).await?;
         self.blob.flush(tx).await?;
@@ -124,6 +102,7 @@ impl Inner {
     pub async fn commit<'a>(
         &'a mut self,
         tx: db::Transaction<'a>,
+        content: Content,
         bump: VersionVector,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
@@ -139,63 +118,9 @@ impl Inner {
             self.branch().data().bump(tx, &bump, write_keys).await?;
         }
 
-        if let Some(pending) = self.pending_entry.take() {
-            self.entries.insert(pending.name, pending.data);
+        if !content.is_empty() {
+            self.entries = content;
         }
-
-        Ok(())
-    }
-
-    // If `overwrite` is set to `Keep`, the existing blob won't be removed from the store. This is
-    // useful when we want to move or rename an entry.
-    pub fn insert(
-        &mut self,
-        name: String,
-        mut new_data: EntryData,
-        overwrite: OverwriteStrategy,
-    ) -> Result<()> {
-        if let Some(old_data) = self.entries.get(&name) {
-            match old_data {
-                // Overwrite files only if the new version is more up to date than the old version
-                // and the old version is not currently open.
-                EntryData::File(old_data)
-                    if new_data.version_vector() > &old_data.version_vector
-                        && !self.blob.branch().is_blob_open(&old_data.blob_id) => {}
-                // Overwrite directories only if the new version is more up to date than the old
-                // version.
-                EntryData::Directory(old_data)
-                    if new_data.version_vector() > &old_data.version_vector => {}
-                EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
-                // Always overwrite tombstones but update the new version vector so it's more up to
-                // date than the tombstone.
-                EntryData::Tombstone(old_data) => {
-                    let mut vv = old_data.version_vector.clone();
-                    vv.bump(new_data.version_vector(), self.branch().id());
-                    *new_data.version_vector_mut() = vv;
-                }
-            }
-        }
-
-        self.pending_entry = Some(PendingEntry {
-            name,
-            data: new_data,
-            overwrite,
-        });
-
-        Ok(())
-    }
-
-    /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, name: &str, bump: &VersionVector) -> Result<()> {
-        let mut data = self.entries.get(name).ok_or(Error::EntryNotFound)?.clone();
-
-        data.version_vector_mut().bump(bump, self.branch().id());
-
-        self.pending_entry = Some(PendingEntry {
-            name: name.to_owned(),
-            data,
-            overwrite: OverwriteStrategy::Keep,
-        });
 
         Ok(())
     }
@@ -205,6 +130,72 @@ impl Inner {
     }
 }
 
+pub(super) fn insert(
+    content: &mut Content,
+    branch: &Branch,
+    name: String,
+    mut new_data: EntryData,
+) -> Result<()> {
+    match content.entry(name) {
+        Entry::Vacant(entry) => {
+            entry.insert(new_data);
+        }
+        Entry::Occupied(mut entry) => {
+            match entry.get() {
+                // Overwrite files only if the new version is more up to date than the old version
+                // and the old version is not currently open.
+                EntryData::File(old_data)
+                    if new_data.version_vector() > &old_data.version_vector
+                        && !branch.is_blob_open(&old_data.blob_id) => {}
+                // Overwrite directories only if the new version is more up to date than the old
+                // version.
+                EntryData::Directory(old_data)
+                    if new_data.version_vector() > &old_data.version_vector => {}
+                EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
+                // Always overwrite tombstones but update the new version vector so it's more up to
+                // date than the tombstone.
+                EntryData::Tombstone(old_data) => {
+                    let mut vv = old_data.version_vector.clone();
+                    vv.bump(new_data.version_vector(), branch.id());
+                    *new_data.version_vector_mut() = vv;
+                }
+            }
+
+            entry.insert(new_data);
+        }
+    }
+
+    Ok(())
+}
+
+/// Updates the version vector of entry at `name`.
+pub(super) fn bump(
+    content: &mut Content,
+    branch: &Branch,
+    name: &str,
+    bump: &VersionVector,
+) -> Result<()> {
+    content
+        .get_mut(name)
+        .ok_or(Error::EntryNotFound)?
+        .version_vector_mut()
+        .bump(bump, branch.id());
+
+    Ok(())
+}
+
+async fn load(
+    conn: &mut db::Connection,
+    branch: Branch,
+    locator: Locator,
+) -> Result<(Blob, Content)> {
+    let mut blob = Blob::open(conn, branch, locator, Shared::uninit()).await?;
+    let buffer = blob.read_to_end(conn).await?;
+    let content = content::deserialize(&buffer)?;
+
+    Ok((blob, content))
+}
+
 /// What to do with the existing entry when inserting a new entry in its place.
 pub(crate) enum OverwriteStrategy {
     // Remove it
@@ -212,10 +203,4 @@ pub(crate) enum OverwriteStrategy {
     // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
     // else)
     Keep,
-}
-
-struct PendingEntry {
-    name: String,
-    data: EntryData,
-    overwrite: OverwriteStrategy,
 }
