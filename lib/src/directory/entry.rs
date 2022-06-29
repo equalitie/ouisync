@@ -289,7 +289,11 @@ struct RefInner<'a> {
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext::new(self.parent_outer.clone(), self.name.into())
+        ParentContext::new(
+            self.parent_outer.clone(),
+            self.name.into(),
+            self.parent_inner.parent.clone(),
+        )
     }
 
     fn branch(&self) -> &'a Branch {

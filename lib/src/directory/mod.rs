@@ -307,7 +307,8 @@ impl Directory {
                 EntryData::File(file_data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(self.clone(), name.into());
+                    let parent_context =
+                        ParentContext::new(self.clone(), name.into(), inner.parent.clone());
 
                     let file = File::open(
                         conn,
@@ -345,7 +346,8 @@ impl Directory {
                 EntryData::Directory(data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(self.clone(), name.into());
+                    let parent_context =
+                        ParentContext::new(self.clone(), name.into(), inner.parent.clone());
 
                     let dir = Directory::open(
                         conn,
@@ -446,7 +448,8 @@ impl Writer<'_> {
     async fn create_file(&mut self, mut tx: db::Transaction<'_>, name: String) -> Result<File> {
         let blob_id = rand::random();
         let data = EntryData::file(blob_id, VersionVector::first(*self.branch().id()));
-        let parent = ParentContext::new(self.outer.clone(), name.clone());
+        let parent =
+            ParentContext::new(self.outer.clone(), name.clone(), self.inner.parent.clone());
         let shared = self.branch().fetch_blob_shared(blob_id);
 
         let mut file = File::create(
@@ -474,7 +477,8 @@ impl Writer<'_> {
     ) -> Result<Directory> {
         let blob_id = rand::random();
         let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
-        let parent = ParentContext::new(self.outer.clone(), name.clone());
+        let parent =
+            ParentContext::new(self.outer.clone(), name.clone(), self.inner.parent.clone());
 
         let dir = Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 

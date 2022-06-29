@@ -14,7 +14,7 @@ pub(crate) struct ParentContext {
 }
 
 impl ParentContext {
-    pub(super) fn new(directory: Directory, entry_name: String) -> Self {
+    pub(super) fn new(directory: Directory, entry_name: String, _parent: Option<Self>) -> Self {
         Self {
             directory,
             entry_name,
