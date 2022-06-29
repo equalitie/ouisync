@@ -16,12 +16,18 @@ use std::collections::{
 /// Version of the Directory serialization format.
 pub(crate) const VERSION: u64 = 1;
 
-#[derive(Clone)]
-pub(super) struct Content(ContentV1);
+#[derive(Clone, Debug)]
+pub(super) struct Content {
+    entries: ContentV1,
+    overwritten_blobs: Vec<BlobId>,
+}
 
 impl Content {
     pub fn empty() -> Self {
-        Self(BTreeMap::new())
+        Self {
+            entries: BTreeMap::new(),
+            overwritten_blobs: Vec::new(),
+        }
     }
 
     pub(super) fn deserialize(mut input: &[u8]) -> Result<Self> {
@@ -34,31 +40,30 @@ impl Content {
             _ => Err(Error::StorageVersionMismatch),
         };
 
-        Ok(Self(content?))
+        Ok(Self {
+            entries: content?,
+            overwritten_blobs: Vec::new(),
+        })
     }
 
     pub(super) fn serialize(&self) -> Vec<u8> {
         let mut output = Vec::new();
         output.extend_from_slice(vint64::encode(VERSION).as_ref());
-        bincode::serialize_into(&mut output, &self.0)
+        bincode::serialize_into(&mut output, &self.entries)
             .expect("failed to serialize directory content");
         output
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.entries.is_empty()
     }
 
     pub(super) fn iter(&self) -> btree_map::Iter<String, EntryData> {
-        self.0.iter()
-    }
-
-    pub(super) fn get(&self, name: &str) -> Option<&EntryData> {
-        self.0.get(name)
+        self.entries.iter()
     }
 
     pub(super) fn get_key_value(&self, name: &str) -> Option<(&String, &EntryData)> {
-        self.0.get_key_value(name)
+        self.entries.get_key_value(name)
     }
 
     pub(super) fn insert(
@@ -67,7 +72,7 @@ impl Content {
         name: String,
         mut new_data: EntryData,
     ) -> Result<()> {
-        match self.0.entry(name) {
+        match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
             }
@@ -77,11 +82,17 @@ impl Content {
                     // and the old version is not currently open.
                     EntryData::File(old_data)
                         if new_data.version_vector() > &old_data.version_vector
-                            && !branch.is_blob_open(&old_data.blob_id) => {}
+                            && !branch.is_blob_open(&old_data.blob_id) =>
+                    {
+                        self.overwritten_blobs.push(old_data.blob_id);
+                    }
                     // Overwrite directories only if the new version is more up to date than the old
                     // version.
                     EntryData::Directory(old_data)
-                        if new_data.version_vector() > &old_data.version_vector => {}
+                        if new_data.version_vector() > &old_data.version_vector =>
+                    {
+                        self.overwritten_blobs.push(old_data.blob_id);
+                    }
                     EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
                     // Always overwrite tombstones but update the new version vector so it's more up to
                     // date than the tombstone.
@@ -101,13 +112,21 @@ impl Content {
 
     /// Updates the version vector of entry at `name`.
     pub(super) fn bump(&mut self, branch: &Branch, name: &str, bump: &VersionVector) -> Result<()> {
-        self.0
+        self.entries
             .get_mut(name)
             .ok_or(Error::EntryNotFound)?
             .version_vector_mut()
             .bump(bump, branch.id());
 
         Ok(())
+    }
+
+    pub(super) fn overwritten_blobs(&self) -> &[BlobId] {
+        &self.overwritten_blobs
+    }
+
+    pub(super) fn clear_overwritten_blobs(&mut self) {
+        self.overwritten_blobs.clear()
     }
 }
 
@@ -118,21 +137,6 @@ impl<'a> IntoIterator for &'a Content {
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
-}
-
-pub(super) fn overwritten<'a>(
-    old: &'a Content,
-    new: &'a Content,
-) -> impl Iterator<Item = &'a BlobId> {
-    old.iter().filter_map(|(name, old_data)| {
-        let new_data = new.get(name)?;
-
-        if new_data.version_vector() > old_data.version_vector() {
-            old_data.blob_id()
-        } else {
-            None
-        }
-    })
 }
 
 type ContentV1 = BTreeMap<String, EntryData>;

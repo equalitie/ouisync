@@ -1,7 +1,4 @@
-use super::{
-    content::{self, Content},
-    parent_context::ParentContext,
-};
+use super::{content::Content, parent_context::ParentContext};
 use crate::{
     blob::{Blob, Shared},
     blob_id::BlobId,
@@ -68,7 +65,7 @@ impl Inner {
     ) -> Result<()> {
         // Remove overwritten blob
         if matches!(overwrite, OverwriteStrategy::Remove) {
-            for blob_id in content::overwritten(&self.entries, content) {
+            for blob_id in content.overwritten_blobs() {
                 match Blob::remove(tx, self.branch(), Locator::head(*blob_id)).await {
                     // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
                     // blob is already removed which can legitimately happen due to several
@@ -112,6 +109,7 @@ impl Inner {
 
         if !content.is_empty() {
             self.entries = content;
+            self.entries.clear_overwritten_blobs();
         }
 
         Ok(())

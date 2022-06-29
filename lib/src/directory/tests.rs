@@ -31,7 +31,7 @@ async fn create_and_list_entries() {
     let dir = branch.open_root(&mut conn).await.unwrap();
     let dir = dir.read().await;
 
-    let expected_names: BTreeSet<_> = vec!["dog.txt", "cat.txt"].into_iter().collect();
+    let expected_names: BTreeSet<_> = ["dog.txt", "cat.txt"].into_iter().collect();
     let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
     assert_eq!(actual_names, expected_names);
 
@@ -211,6 +211,7 @@ async fn move_file_within_branch() {
         .unwrap();
     file.write(&mut conn, content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
+    root_dir.refresh(&mut conn).await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -340,6 +341,10 @@ async fn move_non_empty_directory() {
     let mut file = dir.create_file(&mut conn, file_name.into()).await.unwrap();
     file.write(&mut conn, content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
+
+    dir.refresh(&mut conn).await.unwrap();
+    root_dir.refresh(&mut conn).await.unwrap();
+
     let file_locator = *file.locator();
 
     let dst_dir = root_dir
