@@ -90,7 +90,7 @@ async fn remove_file() {
     drop(file);
 
     // Reopen and remove the file
-    let parent_dir = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
         .remove_entry(&mut conn, name, branch.id(), file_vv)
         .await
@@ -424,7 +424,7 @@ async fn remove_subdirectory() {
     };
 
     // Reopen and remove the subdirectory
-    let parent_dir = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
         .remove_entry(&mut conn, name, branch.id(), dir_vv)
         .await
@@ -621,7 +621,7 @@ async fn remove_unique_remote_file() {
     let (pool, local_branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let root = local_branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root = local_branch.open_or_create_root(&mut conn).await.unwrap();
 
     let name = "foo.txt";
 

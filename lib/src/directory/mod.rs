@@ -152,7 +152,7 @@ impl Directory {
     /// not exist, or if it is the one being removed (branch_id == self.branch_id), then a
     /// tombstone is created.
     pub async fn remove_entry(
-        &self,
+        &mut self,
         conn: &mut db::Connection,
         name: &str,
         branch_id: &PublicKey,

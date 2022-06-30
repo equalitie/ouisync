@@ -126,7 +126,7 @@ impl JointDirectory {
         pattern: Pattern<'_>,
     ) -> Result<()> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let local = fork(conn, &mut self.versions, local_branch).await?;
+        let mut local = fork(conn, &mut self.versions, local_branch).await?;
 
         let entries: Vec<_> = pattern
             .apply(&self.read().await)?
