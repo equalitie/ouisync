@@ -146,7 +146,7 @@ async fn rename_file() {
 
     // Reopen and move the file
     let mut parent_dir_src = branch.open_root(&mut conn).await.unwrap();
-    let mut parent_dir_dst = parent_dir_src.clone().await;
+    let mut parent_dir_dst = parent_dir_src.clone();
 
     let entry_to_move = parent_dir_src
         .read()

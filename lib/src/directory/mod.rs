@@ -44,6 +44,7 @@ pub(crate) enum Mode {
     ReadWrite,
 }
 
+#[derive(Clone)]
 pub struct Directory {
     mode: Mode,
     inner: Inner,
@@ -91,14 +92,6 @@ impl Directory {
         self.inner = inner;
 
         Ok(())
-    }
-
-    // TODO: replace this with regular `Clone` impl when we get rid of the lock
-    pub(crate) async fn clone(&self) -> Directory {
-        Self {
-            mode: self.mode,
-            inner: self.inner.clone(),
-        }
     }
 
     /// Lock this directory for reading.
@@ -277,7 +270,7 @@ impl Directory {
         let inner = self.read().await;
 
         if local_branch.id() == inner.branch().id() {
-            return Ok(self.clone().await);
+            return Ok(self.clone());
         }
 
         let parent = if let Some(parent) = &inner.inner.parent {
