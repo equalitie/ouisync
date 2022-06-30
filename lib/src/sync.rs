@@ -197,6 +197,10 @@ impl<T> RwLock<T> {
     pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
         DeadlockGuard::wrap(self.inner.write(), self.deadlock_tracker.clone())
     }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.inner.get_mut()
+    }
 }
 
 pub type RwLockReadGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockReadGuard<'a, T>>;
