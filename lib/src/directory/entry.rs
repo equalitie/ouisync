@@ -1,6 +1,5 @@
 use super::{
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
-    inner::Inner,
     parent_context::ParentContext,
     Directory, Mode,
 };
@@ -25,17 +24,8 @@ pub enum EntryRef<'a> {
 }
 
 impl<'a> EntryRef<'a> {
-    pub(super) fn new(
-        parent_outer: &'a Directory,
-        parent_inner: &'a Inner,
-        name: &'a str,
-        entry_data: &'a EntryData,
-    ) -> Self {
-        let inner = RefInner {
-            parent_outer,
-            parent_inner,
-            name,
-        };
+    pub(super) fn new(parent: &'a Directory, name: &'a str, entry_data: &'a EntryData) -> Self {
+        let inner = RefInner { parent, name };
 
         match entry_data {
             EntryData::File(entry_data) => Self::File(FileRef { entry_data, inner }),
@@ -93,7 +83,7 @@ impl<'a> EntryRef<'a> {
     }
 
     pub fn parent(&self) -> &Directory {
-        self.inner().parent_outer
+        self.inner().parent
     }
 
     pub(crate) fn clone_data(&self) -> EntryData {
@@ -146,7 +136,7 @@ impl<'a> FileRef<'a> {
     pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
         let shared = self.branch().fetch_blob_shared(*self.blob_id());
         let parent_context = self.inner.parent_context();
-        let branch = self.inner.parent_inner.blob.branch().clone();
+        let branch = self.branch().clone();
         let locator = self.locator();
 
         File::open(conn, branch, locator, parent_context, shared).await
@@ -157,7 +147,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub fn parent(&self) -> &Directory {
-        self.inner.parent_outer
+        self.inner.parent
     }
 
     pub(crate) fn data(&self) -> &EntryFileData {
@@ -199,7 +189,7 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
-        match self.inner.parent_outer.mode {
+        match self.inner.parent.mode {
             Mode::ReadWrite => self.open_read_write(conn).await,
             Mode::ReadOnly => self.open_read_only(conn).await,
         }
@@ -282,33 +272,32 @@ impl fmt::Debug for TombstoneRef<'_> {
 
 #[derive(Copy, Clone)]
 struct RefInner<'a> {
-    parent_outer: &'a Directory,
-    parent_inner: &'a Inner,
+    parent: &'a Directory,
     name: &'a str,
 }
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(
-            *self.parent_inner.blob_id(),
+            *self.parent.locator().blob_id(),
             self.name.into(),
-            self.parent_inner.parent.clone(),
+            self.parent.parent.clone(),
         )
     }
 
     fn branch(&self) -> &'a Branch {
-        self.parent_inner.blob.branch()
+        self.parent.blob.branch()
     }
 
     pub fn branch_id(&self) -> &'a PublicKey {
-        self.parent_inner.blob.branch().id()
+        self.parent.blob.branch().id()
     }
 }
 
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.parent_inner.blob.branch().id() == other.parent_inner.blob.branch().id()
-            && self.parent_inner.blob.locator() == other.parent_inner.blob.locator()
+        self.parent.blob.branch().id() == other.parent.blob.branch().id()
+            && self.parent.blob.locator() == other.parent.blob.locator()
             && self.name == other.name
     }
 }

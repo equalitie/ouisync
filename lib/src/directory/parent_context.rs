@@ -1,4 +1,4 @@
-use super::{inner::OverwriteStrategy, Mode};
+use super::{Mode, OverwriteStrategy};
 use crate::{
     blob::Blob, blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
     locator::Locator, version_vector::VersionVector,
@@ -34,13 +34,12 @@ impl ParentContext {
         merge: VersionVector,
     ) -> Result<()> {
         let mut directory = self.directory(&mut tx, branch).await?;
-        let mut content = directory.inner.entries.clone();
-        content.bump(directory.inner.branch(), &self.entry_name, &merge)?;
+        let mut content = directory.entries.clone();
+        content.bump(directory.branch(), &self.entry_name, &merge)?;
         directory
-            .inner
             .save(&mut tx, &content, OverwriteStrategy::Keep)
             .await?;
-        directory.inner.commit(tx, content, merge).await?;
+        directory.commit(tx, content, merge).await?;
 
         Ok(())
     }
@@ -65,24 +64,16 @@ impl ParentContext {
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
         let mut directory = directory.fork(&mut tx, &dst_branch).await?;
-        let mut content = directory.inner.entries.clone();
-        content.insert(
-            directory.inner.branch(),
-            self.entry_name.clone(),
-            entry_data,
-        )?;
+        let mut content = directory.entries.clone();
+        content.insert(directory.branch(), self.entry_name.clone(), entry_data)?;
         directory
-            .inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
         let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
-        directory
-            .inner
-            .commit(tx, content, VersionVector::new())
-            .await?;
+        directory.commit(tx, content, VersionVector::new()).await?;
 
-        let directory_id = *directory.inner.blob_id();
-        let parent = directory.inner.parent.clone();
+        let directory_id = *directory.locator().blob_id();
+        let parent = directory.parent.clone();
 
         let new_context = Self {
             directory_id,

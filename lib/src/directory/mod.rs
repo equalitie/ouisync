@@ -2,7 +2,6 @@ mod content;
 mod entry;
 mod entry_data;
 mod entry_type;
-mod inner;
 mod parent_context;
 #[cfg(test)]
 mod tests;
@@ -11,13 +10,11 @@ pub use self::{
     entry::{DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
 };
-pub(crate) use self::{
-    entry_data::EntryData, inner::OverwriteStrategy, parent_context::ParentContext,
-};
+pub(crate) use self::{entry_data::EntryData, parent_context::ParentContext};
 
-use self::{content::Content, inner::Inner};
+use self::content::Content;
 use crate::{
-    blob::Shared,
+    blob::{Blob, Shared},
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -44,10 +41,21 @@ pub(crate) enum Mode {
     ReadWrite,
 }
 
+/// What to do with the existing entry when inserting a new entry in its place.
+pub(crate) enum OverwriteStrategy {
+    // Remove it
+    Remove,
+    // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
+    // else)
+    Keep,
+}
+
 #[derive(Clone)]
 pub struct Directory {
     mode: Mode,
-    inner: Inner,
+    blob: Blob,
+    parent: Option<ParentContext>,
+    entries: Content,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -81,34 +89,41 @@ impl Directory {
     /// Reloads this directory from the db.
     #[cfg(test)]
     pub(crate) async fn refresh(&mut self, conn: &mut db::Connection) -> Result<()> {
-        let inner = Inner::open(
+        let Self {
+            mode,
+            blob,
+            parent,
+            entries,
+        } = Self::open(
             conn,
-            self.inner.branch().clone(),
-            *self.inner.blob.locator(),
-            self.inner.parent.as_ref().cloned(),
+            self.branch().clone(),
+            *self.locator(),
+            self.parent.as_ref().cloned(),
+            self.mode,
         )
         .await?;
 
-        self.inner = inner;
+        self.mode = mode;
+        self.blob = blob;
+        self.parent = parent;
+        self.entries = entries;
 
         Ok(())
     }
 
     /// Lookup an entry of this directory by name.
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
-        self.inner
-            .entries()
+        self.entries
             .get_key_value(name)
-            .map(|(name, data)| EntryRef::new(self, &self.inner, name, data))
+            .map(|(name, data)| EntryRef::new(self, name, data))
             .ok_or(Error::EntryNotFound)
     }
 
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner
-            .entries()
+        self.entries
             .iter()
-            .map(move |(name, data)| EntryRef::new(self, &self.inner, name, data))
+            .map(move |(name, data)| EntryRef::new(self, name, data))
     }
 
     /// Creates a new file inside this directory.
@@ -116,28 +131,24 @@ impl Directory {
         let mut tx = conn.begin().await?;
 
         let blob_id = rand::random();
-        let data = EntryData::file(blob_id, VersionVector::first(*self.inner.branch().id()));
-        let parent = ParentContext::new(
-            *self.inner.blob_id(),
-            name.clone(),
-            self.inner.parent.clone(),
-        );
-        let shared = self.inner.branch().fetch_blob_shared(blob_id);
+        let data = EntryData::file(blob_id, VersionVector::first(*self.branch().id()));
+        let parent =
+            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
+        let shared = self.branch().fetch_blob_shared(blob_id);
 
         let mut file = File::create(
-            self.inner.branch().clone(),
+            self.branch().clone(),
             Locator::head(blob_id),
             parent,
             shared,
         );
 
-        let mut content = self.inner.load(&mut tx).await?;
-        content.insert(self.inner.branch(), name, data)?;
+        let mut content = self.load(&mut tx).await?;
+        content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
-        self.inner
-            .save(&mut tx, &content, OverwriteStrategy::Remove)
+        self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.inner.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, VersionVector::new()).await?;
 
         Ok(file)
     }
@@ -151,28 +162,20 @@ impl Directory {
         let mut tx = conn.begin().await?;
 
         let blob_id = rand::random();
-        let data = EntryData::directory(blob_id, VersionVector::first(*self.inner.branch().id()));
-        let parent = ParentContext::new(
-            *self.inner.blob_id(),
-            name.clone(),
-            self.inner.parent.clone(),
-        );
+        let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
+        let parent =
+            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
 
-        let mut dir = Directory::create(
-            self.inner.branch().clone(),
-            Locator::head(blob_id),
-            Some(parent),
-        );
+        let mut dir =
+            Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
-        let mut content = self.inner.load(&mut tx).await?;
-        content.insert(self.inner.branch(), name, data)?;
-        dir.inner
-            .save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
+        let mut content = self.load(&mut tx).await?;
+        content.insert(self.branch(), name, data)?;
+        dir.save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
             .await?;
-        self.inner
-            .save(&mut tx, &content, OverwriteStrategy::Remove)
+        self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.inner.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, VersionVector::new()).await?;
 
         Ok(dir)
     }
@@ -254,7 +257,7 @@ impl Directory {
 
         {
             let tx = conn.begin().await?;
-            let branch_id = *self.inner.branch().id();
+            let branch_id = *self.branch().id();
             self.remove_entry_with_overwrite_strategy(
                 tx,
                 src_name,
@@ -276,12 +279,12 @@ impl Directory {
         conn: &mut db::Connection,
         local_branch: &Branch,
     ) -> Result<Directory> {
-        if local_branch.id() == self.inner.branch().id() {
+        if local_branch.id() == self.branch().id() {
             return Ok(self.clone());
         }
 
-        let parent = if let Some(parent) = &self.inner.parent {
-            let dir = parent.directory(conn, self.inner.branch().clone()).await?;
+        let parent = if let Some(parent) = &self.parent {
+            let dir = parent.directory(conn, self.branch().clone()).await?;
             let entry_name = parent.entry_name().to_owned();
 
             Some((dir, entry_name))
@@ -315,14 +318,12 @@ impl Directory {
         vv: VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
-        self.inner.commit(tx, Content::empty(), vv).await
+        self.commit(tx, Content::empty(), vv).await
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
-        if let Some(parent) = &self.inner.parent {
-            Ok(Some(
-                parent.directory(conn, self.inner.branch().clone()).await?,
-            ))
+        if let Some(parent) = &self.parent {
+            Ok(Some(parent.directory(conn, self.branch().clone()).await?))
         } else {
             Ok(None)
         }
@@ -335,22 +336,30 @@ impl Directory {
         parent: Option<ParentContext>,
         mode: Mode,
     ) -> Result<Self> {
+        let (blob, entries) = load(conn, owner_branch, locator).await?;
+
         Ok(Self {
             mode,
-            inner: Inner::open(conn, owner_branch, locator, parent).await?,
+            blob,
+            parent,
+            entries,
         })
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
+        let blob = Blob::create(owner_branch, locator, Shared::uninit());
+
         Directory {
             mode: Mode::ReadWrite,
-            inner: Inner::create(owner_branch, locator, parent),
+            blob,
+            parent,
+            entries: Content::empty(),
         }
     }
 
     #[async_recursion]
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
-        for (name, entry_data) in self.inner.entries() {
+        for (name, entry_data) in &self.entries {
             print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
             match entry_data {
@@ -358,14 +367,14 @@ impl Directory {
                     let print = print.indent();
 
                     let parent_context = ParentContext::new(
-                        *self.inner.blob_id(),
+                        *self.locator().blob_id(),
                         name.into(),
-                        self.inner.parent.clone(),
+                        self.parent.clone(),
                     );
 
                     let file = File::open(
                         conn,
-                        self.inner.blob.branch().clone(),
+                        self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
                         Shared::uninit(),
@@ -400,14 +409,14 @@ impl Directory {
                     let print = print.indent();
 
                     let parent_context = ParentContext::new(
-                        *self.inner.blob_id(),
+                        *self.locator().blob_id(),
                         name.into(),
-                        self.inner.parent.clone(),
+                        self.parent.clone(),
                     );
 
                     let dir = Directory::open(
                         conn,
-                        self.inner.blob.branch().clone(),
+                        self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
                         Mode::ReadOnly,
@@ -430,23 +439,22 @@ impl Directory {
 
     /// Branch of this directory
     pub fn branch(&self) -> &Branch {
-        self.inner.blob.branch()
+        self.blob.branch()
     }
 
     /// Locator of this directory
-    #[cfg(test)]
     pub(crate) fn locator(&self) -> &Locator {
-        self.inner.blob.locator()
+        self.blob.locator()
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
     /// itself.
     pub async fn len(&self) -> u64 {
-        self.inner.blob.len().await
+        self.blob.len().await
     }
 
     pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        if let Some(parent) = &self.inner.parent {
+        if let Some(parent) = &self.parent {
             parent
                 .entry_version_vector(conn, self.branch().clone())
                 .await
@@ -479,8 +487,8 @@ impl Directory {
             }
         }
 
-        let new_entry = if branch_id == self.inner.branch().id() {
-            EntryData::tombstone(vv.incremented(*self.inner.branch().id()))
+        let new_entry = if branch_id == self.branch().id() {
+            EntryData::tombstone(vv.incremented(*self.branch().id()))
         } else {
             match self.lookup(name) {
                 Ok(old_entry) => {
@@ -489,7 +497,7 @@ impl Directory {
                     new_entry
                 }
                 Err(Error::EntryNotFound) => {
-                    EntryData::tombstone(vv.incremented(*self.inner.branch().id()))
+                    EntryData::tombstone(vv.incremented(*self.branch().id()))
                 }
                 Err(e) => return Err(e),
             }
@@ -507,9 +515,89 @@ impl Directory {
         entry: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let mut content = self.inner.load(&mut tx).await?;
-        content.insert(self.inner.branch(), name, entry)?;
-        self.inner.save(&mut tx, &content, overwrite).await?;
-        self.inner.commit(tx, content, VersionVector::new()).await
+        let mut content = self.load(&mut tx).await?;
+        content.insert(self.branch(), name, entry)?;
+        self.save(&mut tx, &content, overwrite).await?;
+        self.commit(tx, content, VersionVector::new()).await
     }
+
+    async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
+        if self.blob.is_dirty() {
+            Ok(self.entries.clone())
+        } else {
+            let (blob, content) = load(conn, self.branch().clone(), *self.locator()).await?;
+            self.blob = blob;
+            Ok(content)
+        }
+    }
+
+    async fn save(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        content: &Content,
+        overwrite: OverwriteStrategy,
+    ) -> Result<()> {
+        // Remove overwritten blob
+        if matches!(overwrite, OverwriteStrategy::Remove) {
+            for blob_id in content.overwritten_blobs() {
+                match Blob::remove(tx, self.branch(), Locator::head(*blob_id)).await {
+                    // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
+                    // blob is already removed which can legitimately happen due to several
+                    // reasons so we don't treat it as an error.
+                    Ok(()) | Err(Error::EntryNotFound | Error::BlockNotFound(_)) => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        // Save the directory content into the store
+        let buffer = content.serialize();
+        self.blob.truncate(tx, 0).await?;
+        self.blob.write(tx, &buffer).await?;
+        self.blob.flush(tx).await?;
+
+        Ok(())
+    }
+
+    /// Atomically commits any pending changes in this directory and updates the version vectors of
+    /// it and all its ancestors.
+    #[async_recursion]
+    async fn commit<'a>(
+        &'a mut self,
+        tx: db::Transaction<'a>,
+        content: Content,
+        bump: VersionVector,
+    ) -> Result<()> {
+        // Update the version vector of this directory and all it's ancestors
+        if let Some(ctx) = self.parent.as_mut() {
+            ctx.commit(tx, self.blob.branch().clone(), bump).await?;
+        } else {
+            let write_keys = self
+                .branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?;
+
+            self.branch().data().bump(tx, &bump, write_keys).await?;
+        }
+
+        if !content.is_empty() {
+            self.entries = content;
+            self.entries.clear_overwritten_blobs();
+        }
+
+        Ok(())
+    }
+}
+
+async fn load(
+    conn: &mut db::Connection,
+    branch: Branch,
+    locator: Locator,
+) -> Result<(Blob, Content)> {
+    let mut blob = Blob::open(conn, branch, locator, Shared::uninit()).await?;
+    let buffer = blob.read_to_end(conn).await?;
+    let content = Content::deserialize(&buffer)?;
+
+    Ok((blob, content))
 }
