@@ -172,7 +172,7 @@ mod tests {
         let (pool, branch) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
-        let root = branch.open_or_create_root(&mut conn).await.unwrap();
+        let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
 
         branch
             .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))

@@ -99,7 +99,7 @@ async fn merge() {
 
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
-    let local_root = {
+    let mut local_root = {
         let mut conn = repo.db().acquire().await.unwrap();
         local_branch.open_or_create_root(&mut conn).await.unwrap()
     };

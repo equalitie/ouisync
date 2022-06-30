@@ -257,7 +257,7 @@ async fn conflict_open_file() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     let file0 = root0
         .create_file(&mut conn, "file.txt".into())
@@ -338,7 +338,7 @@ async fn merge_locally_non_existing_file() {
     let content = b"cat";
 
     // Create local root dir
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
     // Create remote root dir
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
@@ -390,7 +390,7 @@ async fn merge_locally_older_file() {
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file in the remote root
@@ -459,7 +459,7 @@ async fn merge_locally_newer_file() {
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(
@@ -516,7 +516,7 @@ async fn attempt_to_merge_concurrent_file() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
@@ -719,7 +719,7 @@ async fn merge_sequential_modifications() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.

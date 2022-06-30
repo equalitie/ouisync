@@ -585,7 +585,7 @@ async fn modify_directory_concurrently() {
         .create_directory(&mut conn, "dir".to_owned())
         .await
         .unwrap();
-    let dir1 = root
+    let mut dir1 = root
         .read()
         .await
         .lookup("dir")

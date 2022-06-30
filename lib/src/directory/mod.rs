@@ -25,7 +25,6 @@ use crate::{
     error::{Error, Result},
     file::File,
     locator::Locator,
-    sync::{RwLock, RwLockReadGuard},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -50,7 +49,7 @@ pub struct Directory {
     // require locking.
     branch_id: PublicKey,
     mode: Mode,
-    inner: RwLock<Inner>,
+    inner: Inner,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -83,19 +82,16 @@ impl Directory {
 
     /// Reloads this directory from the db.
     #[cfg(test)]
-    pub(crate) async fn refresh(&self, conn: &mut db::Connection) -> Result<()> {
-        let inner = {
-            let reader = self.read().await;
-            Inner::open(
-                conn,
-                reader.branch().clone(),
-                *reader.locator(),
-                reader.inner.parent.as_ref().cloned(),
-            )
-            .await?
-        };
+    pub(crate) async fn refresh(&mut self, conn: &mut db::Connection) -> Result<()> {
+        let inner = Inner::open(
+            conn,
+            self.inner.branch().clone(),
+            *self.inner.blob.locator(),
+            self.inner.parent.as_ref().cloned(),
+        )
+        .await?;
 
-        *self.inner.write().await = inner;
+        self.inner = inner;
 
         Ok(())
     }
@@ -105,7 +101,7 @@ impl Directory {
         Self {
             branch_id: self.branch_id,
             mode: self.mode,
-            inner: RwLock::new(self.inner.read().await.clone()),
+            inner: self.inner.clone(),
         }
     }
 
@@ -113,34 +109,37 @@ impl Directory {
     pub async fn read(&self) -> Reader<'_> {
         Reader {
             outer: self,
-            inner: self.inner.read().await,
+            inner: &self.inner,
         }
     }
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
         let mut tx = conn.begin().await?;
-        let mut inner = self.inner.write().await;
 
         let blob_id = rand::random();
-        let data = EntryData::file(blob_id, VersionVector::first(*inner.branch().id()));
-        let parent = ParentContext::new(*inner.blob_id(), name.clone(), inner.parent.clone());
-        let shared = inner.branch().fetch_blob_shared(blob_id);
+        let data = EntryData::file(blob_id, VersionVector::first(*self.inner.branch().id()));
+        let parent = ParentContext::new(
+            *self.inner.blob_id(),
+            name.clone(),
+            self.inner.parent.clone(),
+        );
+        let shared = self.inner.branch().fetch_blob_shared(blob_id);
 
         let mut file = File::create(
-            inner.branch().clone(),
+            self.inner.branch().clone(),
             Locator::head(blob_id),
             parent,
             shared,
         );
 
-        let mut content = inner.load(&mut tx).await?;
-        content.insert(inner.branch(), name, data)?;
+        let mut content = self.inner.load(&mut tx).await?;
+        content.insert(self.inner.branch(), name, data)?;
         file.save(&mut tx).await?;
-        inner
+        self.inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        inner.commit(tx, content, VersionVector::new()).await?;
+        self.inner.commit(tx, content, VersionVector::new()).await?;
 
         Ok(file)
     }
@@ -152,25 +151,30 @@ impl Directory {
         name: String,
     ) -> Result<Self> {
         let mut tx = conn.begin().await?;
-        let mut inner = self.inner.write().await;
 
         let blob_id = rand::random();
-        let data = EntryData::directory(blob_id, VersionVector::first(*inner.branch().id()));
-        let parent = ParentContext::new(*inner.blob_id(), name.clone(), inner.parent.clone());
+        let data = EntryData::directory(blob_id, VersionVector::first(*self.inner.branch().id()));
+        let parent = ParentContext::new(
+            *self.inner.blob_id(),
+            name.clone(),
+            self.inner.parent.clone(),
+        );
 
-        let dir = Directory::create(inner.branch().clone(), Locator::head(blob_id), Some(parent));
+        let mut dir = Directory::create(
+            self.inner.branch().clone(),
+            Locator::head(blob_id),
+            Some(parent),
+        );
 
-        let mut content = inner.load(&mut tx).await?;
-        content.insert(inner.branch(), name, data)?;
+        let mut content = self.inner.load(&mut tx).await?;
+        content.insert(self.inner.branch(), name, data)?;
         dir.inner
-            .write()
-            .await
             .save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
             .await?;
-        inner
+        self.inner
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        inner.commit(tx, content, VersionVector::new()).await?;
+        self.inner.commit(tx, content, VersionVector::new()).await?;
 
         Ok(dir)
     }
@@ -320,8 +324,7 @@ impl Directory {
         vv: VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
-        let mut inner = self.inner.write().await;
-        inner.commit(tx, Content::empty(), vv).await
+        self.inner.commit(tx, Content::empty(), vv).await
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
@@ -344,7 +347,7 @@ impl Directory {
         Ok(Self {
             branch_id: *owner_branch.id(),
             mode,
-            inner: RwLock::new(Inner::open(conn, owner_branch, locator, parent).await?),
+            inner: Inner::open(conn, owner_branch, locator, parent).await?,
         })
     }
 
@@ -352,27 +355,28 @@ impl Directory {
         Directory {
             branch_id: *owner_branch.id(),
             mode: Mode::ReadWrite,
-            inner: RwLock::new(Inner::create(owner_branch, locator, parent)),
+            inner: Inner::create(owner_branch, locator, parent),
         }
     }
 
     #[async_recursion]
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
-        let inner = self.inner.read().await;
-
-        for (name, entry_data) in inner.entries() {
+        for (name, entry_data) in self.inner.entries() {
             print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
             match entry_data {
                 EntryData::File(file_data) => {
                     let print = print.indent();
 
-                    let parent_context =
-                        ParentContext::new(*inner.blob_id(), name.into(), inner.parent.clone());
+                    let parent_context = ParentContext::new(
+                        *self.inner.blob_id(),
+                        name.into(),
+                        self.inner.parent.clone(),
+                    );
 
                     let file = File::open(
                         conn,
-                        inner.blob.branch().clone(),
+                        self.inner.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
                         Shared::uninit(),
@@ -406,12 +410,15 @@ impl Directory {
                 EntryData::Directory(data) => {
                     let print = print.indent();
 
-                    let parent_context =
-                        ParentContext::new(*inner.blob_id(), name.into(), inner.parent.clone());
+                    let parent_context = ParentContext::new(
+                        *self.inner.blob_id(),
+                        name.into(),
+                        self.inner.parent.clone(),
+                    );
 
                     let dir = Directory::open(
                         conn,
-                        inner.blob.branch().clone(),
+                        self.inner.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
                         Mode::ReadOnly,
@@ -504,18 +511,17 @@ impl Directory {
         entry: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let mut inner = self.inner.write().await;
-        let mut content = inner.load(&mut tx).await?;
-        content.insert(inner.branch(), name, entry)?;
-        inner.save(&mut tx, &content, overwrite).await?;
-        inner.commit(tx, content, VersionVector::new()).await
+        let mut content = self.inner.load(&mut tx).await?;
+        content.insert(self.inner.branch(), name, entry)?;
+        self.inner.save(&mut tx, &content, overwrite).await?;
+        self.inner.commit(tx, content, VersionVector::new()).await
     }
 }
 
 /// View of a `Directory` for performing read-only queries.
 pub struct Reader<'a> {
     outer: &'a Directory,
-    inner: RwLockReadGuard<'a, Inner>,
+    inner: &'a Inner,
 }
 
 impl Reader<'_> {
