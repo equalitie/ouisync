@@ -45,9 +45,6 @@ pub(crate) enum Mode {
 }
 
 pub struct Directory {
-    // `branch_id` is equivalent `inner.read().await.branch().id()`, but access to it doesn't
-    // require locking.
-    branch_id: PublicKey,
     mode: Mode,
     inner: Inner,
 }
@@ -99,7 +96,6 @@ impl Directory {
     // TODO: replace this with regular `Clone` impl when we get rid of the lock
     pub(crate) async fn clone(&self) -> Directory {
         Self {
-            branch_id: self.branch_id,
             mode: self.mode,
             inner: self.inner.clone(),
         }
@@ -256,7 +252,7 @@ impl Directory {
 
         {
             let tx = conn.begin().await?;
-            let branch_id = self.branch_id;
+            let branch_id = *self.inner.branch().id();
             self.remove_entry_with_overwrite_strategy(
                 tx,
                 src_name,
@@ -345,7 +341,6 @@ impl Directory {
         mode: Mode,
     ) -> Result<Self> {
         Ok(Self {
-            branch_id: *owner_branch.id(),
             mode,
             inner: Inner::open(conn, owner_branch, locator, parent).await?,
         })
@@ -353,7 +348,6 @@ impl Directory {
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         Directory {
-            branch_id: *owner_branch.id(),
             mode: Mode::ReadWrite,
             inner: Inner::create(owner_branch, locator, parent),
         }
@@ -440,7 +434,7 @@ impl Directory {
     }
 
     pub fn branch_id(&self) -> &PublicKey {
-        &self.branch_id
+        self.inner.branch().id()
     }
 
     pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
