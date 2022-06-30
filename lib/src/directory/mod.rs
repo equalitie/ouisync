@@ -190,11 +190,11 @@ impl Directory {
     /// TODO: Improve cancel-safety either by making the whole operation atomic or by implementing
     /// proper hard links.
     pub(crate) async fn move_entry(
-        &self,
+        &mut self,
         conn: &mut db::Connection,
         src_name: &str,
         src_data: EntryData,
-        dst_dir: &Directory,
+        dst_dir: &mut Directory,
         dst_name: &str,
         dst_vv: VersionVector,
     ) -> Result<()> {

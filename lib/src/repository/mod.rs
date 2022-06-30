@@ -365,7 +365,7 @@ impl Repository {
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
         let src_joint_dir_r = src_joint_dir.read().await;
 
-        let (src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
+        let (mut src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
@@ -427,11 +427,18 @@ impl Repository {
         drop(dst_joint_reader);
         drop(dst_joint_dir);
 
-        let dst_dir = local_branch
+        let mut dst_dir = local_branch
             .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
             .await?;
         src_dir
-            .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
+            .move_entry(
+                &mut conn,
+                &src_name,
+                src_entry,
+                &mut dst_dir,
+                dst_name,
+                dst_vv,
+            )
             .await
     }
 

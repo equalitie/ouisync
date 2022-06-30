@@ -145,21 +145,22 @@ async fn rename_file() {
     drop(file);
 
     // Reopen and move the file
-    let parent_dir = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir_src = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir_dst = parent_dir_src.clone().await;
 
-    let entry_to_move = parent_dir
+    let entry_to_move = parent_dir_src
         .read()
         .await
         .lookup(src_name)
         .unwrap()
         .clone_data();
 
-    parent_dir
+    parent_dir_src
         .move_entry(
             &mut conn,
             src_name,
             entry_to_move,
-            &parent_dir,
+            &mut parent_dir_dst,
             dst_name,
             VersionVector::first(*branch.id()),
         )
@@ -200,7 +201,7 @@ async fn move_file_within_branch() {
 
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
-    let aux_dir = root_dir
+    let mut aux_dir = root_dir
         .create_directory(&mut conn, "aux".into())
         .await
         .unwrap();
@@ -233,7 +234,7 @@ async fn move_file_within_branch() {
             &mut conn,
             file_name,
             entry_to_move,
-            &aux_dir,
+            &mut aux_dir,
             file_name,
             VersionVector::first(*branch.id()),
         )
@@ -290,7 +291,7 @@ async fn move_file_within_branch() {
             &mut conn,
             file_name,
             entry_to_move,
-            &root_dir,
+            &mut root_dir,
             file_name,
             tombstone_vv.incremented(*branch.id()),
         )
@@ -347,7 +348,7 @@ async fn move_non_empty_directory() {
 
     let file_locator = *file.locator();
 
-    let dst_dir = root_dir
+    let mut dst_dir = root_dir
         .create_directory(&mut conn, dst_dir_name.into())
         .await
         .unwrap();
@@ -359,7 +360,7 @@ async fn move_non_empty_directory() {
             &mut conn,
             dir_name,
             entry_to_move,
-            &dst_dir,
+            &mut dst_dir,
             dir_name,
             VersionVector::first(*branch.id()),
         )
