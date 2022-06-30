@@ -1,6 +1,7 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
     protocol::RuntimeId,
+    seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
     scoped_task::ScopedJoinHandle,
@@ -32,6 +33,7 @@ pub(super) struct LocalDiscovery {
     id: RuntimeId,
     listener_port: PeerPort,
     socket_provider: Arc<SocketProvider>,
+    seen_peers: Arc<SeenPeers>,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
     _beacon_handle: ScopedJoinHandle<()>,
@@ -52,10 +54,13 @@ impl LocalDiscovery {
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
         let beacon_responses_received = monitor.make_value("beacon_responses_received".into(), 0);
 
+        let seen_peers = Arc::new(SeenPeers::new());
+
         let beacon_handle = task::spawn(run_beacon(
             socket_provider.clone(),
             id,
             listener_port,
+            seen_peers.clone(),
             monitor,
         ));
         let beacon_handle = ScopedJoinHandle(beacon_handle);
@@ -64,13 +69,27 @@ impl LocalDiscovery {
             id,
             listener_port,
             socket_provider,
+            seen_peers,
             beacon_requests_received,
             beacon_responses_received,
             _beacon_handle: beacon_handle,
         })
     }
 
-    pub async fn recv(&self) -> Option<PeerAddr> {
+    pub async fn recv(&self) -> Option<SeenPeer> {
+        loop {
+            let addr = match self.try_recv().await {
+                Some(addr) => addr,
+                None => return None,
+            };
+
+            if let Some(peer) = self.seen_peers.insert(addr) {
+                return Some(peer);
+            }
+        }
+    }
+
+    async fn try_recv(&self) -> Option<PeerAddr> {
         let mut recv_buffer = [0; 64];
 
         let mut recv_error_reported = false;
@@ -177,6 +196,7 @@ async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: RuntimeId,
     listener_port: PeerPort,
+    seen_peers: Arc<SeenPeers>,
     monitor: Arc<StateMonitor>,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
@@ -186,6 +206,8 @@ async fn run_beacon(
 
     loop {
         let socket = socket_provider.provide().await;
+
+        seen_peers.start_new_round();
 
         let msg = Message::ImHereYouAll {
             id,
