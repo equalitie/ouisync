@@ -431,7 +431,6 @@ impl Inner {
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
         let mut conn = self.repository.db().acquire().await?;
-        let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
@@ -443,8 +442,6 @@ impl Inner {
                 entry
                     .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
-                    .read()
-                    .await
                     .len()
                     .await,
                 Representation::Directory,
@@ -599,7 +596,6 @@ impl Inner {
 
         let parent = self.inodes.get(inode).parent();
         let dir = self.entries.get_directory(handle)?;
-        let dir = dir.read().await;
 
         // Handle . and ..
         if offset <= 0 {

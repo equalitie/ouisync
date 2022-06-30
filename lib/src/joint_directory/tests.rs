@@ -20,8 +20,6 @@ async fn no_conflict() {
     create_file(&mut conn, &mut root1, "file1.txt", &[], &branches[1]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let root = root.read().await;
-
     let entries: Vec<_> = root.entries().collect();
 
     assert_eq!(entries.len(), 2);
@@ -54,7 +52,6 @@ async fn conflict_independent_files() {
     create_file(&mut conn, &mut root1, "file.txt", &[], &branches[1]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let root = root.read().await;
 
     let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
     assert_eq!(files.len(), 2);
@@ -118,7 +115,6 @@ async fn conflict_forked_files() {
     let root1 = branches[1].open_root(&mut conn).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
-    let root = root.read().await;
 
     let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
 
@@ -153,7 +149,6 @@ async fn conflict_directories() {
         .unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let root = root.read().await;
 
     let directories: Vec<_> = root
         .entries()
@@ -179,7 +174,6 @@ async fn conflict_file_and_directory() {
         .unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let root = root.read().await;
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
@@ -224,7 +218,6 @@ async fn conflict_identical_versions() {
 
     // Create joint directory using branch 1 as the local branch.
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
-    let root = root.read().await;
 
     // The file appears among the entries only once...
     assert_eq!(root.entries().count(), 1);
@@ -284,7 +277,6 @@ async fn conflict_open_file() {
         .unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let root = root.read().await;
 
     // Despite file1 being newer than file0, both versions are present because file0 is open and
     // might have unflushed modifications.
@@ -319,7 +311,6 @@ async fn cd_into_concurrent_directory() {
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
     let dir = root.cd(&mut conn, "pics").await.unwrap();
-    let dir = dir.read().await;
 
     let entries: Vec<_> = dir.entries().collect();
     assert_eq!(entries.len(), 2);
@@ -853,11 +844,9 @@ async fn remove_non_empty_subdirectory() {
         .await
         .unwrap();
 
-    let joint_reader = root.read().await;
-
-    assert_matches!(joint_reader.lookup("dir0").next(), None);
-    assert!(joint_reader.lookup("dir1").next().is_some());
-    assert!(joint_reader.lookup("dir2").next().is_some());
+    assert_matches!(root.lookup("dir0").next(), None);
+    assert!(root.lookup("dir1").next().is_some());
+    assert!(root.lookup("dir2").next().is_some());
 
     assert_matches!(local_root.lookup("dir0"), Ok(EntryRef::Tombstone(_)));
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));

@@ -227,7 +227,7 @@ async fn concurrent_read_and_create_dir() {
         async move {
             for _ in 1..10 {
                 if let Ok(dir) = repo.open_directory(path).await {
-                    dir.read().await.entries().count();
+                    dir.entries().count();
                     return;
                 }
                 // Sometimes opening the directory may outrace its creation,

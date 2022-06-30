@@ -48,18 +48,113 @@ impl JointDirectory {
         }
     }
 
-    /// Lock this joint directory for reading.
-    pub async fn read(&self) -> Reader<'_> {
-        let mut versions = BTreeMap::new();
+    /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
+    /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
+    /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
+    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
+        let entries = self.versions.values().map(|directory| directory.entries());
+        let entries = SortedUnion::new(entries, |entry| entry.name());
+        let entries = Accumulate::new(entries, |entry| entry.name());
 
-        for (branch_id, dir) in &self.versions {
-            versions.insert(branch_id, dir);
+        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.local_branch.as_ref()))
+    }
+
+    /// Returns all versions of an entry with the given name. Concurrent file versions are returned
+    /// separately but concurrent directory versions are merged into a single `JointDirectory`.
+    pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
+        Merge::new(
+            self.versions
+                .values()
+                .filter_map(move |dir| dir.lookup(name).ok()),
+            self.local_branch.as_ref(),
+        )
+    }
+
+    /// Looks up single entry with the specified name if it is unique.
+    ///
+    /// - If there is only one version of a entry with the specified name, it is returned.
+    /// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
+    ///   returned. To lookup a single version, include a disambiguator in the `name`.
+    /// - If there are multiple versiond and all of them are directories, they are merged into a
+    ///   single `JointEntryRef::Directory` and returned.
+    /// - Finally, if there are both files and directories, only the directories are retured (merged
+    ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
+    ///   to unambiguously lookup a directory even in the presence of conflicting files.
+    pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
+        // First try exact match as it is more common.
+        let mut last_file = None;
+
+        for entry in Merge::new(self.entry_versions(name), self.local_branch.as_ref()) {
+            match entry {
+                JointEntryRef::Directory(_) => return Ok(entry),
+                JointEntryRef::File(_) if last_file.is_none() => {
+                    last_file = Some(entry);
+                }
+                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
+            }
         }
 
-        Reader {
-            versions,
-            local_branch: self.local_branch.as_ref(),
+        if let Some(entry) = last_file {
+            return Ok(entry);
         }
+
+        // If not found, extract the disambiguator and try to lookup an entry whose branch id
+        // matches it.
+        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
+
+        let entries = self
+            .entry_versions(name)
+            .filter_map(|entry| entry.file().ok())
+            .filter(|entry| entry.branch().id().starts_with(&branch_id_prefix));
+
+        // At this point, `entries` contains files from only a single author. It may still be the
+        // case however that there are multiple versions of the entry because each branch may
+        // contain one.
+        // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
+        // no single author/replica can create concurrent versions of an entry.
+        let mut entries =
+            versioned::keep_maximal(entries, self.local_branch.as_ref().map(Branch::id))
+                .into_iter();
+
+        let first = entries.next().ok_or(Error::EntryNotFound)?;
+
+        if entries.next().is_none() {
+            Ok(JointEntryRef::File(JointFileRef {
+                file: first,
+                needs_disambiguation: true,
+            }))
+        } else {
+            Err(Error::AmbiguousEntry)
+        }
+    }
+
+    /// Looks up a specific version of a file.
+    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
+        self.versions
+            .get(branch_id)
+            .ok_or(Error::EntryNotFound)
+            .and_then(|dir| dir.lookup(name))
+            .and_then(|entry| entry.file())
+    }
+
+    pub(crate) fn merge_entry_version_vectors(&self, name: &str) -> VersionVector {
+        self.entry_versions(name)
+            .fold(VersionVector::new(), |mut vv, entry| {
+                vv.merge(entry.version_vector());
+                vv
+            })
+    }
+
+    /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
+    /// lengths.
+    #[allow(clippy::len_without_is_empty)]
+    pub async fn len(&self) -> u64 {
+        let mut sum = 0;
+        for dir in self.versions.values() {
+            sum += dir.len().await;
+        }
+        sum
     }
 
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
@@ -73,8 +168,6 @@ impl JointDirectory {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
                     let next = curr
-                        .read()
-                        .await
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
@@ -117,7 +210,7 @@ impl JointDirectory {
         let mut local = fork(conn, &mut self.versions, local_branch).await?;
 
         let entries: Vec<_> = pattern
-            .apply(&self.read().await)?
+            .apply(self)?
             .map(|entry| {
                 let name = entry.name().to_owned();
                 let branch_id = match &entry {
@@ -145,10 +238,7 @@ impl JointDirectory {
     ) -> Result<()> {
         let mut dirs = Vec::new();
 
-        for entry in pattern
-            .apply(&self.read().await)?
-            .filter_map(|e| e.directory().ok())
-        {
+        for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
             dirs.push(entry.open(conn, MissingVersionStrategy::Skip).await?);
         }
 
@@ -190,7 +280,7 @@ impl JointDirectory {
         let mut files = vec![];
         let mut subdirs = vec![];
 
-        for entry in self.read().await.entries() {
+        for entry in self.entries() {
             match entry {
                 JointEntryRef::File(entry) => files.push(entry.open(&mut conn).await?),
                 JointEntryRef::Directory(entry) => {
@@ -245,6 +335,12 @@ impl JointDirectory {
 
         Ok(outcome)
     }
+
+    fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
+        self.versions
+            .values()
+            .filter_map(move |v| v.lookup(name).ok())
+    }
 }
 
 // Ensures this joint directory contains a local version and returns it.
@@ -270,128 +366,6 @@ async fn fork(
 impl fmt::Debug for JointDirectory {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("JointDirectory").finish()
-    }
-}
-
-/// View of a `JointDirectory` for performing read-only queries.
-pub struct Reader<'a> {
-    versions: BTreeMap<&'a PublicKey, &'a Directory>,
-    local_branch: Option<&'a Branch>,
-}
-
-impl Reader<'_> {
-    /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
-    /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
-    /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
-    pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
-        let entries = self.versions.values().map(|directory| directory.entries());
-        let entries = SortedUnion::new(entries, |entry| entry.name());
-        let entries = Accumulate::new(entries, |entry| entry.name());
-
-        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.local_branch))
-    }
-
-    /// Returns all versions of an entry with the given name. Concurrent file versions are returned
-    /// separately but concurrent directory versions are merged into a single `JointDirectory`.
-    pub fn lookup<'a>(&'a self, name: &'a str) -> impl Iterator<Item = JointEntryRef<'a>> + 'a {
-        Merge::new(
-            self.versions
-                .values()
-                .filter_map(move |dir| dir.lookup(name).ok()),
-            self.local_branch,
-        )
-    }
-
-    /// Looks up single entry with the specified name if it is unique.
-    ///
-    /// - If there is only one version of a entry with the specified name, it is returned.
-    /// - If there are multiple versions and all of them are files, an `AmbiguousEntry` error is
-    ///   returned. To lookup a single version, include a disambiguator in the `name`.
-    /// - If there are multiple versiond and all of them are directories, they are merged into a
-    ///   single `JointEntryRef::Directory` and returned.
-    /// - Finally, if there are both files and directories, only the directories are retured (merged
-    ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
-    ///   to unambiguously lookup a directory even in the presence of conflicting files.
-    pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
-        // First try exact match as it is more common.
-        let mut last_file = None;
-
-        for entry in Merge::new(self.entry_versions(name), self.local_branch) {
-            match entry {
-                JointEntryRef::Directory(_) => return Ok(entry),
-                JointEntryRef::File(_) if last_file.is_none() => {
-                    last_file = Some(entry);
-                }
-                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
-            }
-        }
-
-        if let Some(entry) = last_file {
-            return Ok(entry);
-        }
-
-        // If not found, extract the disambiguator and try to lookup an entry whose branch id
-        // matches it.
-        let (name, branch_id_prefix) = versioned_file_name::parse(name);
-        let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
-
-        let entries = self
-            .entry_versions(name)
-            .filter_map(|entry| entry.file().ok())
-            .filter(|entry| entry.branch().id().starts_with(&branch_id_prefix));
-
-        // At this point, `entries` contains files from only a single author. It may still be the
-        // case however that there are multiple versions of the entry because each branch may
-        // contain one.
-        // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
-        // no single author/replica can create concurrent versions of an entry.
-        let mut entries =
-            versioned::keep_maximal(entries, self.local_branch.map(Branch::id)).into_iter();
-
-        let first = entries.next().ok_or(Error::EntryNotFound)?;
-
-        if entries.next().is_none() {
-            Ok(JointEntryRef::File(JointFileRef {
-                file: first,
-                needs_disambiguation: true,
-            }))
-        } else {
-            Err(Error::AmbiguousEntry)
-        }
-    }
-
-    /// Looks up a specific version of a file.
-    pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
-        self.versions
-            .get(branch_id)
-            .ok_or(Error::EntryNotFound)
-            .and_then(|dir| dir.lookup(name))
-            .and_then(|entry| entry.file())
-    }
-
-    /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
-    /// lengths.
-    #[allow(clippy::len_without_is_empty)]
-    pub async fn len(&self) -> u64 {
-        let mut sum = 0;
-        for dir in self.versions.values() {
-            sum += dir.len().await;
-        }
-        sum
-    }
-
-    pub(crate) fn merge_version_vectors(&self, name: &str) -> VersionVector {
-        self.entry_versions(name)
-            .fold(VersionVector::new(), |mut vv, entry| {
-                vv.merge(entry.version_vector());
-                vv
-            })
-    }
-
-    fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
-        self.versions
-            .values()
-            .filter_map(move |r| r.lookup(name).ok())
     }
 }
 
@@ -659,10 +633,10 @@ enum Pattern<'a> {
 }
 
 impl<'a> Pattern<'a> {
-    fn apply(&self, reader: &'a Reader) -> Result<impl Iterator<Item = JointEntryRef<'a>>> {
+    fn apply(&self, dir: &'a JointDirectory) -> Result<impl Iterator<Item = JointEntryRef<'a>>> {
         match self {
-            Self::All => Ok(Either::Left(reader.entries())),
-            Self::Unique(name) => reader
+            Self::All => Ok(Either::Left(dir.entries())),
+            Self::Unique(name) => dir
                 .lookup_unique(name)
                 .map(|entry| Either::Right(iter::once(entry))),
         }

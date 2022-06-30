@@ -262,7 +262,6 @@ impl Repository {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
-                let parent = parent.read().await;
                 Ok(parent.lookup_unique(name)?.entry_type())
             }
             None => Ok(EntryType::Directory),
@@ -277,8 +276,6 @@ impl Repository {
 
         self.cd(&mut conn, parent)
             .await?
-            .read()
-            .await
             .lookup_unique(name)?
             .file()?
             .open(&mut conn)
@@ -297,8 +294,6 @@ impl Repository {
 
         self.cd(&mut conn, parent)
             .await?
-            .read()
-            .await
             .lookup_version(name, branch_id)?
             .open(&mut conn)
             .await
@@ -363,17 +358,12 @@ impl Repository {
         let mut conn = self.db().acquire().await?;
 
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
-        let src_joint_dir_r = src_joint_dir.read().await;
 
-        let (mut src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
+        let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
                 let mut file = entry.open(&mut conn).await?;
-
-                // Prevent deadlocks
-                drop(src_joint_dir_r);
-
                 file.fork(&mut conn, local_branch.clone()).await?;
 
                 (file.parent(&mut conn).await?, Cow::Owned(src_name))
@@ -389,9 +379,6 @@ impl Repository {
 
                 // ...and acquire it back again once `merge` is done.
                 conn = self.db().acquire().await?;
-
-                // Prevent deadlocks
-                drop(src_joint_dir_r);
 
                 let src_dir = dir_to_move
                     .parent(&mut conn)
@@ -410,21 +397,19 @@ impl Repository {
         let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
         let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
-        let dst_joint_reader = dst_joint_dir.read().await;
 
-        let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
+        let dst_vv = match dst_joint_dir.lookup_unique(dst_name) {
             Err(Error::EntryNotFound) => {
                 // Even if there is no regular entry, there still may be tombstones and so the
                 // destination version vector must be "happened after" those.
-                dst_joint_reader
-                    .merge_version_vectors(dst_name)
+                dst_joint_dir
+                    .merge_entry_version_vectors(dst_name)
                     .incremented(*local_branch.id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
         };
 
-        drop(dst_joint_reader);
         drop(dst_joint_dir);
 
         let mut dst_dir = local_branch

@@ -131,7 +131,7 @@ impl BlockScanner {
 
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
-        for entry in dir.read().await.entries() {
+        for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
                     entries.push(BlockIds::new(
