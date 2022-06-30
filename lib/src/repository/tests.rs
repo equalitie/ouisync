@@ -809,7 +809,7 @@ async fn version_vector_deep_hierarchy() {
 
     for i in 0..depth {
         let dir = dirs
-            .last()
+            .last_mut()
             .unwrap()
             .create_directory(&mut conn, format!("dir-{}", i))
             .await
@@ -875,7 +875,7 @@ async fn version_vector_fork_file() {
 
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     let mut remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await

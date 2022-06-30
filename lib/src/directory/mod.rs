@@ -135,7 +135,11 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(&self, conn: &mut db::Connection, name: String) -> Result<Self> {
+    pub async fn create_directory(
+        &mut self,
+        conn: &mut db::Connection,
+        name: String,
+    ) -> Result<Self> {
         let tx = conn.begin().await?;
         self.write().await?.create_directory(tx, name).await
     }

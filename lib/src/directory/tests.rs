@@ -332,7 +332,7 @@ async fn move_non_empty_directory() {
     let content = b"moo";
 
     // Create a directory with a single file.
-    let root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
     let mut dir = root_dir
         .create_directory(&mut conn, dir_name.into())
         .await
@@ -409,7 +409,7 @@ async fn remove_subdirectory() {
     let name = "dir";
 
     // Create a directory with a single subdirectory.
-    let parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
     let dir = parent_dir
         .create_directory(&mut conn, name.into())
         .await
@@ -449,7 +449,7 @@ async fn fork() {
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a nested directory by branch 0
-    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     root0
         .create_directory(&mut conn, "dir".into())
         .await
@@ -525,7 +525,7 @@ async fn fork_over_tombstone() {
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a directory in branch 0 and delete it.
-    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     root0
         .create_directory(&mut conn, "dir".into())
         .await
@@ -544,7 +544,7 @@ async fn fork_over_tombstone() {
         .unwrap();
 
     // Create a directory with the same name in branch 1.
-    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
         .create_directory(&mut conn, "dir".into())
         .await
@@ -575,7 +575,7 @@ async fn modify_directory_concurrently() {
     let (pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let root = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
 
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file also exists in the other after refresh.

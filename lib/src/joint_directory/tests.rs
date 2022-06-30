@@ -140,13 +140,13 @@ async fn conflict_directories() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
     root0
         .create_directory(&mut conn, "dir".to_owned())
         .await
         .unwrap();
 
-    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
         .create_directory(&mut conn, "dir".to_owned())
         .await
@@ -172,7 +172,7 @@ async fn conflict_file_and_directory() {
 
     create_file(&mut conn, &mut root0, "config", &[], &branches[0]).await;
 
-    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
         .create_directory(&mut conn, "config".to_owned())
         .await
@@ -304,7 +304,7 @@ async fn cd_into_concurrent_directory() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
     let mut dir0 = root0
         .create_directory(&mut conn, "pics".to_owned())
@@ -312,7 +312,7 @@ async fn cd_into_concurrent_directory() {
         .unwrap();
     create_file(&mut conn, &mut dir0, "dog.jpg", &[], &branches[0]).await;
 
-    let root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let mut dir1 = root1
         .create_directory(&mut conn, "pics".to_owned())
         .await
@@ -784,14 +784,14 @@ async fn merge_concurrent_directories() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut local_dir = local_root
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
     create_file(&mut conn, &mut local_dir, "dog.jpg", &[], &branches[0]).await;
 
-    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_dir = remote_root
         .create_directory(&mut conn, "dir".into())
         .await
@@ -843,7 +843,7 @@ async fn remove_non_empty_subdirectory() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut local_dir = local_root
         .create_directory(&mut conn, "dir0".into())
         .await
@@ -855,7 +855,7 @@ async fn remove_non_empty_subdirectory() {
         .await
         .unwrap();
 
-    let remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_dir = remote_root
         .create_directory(&mut conn, "dir0".into())
         .await
