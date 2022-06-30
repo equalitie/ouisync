@@ -177,6 +177,8 @@ impl Directory {
     /// Thus using the "caller provided" version vector, we ensure that we don't accidentally
     /// delete data.
     ///
+    /// To move an entry within the same directory, clone `self` and pass it as `dst_dir`.
+    ///
     /// # Cancel safety
     ///
     /// This function is partially cancel safe in the sense that it will never lose data. However,
@@ -269,7 +271,11 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn bump(&self, conn: &mut db::Connection, vv: VersionVector) -> Result<()> {
+    pub(crate) async fn bump(
+        &mut self,
+        conn: &mut db::Connection,
+        vv: VersionVector,
+    ) -> Result<()> {
         let tx = conn.begin().await?;
         let mut writer = self.write().await?;
         writer.inner.commit(tx, Content::empty(), vv).await

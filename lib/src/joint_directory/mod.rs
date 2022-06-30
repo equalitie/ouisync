@@ -187,7 +187,7 @@ impl JointDirectory {
         let mut conn = db.acquire().await?;
 
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let local_version = fork(&mut conn, &mut self.versions, local_branch).await?;
+        let mut local_version = fork(&mut conn, &mut self.versions, local_branch).await?;
 
         let new_version_vector = self.merge_version_vectors(&mut conn).await?;
         let old_version_vector = local_version.version_vector(&mut conn).await?;
