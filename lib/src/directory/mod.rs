@@ -129,7 +129,7 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub async fn create_file(&self, conn: &mut db::Connection, name: String) -> Result<File> {
+    pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
         let tx = conn.begin().await?;
         self.write().await?.create_file(tx, name).await
     }
@@ -218,6 +218,7 @@ impl Directory {
     }
 
     // Forks this directory into the local branch.
+    // TODO: change this method to modify self instead of returning a new instance.
     #[async_recursion]
     pub(crate) async fn fork(
         &self,

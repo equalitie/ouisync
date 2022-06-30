@@ -109,7 +109,7 @@ impl Branch {
         path: &Utf8Path,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let dir = self.ensure_directory_exists(conn, parent).await?;
+        let mut dir = self.ensure_directory_exists(conn, parent).await?;
         dir.create_file(conn, name.to_string()).await
     }
 

@@ -876,11 +876,11 @@ async fn version_vector_fork_file() {
     let mut conn = repo.db().acquire().await.unwrap();
 
     let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    let remote_parent = remote_root
+    let mut remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await
         .unwrap();
-    let mut file = create_file_in_directory(&mut conn, &remote_parent, "foo.txt", &[]).await;
+    let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
 
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
@@ -1057,9 +1057,9 @@ async fn remove_branch() {
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
     let mut conn = repo.db().acquire().await.unwrap();
-    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    create_file_in_directory(&mut conn, &remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&mut conn, &remote_root, "bar.txt", b"bar").await;
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    create_file_in_directory(&mut conn, &mut remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&mut conn, &mut remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
     drop(conn);
 
@@ -1102,13 +1102,13 @@ async fn create_file_in_branch(
     name: &str,
     content: &[u8],
 ) -> File {
-    let root = branch.open_or_create_root(conn).await.unwrap();
-    create_file_in_directory(conn, &root, name, content).await
+    let mut root = branch.open_or_create_root(conn).await.unwrap();
+    create_file_in_directory(conn, &mut root, name, content).await
 }
 
 async fn create_file_in_directory(
     conn: &mut db::Connection,
-    dir: &Directory,
+    dir: &mut Directory,
     name: &str,
     content: &[u8],
 ) -> File {

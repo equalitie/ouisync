@@ -17,7 +17,7 @@ async fn create_and_list_entries() {
     let mut conn = pool.acquire().await.unwrap();
 
     // Create the root directory and put some file in it.
-    let dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut dir = branch.open_or_create_root(&mut conn).await.unwrap();
 
     let mut file_dog = dir.create_file(&mut conn, "dog.txt".into()).await.unwrap();
     file_dog.write(&mut conn, b"woof").await.unwrap();
@@ -56,11 +56,11 @@ async fn add_entry_to_existing_directory() {
     let mut conn = pool.acquire().await.unwrap();
 
     // Create empty directory and add a file to it.
-    let dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut dir = branch.open_or_create_root(&mut conn).await.unwrap();
     dir.create_file(&mut conn, "one.txt".into()).await.unwrap();
 
     // Reopen it and add another file to it.
-    let dir = branch.open_root(&mut conn).await.unwrap();
+    let mut dir = branch.open_root(&mut conn).await.unwrap();
     dir.create_file(&mut conn, "two.txt".into()).await.unwrap();
 
     // Reopen it again and check boths files are still there.
@@ -78,7 +78,7 @@ async fn remove_file() {
     let name = "monkey.txt";
 
     // Create a directory with a single file.
-    let parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
     let mut file = parent_dir
         .create_file(&mut conn, name.into())
         .await
@@ -112,7 +112,7 @@ async fn remove_file() {
 
     // Try re-creating the file again
     drop(parent_dir); // Drop the previous handle to avoid deadlock.
-    let parent_dir = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
 
     let mut file = parent_dir
         .create_file(&mut conn, name.into())
@@ -132,7 +132,7 @@ async fn rename_file() {
     let content = b"hee-haw";
 
     // Create a directory with a single file.
-    let parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
     let mut file = parent_dir
         .create_file(&mut conn, src_name.into())
         .await
@@ -199,7 +199,7 @@ async fn move_file_within_branch() {
     let content = b"moo";
 
     // Create a directory with a single file.
-    let root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
     let aux_dir = root_dir
         .create_directory(&mut conn, "aux".into())
         .await
@@ -333,7 +333,7 @@ async fn move_non_empty_directory() {
 
     // Create a directory with a single file.
     let root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
-    let dir = root_dir
+    let mut dir = root_dir
         .create_directory(&mut conn, dir_name.into())
         .await
         .unwrap();
@@ -472,7 +472,7 @@ async fn fork() {
             .unwrap()
     };
 
-    let dir1 = dir0.fork(&mut conn, &branches[1]).await.unwrap();
+    let mut dir1 = dir0.fork(&mut conn, &branches[1]).await.unwrap();
 
     dir1.create_file(&mut conn, "dog.jpg".into()).await.unwrap();
 
@@ -580,21 +580,20 @@ async fn modify_directory_concurrently() {
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file also exists in the other after refresh.
 
-    let dir0 = root
+    let mut dir0 = root
         .create_directory(&mut conn, "dir".to_owned())
         .await
         .unwrap();
-    let dir1 = {
-        root.read()
-            .await
-            .lookup("dir")
-            .unwrap()
-            .directory()
-            .unwrap()
-            .open(&mut conn)
-            .await
-            .unwrap()
-    };
+    let dir1 = root
+        .read()
+        .await
+        .lookup("dir")
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
 
     let mut file0 = dir0
         .create_file(&mut conn, "file.txt".to_owned())
@@ -646,7 +645,7 @@ async fn remove_concurrent_remote_file() {
     let (pool, local_branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let root = local_branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root = local_branch.open_or_create_root(&mut conn).await.unwrap();
 
     let name = "foo.txt";
     root.create_file(&mut conn, name.to_owned())
