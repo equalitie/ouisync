@@ -109,8 +109,6 @@ async fn merge() {
     let mut conn = repo.db().acquire().await.unwrap();
     local_root.refresh(&mut conn).await.unwrap();
     let content = local_root
-        .read()
-        .await
         .lookup("test.txt")
         .unwrap()
         .file()

@@ -275,8 +275,6 @@ async fn conflict_open_file() {
     assert!(vv1 > vv0);
 
     let _file0 = root0
-        .read()
-        .await
         .lookup("file.txt")
         .unwrap()
         .file()
@@ -430,8 +428,6 @@ async fn merge_locally_older_file() {
     let mut conn = pool.acquire().await.unwrap();
     local_root.refresh(&mut conn).await.unwrap();
     let local_content = local_root
-        .read()
-        .await
         .lookup("cat.jpg")
         .unwrap()
         .file()
@@ -493,8 +489,6 @@ async fn merge_locally_newer_file() {
 
     let mut conn = pool.acquire().await.unwrap();
     let local_content = local_root
-        .read()
-        .await
         .lookup("cat.jpg")
         .unwrap()
         .file()
@@ -572,7 +566,7 @@ async fn attempt_to_merge_concurrent_file() {
     );
 
     // There is still only the local version in the local branch
-    assert_eq!(local_root.read().await.entries().count(), 1);
+    assert_eq!(local_root.entries().count(), 1);
 
     // The branches are still concurrent
     assert_eq!(
@@ -707,7 +701,7 @@ async fn merge_remote_only() {
 
     let mut conn = pool.acquire().await.unwrap();
     let local_root = branches[0].open_root(&mut conn).await.unwrap();
-    local_root.read().await.lookup("cat.jpg").unwrap();
+    local_root.lookup("cat.jpg").unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -758,9 +752,7 @@ async fn merge_sequential_modifications() {
     let mut conn = pool.acquire().await.unwrap();
     local_root.refresh(&mut conn).await.unwrap();
 
-    let reader = local_root.read().await;
-    let entry = reader.lookup("dog.jpg").unwrap().file().unwrap();
-
+    let entry = local_root.lookup("dog.jpg").unwrap().file().unwrap();
     assert_eq!(entry.version_vector(), &vv2);
 
     let content = entry
@@ -802,8 +794,6 @@ async fn merge_concurrent_directories() {
     let mut conn = pool.acquire().await.unwrap();
     local_root.refresh(&mut conn).await.unwrap();
 
-    let local_root = local_root.read().await;
-
     assert_eq!(local_root.entries().count(), 1);
 
     let entry = local_root.entries().next().unwrap();
@@ -817,8 +807,6 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.version_vector(), &expected_vv);
 
     let dir = entry.directory().unwrap().open(&mut conn).await.unwrap();
-    let dir = dir.read().await;
-
     assert_eq!(dir.entries().count(), 2);
 
     dir.lookup("dog.jpg").unwrap().file().unwrap();
@@ -871,15 +859,8 @@ async fn remove_non_empty_subdirectory() {
     assert!(joint_reader.lookup("dir1").next().is_some());
     assert!(joint_reader.lookup("dir2").next().is_some());
 
-    assert_matches!(
-        local_root.read().await.lookup("dir0"),
-        Ok(EntryRef::Tombstone(_))
-    );
-
-    assert_matches!(
-        local_root.read().await.lookup("dir1"),
-        Ok(EntryRef::Directory(_))
-    );
+    assert_matches!(local_root.lookup("dir0"), Ok(EntryRef::Tombstone(_)));
+    assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }
 
 async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
@@ -977,8 +958,6 @@ async fn update_file(
 
 async fn open_file(conn: &mut db::Connection, parent: &Directory, name: &str) -> File {
     parent
-        .read()
-        .await
         .lookup(name)
         .unwrap()
         .file()
@@ -990,8 +969,6 @@ async fn open_file(conn: &mut db::Connection, parent: &Directory, name: &str) ->
 
 async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
     parent
-        .read()
-        .await
         .lookup(name)
         .unwrap()
         .file()

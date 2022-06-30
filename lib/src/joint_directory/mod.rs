@@ -6,7 +6,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    directory::{self, Directory, DirectoryRef, EntryRef, EntryType, FileRef},
+    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -39,7 +39,7 @@ impl JointDirectory {
     {
         let versions = versions
             .into_iter()
-            .map(|dir| (*dir.branch_id(), dir))
+            .map(|dir| (*dir.branch().id(), dir))
             .collect();
 
         Self {
@@ -53,7 +53,7 @@ impl JointDirectory {
         let mut versions = BTreeMap::new();
 
         for (branch_id, dir) in &self.versions {
-            versions.insert(branch_id, dir.read().await);
+            versions.insert(branch_id, dir);
         }
 
         Reader {
@@ -275,7 +275,7 @@ impl fmt::Debug for JointDirectory {
 
 /// View of a `JointDirectory` for performing read-only queries.
 pub struct Reader<'a> {
-    versions: BTreeMap<&'a PublicKey, directory::Reader<'a>>,
+    versions: BTreeMap<&'a PublicKey, &'a Directory>,
     local_branch: Option<&'a Branch>,
 }
 

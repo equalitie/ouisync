@@ -79,7 +79,7 @@ impl Branch {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let next = match curr.read().await.lookup(name) {
+                    let next = match curr.lookup(name) {
                         Ok(EntryRef::Directory(entry)) => Some(entry.open(conn).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
@@ -164,7 +164,7 @@ mod tests {
             .ensure_directory_exists(&mut conn, "/".into())
             .await
             .unwrap();
-        assert_eq!(dir.read().await.locator(), &Locator::ROOT);
+        assert_eq!(dir.locator(), &Locator::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -180,7 +180,7 @@ mod tests {
             .unwrap();
 
         root.refresh(&mut conn).await.unwrap();
-        let _ = root.read().await.lookup("dir").unwrap();
+        let _ = root.lookup("dir").unwrap();
     }
 
     async fn setup() -> (db::Pool, Branch) {

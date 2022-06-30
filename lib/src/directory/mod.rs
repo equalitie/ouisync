@@ -94,12 +94,21 @@ impl Directory {
         Ok(())
     }
 
-    /// Lock this directory for reading.
-    pub async fn read(&self) -> Reader<'_> {
-        Reader {
-            outer: self,
-            inner: &self.inner,
-        }
+    /// Lookup an entry of this directory by name.
+    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
+        self.inner
+            .entries()
+            .get_key_value(name)
+            .map(|(name, data)| EntryRef::new(self, &self.inner, name, data))
+            .ok_or(Error::EntryNotFound)
+    }
+
+    /// Returns iterator over the entries of this directory.
+    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
+        self.inner
+            .entries()
+            .iter()
+            .map(move |(name, data)| EntryRef::new(self, &self.inner, name, data))
     }
 
     /// Creates a new file inside this directory.
@@ -267,14 +276,12 @@ impl Directory {
         conn: &mut db::Connection,
         local_branch: &Branch,
     ) -> Result<Directory> {
-        let inner = self.read().await;
-
-        if local_branch.id() == inner.branch().id() {
+        if local_branch.id() == self.inner.branch().id() {
             return Ok(self.clone());
         }
 
-        let parent = if let Some(parent) = &inner.inner.parent {
-            let dir = parent.directory(conn, inner.branch().clone()).await?;
+        let parent = if let Some(parent) = &self.inner.parent {
+            let dir = parent.directory(conn, self.inner.branch().clone()).await?;
             let entry_name = parent.entry_name().to_owned();
 
             Some((dir, entry_name))
@@ -282,21 +289,16 @@ impl Directory {
             None
         };
 
-        // Prevent deadlock
-        drop(inner);
-
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(conn, local_branch).await?;
-            let reader = parent_dir.read().await;
 
-            match reader.lookup(&entry_name) {
+            match parent_dir.lookup(&entry_name) {
                 Ok(EntryRef::Directory(entry)) => entry.open(conn).await,
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
                     Err(Error::EntryIsFile)
                 }
                 Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    drop(reader);
                     parent_dir.create_directory(conn, entry_name).await
                 }
                 Err(error) => Err(error),
@@ -317,10 +319,10 @@ impl Directory {
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
-        let read = self.read().await;
-
-        if let Some(parent) = &read.inner.parent {
-            Ok(Some(parent.directory(conn, read.branch().clone()).await?))
+        if let Some(parent) = &self.inner.parent {
+            Ok(Some(
+                parent.directory(conn, self.inner.branch().clone()).await?,
+            ))
         } else {
             Ok(None)
         }
@@ -426,12 +428,31 @@ impl Directory {
         }
     }
 
-    pub fn branch_id(&self) -> &PublicKey {
-        self.inner.branch().id()
+    /// Branch of this directory
+    pub fn branch(&self) -> &Branch {
+        self.inner.blob.branch()
+    }
+
+    /// Locator of this directory
+    #[cfg(test)]
+    pub(crate) fn locator(&self) -> &Locator {
+        self.inner.blob.locator()
+    }
+
+    /// Length of this directory in bytes. Does not include the content, only the size of directory
+    /// itself.
+    pub async fn len(&self) -> u64 {
+        self.inner.blob.len().await
     }
 
     pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        self.read().await.version_vector(conn).await
+        if let Some(parent) = &self.inner.parent {
+            parent
+                .entry_version_vector(conn, self.branch().clone())
+                .await
+        } else {
+            self.branch().data().load_version_vector(conn).await
+        }
     }
 
     async fn remove_entry_with_overwrite_strategy(
@@ -442,49 +463,37 @@ impl Directory {
         vv: VersionVector,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
-        let reader = self.read().await;
-
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
-        let old_dir = match reader.lookup(name) {
+        let old_dir = match self.lookup(name) {
             Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };
 
-        // Keep the reader (and thus the read lock) around until the end of this function to make
-        // sure no new entry is created in the directory after this check in another thread.
-        let _old_dir_reader = if let Some(dir) = &old_dir {
-            let reader = dir.read().await;
-
+        if let Some(dir) = &old_dir {
             if matches!(overwrite, OverwriteStrategy::Remove)
-                && reader.entries().any(|entry| !entry.is_tombstone())
+                && dir.entries().any(|entry| !entry.is_tombstone())
             {
                 return Err(Error::DirectoryNotEmpty);
             }
+        }
 
-            Some(reader)
+        let new_entry = if branch_id == self.inner.branch().id() {
+            EntryData::tombstone(vv.incremented(*self.inner.branch().id()))
         } else {
-            None
-        };
-
-        let new_entry = if branch_id == reader.branch().id() {
-            EntryData::tombstone(vv.incremented(*reader.branch().id()))
-        } else {
-            match reader.lookup(name) {
+            match self.lookup(name) {
                 Ok(old_entry) => {
                     let mut new_entry = old_entry.clone_data();
                     new_entry.version_vector_mut().merge(&vv);
                     new_entry
                 }
                 Err(Error::EntryNotFound) => {
-                    EntryData::tombstone(vv.incremented(*reader.branch().id()))
+                    EntryData::tombstone(vv.incremented(*self.inner.branch().id()))
                 }
                 Err(e) => return Err(e),
             }
         };
-
-        drop(reader);
 
         self.insert_entry_with_overwrite_strategy(tx, name.to_owned(), new_entry, overwrite)
             .await
@@ -503,61 +512,4 @@ impl Directory {
         self.inner.save(&mut tx, &content, overwrite).await?;
         self.inner.commit(tx, content, VersionVector::new()).await
     }
-}
-
-/// View of a `Directory` for performing read-only queries.
-pub struct Reader<'a> {
-    outer: &'a Directory,
-    inner: &'a Inner,
-}
-
-impl Reader<'_> {
-    /// Returns iterator over the entries of this directory.
-    pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.inner
-            .entries()
-            .iter()
-            .map(move |(name, data)| EntryRef::new(self.outer, &*self.inner, name, data))
-    }
-
-    /// Lookup an entry of this directory by name.
-    pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
-        lookup(self.outer, &*self.inner, name)
-    }
-
-    /// Length of this directory in bytes. Does not include the content, only the size of directory
-    /// itself.
-    pub async fn len(&self) -> u64 {
-        self.inner.blob.len().await
-    }
-
-    /// Branch of this directory
-    pub fn branch(&self) -> &Branch {
-        self.inner.blob.branch()
-    }
-
-    /// Version vector of this directory.
-    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        if let Some(parent) = &self.inner.parent {
-            parent
-                .entry_version_vector(conn, self.branch().clone())
-                .await
-        } else {
-            self.branch().data().load_version_vector(conn).await
-        }
-    }
-
-    /// Locator of this directory
-    #[cfg(test)]
-    pub(crate) fn locator(&self) -> &Locator {
-        self.inner.blob.locator()
-    }
-}
-
-fn lookup<'a>(outer: &'a Directory, inner: &'a Inner, name: &'_ str) -> Result<EntryRef<'a>> {
-    inner
-        .entries()
-        .get_key_value(name)
-        .map(|(name, data)| EntryRef::new(outer, inner, name, data))
-        .ok_or(Error::EntryNotFound)
 }

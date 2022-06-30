@@ -60,11 +60,7 @@ impl ParentContext {
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
         let directory = self.directory(&mut tx, src_branch).await?;
-        let entry_data = directory
-            .read()
-            .await
-            .lookup(&self.entry_name)?
-            .clone_data();
+        let entry_data = directory.lookup(&self.entry_name)?.clone_data();
 
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
@@ -127,8 +123,6 @@ impl ParentContext {
         Ok(self
             .directory(conn, branch)
             .await?
-            .read()
-            .await
             .lookup(&self.entry_name)?
             .version_vector()
             .clone())

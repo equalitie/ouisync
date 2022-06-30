@@ -194,8 +194,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -213,8 +211,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -230,8 +226,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -261,8 +255,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("pig.jpg")
             .unwrap()
             .file()

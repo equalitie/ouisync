@@ -669,7 +669,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
-        let len = dir.read().await.len().await;
+        let len = dir.len().await;
 
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }

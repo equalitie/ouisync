@@ -407,7 +407,7 @@ impl Repository {
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
-        let src_entry = src_dir.read().await.lookup(&src_name)?.clone_data();
+        let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
         let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
         let dst_joint_reader = dst_joint_dir.read().await;

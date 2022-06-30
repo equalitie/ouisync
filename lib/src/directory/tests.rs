@@ -29,7 +29,6 @@ async fn create_and_list_entries() {
 
     // Reopen the dir and try to read the files.
     let dir = branch.open_root(&mut conn).await.unwrap();
-    let dir = dir.read().await;
 
     let expected_names: BTreeSet<_> = ["dog.txt", "cat.txt"].into_iter().collect();
     let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
@@ -65,9 +64,8 @@ async fn add_entry_to_existing_directory() {
 
     // Reopen it again and check boths files are still there.
     let dir = branch.open_root(&mut conn).await.unwrap();
-    let reader = dir.read().await;
-    assert!(reader.lookup("one.txt").is_ok());
-    assert!(reader.lookup("two.txt").is_ok());
+    assert!(dir.lookup("one.txt").is_ok());
+    assert!(dir.lookup("two.txt").is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -98,7 +96,6 @@ async fn remove_file() {
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root(&mut conn).await.unwrap();
-    let parent_dir = parent_dir.read().await;
 
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
     assert_eq!(parent_dir.entries().count(), 1);
@@ -148,12 +145,7 @@ async fn rename_file() {
     let mut parent_dir_src = branch.open_root(&mut conn).await.unwrap();
     let mut parent_dir_dst = parent_dir_src.clone();
 
-    let entry_to_move = parent_dir_src
-        .read()
-        .await
-        .lookup(src_name)
-        .unwrap()
-        .clone_data();
+    let entry_to_move = parent_dir_src.lookup(src_name).unwrap().clone_data();
 
     parent_dir_src
         .move_entry(
@@ -169,7 +161,6 @@ async fn rename_file() {
 
     // Reopen again and check the file entry was removed.
     let parent_dir = branch.open_root(&mut conn).await.unwrap();
-    let parent_dir = parent_dir.read().await;
 
     let mut dst_file = parent_dir
         .lookup(dst_name)
@@ -222,12 +213,7 @@ async fn move_file_within_branch() {
     // Move the file from ./ to ./aux/
     //
 
-    let entry_to_move = root_dir
-        .read()
-        .await
-        .lookup(file_name)
-        .unwrap()
-        .clone_data();
+    let entry_to_move = root_dir.lookup(file_name).unwrap().clone_data();
 
     root_dir
         .move_entry(
@@ -245,8 +231,6 @@ async fn move_file_within_branch() {
         .open_root(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup("aux")
         .unwrap()
         .directory()
@@ -254,8 +238,6 @@ async fn move_file_within_branch() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup(file_name)
         .unwrap()
         .file()
@@ -276,15 +258,9 @@ async fn move_file_within_branch() {
     // Now move it back from ./aux/ to ./
     //
 
-    let entry_to_move = aux_dir.read().await.lookup(file_name).unwrap().clone_data();
+    let entry_to_move = aux_dir.lookup(file_name).unwrap().clone_data();
 
-    let tombstone_vv = root_dir
-        .read()
-        .await
-        .lookup(file_name)
-        .unwrap()
-        .version_vector()
-        .clone();
+    let tombstone_vv = root_dir.lookup(file_name).unwrap().version_vector().clone();
 
     aux_dir
         .move_entry(
@@ -299,8 +275,6 @@ async fn move_file_within_branch() {
         .unwrap();
 
     let mut file = root_dir
-        .read()
-        .await
         .lookup(file_name)
         .unwrap()
         .file()
@@ -353,7 +327,7 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    let entry_to_move = root_dir.read().await.lookup(dir_name).unwrap().clone_data();
+    let entry_to_move = root_dir.lookup(dir_name).unwrap().clone_data();
 
     root_dir
         .move_entry(
@@ -371,8 +345,6 @@ async fn move_non_empty_directory() {
         .open_root(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup(dst_dir_name)
         .unwrap()
         .directory()
@@ -380,8 +352,6 @@ async fn move_non_empty_directory() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup(dir_name)
         .unwrap()
         .directory()
@@ -389,8 +359,6 @@ async fn move_non_empty_directory() {
         .open(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup(file_name)
         .unwrap()
         .file()
@@ -416,13 +384,8 @@ async fn remove_subdirectory() {
         .await
         .unwrap();
 
-    let (dir_locator, dir_vv) = {
-        let reader = dir.read().await;
-        (
-            *reader.locator(),
-            reader.version_vector(&mut conn).await.unwrap(),
-        )
-    };
+    let dir_locator = *dir.locator();
+    let dir_vv = dir.version_vector(&mut conn).await.unwrap();
 
     // Reopen and remove the subdirectory
     let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
@@ -433,7 +396,6 @@ async fn remove_subdirectory() {
 
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root(&mut conn).await.unwrap();
-    let parent_dir = parent_dir.read().await;
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
@@ -462,8 +424,6 @@ async fn fork() {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dir")
             .unwrap()
             .directory()
@@ -477,15 +437,13 @@ async fn fork() {
 
     dir1.create_file(&mut conn, "dog.jpg".into()).await.unwrap();
 
-    assert_eq!(dir1.read().await.branch().id(), branches[1].id());
+    assert_eq!(dir1.branch().id(), branches[1].id());
 
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
         .open_root(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup("dir")
         .unwrap()
         .directory()
@@ -494,15 +452,13 @@ async fn fork() {
         .await
         .unwrap();
 
-    assert_eq!(dir.read().await.entries().count(), 0);
+    assert_eq!(dir.entries().count(), 0);
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
         .open_root(&mut conn)
         .await
         .unwrap()
-        .read()
-        .await
         .lookup("dir")
         .unwrap()
         .directory()
@@ -512,7 +468,7 @@ async fn fork() {
         .unwrap();
 
     assert_eq!(
-        dir.read().await.entries().map(|entry| entry.name()).next(),
+        dir.entries().map(|entry| entry.name()).next(),
         Some("dog.jpg")
     );
 
@@ -531,13 +487,7 @@ async fn fork_over_tombstone() {
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
-    let vv = root0
-        .read()
-        .await
-        .lookup("dir")
-        .unwrap()
-        .version_vector()
-        .clone();
+    let vv = root0.lookup("dir").unwrap().version_vector().clone();
 
     root0
         .remove_entry(&mut conn, "dir", branches[0].id(), vv)
@@ -554,8 +504,6 @@ async fn fork_over_tombstone() {
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root(&mut conn).await.unwrap();
     let dir1 = root1_on_0
-        .read()
-        .await
         .lookup("dir")
         .unwrap()
         .directory()
@@ -568,7 +516,7 @@ async fn fork_over_tombstone() {
 
     // Check the forked dir now exists in branch 0.
     root0.refresh(&mut conn).await.unwrap();
-    assert_matches!(root0.read().await.lookup("dir"), Ok(EntryRef::Directory(_)));
+    assert_matches!(root0.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -586,8 +534,6 @@ async fn modify_directory_concurrently() {
         .await
         .unwrap();
     let mut dir1 = root
-        .read()
-        .await
         .lookup("dir")
         .unwrap()
         .directory()
@@ -605,8 +551,6 @@ async fn modify_directory_concurrently() {
 
     dir1.refresh(&mut conn).await.unwrap();
     let mut file1 = dir1
-        .read()
-        .await
         .lookup("file.txt")
         .unwrap()
         .file()
@@ -634,7 +578,7 @@ async fn remove_unique_remote_file() {
         .unwrap();
 
     let local_vv = assert_matches!(
-        root.read().await.lookup(name),
+        root.lookup(name),
         Ok(EntryRef::Tombstone(entry)) => entry.version_vector().clone()
     );
 
@@ -664,7 +608,7 @@ async fn remove_concurrent_remote_file() {
         .unwrap();
 
     let local_vv = assert_matches!(
-        root.read().await.lookup(name),
+        root.lookup(name),
         Ok(EntryRef::File(entry)) => entry.version_vector().clone()
     );
 
