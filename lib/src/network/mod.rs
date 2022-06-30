@@ -240,7 +240,11 @@ impl Network {
             async move {
                 while let Some(seen_peer) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
-                        inner.spawn(inner.clone().establish_connection(seen_peer, PeerSource::Dht));
+                        inner.spawn(
+                            inner
+                                .clone()
+                                .establish_connection(seen_peer, PeerSource::Dht),
+                        );
                     }
                 }
             }
@@ -575,9 +579,10 @@ impl Inner {
         while let Some(peer) = discovery.recv().await {
             let tasks = self.tasks.upgrade().unwrap();
 
-            tasks
-                .other
-                .spawn(self.clone().establish_connection(peer, PeerSource::LocalDiscovery))
+            tasks.other.spawn(
+                self.clone()
+                    .establish_connection(peer, PeerSource::LocalDiscovery),
+            )
         }
     }
 
@@ -641,7 +646,9 @@ impl Inner {
                 // Unwrap OK because this is the only `addr` inserted into `seen_peers`.
                 let peer = seen_peers.insert(addr).unwrap();
 
-                inner.establish_connection(peer, PeerSource::UserProvided).await;
+                inner
+                    .establish_connection(peer, PeerSource::UserProvided)
+                    .await;
             }
         })
     }
@@ -688,12 +695,15 @@ impl Inner {
         permit.mark_as_connecting();
 
         if let Some(socket) = self.connect_with_retries(peer, source).await {
-            self.handle_new_connection(socket, source, permit)
-                .await;
+            self.handle_new_connection(socket, source, permit).await;
         }
     }
 
-    async fn connect_with_retries(&self, peer: SeenPeer, source: PeerSource) -> Option<raw::Stream> {
+    async fn connect_with_retries(
+        &self,
+        peer: SeenPeer,
+        source: PeerSource,
+    ) -> Option<raw::Stream> {
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))

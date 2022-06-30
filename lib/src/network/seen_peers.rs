@@ -64,41 +64,46 @@ impl SeenPeersInner {
         use std::collections::hash_map::Entry;
 
         self.current_round_id += 1;
-        self.rounds
-            .retain(|round, peers| {
-                let is_old = round + REMOVE_AFTER_ROUND_COUNT < self.current_round_id;
+        self.rounds.retain(|round, peers| {
+            let is_old = round + REMOVE_AFTER_ROUND_COUNT < self.current_round_id;
 
-                if is_old {
-                    for peer in peers.iter() {
-                        let mut entry = match self.peers.entry(*peer) {
-                            Entry::Occupied(entry) => entry,
-                            Entry::Vacant(_) => unreachable!(),
-                        };
+            if is_old {
+                for peer in peers.iter() {
+                    let mut entry = match self.peers.entry(*peer) {
+                        Entry::Occupied(entry) => entry,
+                        Entry::Vacant(_) => unreachable!(),
+                    };
 
-                        let (rc, rounds) = entry.get_mut();
-                        rounds.remove(round);
+                    let (rc, rounds) = entry.get_mut();
+                    rounds.remove(round);
 
-                        if *rc == 0 && rounds.is_empty() {
-                            entry.remove();
-                        }
+                    if *rc == 0 && rounds.is_empty() {
+                        entry.remove();
                     }
                 }
+            }
 
-                !is_old
-            });
+            !is_old
+        });
     }
 
     /// Returns `Some(SeenPeer)` if the peer has not been seen in the last
     /// REMOVE_AFTER_ROUND_COUNT rounds.
     fn insert(&mut self, addr: PeerAddr, ext: &Arc<RwLock<SeenPeersInner>>) -> Option<SeenPeer> {
-        let round = self.rounds.entry(self.current_round_id).or_insert_with(||HashSet::new());
+        let round = self
+            .rounds
+            .entry(self.current_round_id)
+            .or_insert_with(|| HashSet::new());
 
         if !round.insert(addr) {
             // Already in current round
             return None;
         };
 
-        let (rc, rounds) = self.peers.entry(addr).or_insert_with(||(0, HashSet::new()));
+        let (rc, rounds) = self
+            .peers
+            .entry(addr)
+            .or_insert_with(|| (0, HashSet::new()));
 
         let is_new = rounds.is_empty();
 
@@ -120,24 +125,26 @@ impl SeenPeersInner {
     }
 
     fn collect(&mut self, ext: &Arc<RwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
-        self.peers.iter_mut().filter_map(|(addr, (rc, rounds))| {
-            if rounds.is_empty() {
-                None
-            } else {
-                *rc += 1;
-                Some(SeenPeer {
-                    addr: *addr,
-                    seen_peers: ext.clone(),
-                })
-            }
-        })
-        .collect()
+        self.peers
+            .iter_mut()
+            .filter_map(|(addr, (rc, rounds))| {
+                if rounds.is_empty() {
+                    None
+                } else {
+                    *rc += 1;
+                    Some(SeenPeer {
+                        addr: *addr,
+                        seen_peers: ext.clone(),
+                    })
+                }
+            })
+            .collect()
     }
 }
 
 pub(crate) struct SeenPeer {
     addr: PeerAddr,
-    seen_peers: Arc<RwLock<SeenPeersInner>>
+    seen_peers: Arc<RwLock<SeenPeersInner>>,
 }
 
 impl SeenPeer {
@@ -214,7 +221,7 @@ mod tests {
 
         let peer = seen_peers.insert(peer_addr).unwrap();
 
-        for _ in 0..(REMOVE_AFTER_ROUND_COUNT+1) {
+        for _ in 0..(REMOVE_AFTER_ROUND_COUNT + 1) {
             assert!(peer.addr().is_some());
             seen_peers.start_new_round();
         }
