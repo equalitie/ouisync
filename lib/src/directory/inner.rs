@@ -10,6 +10,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 
+#[derive(Clone)]
 pub(super) struct Inner {
     pub blob: Blob,
     pub parent: Option<ParentContext>,

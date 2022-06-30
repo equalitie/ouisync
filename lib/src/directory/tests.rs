@@ -9,7 +9,7 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::future;
-use std::{collections::BTreeSet, convert::TryInto};
+use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {

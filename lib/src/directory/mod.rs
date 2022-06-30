@@ -30,7 +30,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::{mem, sync::Arc};
+use std::mem;
 
 /// Directory access mode
 ///
@@ -45,13 +45,12 @@ pub(crate) enum Mode {
     ReadWrite,
 }
 
-#[derive(Clone)]
 pub struct Directory {
     // `branch_id` is equivalent `inner.read().await.branch().id()`, but access to it doesn't
     // require locking.
     branch_id: PublicKey,
     mode: Mode,
-    inner: Arc<RwLock<Inner>>,
+    inner: RwLock<Inner>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -99,6 +98,15 @@ impl Directory {
         *self.inner.write().await = inner;
 
         Ok(())
+    }
+
+    // TODO: replace this with regular `Clone` impl when we get rid of the lock
+    pub(crate) async fn clone(&self) -> Directory {
+        Self {
+            branch_id: self.branch_id,
+            mode: self.mode,
+            inner: RwLock::new(self.inner.read().await.clone()),
+        }
     }
 
     /// Lock this directory for reading.
@@ -219,7 +227,7 @@ impl Directory {
         let inner = self.read().await;
 
         if local_branch.id() == inner.branch().id() {
-            return Ok(self.clone());
+            return Ok(self.clone().await);
         }
 
         let parent = if let Some(parent) = &inner.inner.parent {
@@ -282,9 +290,7 @@ impl Directory {
         Ok(Self {
             branch_id: *owner_branch.id(),
             mode,
-            inner: Arc::new(RwLock::new(
-                Inner::open(conn, owner_branch, locator, parent).await?,
-            )),
+            inner: RwLock::new(Inner::open(conn, owner_branch, locator, parent).await?),
         })
     }
 
@@ -292,7 +298,7 @@ impl Directory {
         Directory {
             branch_id: *owner_branch.id(),
             mode: Mode::ReadWrite,
-            inner: Arc::new(RwLock::new(Inner::create(owner_branch, locator, parent))),
+            inner: RwLock::new(Inner::create(owner_branch, locator, parent)),
         }
     }
 
@@ -380,16 +386,6 @@ impl Directory {
         self.read().await.version_vector(conn).await
     }
 }
-
-impl PartialEq for Directory {
-    fn eq(&self, other: &Self) -> bool {
-        // We can do this because we have the assurance that if a /foo/bar/ directory is opened
-        // more than once, all the opened instances must share the same `.inner`.
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-}
-
-impl Eq for Directory {}
 
 /// View of a `Directory` for performing read-only queries.
 pub struct Reader<'a> {

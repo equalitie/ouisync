@@ -23,7 +23,6 @@ use std::{
 };
 
 /// Unified view over multiple concurrent versions of a directory.
-#[derive(Clone)]
 pub struct JointDirectory {
     versions: BTreeMap<PublicKey, Directory>,
     local_branch: Option<Branch>,
@@ -48,6 +47,19 @@ impl JointDirectory {
         }
     }
 
+    // TODO: replace with regular `Clone` impl once we get rid of the Directory lock.
+    pub async fn clone(&self) -> JointDirectory {
+        let mut versions = BTreeMap::new();
+        for (id, version) in &self.versions {
+            versions.insert(*id, version.clone().await);
+        }
+
+        Self {
+            versions,
+            local_branch: self.local_branch.clone(),
+        }
+    }
+
     /// Lock this joint directory for reading.
     pub async fn read(&self) -> Reader<'_> {
         let mut versions = BTreeMap::new();
@@ -66,7 +78,7 @@ impl JointDirectory {
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
     pub async fn cd(&self, conn: &mut db::Connection, path: impl AsRef<Utf8Path>) -> Result<Self> {
-        let mut curr = Cow::Borrowed(self);
+        let mut curr = self.clone().await;
 
         for component in path.as_ref().components() {
             match component {
@@ -80,7 +92,7 @@ impl JointDirectory {
                         .ok_or(Error::EntryNotFound)?
                         .open(conn, MissingVersionStrategy::Skip)
                         .await?;
-                    curr = Cow::Owned(next);
+                    curr = next;
                 }
                 Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
                     return Err(Error::OperationNotSupported)
@@ -88,7 +100,7 @@ impl JointDirectory {
             }
         }
 
-        Ok(curr.into_owned())
+        Ok(curr)
     }
 
     /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
@@ -255,14 +267,14 @@ async fn fork(
     local_branch: &Branch,
 ) -> Result<Directory> {
     if let Some(local) = versions.get(local_branch.id()) {
-        return Ok(local.clone());
+        return Ok(local.clone().await);
     }
 
     // Grab any version and fork it to create the local one.
     let remote = versions.values().next().ok_or(Error::EntryNotFound)?;
-    let local = remote.clone().fork(conn, local_branch).await?;
+    let local = remote.fork(conn, local_branch).await?;
 
-    versions.insert(*local_branch.id(), local.clone());
+    versions.insert(*local_branch.id(), local.clone().await);
 
     Ok(local)
 }
