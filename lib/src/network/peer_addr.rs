@@ -38,6 +38,13 @@ impl PeerAddr {
             Self::Quic(addr) => PeerPort::Quic(addr.port()),
         }
     }
+
+    pub fn is_quic(&self) -> bool {
+        match self {
+            Self::Tcp(_) => false,
+            Self::Quic(_) => true,
+        }
+    }
 }
 
 impl FromStr for PeerAddr {

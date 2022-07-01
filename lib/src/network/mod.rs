@@ -28,6 +28,7 @@ pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
+    ip::is_global_ip,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
@@ -124,6 +125,9 @@ impl Network {
 
         let monitor = StateMonitor::make_root();
 
+        let hole_puncher_v4 = udp_socket_v4.as_ref().map(|s| s.create_sender());
+        let hole_puncher_v6 = udp_socket_v6.as_ref().map(|s| s.create_sender());
+
         let dht_discovery = if !options.disable_dht {
             // Also note that we're now only using quic for the transport discovered over the dht.
             // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -207,6 +211,8 @@ impl Network {
             quic_listener_local_addr_v6,
             tcp_listener_local_addr_v4,
             tcp_listener_local_addr_v6,
+            hole_puncher_v4,
+            hole_puncher_v6,
             this_runtime_id: rand::random(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
@@ -500,6 +506,8 @@ struct Inner {
     quic_listener_local_addr_v6: Option<SocketAddr>,
     tcp_listener_local_addr_v4: Option<SocketAddr>,
     tcp_listener_local_addr_v6: Option<SocketAddr>,
+    hole_puncher_v4: Option<quic::SideChannelSender>,
+    hole_puncher_v6: Option<quic::SideChannelSender>,
     this_runtime_id: RuntimeId,
     state: BlockingMutex<State>,
     _tcp_port_map: Option<upnp::Mapping>,
@@ -711,11 +719,13 @@ impl Inner {
             .with_max_elapsed_time(None)
             .build();
 
+        let _hole_punching_task = self.start_punching_holes(*peer.addr()?);
+
         loop {
-            let addr = match peer.addr() {
-                Some(addr) => *addr,
-                None => return None,
-            };
+            // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
+            // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
+            // found it is no longer seeing it.
+            let addr = *peer.addr()?;
 
             match self.connect(addr).await.ok() {
                 Some(socket) => {
@@ -738,6 +748,42 @@ impl Inner {
                 }
             }
         }
+    }
+
+    fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
+        if !addr.is_quic() {
+            return None;
+        }
+
+        if !is_global_ip(&addr.ip()) {
+            return None;
+        }
+
+        use std::net::IpAddr;
+
+        let sender = match addr.ip() {
+            IpAddr::V4(_) => self.hole_puncher_v4.clone(),
+            IpAddr::V6(_) => self.hole_puncher_v6.clone(),
+        };
+
+        sender.map(|sender| {
+            scoped_task::spawn(async move {
+                use rand::Rng;
+
+                let addr = addr.socket_addr();
+                loop {
+                    let duration_ms = rand::thread_rng().gen_range(5_000..15_000);
+                    // Sleep first because the `connect` function that is normally called right
+                    // after this function will send a SYN packet right a way, so no need to do
+                    // double work here.
+                    time::sleep(Duration::from_millis(duration_ms)).await;
+                    // TODO: Consider using something non-identifiable (random) but something that
+                    // won't interfere with (will be ignored by) the quic and btdht protocols.
+                    let msg = b"punch";
+                    sender.send_to(msg, &addr).await.map(|_| ()).unwrap_or(());
+                }
+            })
+        })
     }
 
     fn on_protocol_mismatch(&self, their_version: Version) {

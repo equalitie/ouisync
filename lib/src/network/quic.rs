@@ -567,6 +567,25 @@ impl SideChannel {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.io.local_addr()
     }
+
+    pub fn create_sender(&self) -> SideChannelSender {
+        SideChannelSender {
+            io: self.io.clone(),
+        }
+    }
+}
+
+// `SideChannelSender` is less expensive than the `SideChannel` because there is no additional
+// `broadcast::Receiver` that the `CustomUdpSocket` would need to pass messages to.
+#[derive(Clone)]
+pub struct SideChannelSender {
+    io: Arc<tokio::net::UdpSocket>,
+}
+
+impl SideChannelSender {
+    pub async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
+        self.io.send_to(buf, target).await.map(|_| ())
+    }
 }
 
 //------------------------------------------------------------------------------
