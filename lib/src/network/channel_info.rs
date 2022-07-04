@@ -1,4 +1,4 @@
-use super::{message::MessageChannel, runtime_id::RuntimeId};
+use super::{message::MessageChannel, runtime_id::PublicRuntimeId};
 use std::{fmt, future::Future};
 use tokio::task_local;
 
@@ -9,15 +9,15 @@ task_local! {
 #[derive(Clone, Copy)]
 pub(super) struct ChannelInfo {
     channel: MessageChannel,
-    this_runtime_id: RuntimeId,
-    that_runtime_id: RuntimeId,
+    this_runtime_id: PublicRuntimeId,
+    that_runtime_id: PublicRuntimeId,
 }
 
 impl ChannelInfo {
     pub fn new(
         channel: MessageChannel,
-        this_runtime_id: RuntimeId,
-        that_runtime_id: RuntimeId,
+        this_runtime_id: PublicRuntimeId,
+        that_runtime_id: PublicRuntimeId,
     ) -> Self {
         Self {
             channel,

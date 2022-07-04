@@ -4,7 +4,7 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
-    runtime_id::RuntimeId,
+    runtime_id::PublicRuntimeId,
     raw,
     request::MAX_PENDING_REQUESTS,
     server::Server,
@@ -32,8 +32,8 @@ use tokio::{
 /// that it either goes to the ClientStream or ServerStream for processing by the Client and Server
 /// structures respectively.
 pub(super) struct MessageBroker {
-    this_runtime_id: RuntimeId,
-    that_runtime_id: RuntimeId,
+    this_runtime_id: PublicRuntimeId,
+    that_runtime_id: PublicRuntimeId,
     dispatcher: MessageDispatcher,
     links: HashMap<MessageChannel, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
@@ -41,8 +41,8 @@ pub(super) struct MessageBroker {
 
 impl MessageBroker {
     pub fn new(
-        this_runtime_id: RuntimeId,
-        that_runtime_id: RuntimeId,
+        this_runtime_id: PublicRuntimeId,
+        that_runtime_id: PublicRuntimeId,
         stream: raw::Stream,
         permit: ConnectionPermit,
     ) -> Self {

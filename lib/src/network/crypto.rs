@@ -9,7 +9,7 @@
 
 use super::{
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
-    runtime_id::RuntimeId,
+    runtime_id::PublicRuntimeId,
 };
 use crate::repository::RepositoryId;
 use noise_protocol::Cipher as _;
@@ -39,8 +39,8 @@ impl Role {
     /// Panics if the runtime ids are equal.
     pub fn determine(
         repo_id: &RepositoryId,
-        this_runtime_id: &RuntimeId,
-        that_runtime_id: &RuntimeId,
+        this_runtime_id: &PublicRuntimeId,
+        that_runtime_id: &PublicRuntimeId,
     ) -> Self {
         assert_ne!(this_runtime_id, that_runtime_id);
 
