@@ -903,8 +903,12 @@ impl Inner {
                 Entry::Vacant(entry) => {
                     log::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
 
-                    let mut broker =
-                        MessageBroker::new(self.this_runtime_id.public(), that_runtime_id, stream, permit);
+                    let mut broker = MessageBroker::new(
+                        self.this_runtime_id.public(),
+                        that_runtime_id,
+                        stream,
+                        permit,
+                    );
 
                     // TODO: for DHT connection we should only link the repository for which we did the
                     // lookup but make sure we correctly handle edge cases, for example, when we have
@@ -958,7 +962,7 @@ pub enum ConnectError {
 
 //------------------------------------------------------------------------------
 
-// Exchange runtime ids with the peer. Returns their runtime id.
+// Exchange runtime ids with the peer. Returns their (verified) runtime id.
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -967,10 +971,8 @@ async fn perform_handshake(
     stream.write_all(MAGIC).await?;
 
     this_version.write_into(stream).await?;
-    this_runtime_id.public().write_into(stream).await?;
 
     let mut that_magic = [0; MAGIC.len()];
-
     stream.read_exact(&mut that_magic).await?;
 
     if MAGIC != &that_magic {
@@ -983,7 +985,7 @@ async fn perform_handshake(
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
-    Ok(PublicRuntimeId::read_from(stream).await?)
+    Ok(runtime_id::exchange(&this_runtime_id, stream).await?)
 }
 
 #[derive(Debug, Error)]

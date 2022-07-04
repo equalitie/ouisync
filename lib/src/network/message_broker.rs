@@ -4,9 +4,9 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
-    runtime_id::PublicRuntimeId,
     raw,
     request::MAX_PENDING_REQUESTS,
+    runtime_id::PublicRuntimeId,
     server::Server,
 };
 use crate::{

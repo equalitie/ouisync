@@ -253,6 +253,12 @@ impl AsRef<[u8]> for Signature {
     }
 }
 
+impl From<[u8; Self::SIZE]> for Signature {
+    fn from(bytes: [u8; Self::SIZE]) -> Self {
+        Self::try_from(bytes.as_ref()).unwrap()
+    }
+}
+
 impl TryFrom<&'_ [u8]> for Signature {
     type Error = ext::SignatureError;
 
