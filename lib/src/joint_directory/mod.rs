@@ -161,7 +161,7 @@ impl JointDirectory {
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
     pub async fn cd(&self, conn: &mut db::Connection, path: impl AsRef<Utf8Path>) -> Result<Self> {
-        let mut curr = self.clone();
+        let mut curr = Cow::Borrowed(self);
 
         for component in path.as_ref().components() {
             match component {
@@ -173,7 +173,7 @@ impl JointDirectory {
                         .ok_or(Error::EntryNotFound)?
                         .open(conn, MissingVersionStrategy::Skip)
                         .await?;
-                    curr = next;
+                    curr = Cow::Owned(next);
                 }
                 Utf8Component::ParentDir | Utf8Component::Prefix(_) => {
                     return Err(Error::OperationNotSupported)
@@ -181,7 +181,7 @@ impl JointDirectory {
             }
         }
 
-        Ok(curr)
+        Ok(curr.into_owned())
     }
 
     /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
