@@ -207,7 +207,6 @@ impl JointDirectory {
         pattern: Pattern<'_>,
     ) -> Result<()> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let mut local = fork(conn, &mut self.versions, local_branch).await?;
 
         let entries: Vec<_> = pattern
             .apply(self)?
@@ -223,8 +222,12 @@ impl JointDirectory {
             })
             .collect();
 
+        let local_version = self.fork(conn).await?;
+
         for (name, branch_id, vv) in entries {
-            local.remove_entry(conn, &name, &branch_id, vv).await?;
+            local_version
+                .remove_entry(conn, &name, &branch_id, vv)
+                .await?;
         }
 
         Ok(())
@@ -236,13 +239,8 @@ impl JointDirectory {
         conn: &mut db::Connection,
         pattern: Pattern<'a>,
     ) -> Result<()> {
-        let mut dirs = Vec::new();
-
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
-            dirs.push(entry.open(conn, MissingVersionStrategy::Skip).await?);
-        }
-
-        for mut dir in dirs {
+            let mut dir = entry.open(conn, MissingVersionStrategy::Skip).await?;
             dir.remove_entries_recursively(conn, Pattern::All).await?;
         }
 
@@ -264,29 +262,16 @@ impl JointDirectory {
     pub async fn merge(&mut self, db: &db::Pool) -> Result<Directory> {
         let mut conn = db.acquire().await?;
 
-        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
-        let mut local_version = fork(&mut conn, &mut self.versions, local_branch).await?;
+        let local_version = self.fork(&mut conn).await?;
+        let local_branch = local_version.branch().clone();
 
-        let new_version_vector = self.merge_version_vectors(&mut conn).await?;
         let old_version_vector = local_version.version_vector(&mut conn).await?;
+        let new_version_vector = self.merge_version_vectors(&mut conn).await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
-            return Ok(local_version);
-        }
-
-        // To avoid deadlock, collect the files and directories and only fork/merge them after
-        // releasing the read lock.
-        let mut files = vec![];
-        let mut subdirs = vec![];
-
-        for entry in self.entries() {
-            match entry {
-                JointEntryRef::File(entry) => files.push(entry.open(&mut conn).await?),
-                JointEntryRef::Directory(entry) => {
-                    subdirs.push(entry.open(&mut conn, MissingVersionStrategy::Fail).await?)
-                }
-            }
+            // unwrap is ok because we ensured the local version exists by calling `fork` above.
+            return Ok(self.local_version().unwrap().clone());
         }
 
         // Drop the connection now and re-acquire it for each file/subdirectory separately, to give
@@ -295,34 +280,46 @@ impl JointDirectory {
 
         let mut bump = true;
 
-        // Fork files.
-        for mut file in files {
-            let mut conn = db.acquire().await?;
+        for entry in self.entries() {
+            match entry {
+                JointEntryRef::File(entry) => {
+                    let mut conn = db.acquire().await?;
+                    let mut file = entry.open(&mut conn).await?;
 
-            match file.fork(&mut conn, local_branch.clone()).await {
-                Ok(()) => (),
-                Err(Error::EntryExists) => {
-                    // This error indicates the local and the remote files are in conflict and
-                    // so can't be automatically merged. We still proceed with merging the
-                    // remaining entries but we won't mark this directory as merged (by bumping its
-                    // vv) to prevent the conflicting remote file from being collected.
-                    bump = false;
+                    match file.fork(&mut conn, local_branch.clone()).await {
+                        Ok(()) => (),
+                        Err(Error::EntryExists) => {
+                            // This error indicates the local and the remote files are in conflict and
+                            // so can't be automatically merged. We still proceed with merging the
+                            // remaining entries but we won't mark this directory as merged (by bumping its
+                            // vv) to prevent the conflicting remote file from being collected.
+                            bump = false;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-                Err(error) => return Err(error),
+                JointEntryRef::Directory(entry) => {
+                    let mut conn = db.acquire().await?;
+                    let mut dir = entry.open(&mut conn, MissingVersionStrategy::Fail).await?;
+                    drop(conn);
+
+                    dir.merge(db).await?;
+                }
             }
         }
 
-        // Merge subdirectories
-        for mut dir in subdirs {
-            dir.merge(db).await?;
-        }
+        let mut conn = db.acquire().await?;
+
+        // unwrap is ok because we ensured the local version exists by calling `fork` at the
+        // beginning of this function.
+        let local_version = self.local_version_mut().unwrap();
+        // local_version.refresh(&mut conn).await?;
 
         if bump {
-            let mut conn = db.acquire().await?;
             local_version.bump(&mut conn, new_version_vector).await?;
         }
 
-        Ok(local_version)
+        Ok(local_version.clone())
     }
 
     // Merge the version vectors of all the versions in this joint directory.
@@ -336,31 +333,45 @@ impl JointDirectory {
         Ok(outcome)
     }
 
+    async fn fork(&mut self, conn: &'_ mut db::Connection) -> Result<&mut Directory> {
+        let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
+
+        // Note the triple lookup (`contains_key`, `insert` and `get_mut`) is unfortunate but
+        // necessary to satisfy the borrow checker.
+
+        if !self.versions.contains_key(local_branch.id()) {
+            // Grab any version and fork it to create the local one.
+            let version = self
+                .versions
+                .values()
+                .next()
+                .ok_or(Error::EntryNotFound)?
+                .fork(conn, local_branch)
+                .await?;
+            self.versions.insert(*local_branch.id(), version);
+        }
+
+        // `unwrap` is ok because we just ensured the entry exists in the code above.
+        Ok(self.versions.get_mut(local_branch.id()).unwrap())
+    }
+
+    fn local_version(&self) -> Option<&Directory> {
+        self.local_branch
+            .as_ref()
+            .and_then(|branch| self.versions.get(branch.id()))
+    }
+
+    fn local_version_mut(&mut self) -> Option<&mut Directory> {
+        self.local_branch
+            .as_ref()
+            .and_then(|branch| self.versions.get_mut(branch.id()))
+    }
+
     fn entry_versions<'a>(&'a self, name: &'a str) -> impl Iterator<Item = EntryRef<'a>> {
         self.versions
             .values()
             .filter_map(move |v| v.lookup(name).ok())
     }
-}
-
-// Ensures this joint directory contains a local version and returns it.
-// Note this is not a method to work around borrow checker.
-async fn fork(
-    conn: &mut db::Connection,
-    versions: &mut BTreeMap<PublicKey, Directory>,
-    local_branch: &Branch,
-) -> Result<Directory> {
-    if let Some(local) = versions.get(local_branch.id()) {
-        return Ok(local.clone());
-    }
-
-    // Grab any version and fork it to create the local one.
-    let remote = versions.values().next().ok_or(Error::EntryNotFound)?;
-    let local = remote.fork(conn, local_branch).await?;
-
-    versions.insert(*local_branch.id(), local.clone());
-
-    Ok(local)
 }
 
 impl fmt::Debug for JointDirectory {
