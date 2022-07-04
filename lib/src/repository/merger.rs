@@ -14,10 +14,8 @@ use tokio::{
 
 /// Utility that merges remote branches into the local one.
 pub(super) struct Merger {
-    shared: Arc<Shared>,
-    local_branch: Branch,
+    inner: Inner,
     command_rx: mpsc::Receiver<Command>,
-    event_scope: EventScope,
 }
 
 impl Merger {
@@ -26,10 +24,12 @@ impl Merger {
 
         (
             Self {
-                shared,
-                local_branch,
+                inner: Inner {
+                    shared,
+                    local_branch,
+                    event_scope: EventScope::new(),
+                },
                 command_rx,
-                event_scope: EventScope::new(),
             },
             MergerHandle { command_tx },
         )
@@ -37,7 +37,7 @@ impl Merger {
 
     pub async fn run(mut self) {
         // TODO: consider throttling / debouncing this stream
-        let mut notify_rx = self.shared.store.index.subscribe();
+        let mut notify_rx = self.inner.shared.store.index.subscribe();
         let mut wait = false;
 
         loop {
@@ -63,7 +63,7 @@ impl Merger {
             // Run the merge process but interrupt and restart it when we receive notification or
             // command.
             select! {
-                event = recv(&mut notify_rx, self.event_scope) => {
+                event = recv(&mut notify_rx, self.inner.event_scope) => {
                     if event.is_ok() {
                         wait = false;
                         continue;
@@ -78,7 +78,7 @@ impl Merger {
                         break;
                     }
                 }
-                _ = process_and_log(&self.shared, &self.local_branch, self.event_scope) => (),
+                _ = self.inner.process_and_log() => (),
             }
 
             wait = true;
@@ -90,65 +90,61 @@ impl Merger {
     async fn handle_command(&self, command: Command) {
         match command {
             Command::Merge(result_tx) => {
-                let result = process(&self.shared, &self.local_branch, self.event_scope).await;
+                let result = self.inner.process().await;
                 result_tx.send(result).unwrap_or(());
             }
         }
     }
 }
 
-// Receive next event but ignore events triggered from inside the given scope.
-async fn recv(
-    rx: &mut async_broadcast::Receiver<Event>,
-    ignore_scope: EventScope,
-) -> Result<Event, async_broadcast::RecvError> {
-    loop {
-        let event = rx.recv().await?;
-        if event.scope != ignore_scope {
-            break Ok(event);
-        }
-    }
+struct Inner {
+    shared: Arc<Shared>,
+    local_branch: Branch,
+    event_scope: EventScope,
 }
 
-async fn process(shared: &Shared, local_branch: &Branch, event_scope: EventScope) -> Result<()> {
-    let branches = shared.collect_branches().await?;
-    let mut roots = Vec::with_capacity(branches.len());
+impl Inner {
+    async fn process(&self) -> Result<()> {
+        let branches = self.shared.collect_branches().await?;
+        let mut roots = Vec::with_capacity(branches.len());
 
-    for branch in branches {
-        let mut conn = shared.store.db().acquire().await?;
-        match branch.open_root(&mut conn).await {
-            Ok(dir) => roots.push(dir),
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
-            Err(error) => return Err(error),
+        for branch in branches {
+            let mut conn = self.shared.store.db().acquire().await?;
+            match branch.open_root(&mut conn).await {
+                Ok(dir) => roots.push(dir),
+                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+                Err(error) => return Err(error),
+            }
         }
+
+        // Run the merge within `event_scope` so we can distinguish the events triggered by the merge
+        // itself from any other events and not interrupt the merge by the event it itself triggered.
+        let mut joint = JointDirectory::new(Some(self.local_branch.clone()), roots);
+        self.event_scope
+            .apply(joint.merge(self.shared.store.db()))
+            .await?;
+
+        Ok(())
     }
 
-    // Run the merge within `event_scope` so we can distinguish the events triggered by the merge
-    // itself from any other events and not interrupt the merge by the event it itself triggered.
-    event_scope
-        .apply(JointDirectory::new(Some(local_branch.clone()), roots).merge(shared.store.db()))
-        .await?;
+    async fn process_and_log(&self) {
+        log::trace!("merge started");
 
-    Ok(())
-}
+        match self.process().await {
+            Ok(()) => log::trace!("merge completed"),
+            Err(error) => {
+                // `BlockNotFound` means that a block is not downloaded yet. This error
+                // is harmless because the merge will be attempted again on the next
+                // change notification. We reduce the log severity for them to avoid
+                // log spam.
+                let level = if let Error::BlockNotFound(_) = error {
+                    Level::Trace
+                } else {
+                    Level::Error
+                };
 
-async fn process_and_log(shared: &Shared, local_branch: &Branch, event_scope: EventScope) {
-    log::trace!("merge started");
-
-    match process(shared, local_branch, event_scope).await {
-        Ok(()) => log::trace!("merge completed"),
-        Err(error) => {
-            // `BlockNotFound` means that a block is not downloaded yet. This error
-            // is harmless because the merge will be attempted again on the next
-            // change notification. We reduce the log severity for them to avoid
-            // log spam.
-            let level = if let Error::BlockNotFound(_) = error {
-                Level::Trace
-            } else {
-                Level::Error
-            };
-
-            log::log!(level, "merge failed: {:?}", error)
+                log::log!(level, "merge failed: {:?}", error)
+            }
         }
     }
 }
@@ -174,4 +170,17 @@ impl MergerHandle {
 
 enum Command {
     Merge(oneshot::Sender<Result<()>>),
+}
+
+// Receive next event but ignore events triggered from inside the given scope.
+async fn recv(
+    rx: &mut async_broadcast::Receiver<Event>,
+    ignore_scope: EventScope,
+) -> Result<Event, async_broadcast::RecvError> {
+    loop {
+        let event = rx.recv().await?;
+        if event.scope != ignore_scope {
+            break Ok(event);
+        }
+    }
 }

@@ -24,7 +24,7 @@ impl Event {
     pub(crate) fn new(branch_id: PublicKey) -> Self {
         let scope = CURRENT_SCOPE
             .try_with(|scope| *scope)
-            .unwrap_or(Scope::DEFAULT);
+            .unwrap_or(EventScope::DEFAULT);
 
         Self { branch_id, scope }
     }
