@@ -293,8 +293,6 @@ async fn sync_during_file_write() {
     .unwrap();
 }
 
-// TODO: this now passes, remove the `ignore`
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
