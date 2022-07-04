@@ -88,10 +88,7 @@ impl BlockScanner {
             if result.is_ok() {
                 let mut conn = self.shared.store.db().acquire().await?;
 
-                // Open the directory in read-only mode to bypass the cache (see `directory::Mode` for
-                // more details) to make sure we obtain the most up-to-date version of the directory so
-                // that we can find all the missing blocks.
-                match branch.open_root_read_only(&mut conn).await {
+                match branch.open_root(&mut conn).await {
                     Ok(dir) => versions.push(dir),
                     Err(Error::EntryNotFound) => {
                         // `EntryNotFound` here just means this is a newly created branch with no

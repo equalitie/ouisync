@@ -28,19 +28,6 @@ use async_recursion::async_recursion;
 use sqlx::Connection;
 use std::mem;
 
-/// Directory access mode
-///
-/// Note: when a directory is opening in `ReadOnly` mode, it also bypasses the cache. This is
-/// because the purpose of the cache is to make sure all instances of the same directory are in
-/// sync, but when the directory is read-only, it's not possible to perform any modifications on it
-/// that would affect the other instances so the cache is unnecessary. This is also useful when one
-/// needs to open the most up to date version of the directory.
-#[derive(Clone, Copy)]
-pub(crate) enum Mode {
-    ReadOnly,
-    ReadWrite,
-}
-
 /// What to do with the existing entry when inserting a new entry in its place.
 pub(crate) enum OverwriteStrategy {
     // Remove it
@@ -52,7 +39,6 @@ pub(crate) enum OverwriteStrategy {
 
 #[derive(Clone)]
 pub struct Directory {
-    mode: Mode,
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
@@ -62,12 +48,8 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(
-        conn: &mut db::Connection,
-        owner_branch: Branch,
-        mode: Mode,
-    ) -> Result<Self> {
-        Self::open(conn, owner_branch, Locator::ROOT, None, mode).await
+    pub(crate) async fn open_root(conn: &mut db::Connection, owner_branch: Branch) -> Result<Self> {
+        Self::open(conn, owner_branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -79,7 +61,7 @@ impl Directory {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(conn, branch.clone(), locator, None, Mode::ReadWrite).await {
+        match Self::open(conn, branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -89,7 +71,6 @@ impl Directory {
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self, conn: &mut db::Connection) -> Result<()> {
         let Self {
-            mode,
             blob,
             parent,
             entries,
@@ -98,11 +79,9 @@ impl Directory {
             self.branch().clone(),
             *self.locator(),
             self.parent.as_ref().cloned(),
-            self.mode,
         )
         .await?;
 
-        self.mode = mode;
         self.blob = blob;
         self.parent = parent;
         self.entries = entries;
@@ -333,12 +312,10 @@ impl Directory {
         owner_branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
-        mode: Mode,
     ) -> Result<Self> {
         let (blob, entries) = load(conn, owner_branch, locator).await?;
 
         Ok(Self {
-            mode,
             blob,
             parent,
             entries,
@@ -349,7 +326,6 @@ impl Directory {
         let blob = Blob::create(owner_branch, locator, Shared::uninit());
 
         Directory {
-            mode: Mode::ReadWrite,
             blob,
             parent,
             entries: Content::empty(),
@@ -418,7 +394,6 @@ impl Directory {
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
-                        Mode::ReadOnly,
                     )
                     .await;
 

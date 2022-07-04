@@ -1,4 +1,4 @@
-use super::{Mode, OverwriteStrategy};
+use super::OverwriteStrategy;
 use crate::{
     blob::Blob, blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
     locator::Locator, version_vector::VersionVector,
@@ -95,7 +95,6 @@ impl ParentContext {
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),
-            Mode::ReadWrite,
         )
         .await
     }
