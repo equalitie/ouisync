@@ -5,7 +5,6 @@ use crate::{
     crypto::sign::PublicKey,
     error::Error,
     index::BranchData,
-    sync::broadcast,
     test_utils,
 };
 use assert_matches::assert_matches;
@@ -13,6 +12,7 @@ use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
 use std::sync::Arc;
 use test_strategy::proptest;
+use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
@@ -516,7 +516,7 @@ async fn fork_case(
     let (mut rng, pool, src_branch) = setup(rng_seed).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let notify_tx = broadcast::Sender::new(1);
+    let (notify_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(
         BranchData::create(
             &mut conn,
@@ -613,7 +613,7 @@ async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
     let secrets = WriteSecrets::generate(&mut rng);
     let pool = db::create(&db::Store::Temporary).await.unwrap();
 
-    let notify_tx = broadcast::Sender::new(1);
+    let (notify_tx, _) = broadcast::channel(1);
     let branch = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),

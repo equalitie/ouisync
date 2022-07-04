@@ -5,106 +5,13 @@ use std::future::Future;
 
 /// MPMC broadcast channel
 pub(crate) mod broadcast {
-    pub use async_broadcast::Receiver;
     use std::time::{Duration, Instant};
-    use tokio::{select, sync::watch, task, time};
-
-    /// Sender for a mpmc broadcast channel.
-    ///
-    /// This is a wrapper for `async_broadcast::Sender` which provides these additional features:
-    ///
-    /// 1. Receiver can be created directly from `Sender` (using `subscribe`), without needing to
-    ///    keep a `Receiver` or `InactiveReceiver` around.
-    /// 2. Calling `broadcast` when there are no subscribed receivers does not wait (block).
-    #[derive(Clone)]
-    pub struct Sender<T> {
-        tx: async_broadcast::Sender<T>,
-        rx: async_broadcast::InactiveReceiver<T>,
-    }
-
-    impl<T> Sender<T>
-    where
-        T: Clone + Send + Sync + 'static,
-    {
-        /// Create a broadcast channel with the specified capacity.
-        pub fn new(capacity: usize) -> Self {
-            let (tx, rx) = async_broadcast::broadcast(capacity);
-
-            // HACK: drain the channel so that sending doesn't block when there are no
-            // subscriptions.
-            task::spawn({
-                let mut rx = rx.clone();
-                async move { while rx.recv().await.is_ok() {} }
-            });
-
-            Self {
-                tx,
-                rx: rx.deactivate(),
-            }
-        }
-
-        /// Broadcast a message on the channel. The message will be received by all currently
-        /// subscribed receivers. If the channel is full, then this function waits until it becomes
-        /// non-full again. However, if there are currently no receivers, then this function
-        /// returns immediately with `Ok`.
-        pub async fn broadcast(&self, value: T) -> Result<(), async_broadcast::SendError<T>> {
-            self.tx.broadcast(value).await?;
-            Ok(())
-        }
-
-        /// Create a new receiver subscribed to this channel.
-        pub fn subscribe(&self) -> async_broadcast::Receiver<T> {
-            self.rx.activate_cloned()
-        }
-
-        /// Close the channel explicitly. This makes all subsequent receives to fail immediately.
-        pub fn close(&self) {
-            self.tx.close();
-        }
-    }
-
-    /// Adapter for `Sender` which enables overflow of messages sent previously on this same sender.
-    pub struct OverflowSender<T> {
-        tx: watch::Sender<Option<T>>,
-    }
-
-    impl<T> OverflowSender<T>
-    where
-        T: Clone + Send + Sync + 'static,
-    {
-        pub fn new(inner: Sender<T>) -> Self {
-            let (tx, mut rx) = watch::channel::<Option<T>>(None);
-
-            task::spawn(async move {
-                while rx.changed().await.is_ok() {
-                    let value = if let Some(value) = &*rx.borrow() {
-                        value.clone()
-                    } else {
-                        continue;
-                    };
-
-                    if inner.broadcast(value).await.is_err() {
-                        break;
-                    }
-                }
-            });
-
-            Self { tx }
-        }
-
-        pub fn broadcast(&self, value: T) -> Result<(), async_broadcast::SendError<T>> {
-            self.tx
-                .send(Some(value))
-                .map_err(|watch::error::SendError(value)| {
-                    async_broadcast::SendError(value.unwrap())
-                })
-        }
-    }
+    use tokio::{select, sync::broadcast, time};
 
     /// Adapter for `Receiver` which limits the rate at which messages are received. The messages
     /// are not buffered - if the rate limit is exceeded, all but the last message are discarded.
     pub(crate) struct ThrottleReceiver<T> {
-        rx: Receiver<T>,
+        rx: broadcast::Receiver<T>,
         interval: Duration,
         last_recv: Instant,
     }
@@ -113,7 +20,7 @@ pub(crate) mod broadcast {
     where
         T: Clone,
     {
-        pub fn new(inner: Receiver<T>, interval: Duration) -> Self {
+        pub fn new(inner: broadcast::Receiver<T>, interval: Duration) -> Self {
             Self {
                 rx: inner,
                 interval,
@@ -121,7 +28,7 @@ pub(crate) mod broadcast {
             }
         }
 
-        pub async fn recv(&mut self) -> Result<T, async_broadcast::RecvError> {
+        pub async fn recv(&mut self) -> Result<T, broadcast::error::RecvError> {
             let mut item = None;
             let end = self.last_recv + self.interval;
 

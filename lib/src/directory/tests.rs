@@ -5,11 +5,11 @@ use crate::{
     crypto::sign::Keypair,
     db,
     index::BranchData,
-    sync::broadcast,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
 use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
+use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -634,7 +634,7 @@ async fn setup_multiple<const N: usize>() -> (db::Pool, [Branch; N]) {
 }
 
 async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
-    let notify_tx = broadcast::Sender::new(1);
+    let (notify_tx, _) = broadcast::channel(1);
     let write_keys = Keypair::random();
     let branch_data = BranchData::create(
         &mut pool.acquire().await.unwrap(),

@@ -107,7 +107,6 @@ mod tests {
         },
         locator::Locator,
         repository::RepositoryId,
-        sync::broadcast,
         test_utils,
         version_vector::VersionVector,
     };
@@ -115,6 +114,7 @@ mod tests {
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use sqlx::Connection;
     use test_strategy::proptest;
+    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
@@ -122,7 +122,7 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let notify_tx = broadcast::Sender::new(1);
+        let (notify_tx, _) = broadcast::channel(1);
 
         let branch0 = BranchData::create(
             &mut conn,

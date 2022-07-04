@@ -171,9 +171,9 @@ mod tests {
         crypto::sign::PublicKey,
         db,
         index::BranchData,
-        sync::broadcast,
     };
     use std::sync::Arc;
+    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
@@ -287,7 +287,7 @@ mod tests {
         keys: AccessKeys,
         blob_cache: Arc<BlobCache>,
     ) -> Branch {
-        let notify_tx = broadcast::Sender::new(1);
+        let (notify_tx, _) = broadcast::channel(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
             PublicKey::random(),

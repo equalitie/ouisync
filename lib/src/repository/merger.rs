@@ -9,7 +9,10 @@ use log::Level;
 use std::sync::Arc;
 use tokio::{
     select,
-    sync::{mpsc, oneshot},
+    sync::{
+        broadcast::{self, error::RecvError},
+        mpsc, oneshot,
+    },
 };
 
 /// Utility that merges remote branches into the local one.
@@ -45,8 +48,9 @@ impl Merger {
             if wait {
                 select! {
                     event = notify_rx.recv() => {
-                        if event.is_err() {
-                            break;
+                        match event {
+                            Ok(_) | Err(RecvError::Lagged(_)) => (),
+                            Err(RecvError::Closed) => break,
                         }
                     }
                     command = self.command_rx.recv() => {
@@ -64,11 +68,12 @@ impl Merger {
             // command.
             select! {
                 event = recv(&mut notify_rx, self.inner.event_scope) => {
-                    if event.is_ok() {
-                        wait = false;
-                        continue;
-                    } else {
-                        break;
+                    match event {
+                        Ok(_) | Err(RecvError::Lagged(_)) => {
+                            wait = false;
+                            continue;
+                        }
+                        Err(RecvError::Closed) => break,
                     }
                 }
                 command = self.command_rx.recv() => {
@@ -174,9 +179,9 @@ enum Command {
 
 // Receive next event but ignore events triggered from inside the given scope.
 async fn recv(
-    rx: &mut async_broadcast::Receiver<Event>,
+    rx: &mut broadcast::Receiver<Event>,
     ignore_scope: EventScope,
-) -> Result<Event, async_broadcast::RecvError> {
+) -> Result<Event, RecvError> {
     loop {
         let event = rx.recv().await?;
         if event.scope != ignore_scope {

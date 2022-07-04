@@ -1,12 +1,13 @@
 use super::*;
 use crate::{
     access_control::WriteSecrets, blob::BlobCache, branch::Branch, crypto::sign::PublicKey, db,
-    index::BranchData, sync::broadcast, version_vector::VersionVector,
+    index::BranchData, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
@@ -858,7 +859,7 @@ async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<Branch>) {
     let pool = db::create(&db::Store::Temporary).await.unwrap();
-    let notify_tx = broadcast::Sender::new(1);
+    let (notify_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
     let blob_cache = Arc::new(BlobCache::new());
 

@@ -11,7 +11,6 @@ publish = false
 
 [dependencies]
 argon2 = "0.4.0"
-async-broadcast = "0.4.0"
 async-recursion = "1.0.0"
 async-trait   = "0.1.56"
 backoff = "0.4.0"

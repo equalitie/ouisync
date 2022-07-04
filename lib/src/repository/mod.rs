@@ -41,7 +41,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::task;
+use tokio::{
+    sync::broadcast::{self, error::RecvError},
+    task,
+};
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -440,7 +443,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> async_broadcast::Receiver<Event> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.store.index.subscribe()
     }
 
@@ -594,12 +597,6 @@ impl Repository {
     }
 }
 
-impl Drop for Repository {
-    fn drop(&mut self) {
-        self.shared.store.index.close()
-    }
-}
-
 struct Shared {
     store: Store,
     this_writer_id: PublicKey,
@@ -695,7 +692,12 @@ async fn report_sync_progress(store: Store) {
     let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(store.index.subscribe(), Duration::from_secs(1));
 
-    while event_rx.recv().await.is_ok() {
+    loop {
+        match event_rx.recv().await {
+            Ok(_) | Err(RecvError::Lagged(_)) => (),
+            Err(RecvError::Closed) => break,
+        }
+
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {

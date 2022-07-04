@@ -11,7 +11,7 @@ use async_recursion::async_recursion;
 use std::sync::Arc;
 use tokio::{
     select,
-    sync::{mpsc, oneshot},
+    sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
 
 /// Utility that traverses the repository scanning for missing and unreachable blocks. It then
@@ -35,16 +35,17 @@ impl BlockScanner {
 
         loop {
             select! {
-                result = notify_rx.recv() => {
-                    if result.is_ok() {
-                        match self.process(Mode::RequestAndCollect).await {
-                            Ok(()) => (),
-                            Err(error) => {
-                                log::error!("BlockScanner failed: {:?}", error);
+                event = notify_rx.recv() => {
+                    match event {
+                        Ok(_) | Err(RecvError::Lagged(_)) => {
+                            match self.process(Mode::RequestAndCollect).await {
+                                Ok(()) => (),
+                                Err(error) => {
+                                    log::error!("BlockScanner failed: {:?}", error);
+                                }
                             }
                         }
-                    } else {
-                        break;
+                        Err(RecvError::Closed) => break,
                     }
                 }
                 command = self.command_rx.recv() => {
