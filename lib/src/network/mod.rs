@@ -28,7 +28,6 @@ pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
     dht_discovery::DhtDiscovery,
-    ip::is_global_ip,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
@@ -712,6 +711,10 @@ impl Inner {
         peer: SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
+        if !Self::ok_to_connect(peer.addr()?.socket_addr(), source) {
+            return None;
+        }
+
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(200))
             .with_max_interval(Duration::from_secs(10))
@@ -750,12 +753,62 @@ impl Inner {
         }
     }
 
+    // Filter out some weird `SocketAddr`s. We don't want to connect to those.
+    fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
+        if addr.port() == 0 || addr.port() == 1 {
+            return false;
+        }
+
+        match addr {
+            SocketAddr::V4(addr) => {
+                let ip_addr = addr.ip();
+                if ip_addr.octets()[0] == 0 {
+                    return false;
+                }
+                if ip::is_benchmarking(ip_addr)
+                    || ip::is_reserved(ip_addr)
+                    || ip_addr.is_broadcast()
+                    || ip_addr.is_documentation()
+                {
+                    return false;
+                }
+
+                if source == PeerSource::Dht {
+                    if ip_addr.is_private() || ip_addr.is_loopback() || ip_addr.is_link_local() {
+                        return false;
+                    }
+                }
+            }
+            SocketAddr::V6(addr) => {
+                let ip_addr = addr.ip();
+
+                if ip_addr.is_multicast()
+                    || ip_addr.is_unspecified()
+                    || ip::is_documentation(ip_addr)
+                {
+                    return false;
+                }
+
+                if source == PeerSource::Dht {
+                    if ip_addr.is_loopback()
+                        || ip::is_unicast_link_local(ip_addr)
+                        || ip::is_unique_local(ip_addr)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
     fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
         if !addr.is_quic() {
             return None;
         }
 
-        if !is_global_ip(&addr.ip()) {
+        if !ip::is_global(&addr.ip()) {
             return None;
         }
 
@@ -941,7 +994,7 @@ enum HandshakeError {
     Fatal(#[from] io::Error),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerSource {
     UserProvided,
     Listener,

@@ -21,7 +21,7 @@ impl fmt::Display for Protocol {
 // TODO: Get rid of the below once `IpAddr::is_global` is in stable API.
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-pub const fn is_global_ip(ip: &IpAddr) -> bool {
+pub const fn is_global(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_global_ipv4(ip),
         IpAddr::V6(ip) => is_global_ipv6(ip),
@@ -66,7 +66,7 @@ const fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
     }
 }
 
-const fn is_benchmarking(ip: &Ipv4Addr) -> bool {
+pub const fn is_benchmarking(ip: &Ipv4Addr) -> bool {
     ip.octets()[0] == 198 && (ip.octets()[1] & 0xfe) == 18
 }
 
@@ -83,14 +83,15 @@ const fn is_unicast_global_ipv6(ip: &Ipv6Addr) -> bool {
         && !is_documentation(ip)
 }
 
-const fn is_unicast_link_local(ip: &Ipv6Addr) -> bool {
+pub const fn is_unicast_link_local(ip: &Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
-const fn is_unique_local(ip: &Ipv6Addr) -> bool {
+pub const fn is_unique_local(ip: &Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xfe00) == 0xfc00
 }
-const fn is_documentation(ip: &Ipv6Addr) -> bool {
+
+pub const fn is_documentation(ip: &Ipv6Addr) -> bool {
     (ip.segments()[0] == 0x2001) && (ip.segments()[1] == 0xdb8)
 }
 
