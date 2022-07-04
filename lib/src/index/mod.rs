@@ -25,6 +25,7 @@ use crate::{
     db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
+    event::Event,
     repository::RepositoryId,
     sync::{broadcast, RwLock},
 };
@@ -115,7 +116,7 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.notify_tx.subscribe()
     }
 
@@ -369,7 +370,7 @@ impl Index {
 struct Shared {
     repository_id: RepositoryId,
     branches: RwLock<Branches>,
-    notify_tx: broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<Event>,
 }
 
 /// Container for all known branches (local and remote)
@@ -377,7 +378,7 @@ pub(crate) type Branches = HashMap<PublicKey, Arc<BranchData>>;
 
 async fn load_branches(
     conn: &mut db::Connection,
-    notify_tx: broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<Event>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
     RootNode::load_all_latest_complete(conn)
         .map_ok(|node| {

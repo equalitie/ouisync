@@ -2,6 +2,7 @@ use super::Shared;
 use crate::{
     branch::Branch,
     error::{Error, Result},
+    event::{Event, EventScope},
     joint_directory::JointDirectory,
 };
 use log::Level;
@@ -16,6 +17,7 @@ pub(super) struct Merger {
     shared: Arc<Shared>,
     local_branch: Branch,
     command_rx: mpsc::Receiver<Command>,
+    event_scope: EventScope,
 }
 
 impl Merger {
@@ -27,6 +29,7 @@ impl Merger {
                 shared,
                 local_branch,
                 command_rx,
+                event_scope: EventScope::new(),
             },
             MergerHandle { command_tx },
         )
@@ -60,7 +63,7 @@ impl Merger {
             // Run the merge process but interrupt and restart it when we receive notification or
             // command.
             select! {
-                event = notify_rx.recv() => {
+                event = recv(&mut notify_rx, self.event_scope) => {
                     if event.is_ok() {
                         wait = false;
                         continue;
@@ -75,7 +78,7 @@ impl Merger {
                         break;
                     }
                 }
-                _ = process_and_log(&self.shared, &self.local_branch) => (),
+                _ = process_and_log(&self.shared, &self.local_branch, self.event_scope) => (),
             }
 
             wait = true;
@@ -87,14 +90,27 @@ impl Merger {
     async fn handle_command(&self, command: Command) {
         match command {
             Command::Merge(result_tx) => {
-                let result = process(&self.shared, &self.local_branch).await;
+                let result = process(&self.shared, &self.local_branch, self.event_scope).await;
                 result_tx.send(result).unwrap_or(());
             }
         }
     }
 }
 
-async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
+// Receive next event but ignore events triggered from inside the given scope.
+async fn recv(
+    rx: &mut async_broadcast::Receiver<Event>,
+    ignore_scope: EventScope,
+) -> Result<Event, async_broadcast::RecvError> {
+    loop {
+        let event = rx.recv().await?;
+        if event.scope != ignore_scope {
+            break Ok(event);
+        }
+    }
+}
+
+async fn process(shared: &Shared, local_branch: &Branch, event_scope: EventScope) -> Result<()> {
     let branches = shared.collect_branches().await?;
     let mut roots = Vec::with_capacity(branches.len());
 
@@ -107,16 +123,19 @@ async fn process(shared: &Shared, local_branch: &Branch) -> Result<()> {
         }
     }
 
-    JointDirectory::new(Some(local_branch.clone()), roots)
-        .merge(shared.store.db())
+    // Run the merge within `event_scope` so we can distinguish the events triggered by the merge
+    // itself from any other events and not interrupt the merge by the event it itself triggered.
+    event_scope
+        .apply(JointDirectory::new(Some(local_branch.clone()), roots).merge(shared.store.db()))
         .await?;
+
     Ok(())
 }
 
-async fn process_and_log(shared: &Shared, local_branch: &Branch) {
+async fn process_and_log(shared: &Shared, local_branch: &Branch, event_scope: EventScope) {
     log::trace!("merge started");
 
-    match process(shared, local_branch).await {
+    match process(shared, local_branch, event_scope).await {
         Ok(()) => log::trace!("merge completed"),
         Err(error) => {
             // `BlockNotFound` means that a block is not downloaded yet. This error

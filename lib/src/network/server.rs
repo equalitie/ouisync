@@ -170,8 +170,8 @@ impl<'a> Monitor<'a> {
             self.handle_root_node_changed(root_node).await?;
         }
 
-        while let Ok(branch_id) = subscription.recv().await {
-            self.handle_branch_changed(branch_id).await?;
+        while let Ok(event) = subscription.recv().await {
+            self.handle_branch_changed(event.branch_id).await?;
         }
 
         Ok(())

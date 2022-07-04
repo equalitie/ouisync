@@ -11,6 +11,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
+    event::Event,
     sync::broadcast,
     version_vector::VersionVector,
 };
@@ -19,12 +20,12 @@ type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
     writer_id: PublicKey,
-    notify_tx: broadcast::OverflowSender<PublicKey>,
+    notify_tx: broadcast::OverflowSender<Event>,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<PublicKey>) -> Self {
+    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<Event>) -> Self {
         Self {
             writer_id,
             notify_tx: broadcast::OverflowSender::new(notify_tx),
@@ -37,7 +38,7 @@ impl BranchData {
         conn: &mut db::Connection,
         writer_id: PublicKey,
         write_keys: &Keypair,
-        notify_tx: broadcast::Sender<PublicKey>,
+        notify_tx: broadcast::Sender<Event>,
     ) -> Result<Self> {
         use super::node::Summary;
 
@@ -142,7 +143,9 @@ impl BranchData {
 
     /// Trigger a notification event from this branch.
     pub fn notify(&self) {
-        self.notify_tx.broadcast(self.writer_id).unwrap_or(())
+        self.notify_tx
+            .broadcast(Event::new(self.writer_id))
+            .unwrap_or(())
     }
 
     /// Update the root version vector of this branch.

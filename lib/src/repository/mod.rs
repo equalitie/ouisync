@@ -25,6 +25,7 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
+    event::Event,
     file::File,
     index::{BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
@@ -439,7 +440,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> async_broadcast::Receiver<Event> {
         self.shared.store.index.subscribe()
     }
 
