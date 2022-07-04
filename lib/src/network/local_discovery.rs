@@ -1,6 +1,6 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
-    protocol::RuntimeId,
+    runtime_id::RuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{

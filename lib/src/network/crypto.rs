@@ -9,7 +9,7 @@
 
 use super::{
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
-    protocol::RuntimeId,
+    runtime_id::RuntimeId,
 };
 use crate::repository::RepositoryId;
 use noise_protocol::Cipher as _;

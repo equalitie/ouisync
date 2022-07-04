@@ -17,6 +17,7 @@ mod protocol;
 mod quic;
 mod raw;
 mod request;
+mod runtime_id;
 mod seen_peers;
 mod server;
 mod socket;
@@ -31,7 +32,8 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
-    protocol::{RuntimeId, Version, MAGIC, VERSION},
+    protocol::{Version, MAGIC, VERSION},
+    runtime_id::RuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{

@@ -1,4 +1,4 @@
-use super::{message::MessageChannel, protocol::RuntimeId};
+use super::{message::MessageChannel, runtime_id::RuntimeId};
 use std::{fmt, future::Future};
 use tokio::task_local;
 

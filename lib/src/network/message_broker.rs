@@ -4,7 +4,7 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
-    protocol::RuntimeId,
+    runtime_id::RuntimeId,
     raw,
     request::MAX_PENDING_REQUESTS,
     server::Server,
