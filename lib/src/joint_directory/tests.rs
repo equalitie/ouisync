@@ -806,8 +806,6 @@ async fn merge_concurrent_directories() {
 
 // TODO: merge directory with missing blocks
 
-// FIXME:  The `remove_entry_recursively` call currently fails. Investigate and fix!
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_non_empty_subdirectory() {
     let (pool, branches) = setup(2).await;
@@ -848,6 +846,7 @@ async fn remove_non_empty_subdirectory() {
     assert!(root.lookup("dir1").next().is_some());
     assert!(root.lookup("dir2").next().is_some());
 
+    local_root.refresh(&mut conn).await.unwrap();
     assert_matches!(local_root.lookup("dir0"), Ok(EntryRef::Tombstone(_)));
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }

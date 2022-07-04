@@ -244,6 +244,10 @@ impl JointDirectory {
             dir.remove_entries_recursively(conn, Pattern::All).await?;
         }
 
+        if let Some(local_version) = self.local_version_mut() {
+            local_version.refresh(conn).await?;
+        }
+
         self.remove_entries(conn, pattern).await
     }
 
@@ -313,7 +317,7 @@ impl JointDirectory {
         // unwrap is ok because we ensured the local version exists by calling `fork` at the
         // beginning of this function.
         let local_version = self.local_version_mut().unwrap();
-        // local_version.refresh(&mut conn).await?;
+        local_version.refresh(&mut conn).await?;
 
         if bump {
             local_version.bump(&mut conn, new_version_vector).await?;

@@ -87,7 +87,6 @@ impl Directory {
     }
 
     /// Reloads this directory from the db.
-    #[cfg(test)]
     pub(crate) async fn refresh(&mut self, conn: &mut db::Connection) -> Result<()> {
         let Self {
             mode,
