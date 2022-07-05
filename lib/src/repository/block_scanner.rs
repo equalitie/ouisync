@@ -75,7 +75,7 @@ impl BlockScanner {
     }
 
     async fn traverse_root(&self, mode: Mode) -> Result<()> {
-        let branches = self.shared.collect_branches().await?;
+        let branches = self.shared.collect_branches()?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
@@ -114,7 +114,7 @@ impl BlockScanner {
         // blocks and/or incorrectly mark some as unreachable.
         result?;
 
-        let local_branch = self.shared.local_branch().await;
+        let local_branch = self.shared.local_branch();
         self.traverse(mode, JointDirectory::new(local_branch, versions))
             .await
     }
@@ -175,10 +175,10 @@ impl BlockScanner {
 
     async fn remove_outdated_branches(&self) -> Result<()> {
         let mut conn = self.shared.store.db().acquire().await?;
-        let local_id = self.shared.local_branch().await.map(|branch| *branch.id());
+        let local_id = self.shared.local_branch().map(|branch| *branch.id());
         let outdated_branches = utils::outdated_branches(
             &mut conn,
-            self.shared.collect_branches().await?,
+            self.shared.collect_branches()?,
             local_id.as_ref(),
         )
         .await?;

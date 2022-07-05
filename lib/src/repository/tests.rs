@@ -23,7 +23,7 @@ async fn root_directory_always_exists() {
 // Count leaf nodes in the index of the local branch.
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
     let store = repo.store();
-    let branch = repo.local_branch().await.unwrap();
+    let branch = repo.local_branch().unwrap();
     let mut conn = store.db().acquire().await.unwrap();
     branch.data().count_leaf_nodes(&mut conn).await.unwrap()
 }
@@ -98,7 +98,7 @@ async fn merge() {
     create_remote_file(&repo, remote_id, "test.txt", b"hello").await;
 
     // Open the local root.
-    let local_branch = repo.local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
     let mut local_root = {
         let mut conn = repo.db().acquire().await.unwrap();
         local_branch.open_or_create_root(&mut conn).await.unwrap()
@@ -648,7 +648,7 @@ async fn read_access_different_replica() {
     .unwrap();
 
     // The second replica doesn't have its own local branch in the repo.
-    assert_matches!(repo.local_branch().await.map(|_| ()), None);
+    assert_matches!(repo.local_branch().map(|_| ()), None);
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();

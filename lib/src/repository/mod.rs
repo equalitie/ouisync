@@ -426,8 +426,8 @@ impl Repository {
     }
 
     /// Returns the local branch if it exists.
-    pub async fn local_branch(&self) -> Option<Branch> {
-        self.shared.local_branch().await
+    pub fn local_branch(&self) -> Option<Branch> {
+        self.shared.local_branch()
     }
 
     /// Returns the local branch if it exists or create it otherwise. The repository must have
@@ -484,8 +484,8 @@ impl Repository {
             return Err(Error::PermissionDenied);
         }
 
-        let local_branch = self.local_branch().await;
-        let branches = self.shared.collect_branches().await?;
+        let local_branch = self.local_branch();
+        let branches = self.shared.collect_branches()?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -544,7 +544,7 @@ impl Repository {
             }
         };
 
-        let branches = match self.shared.collect_branches().await {
+        let branches = match self.shared.collect_branches() {
             Ok(branches) => branches,
             Err(error) => {
                 print.display(&format_args!("failed to collect branches: {:?}", error));
@@ -607,15 +607,15 @@ struct Shared {
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Option<Branch> {
-        match self.store.index.get_branch(&self.this_writer_id).await {
-            Some(data) => self.inflate(data).ok(),
-            None => None,
-        }
+    pub fn local_branch(&self) -> Option<Branch> {
+        self.store
+            .index
+            .get_branch(&self.this_writer_id)
+            .and_then(|data| self.inflate(data).ok())
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id).await {
+        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
             data
         } else if let Some(write_keys) = self.secrets.write_keys() {
             let proof = Proof::first(self.this_writer_id, write_keys);
@@ -627,11 +627,10 @@ impl Shared {
         self.inflate(data)
     }
 
-    pub async fn collect_branches(&self) -> Result<Vec<Branch>> {
+    pub fn collect_branches(&self) -> Result<Vec<Branch>> {
         self.store
             .index
             .collect_branches()
-            .await
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()

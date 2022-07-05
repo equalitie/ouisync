@@ -110,7 +110,7 @@ struct Inner {
 
 impl Inner {
     async fn process(&self) -> Result<()> {
-        let branches = self.shared.collect_branches().await?;
+        let branches = self.shared.collect_branches()?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {

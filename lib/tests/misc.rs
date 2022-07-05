@@ -328,8 +328,8 @@ async fn concurrent_modify_open_file() {
 
     drop(file_b);
 
-    let id_a = *repo_a.local_branch().await.unwrap().id();
-    let id_b = *repo_b.local_branch().await.unwrap().id();
+    let id_a = *repo_a.local_branch().unwrap().id();
+    let id_b = *repo_b.local_branch().unwrap().id();
 
     // A: Wait until we see B's writes
     time::timeout(
@@ -396,7 +396,6 @@ async fn recreate_local_branch() {
 
     let vv_a_0 = repo_a
         .local_branch()
-        .await
         .unwrap()
         .version_vector(&mut conn)
         .await
@@ -434,7 +433,6 @@ async fn recreate_local_branch() {
 
     let vv_b = repo_b
         .local_branch()
-        .await
         .unwrap()
         .version_vector(&mut conn)
         .await
@@ -466,7 +464,6 @@ async fn recreate_local_branch() {
         let mut conn = repo_a.db().acquire().await.unwrap();
         let vv_a_1 = repo_a
             .local_branch()
-            .await
             .unwrap()
             .version_vector(&mut conn)
             .await
@@ -537,14 +534,14 @@ async fn expect_file_version_content(
 // version vectors and A's version vector is greater or equal to B's.
 async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
     common::eventually(repo_a, || async {
-        let vv_a = if let Some(branch) = repo_a.local_branch().await {
+        let vv_a = if let Some(branch) = repo_a.local_branch() {
             let mut conn = repo_a.db().acquire().await.unwrap();
             branch.version_vector(&mut conn).await.unwrap()
         } else {
             return false;
         };
 
-        let vv_b = if let Some(branch) = repo_b.local_branch().await {
+        let vv_b = if let Some(branch) = repo_b.local_branch() {
             let mut conn = repo_b.db().acquire().await.unwrap();
             branch.version_vector(&mut conn).await.unwrap()
         } else {

@@ -78,7 +78,7 @@ impl Store {
 
         // Notify affected branches.
         for writer_id in &writer_ids {
-            if let Some(branch) = self.index.get_branch(writer_id).await {
+            if let Some(branch) = self.index.get_branch(writer_id) {
                 branch.notify();
             }
         }
