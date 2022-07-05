@@ -9,6 +9,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
 };
 use tempfile::TempDir;
+use tokio::sync::broadcast::error::RecvError;
 
 // Test environment
 pub(crate) struct Env {
@@ -114,6 +115,9 @@ where
             break;
         }
 
-        rx.recv().await.unwrap();
+        match rx.recv().await {
+            Ok(_) | Err(RecvError::Lagged(_)) => (),
+            Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+        }
     }
 }
