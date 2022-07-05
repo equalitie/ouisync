@@ -99,7 +99,7 @@ async fn merge() {
 
     // Open the local root.
     let local_branch = repo.local_branch().await.unwrap();
-    let local_root = {
+    let mut local_root = {
         let mut conn = repo.db().acquire().await.unwrap();
         local_branch.open_or_create_root(&mut conn).await.unwrap()
     };
@@ -107,9 +107,8 @@ async fn merge() {
     repo.force_merge().await.unwrap();
 
     let mut conn = repo.db().acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
     let content = local_root
-        .read()
-        .await
         .lookup("test.txt")
         .unwrap()
         .file()
@@ -228,7 +227,7 @@ async fn concurrent_read_and_create_dir() {
         async move {
             for _ in 1..10 {
                 if let Ok(dir) = repo.open_directory(path).await {
-                    dir.read().await.entries().count();
+                    dir.entries().count();
                     return;
                 }
                 // Sometimes opening the directory may outrace its creation,
@@ -674,7 +673,7 @@ async fn truncate_forked_remote_file() {
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
 }
 
@@ -738,15 +737,24 @@ async fn version_vector_create_file() {
     let mut conn = repo.db().acquire().await.unwrap();
 
     let root_vv_1 = file
-        .parent()
-        .parent()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_1 = file
+        .parent(&mut conn)
         .await
         .unwrap()
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let parent_vv_1 = file.parent().version_vector(&mut conn).await.unwrap();
-    let file_vv_1 = file.version_vector().await;
+    let file_vv_1 = file.version_vector(&mut conn).await.unwrap();
 
     assert!(root_vv_1 > root_vv_0);
 
@@ -754,15 +762,24 @@ async fn version_vector_create_file() {
     file.flush(&mut conn).await.unwrap();
 
     let root_vv_2 = file
-        .parent()
-        .parent()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .parent(&mut conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .version_vector(&mut conn)
+        .await
+        .unwrap();
+    let parent_vv_2 = file
+        .parent(&mut conn)
         .await
         .unwrap()
         .version_vector(&mut conn)
         .await
         .unwrap();
-    let parent_vv_2 = file.parent().version_vector(&mut conn).await.unwrap();
-    let file_vv_2 = file.version_vector().await;
+    let file_vv_2 = file.version_vector(&mut conn).await.unwrap();
 
     assert!(root_vv_2 > root_vv_1);
     assert!(parent_vv_2 > parent_vv_1);
@@ -790,7 +807,7 @@ async fn version_vector_deep_hierarchy() {
 
     for i in 0..depth {
         let dir = dirs
-            .last()
+            .last_mut()
             .unwrap()
             .create_directory(&mut conn, format!("dir-{}", i))
             .await
@@ -827,7 +844,11 @@ async fn version_vector_recreate_deleted_file() {
     repo.remove_entry("test.txt").await.unwrap();
 
     let file = repo.create_file("test.txt").await.unwrap();
-    assert_eq!(file.version_vector().await, vv![local_id => 3]);
+    let mut conn = repo.db().acquire().await.unwrap();
+    assert_eq!(
+        file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 3]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -852,18 +873,21 @@ async fn version_vector_fork_file() {
 
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    let remote_parent = remote_root
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await
         .unwrap();
-    let mut file = create_file_in_directory(&mut conn, &remote_parent, "foo.txt", &[]).await;
+    let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
 
-    let remote_file_vv = file.version_vector().await;
+    let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
 
-    assert_eq!(file.version_vector().await, remote_file_vv);
+    assert_eq!(
+        file.version_vector(&mut conn).await.unwrap(),
+        remote_file_vv
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -916,12 +940,18 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
-    assert_eq!(local_file.version_vector().await, vv![local_id => 2]);
+    assert_eq!(
+        local_file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 2]
+    );
     drop(local_file);
 
     let remote_file =
         create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(
+        remote_file.version_vector(&mut conn).await.unwrap(),
+        vv![remote_id => 2]
+    );
     drop(remote_file);
 
     drop(conn);
@@ -942,7 +972,10 @@ async fn file_conflict_modify_local() {
         local_file.read_to_end(&mut conn).await.unwrap(),
         b"local v2"
     );
-    assert_eq!(local_file.version_vector().await, vv![local_id => 3]);
+    assert_eq!(
+        local_file.version_vector(&mut conn).await.unwrap(),
+        vv![local_id => 3]
+    );
     drop(conn);
 
     let mut remote_file = repo
@@ -954,7 +987,10 @@ async fn file_conflict_modify_local() {
         remote_file.read_to_end(&mut conn).await.unwrap(),
         b"remote v1"
     );
-    assert_eq!(remote_file.version_vector().await, vv![remote_id => 2]);
+    assert_eq!(
+        remote_file.version_vector(&mut conn).await.unwrap(),
+        vv![remote_id => 2]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -991,7 +1027,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
     assert_matches!(
-        remote_file.fork(&mut conn, &local_branch).await,
+        remote_file.fork(&mut conn, local_branch).await,
         Err(Error::EntryExists)
     );
 }
@@ -1019,15 +1055,15 @@ async fn remove_branch() {
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
     let mut conn = repo.db().acquire().await.unwrap();
-    let remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    create_file_in_directory(&mut conn, &remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&mut conn, &remote_root, "bar.txt", b"bar").await;
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    create_file_in_directory(&mut conn, &mut remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&mut conn, &mut remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
     drop(conn);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork(&mut conn, &local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
     drop(conn);
     drop(file);
 
@@ -1064,13 +1100,13 @@ async fn create_file_in_branch(
     name: &str,
     content: &[u8],
 ) -> File {
-    let root = branch.open_or_create_root(conn).await.unwrap();
-    create_file_in_directory(conn, &root, name, content).await
+    let mut root = branch.open_or_create_root(conn).await.unwrap();
+    create_file_in_directory(conn, &mut root, name, content).await
 }
 
 async fn create_file_in_directory(
     conn: &mut db::Connection,
-    dir: &Directory,
+    dir: &mut Directory,
     name: &str,
     content: &[u8],
 ) -> File {

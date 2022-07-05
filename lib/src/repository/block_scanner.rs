@@ -11,7 +11,7 @@ use async_recursion::async_recursion;
 use std::sync::Arc;
 use tokio::{
     select,
-    sync::{mpsc, oneshot},
+    sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
 
 /// Utility that traverses the repository scanning for missing and unreachable blocks. It then
@@ -35,16 +35,17 @@ impl BlockScanner {
 
         loop {
             select! {
-                result = notify_rx.recv() => {
-                    if result.is_ok() {
-                        match self.process(Mode::RequestAndCollect).await {
-                            Ok(()) => (),
-                            Err(error) => {
-                                log::error!("BlockScanner failed: {:?}", error);
+                event = notify_rx.recv() => {
+                    match event {
+                        Ok(_) | Err(RecvError::Lagged(_)) => {
+                            match self.process(Mode::RequestAndCollect).await {
+                                Ok(()) => (),
+                                Err(error) => {
+                                    log::error!("BlockScanner failed: {:?}", error);
+                                }
                             }
                         }
-                    } else {
-                        break;
+                        Err(RecvError::Closed) => break,
                     }
                 }
                 command = self.command_rx.recv() => {
@@ -88,10 +89,7 @@ impl BlockScanner {
             if result.is_ok() {
                 let mut conn = self.shared.store.db().acquire().await?;
 
-                // Open the directory in read-only mode to bypass the cache (see `directory::Mode` for
-                // more details) to make sure we obtain the most up-to-date version of the directory so
-                // that we can find all the missing blocks.
-                match branch.open_root_read_only(&mut conn).await {
+                match branch.open_root(&mut conn).await {
                     Ok(dir) => versions.push(dir),
                     Err(Error::EntryNotFound) => {
                         // `EntryNotFound` here just means this is a newly created branch with no
@@ -131,7 +129,7 @@ impl BlockScanner {
 
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
-        for entry in dir.read().await.entries() {
+        for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
                     entries.push(BlockIds::new(

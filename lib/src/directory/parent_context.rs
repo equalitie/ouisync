@@ -1,37 +1,47 @@
-use super::{entry::EntryRef, entry_data::EntryData, inner::OverwriteStrategy};
+use super::OverwriteStrategy;
 use crate::{
-    blob::Blob, branch::Branch, db, directory::Directory, error::Result,
-    version_vector::VersionVector,
+    blob::Blob, blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
+    locator::Locator, version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
 pub(crate) struct ParentContext {
-    /// The parent directory of the entry.
-    directory: Directory,
+    /// BlobId of the parent directory of the entry.
+    directory_id: BlobId,
     /// The name of the entry in its parent directory.
     entry_name: String,
+    // ParentContext of the parent directory ("grandparent context")
+    parent: Option<Box<Self>>,
 }
 
 impl ParentContext {
-    pub(super) fn new(directory: Directory, entry_name: String) -> Self {
+    pub(super) fn new(directory_id: BlobId, entry_name: String, parent: Option<Self>) -> Self {
         Self {
-            directory,
+            directory_id,
             entry_name,
+            parent: parent.map(Box::new),
         }
     }
 
     /// Atomically finalizes any pending modifications to the entry that holds this parent context.
     /// This updates the version vector of this entry and all its ancestors, flushes them and
     /// finally commits the transaction.
-    ///
-    /// TODO: document cancel safety.
-    pub async fn commit(&self, mut tx: db::Transaction<'_>, merge: VersionVector) -> Result<()> {
-        let mut writer = self.directory.write().await?;
-        writer.inner.prepare(&mut tx).await?;
-        writer.inner.bump(&self.entry_name, &merge)?;
-        writer.inner.save(&mut tx).await?;
-        writer.inner.commit(tx, merge).await
+    pub async fn commit(
+        &self,
+        mut tx: db::Transaction<'_>,
+        branch: Branch,
+        merge: VersionVector,
+    ) -> Result<()> {
+        let mut directory = self.directory(&mut tx, branch).await?;
+        let mut content = directory.entries.clone();
+        content.bump(directory.branch(), &self.entry_name, &merge)?;
+        directory
+            .save(&mut tx, &content, OverwriteStrategy::Keep)
+            .await?;
+        directory.commit(tx, content, merge).await?;
+
+        Ok(())
     }
 
     /// Atomically forks the blob into the local branch and returns it together with its updated
@@ -45,29 +55,30 @@ impl ParentContext {
         &self,
         mut tx: db::Transaction<'_>,
         entry_blob: &Blob,
-        local_branch: &Branch,
+        src_branch: Branch,
+        dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let entry_data = self.fork_entry_data().await;
+        let directory = self.directory(&mut tx, src_branch).await?;
+        let entry_data = directory.lookup(&self.entry_name)?.clone_data();
+
         assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
 
-        let directory = self.directory.fork(&mut tx, local_branch).await?;
-        let mut writer = directory.write().await?;
+        let mut directory = directory.fork(&mut tx, &dst_branch).await?;
+        let mut content = directory.entries.clone();
+        content.insert(directory.branch(), self.entry_name.clone(), entry_data)?;
+        directory
+            .save(&mut tx, &content, OverwriteStrategy::Remove)
+            .await?;
+        let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
+        directory.commit(tx, content, VersionVector::new()).await?;
 
-        writer.inner.prepare(&mut tx).await?;
-        writer.inner.insert(
-            self.entry_name.clone(),
-            entry_data,
-            OverwriteStrategy::Remove,
-        )?;
-        writer.inner.save(&mut tx).await?;
-        let new_blob = entry_blob.try_fork(&mut tx, local_branch.clone()).await?;
-        writer.inner.commit(tx, VersionVector::new()).await?;
-
-        drop(writer);
+        let directory_id = *directory.locator().blob_id();
+        let parent = directory.parent.clone();
 
         let new_context = Self {
-            directory,
+            directory_id,
             entry_name: self.entry_name.clone(),
+            parent: parent.map(Box::new),
         };
 
         Ok((new_context, new_blob))
@@ -77,9 +88,15 @@ impl ParentContext {
         &self.entry_name
     }
 
-    /// Returns the parent directory of the entry bound to the given local branch.
-    pub fn directory(&self) -> &Directory {
-        &self.directory
+    /// Returns the parent directory of this entry.
+    pub async fn directory(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
+        Directory::open(
+            conn,
+            branch,
+            Locator::head(self.directory_id),
+            self.parent.as_deref().cloned(),
+        )
+        .await
     }
 
     /// Returns the version vector of this entry.
@@ -88,23 +105,16 @@ impl ParentContext {
     ///
     /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
     /// directory.
-    pub async fn entry_version_vector(&self) -> VersionVector {
-        self.map_entry(|entry| entry.version_vector().clone()).await
-    }
-
-    async fn fork_entry_data(&self) -> EntryData {
-        self.map_entry(|entry| entry.clone_data()).await
-    }
-
-    async fn map_entry<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(EntryRef) -> R,
-    {
-        f(self
-            .directory
-            .read()
-            .await
-            .lookup(&self.entry_name)
-            .expect("dangling ParentContext"))
+    pub async fn entry_version_vector(
+        &self,
+        conn: &mut db::Connection,
+        branch: Branch,
+    ) -> Result<VersionVector> {
+        Ok(self
+            .directory(conn, branch)
+            .await?
+            .lookup(&self.entry_name)?
+            .version_vector()
+            .clone())
     }
 }

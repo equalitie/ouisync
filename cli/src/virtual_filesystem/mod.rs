@@ -431,7 +431,6 @@ impl Inner {
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
         let mut conn = self.repository.db().acquire().await?;
-        let parent_dir = parent_dir.read().await;
 
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
@@ -443,8 +442,6 @@ impl Inner {
                 entry
                     .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
-                    .read()
-                    .await
                     .len()
                     .await,
                 Representation::Directory,
@@ -532,7 +529,7 @@ impl Inner {
         if let Some(size) = size {
             let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&mut conn, &local_branch).await?;
+            file.fork(&mut conn, local_branch).await?;
             file.truncate(&mut conn, size).await?;
             file.flush(&mut conn).await?;
         }
@@ -599,7 +596,6 @@ impl Inner {
 
         let parent = self.inodes.get(inode).parent();
         let dir = self.entries.get_directory(handle)?;
-        let dir = dir.read().await;
 
         // Handle . and ..
         if offset <= 0 {
@@ -669,7 +665,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
-        let len = dir.read().await.len().await;
+        let len = dir.len().await;
 
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }
@@ -743,7 +739,7 @@ impl Inner {
             let local_branch = self.repository.get_or_create_local_branch().await?;
             let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&mut conn, &local_branch).await?;
+            file.fork(&mut conn, local_branch).await?;
             file.truncate(&mut conn, 0).await?;
             file.flush(&mut conn).await?;
         }
@@ -842,7 +838,7 @@ impl Inner {
 
         let file = self.entries.get_file_mut(handle)?;
         file.seek(&mut conn, SeekFrom::Start(offset)).await?;
-        file.fork(&mut conn, &local_branch).await?;
+        file.fork(&mut conn, local_branch).await?;
         file.write(&mut conn, data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))

@@ -12,7 +12,7 @@ use futures_util::TryStreamExt;
 use std::{fmt, time::Duration};
 use tokio::{
     select,
-    sync::mpsc,
+    sync::{broadcast::error::RecvError, mpsc},
     time::{self, MissedTickBehavior},
 };
 
@@ -165,13 +165,23 @@ impl<'a> Monitor<'a> {
         let mut subscription = self.index.subscribe();
 
         // send initial branches
+        self.handle_all_branches_changed().await?;
+
+        loop {
+            match subscription.recv().await {
+                Ok(event) => self.handle_branch_changed(event.branch_id).await?,
+                Err(RecvError::Lagged(_)) => self.handle_all_branches_changed().await?,
+                Err(RecvError::Closed) => break,
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_all_branches_changed(&self) -> Result<()> {
         let root_nodes = self.load_all_root_nodes().await?;
         for root_node in root_nodes {
             self.handle_root_node_changed(root_node).await?;
-        }
-
-        while let Ok(branch_id) = subscription.recv().await {
-            self.handle_branch_changed(branch_id).await?;
         }
 
         Ok(())

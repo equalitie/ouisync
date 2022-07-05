@@ -21,6 +21,7 @@ use std::{io::SeekFrom, mem, sync::Arc};
 // a 32bit or 64bit processor (if we want two such replicas to be able to sync).
 pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
+#[derive(Clone)]
 pub(crate) struct Blob {
     shared: Arc<Mutex<Shared>>,
     unique: Unique,

@@ -5,6 +5,7 @@ use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator, sync::Mutex};
 use std::sync::{Arc, Weak};
 
 // State unique to each instance of a blob.
+#[derive(Clone)]
 pub(super) struct Unique {
     pub branch: Branch,
     pub head_locator: Locator,

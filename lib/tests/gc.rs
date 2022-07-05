@@ -144,7 +144,7 @@ async fn local_truncate_remote_file() {
     let mut conn = repo_l.db().acquire().await.unwrap();
     file.fork(
         &mut conn,
-        &repo_l.get_or_create_local_branch().await.unwrap(),
+        repo_l.get_or_create_local_branch().await.unwrap(),
     )
     .await
     .unwrap();

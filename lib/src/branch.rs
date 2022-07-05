@@ -6,7 +6,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     debug_printer::DebugPrinter,
-    directory::{Directory, EntryRef, Mode, RootDirectoryCache},
+    directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,
     index::BranchData,
@@ -21,7 +21,6 @@ use std::sync::Arc;
 pub struct Branch {
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
-    root_directory: Arc<RootDirectoryCache>,
     blob_cache: Arc<BlobCache>,
 }
 
@@ -34,7 +33,6 @@ impl Branch {
         Self {
             branch_data,
             keys,
-            root_directory: Arc::new(RootDirectoryCache::new()),
             blob_cache,
         }
     }
@@ -56,15 +54,11 @@ impl Branch {
     }
 
     pub(crate) async fn open_root(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.root_directory.open(conn, self.clone()).await
-    }
-
-    pub(crate) async fn open_root_read_only(&self, conn: &mut db::Connection) -> Result<Directory> {
-        Directory::open_root(conn, self.clone(), Mode::ReadOnly).await
+        Directory::open_root(conn, self.clone()).await
     }
 
     pub(crate) async fn open_or_create_root(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.root_directory.open_or_create(conn, self.clone()).await
+        Directory::open_or_create_root(conn, self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -81,7 +75,7 @@ impl Branch {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
-                    let next = match curr.read().await.lookup(name) {
+                    let next = match curr.lookup(name) {
                         Ok(EntryRef::Directory(entry)) => Some(entry.open(conn).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
@@ -111,7 +105,7 @@ impl Branch {
         path: &Utf8Path,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let dir = self.ensure_directory_exists(conn, parent).await?;
+        let mut dir = self.ensure_directory_exists(conn, parent).await?;
         dir.create_file(conn, name.to_string()).await
     }
 
@@ -143,7 +137,6 @@ impl Branch {
         Self {
             branch_data: self.branch_data,
             keys,
-            root_directory: self.root_directory,
             blob_cache: self.blob_cache,
         }
     }
@@ -167,7 +160,7 @@ mod tests {
             .ensure_directory_exists(&mut conn, "/".into())
             .await
             .unwrap();
-        assert_eq!(dir.read().await.locator(), &Locator::ROOT);
+        assert_eq!(dir.locator(), &Locator::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -175,14 +168,15 @@ mod tests {
         let (pool, branch) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
-        let root = branch.open_or_create_root(&mut conn).await.unwrap();
+        let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
 
         branch
             .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))
             .await
             .unwrap();
 
-        let _ = root.read().await.lookup("dir").unwrap();
+        root.refresh(&mut conn).await.unwrap();
+        let _ = root.lookup("dir").unwrap();
     }
 
     async fn setup() -> (db::Pool, Branch) {

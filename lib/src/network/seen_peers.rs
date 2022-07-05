@@ -90,10 +90,7 @@ impl SeenPeersInner {
     /// Returns `Some(SeenPeer)` if the peer has not been seen in the last
     /// REMOVE_AFTER_ROUND_COUNT rounds.
     fn insert(&mut self, addr: PeerAddr, ext: &Arc<RwLock<SeenPeersInner>>) -> Option<SeenPeer> {
-        let round = self
-            .rounds
-            .entry(self.current_round_id)
-            .or_insert_with(|| HashSet::new());
+        let round = self.rounds.entry(self.current_round_id).or_default();
 
         if !round.insert(addr) {
             // Already in current round
@@ -119,7 +116,7 @@ impl SeenPeersInner {
         *rc += 1;
 
         Some(SeenPeer {
-            addr: addr,
+            addr,
             seen_peers: ext.clone(),
         })
     }

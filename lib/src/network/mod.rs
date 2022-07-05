@@ -835,7 +835,7 @@ impl Inner {
                     // TODO: Consider using something non-identifiable (random) but something that
                     // won't interfere with (will be ignored by) the quic and btdht protocols.
                     let msg = b"punch";
-                    sender.send_to(msg, &addr).await.map(|_| ()).unwrap_or(());
+                    sender.send_to(msg, addr).await.map(|_| ()).unwrap_or(());
                 }
             })
         })

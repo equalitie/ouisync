@@ -25,6 +25,7 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
+    event::Event,
     file::File,
     index::{BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
@@ -40,7 +41,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::task;
+use tokio::{
+    sync::broadcast::{self, error::RecvError},
+    task,
+};
 
 pub struct Repository {
     shared: Arc<Shared>,
@@ -262,7 +266,6 @@ impl Repository {
         match path::decompose(path.as_ref()) {
             Some((parent, name)) => {
                 let parent = self.open_directory(parent).await?;
-                let parent = parent.read().await;
                 Ok(parent.lookup_unique(name)?.entry_type())
             }
             None => Ok(EntryType::Directory),
@@ -277,8 +280,6 @@ impl Repository {
 
         self.cd(&mut conn, parent)
             .await?
-            .read()
-            .await
             .lookup_unique(name)?
             .file()?
             .open(&mut conn)
@@ -297,8 +298,6 @@ impl Repository {
 
         self.cd(&mut conn, parent)
             .await?
-            .read()
-            .await
             .lookup_version(name, branch_id)?
             .open(&mut conn)
             .await
@@ -363,20 +362,15 @@ impl Repository {
         let mut conn = self.db().acquire().await?;
 
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
-        let src_joint_dir_r = src_joint_dir.read().await;
 
-        let (src_dir, src_name) = match src_joint_dir_r.lookup_unique(src_name)? {
+        let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
                 let mut file = entry.open(&mut conn).await?;
+                file.fork(&mut conn, local_branch.clone()).await?;
 
-                // Prevent deadlocks
-                drop(src_joint_dir_r);
-
-                file.fork(&mut conn, &local_branch).await?;
-
-                (file.parent(), Cow::Owned(src_name))
+                (file.parent(&mut conn).await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
@@ -390,12 +384,9 @@ impl Repository {
                 // ...and acquire it back again once `merge` is done.
                 conn = self.db().acquire().await?;
 
-                // Prevent deadlocks
-                drop(src_joint_dir_r);
-
                 let src_dir = dir_to_move
-                    .parent()
-                    .await
+                    .parent(&mut conn)
+                    .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
                 (src_dir, Cow::Borrowed(src_name))
@@ -407,31 +398,36 @@ impl Repository {
         // Get the entry here before we release the lock to the directory. This way the entry shall
         // contain version vector that we want to delete and if someone updates the entry between
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
-        let src_entry = src_dir.read().await.lookup(&src_name)?.clone_data();
+        let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
         let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
-        let dst_joint_reader = dst_joint_dir.read().await;
 
-        let dst_vv = match dst_joint_reader.lookup_unique(dst_name) {
+        let dst_vv = match dst_joint_dir.lookup_unique(dst_name) {
             Err(Error::EntryNotFound) => {
                 // Even if there is no regular entry, there still may be tombstones and so the
                 // destination version vector must be "happened after" those.
-                dst_joint_reader
-                    .merge_version_vectors(dst_name)
+                dst_joint_dir
+                    .merge_entry_version_vectors(dst_name)
                     .incremented(*local_branch.id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
         };
 
-        drop(dst_joint_reader);
         drop(dst_joint_dir);
 
-        let dst_dir = local_branch
+        let mut dst_dir = local_branch
             .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
             .await?;
         src_dir
-            .move_entry(&mut conn, &src_name, src_entry, &dst_dir, dst_name, dst_vv)
+            .move_entry(
+                &mut conn,
+                &src_name,
+                src_entry,
+                &mut dst_dir,
+                dst_name,
+                dst_vv,
+            )
             .await
     }
 
@@ -447,7 +443,7 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> async_broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.store.index.subscribe()
     }
 
@@ -601,12 +597,6 @@ impl Repository {
     }
 }
 
-impl Drop for Repository {
-    fn drop(&mut self) {
-        self.shared.store.index.close()
-    }
-}
-
 struct Shared {
     store: Store,
     this_writer_id: PublicKey,
@@ -702,7 +692,12 @@ async fn report_sync_progress(store: Store) {
     let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(store.index.subscribe(), Duration::from_secs(1));
 
-    while event_rx.recv().await.is_ok() {
+    loop {
+        match event_rx.recv().await {
+            Ok(_) | Err(RecvError::Lagged(_)) => (),
+            Err(RecvError::Closed) => break,
+        }
+
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {

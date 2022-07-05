@@ -7,7 +7,7 @@ use ouisync_lib::{
     MasterSecret, Repository, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
-use tokio::task::JoinHandle;
+use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn repository_subscribe(
     let mut rx = holder.repository.subscribe();
 
     let handle = session.runtime().spawn(async move {
-        while rx.recv().await.is_ok() {
+        while let Ok(_) | Err(RecvError::Lagged(_)) = rx.recv().await {
             sender.send(port, ());
         }
     });

@@ -50,8 +50,8 @@ impl File {
         self.blob.branch()
     }
 
-    pub fn parent(&self) -> Directory {
-        self.parent.directory().clone()
+    pub async fn parent(&self, conn: &mut db::Connection) -> Result<Directory> {
+        self.parent.directory(conn, self.branch().clone()).await
     }
 
     /// Length of this file in bytes.
@@ -95,7 +95,9 @@ impl File {
 
         let mut tx = conn.begin().await?;
         self.blob.flush(&mut tx).await?;
-        self.parent.commit(tx, VersionVector::new()).await
+        self.parent
+            .commit(tx, self.branch().clone(), VersionVector::new())
+            .await
     }
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
@@ -126,17 +128,20 @@ impl File {
         Ok(())
     }
 
-    /// Forks this file into the local branch. Ensure all its ancestor directories exist and live
-    /// in the local branch as well. Should be called before any mutable operation.
-    pub async fn fork(&mut self, conn: &mut db::Connection, local_branch: &Branch) -> Result<()> {
-        if self.blob.branch().id() == local_branch.id() {
+    /// Forks this file into the given branch. Ensure all its ancestor directories exist and live
+    /// in the branch as well. Should be called before any mutable operation.
+    pub async fn fork(&mut self, conn: &mut db::Connection, dst_branch: Branch) -> Result<()> {
+        if self.branch().id() == dst_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
             return Ok(());
         }
 
         let tx = conn.begin().await?;
-        let (new_parent, new_blob) = self.parent.fork(tx, &self.blob, local_branch).await?;
+        let (new_parent, new_blob) = self
+            .parent
+            .fork(tx, &self.blob, self.branch().clone(), dst_branch)
+            .await?;
 
         self.blob = new_blob;
         self.parent = new_parent;
@@ -144,8 +149,10 @@ impl File {
         Ok(())
     }
 
-    pub async fn version_vector(&self) -> VersionVector {
-        self.parent.entry_version_vector().await
+    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+        self.parent
+            .entry_version_vector(conn, self.branch().clone())
+            .await
     }
 
     /// Locator of this file.
@@ -164,9 +171,9 @@ mod tests {
         crypto::sign::PublicKey,
         db,
         index::BranchData,
-        sync::broadcast,
     };
     use std::sync::Arc;
+    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
@@ -187,8 +194,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -197,7 +202,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork(&mut conn, &branch1).await.unwrap();
+        file1.fork(&mut conn, branch1.clone()).await.unwrap();
         file1.write(&mut conn, b"large").await.unwrap();
         file1.flush(&mut conn).await.unwrap();
 
@@ -206,8 +211,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -223,8 +226,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("dog.jpg")
             .unwrap()
             .file()
@@ -254,8 +255,6 @@ mod tests {
             .open_root(&mut conn)
             .await
             .unwrap()
-            .read()
-            .await
             .lookup("pig.jpg")
             .unwrap()
             .file()
@@ -264,7 +263,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork(&mut conn, &branch1).await.unwrap();
+        file1.fork(&mut conn, branch1).await.unwrap();
 
         for _ in 0..2 {
             file1.write(&mut conn, b"oink").await.unwrap();
@@ -288,7 +287,7 @@ mod tests {
         keys: AccessKeys,
         blob_cache: Arc<BlobCache>,
     ) -> Branch {
-        let notify_tx = broadcast::Sender::new(1);
+        let (notify_tx, _) = broadcast::channel(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
             PublicKey::random(),

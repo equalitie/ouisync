@@ -21,6 +21,7 @@ mod config;
 mod deadlock;
 mod directory;
 mod error;
+mod event;
 mod file;
 mod format;
 mod index;
@@ -48,6 +49,7 @@ pub use self::{
     config::ConfigStore,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
+    event::Event,
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,

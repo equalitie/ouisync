@@ -25,8 +25,9 @@ use crate::{
     db,
     debug_printer::DebugPrinter,
     error::{Error, Result},
+    event::Event,
     repository::RepositoryId,
-    sync::{broadcast, RwLock},
+    sync::RwLock,
 };
 use futures_util::TryStreamExt;
 use std::{
@@ -35,6 +36,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
+use tokio::sync::broadcast;
 
 type SnapshotId = u32;
 
@@ -46,7 +48,7 @@ pub(crate) struct Index {
 
 impl Index {
     pub async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
-        let notify_tx = broadcast::Sender::new(32);
+        let (notify_tx, _) = broadcast::channel(32);
         let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
         Ok(Self {
@@ -115,13 +117,8 @@ impl Index {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> broadcast::Receiver<PublicKey> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.notify_tx.subscribe()
-    }
-
-    /// Signal to all subscribers of this index that it is about to be terminated.
-    pub fn close(&self) {
-        self.shared.notify_tx.close();
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -369,7 +366,7 @@ impl Index {
 struct Shared {
     repository_id: RepositoryId,
     branches: RwLock<Branches>,
-    notify_tx: broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<Event>,
 }
 
 /// Container for all known branches (local and remote)
@@ -377,7 +374,7 @@ pub(crate) type Branches = HashMap<PublicKey, Arc<BranchData>>;
 
 async fn load_branches(
     conn: &mut db::Connection,
-    notify_tx: broadcast::Sender<PublicKey>,
+    notify_tx: broadcast::Sender<Event>,
 ) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
     RootNode::load_all_latest_complete(conn)
         .map_ok(|node| {

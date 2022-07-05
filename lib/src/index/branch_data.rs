@@ -11,23 +11,24 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    sync::broadcast,
+    event::Event,
     version_vector::VersionVector,
 };
+use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
 
 pub(crate) struct BranchData {
     writer_id: PublicKey,
-    notify_tx: broadcast::OverflowSender<PublicKey>,
+    notify_tx: broadcast::Sender<Event>,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<PublicKey>) -> Self {
+    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<Event>) -> Self {
         Self {
             writer_id,
-            notify_tx: broadcast::OverflowSender::new(notify_tx),
+            notify_tx,
         }
     }
 
@@ -37,7 +38,7 @@ impl BranchData {
         conn: &mut db::Connection,
         writer_id: PublicKey,
         write_keys: &Keypair,
-        notify_tx: broadcast::Sender<PublicKey>,
+        notify_tx: broadcast::Sender<Event>,
     ) -> Result<Self> {
         use super::node::Summary;
 
@@ -142,7 +143,7 @@ impl BranchData {
 
     /// Trigger a notification event from this branch.
     pub fn notify(&self) {
-        self.notify_tx.broadcast(self.writer_id).unwrap_or(())
+        self.notify_tx.send(Event::new(self.writer_id)).unwrap_or(0);
     }
 
     /// Update the root version vector of this branch.
@@ -454,7 +455,7 @@ mod tests {
     async fn setup() -> (db::PoolConnection, BranchData) {
         let mut conn = init_db().await;
 
-        let notify_tx = broadcast::Sender::new(1);
+        let (notify_tx, _) = broadcast::channel(1);
         let branch = BranchData::create(
             &mut conn,
             PublicKey::random(),
