@@ -125,11 +125,11 @@ impl TryFrom<&'_ [u8]> for PublicKey {
     }
 }
 
-// impl From<[u8; Self::SIZE]> for PublicKey {
-//     fn from(bytes: [u8; Self::SIZE]) -> Self {
-//         Self::try_from(bytes.as_ref()).unwrap()
-//     }
-// }
+impl From<[u8; Self::SIZE]> for PublicKey {
+    fn from(bytes: [u8; Self::SIZE]) -> Self {
+        Self::try_from(bytes.as_ref()).unwrap()
+    }
+}
 
 impl From<PublicKey> for [u8; PublicKey::SIZE] {
     fn from(key: PublicKey) -> Self {
@@ -250,6 +250,12 @@ impl Signature {
 impl AsRef<[u8]> for Signature {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+impl From<[u8; Self::SIZE]> for Signature {
+    fn from(bytes: [u8; Self::SIZE]) -> Self {
+        Self::try_from(bytes.as_ref()).unwrap()
     }
 }
 

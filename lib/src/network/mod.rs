@@ -17,6 +17,7 @@ mod protocol;
 mod quic;
 mod raw;
 mod request;
+mod runtime_id;
 mod seen_peers;
 mod server;
 mod socket;
@@ -31,7 +32,8 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
-    protocol::{RuntimeId, Version, MAGIC, VERSION},
+    protocol::{Version, MAGIC, VERSION},
+    runtime_id::{PublicRuntimeId, SecretRuntimeId},
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
@@ -212,7 +214,7 @@ impl Network {
             tcp_listener_local_addr_v6,
             hole_puncher_v4,
             hole_puncher_v6,
-            this_runtime_id: rand::random(),
+            this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
@@ -507,7 +509,7 @@ struct Inner {
     tcp_listener_local_addr_v6: Option<SocketAddr>,
     hole_puncher_v4: Option<quic::SideChannelSender>,
     hole_puncher_v6: Option<quic::SideChannelSender>,
-    this_runtime_id: RuntimeId,
+    this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
     _tcp_port_map: Option<upnp::Mapping>,
     _quic_port_map: Option<upnp::Mapping>,
@@ -526,7 +528,7 @@ struct Inner {
 }
 
 struct State {
-    message_brokers: HashMap<RuntimeId, MessageBroker>,
+    message_brokers: HashMap<PublicRuntimeId, MessageBroker>,
     registry: Slab<RegistrationHolder>,
 }
 
@@ -575,7 +577,7 @@ impl Inner {
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
         let monitor = self.monitor.make_child("LocalDiscovery");
 
-        let discovery = match LocalDiscovery::new(self.this_runtime_id, listener_port, monitor) {
+        let discovery = match LocalDiscovery::new(listener_port, monitor) {
             Ok(discovery) => discovery,
             Err(error) => {
                 log::error!("Failed to create LocalDiscovery: {}", error);
@@ -865,7 +867,7 @@ impl Inner {
         permit.mark_as_handshaking();
 
         let that_runtime_id =
-            match perform_handshake(&mut stream, VERSION, self.this_runtime_id).await {
+            match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
                 Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     log::error!("Failed to perform handshake with {:?}: {}", addr, error);
@@ -883,7 +885,7 @@ impl Inner {
             };
 
         // prevent self-connections.
-        if that_runtime_id == self.this_runtime_id {
+        if that_runtime_id == self.this_runtime_id.public() {
             log::debug!("Connection from self, discarding");
             return;
         }
@@ -901,8 +903,12 @@ impl Inner {
                 Entry::Vacant(entry) => {
                     log::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
 
-                    let mut broker =
-                        MessageBroker::new(self.this_runtime_id, that_runtime_id, stream, permit);
+                    let mut broker = MessageBroker::new(
+                        self.this_runtime_id.public(),
+                        that_runtime_id,
+                        stream,
+                        permit,
+                    );
 
                     // TODO: for DHT connection we should only link the repository for which we did the
                     // lookup but make sure we correctly handle edge cases, for example, when we have
@@ -956,19 +962,17 @@ pub enum ConnectError {
 
 //------------------------------------------------------------------------------
 
-// Exchange runtime ids with the peer. Returns their runtime id.
+// Exchange runtime ids with the peer. Returns their (verified) runtime id.
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
-    this_runtime_id: RuntimeId,
-) -> Result<RuntimeId, HandshakeError> {
+    this_runtime_id: &SecretRuntimeId,
+) -> Result<PublicRuntimeId, HandshakeError> {
     stream.write_all(MAGIC).await?;
 
     this_version.write_into(stream).await?;
-    this_runtime_id.write_into(stream).await?;
 
     let mut that_magic = [0; MAGIC.len()];
-
     stream.read_exact(&mut that_magic).await?;
 
     if MAGIC != &that_magic {
@@ -981,7 +985,7 @@ async fn perform_handshake(
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
-    Ok(RuntimeId::read_from(stream).await?)
+    Ok(runtime_id::exchange(&this_runtime_id, stream).await?)
 }
 
 #[derive(Debug, Error)]

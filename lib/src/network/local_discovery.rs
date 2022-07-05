@@ -1,12 +1,12 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
-    protocol::RuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
     scoped_task::ScopedJoinHandle,
     state_monitor::{MonitoredValue, StateMonitor},
 };
+use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,9 +30,11 @@ const PROTOCOL_VERSION: u8 = 0;
 // Poor man's local discovery using UDP multicast.
 // XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
 pub(super) struct LocalDiscovery {
-    id: RuntimeId,
+    // Only used to filter out multicast packets from self.
+    id: InsecureRuntimeId,
     listener_port: PeerPort,
     socket_provider: Arc<SocketProvider>,
+    // TODO: SeenPeers implements Clone, so doesn't need to be in Arc.
     seen_peers: Arc<SeenPeers>,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
@@ -40,15 +42,8 @@ pub(super) struct LocalDiscovery {
 }
 
 impl LocalDiscovery {
-    /// Newly discovered replicas are reported on `tx` and their `RuntimeId` is placed into a
-    /// LRU cache so as to not re-report it too frequently. Once the peer disconnects, the user of
-    /// `LocalDiscovery` should call `forget` with the `RuntimeId` and the replica shall start
-    /// reporting it again.
-    pub fn new(
-        id: RuntimeId,
-        listener_port: PeerPort,
-        monitor: Arc<StateMonitor>,
-    ) -> io::Result<Self> {
+    pub fn new(listener_port: PeerPort, monitor: Arc<StateMonitor>) -> io::Result<Self> {
+        let id = OsRng.gen();
         let socket_provider = Arc::new(SocketProvider::new());
 
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
@@ -194,7 +189,7 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
 
 async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
-    id: RuntimeId,
+    id: InsecureRuntimeId,
     listener_port: PeerPort,
     seen_peers: Arc<SeenPeers>,
     monitor: Arc<StateMonitor>,
@@ -246,6 +241,8 @@ async fn send(socket: &UdpSocket, message: Message, addr: SocketAddr) -> io::Res
     Ok(())
 }
 
+type InsecureRuntimeId = [u8; 16];
+
 #[derive(Serialize, Deserialize, Debug)]
 struct VersionedMessage {
     magic: [u8; 17],
@@ -255,8 +252,14 @@ struct VersionedMessage {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    ImHereYouAll { id: RuntimeId, port: PeerPort },
-    Reply { id: RuntimeId, port: PeerPort },
+    ImHereYouAll {
+        id: InsecureRuntimeId,
+        port: PeerPort,
+    },
+    Reply {
+        id: InsecureRuntimeId,
+        port: PeerPort,
+    },
 }
 
 struct SocketProvider {
