@@ -52,7 +52,7 @@ impl JointDirectory {
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
-        self.merge_entries().map(|(_, merge)| merge).flatten()
+        self.merge_entries().flat_map(|(_, merge)| merge)
     }
 
     fn merge_entries(&self) -> impl Iterator<Item = (&str, Merge)> {

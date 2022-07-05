@@ -32,15 +32,10 @@ use crate::{
     metadata, path,
     progress::Progress,
     store::Store,
-    sync::{broadcast::ThrottleReceiver, Mutex},
+    sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use futures_util::future;
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
@@ -208,7 +203,6 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            branches: Mutex::new(HashMap::new()),
             blob_cache: Arc::new(BlobCache::new()),
         });
 
@@ -550,17 +544,24 @@ impl Repository {
             }
         };
 
-        let branches = self.shared.branches.lock().await.clone();
-        for (writer_id, branch) in &branches {
+        let branches = match self.shared.collect_branches().await {
+            Ok(branches) => branches,
+            Err(error) => {
+                print.display(&format_args!("failed to collect branches: {:?}", error));
+                return;
+            }
+        };
+
+        for branch in branches {
             let print = print.indent();
-            let local = if *writer_id == self.shared.this_writer_id {
+            let local = if branch.id() == &self.shared.this_writer_id {
                 " (local)"
             } else {
                 ""
             };
             print.display(&format_args!(
                 "Branch ID: {:?}{}, root block ID:{:?}",
-                writer_id,
+                branch.id(),
                 local,
                 branch.root_block_id(&mut conn).await
             ));
@@ -593,7 +594,7 @@ impl Repository {
         let proof = Proof::first(remote_id, write_keys);
         let branch = self.shared.store.index.create_branch(proof).await?;
 
-        self.shared.inflate(branch).await
+        self.shared.inflate(branch)
     }
 }
 
@@ -601,8 +602,6 @@ struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
-    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
-    branches: Mutex<HashMap<PublicKey, Branch>>,
     // Cache for open blobs to track multiple instances of the same blob.
     blob_cache: Arc<BlobCache>,
 }
@@ -610,7 +609,7 @@ struct Shared {
 impl Shared {
     pub async fn local_branch(&self) -> Option<Branch> {
         match self.store.index.get_branch(&self.this_writer_id).await {
-            Some(data) => self.inflate(data).await.ok(),
+            Some(data) => self.inflate(data).ok(),
             None => None,
         }
     }
@@ -625,19 +624,17 @@ impl Shared {
             return Err(Error::PermissionDenied);
         };
 
-        self.inflate(data).await
+        self.inflate(data)
     }
 
     pub async fn collect_branches(&self) -> Result<Vec<Branch>> {
-        future::try_join_all(
-            self.store
-                .index
-                .collect_branches()
-                .await
-                .into_iter()
-                .map(|data| self.inflate(data)),
-        )
-        .await
+        self.store
+            .index
+            .collect_branches()
+            .await
+            .into_iter()
+            .map(|data| self.inflate(data))
+            .collect()
     }
 
     /// Removes the branch with the given id.
@@ -647,31 +644,22 @@ impl Shared {
     /// Panics if trying to remove the local branch.
     pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
         assert_ne!(id, &self.this_writer_id, "can't remove local branch");
-
-        self.branches.lock().await.remove(id);
         self.store.index.remove_branch(id).await
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache if it does not.
-    async fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
-        match self.branches.lock().await.entry(*data.id()) {
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
-            Entry::Vacant(entry) => {
-                let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+    fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
+        let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
-                // Only the local branch is writable.
-                let keys = if *data.id() == self.this_writer_id {
-                    keys
-                } else {
-                    keys.read_only()
-                };
+        // Only the local branch is writable.
+        let keys = if *data.id() == self.this_writer_id {
+            keys
+        } else {
+            keys.read_only()
+        };
 
-                let branch = Branch::new(data, keys, self.blob_cache.clone());
-                entry.insert(branch.clone());
-                Ok(branch)
-            }
-        }
+        Ok(Branch::new(data, keys, self.blob_cache.clone()))
     }
 }
 
