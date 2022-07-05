@@ -34,8 +34,7 @@ pub(super) struct LocalDiscovery {
     id: InsecureRuntimeId,
     listener_port: PeerPort,
     socket_provider: Arc<SocketProvider>,
-    // TODO: SeenPeers implements Clone, so doesn't need to be in Arc.
-    seen_peers: Arc<SeenPeers>,
+    seen_peers: SeenPeers,
     beacon_requests_received: MonitoredValue<u64>,
     beacon_responses_received: MonitoredValue<u64>,
     _beacon_handle: ScopedJoinHandle<()>,
@@ -49,7 +48,7 @@ impl LocalDiscovery {
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
         let beacon_responses_received = monitor.make_value("beacon_responses_received".into(), 0);
 
-        let seen_peers = Arc::new(SeenPeers::new());
+        let seen_peers = SeenPeers::new();
 
         let beacon_handle = task::spawn(run_beacon(
             socket_provider.clone(),
@@ -191,7 +190,7 @@ async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: InsecureRuntimeId,
     listener_port: PeerPort,
-    seen_peers: Arc<SeenPeers>,
+    seen_peers: SeenPeers,
     monitor: Arc<StateMonitor>,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
