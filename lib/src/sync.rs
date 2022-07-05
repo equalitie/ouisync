@@ -81,38 +81,6 @@ impl<T> Mutex<T> {
 
 pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
 
-/// Replacement for `tokio::sync::RwLock` instrumented for deadlock detection.
-pub struct RwLock<T> {
-    inner: tokio::sync::RwLock<T>,
-    deadlock_tracker: DeadlockTracker,
-}
-
-impl<T> RwLock<T> {
-    pub fn new(value: T) -> Self {
-        Self {
-            inner: tokio::sync::RwLock::new(value),
-            deadlock_tracker: DeadlockTracker::new(),
-        }
-    }
-
-    #[track_caller]
-    pub fn read(&self) -> impl Future<Output = RwLockReadGuard<'_, T>> {
-        DeadlockGuard::wrap(self.inner.read(), self.deadlock_tracker.clone())
-    }
-
-    #[track_caller]
-    pub fn write(&self) -> impl Future<Output = RwLockWriteGuard<'_, T>> {
-        DeadlockGuard::wrap(self.inner.write(), self.deadlock_tracker.clone())
-    }
-
-    pub fn get_mut(&mut self) -> &mut T {
-        self.inner.get_mut()
-    }
-}
-
-pub type RwLockReadGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockReadGuard<'a, T>>;
-pub type RwLockWriteGuard<'a, T> = DeadlockGuard<tokio::sync::RwLockWriteGuard<'a, T>>;
-
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
 pub mod uninitialized_watch {
