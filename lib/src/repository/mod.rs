@@ -78,9 +78,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        let index = Index::load(pool, *access_secrets.id()).await?;
-
-        Self::new(index, this_writer_id, access_secrets, enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
     }
 
     /// Opens an existing repository.
@@ -170,17 +168,19 @@ impl Repository {
         drop(conn);
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
-        let index = Index::load(pool, *access_secrets.id()).await?;
 
-        Self::new(index, this_writer_id, access_secrets, enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
-        index: Index,
+        pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
+        let (event_tx, _) = broadcast::channel(256);
+        let index = Index::load(pool, *secrets.id(), event_tx).await?;
+
         // Lazy block downloading requires at least read access because it needs to be able to
         // traverse the repository in order to enumarate reachable blocks.
         let block_tracker = if secrets.can_read() {

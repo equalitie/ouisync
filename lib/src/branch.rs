@@ -155,6 +155,7 @@ mod tests {
         index::{Index, Proof},
         locator::Locator,
     };
+    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -189,8 +190,11 @@ mod tests {
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
         let repository_id = secrets.id;
+        let (event_tx, _) = broadcast::channel(1);
 
-        let index = Index::load(pool.clone(), repository_id).await.unwrap();
+        let index = Index::load(pool.clone(), repository_id, event_tx)
+            .await
+            .unwrap();
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();

@@ -8,6 +8,7 @@ use crate::{
     block::{self, BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
+    event::Event,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, Proof, RootNode,
@@ -26,7 +27,10 @@ use std::{fmt, future::Future, sync::Arc, time::Duration};
 use test_strategy::proptest;
 use tokio::{
     pin, select,
-    sync::{mpsc, Semaphore},
+    sync::{
+        broadcast::{self, error::RecvError},
+        mpsc, Semaphore,
+    },
     time,
 };
 
@@ -317,8 +321,9 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
     let db = db::create(&db::Store::Temporary).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
+    let (event_tx, _) = broadcast::channel(1);
 
-    let index = Index::load(db, repository_id).await.unwrap();
+    let index = Index::load(db, repository_id, event_tx).await.unwrap();
     let proof = Proof::first(writer_id, write_keys);
     index.create_branch(proof).await.unwrap();
 
@@ -376,7 +381,7 @@ async fn wait_until_snapshots_in_sync(
             }
         }
 
-        rx.recv().await.unwrap();
+        recv_any(&mut rx).await
     }
 }
 
@@ -387,7 +392,14 @@ async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
         .await
         .unwrap()
     {
-        rx.recv().await.unwrap();
+        recv_any(&mut rx).await
+    }
+}
+
+async fn recv_any(rx: &mut broadcast::Receiver<Event>) {
+    match rx.recv().await {
+        Ok(_) | Err(RecvError::Lagged(_)) => (),
+        Err(RecvError::Closed) => panic!("event channel unexpectedly closed"),
     }
 }
 

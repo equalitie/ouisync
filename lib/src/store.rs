@@ -181,7 +181,8 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let index = Index::load(pool, repository_id).await.unwrap();
+        let (event_tx, _) = broadcast::channel(1);
+        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
             index,
             block_tracker: BlockTracker::lazy(),
@@ -216,7 +217,8 @@ mod tests {
         let pool = setup().await;
 
         let repository_id = RepositoryId::random();
-        let index = Index::load(pool, repository_id).await.unwrap();
+        let (event_tx, _) = broadcast::channel(1);
+        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
             index,
             block_tracker: BlockTracker::lazy(),
@@ -252,7 +254,8 @@ mod tests {
         let pool = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let index = Index::load(pool, repository_id).await.unwrap();
+        let (event_tx, _) = broadcast::channel(1);
+        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
             index,
             block_tracker: BlockTracker::lazy(),

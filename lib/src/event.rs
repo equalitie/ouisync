@@ -9,11 +9,19 @@ task_local! {
     static CURRENT_SCOPE: EventScope;
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum Payload {
+    /// A new snapshot was created or a block received in the specified branch.
+    BranchChanged(PublicKey),
+    /// A blob was closed
+    BlobClosed,
+}
+
 /// Notification event
 #[derive(Copy, Clone, Debug)]
 pub struct Event {
-    /// Branch that triggered the event.
-    pub branch_id: PublicKey,
+    /// Event payload.
+    pub(crate) payload: Payload,
     /// Event scope. Can be used to distinguish which part of the code the event was emitted from.
     /// Scope can be set by running the event-emitting task with `EventScope::apply`. If no scope
     /// is set, uses `EventScope::DEFAULT`.
@@ -21,12 +29,12 @@ pub struct Event {
 }
 
 impl Event {
-    pub(crate) fn new(branch_id: PublicKey) -> Self {
+    pub(crate) fn new(payload: Payload) -> Self {
         let scope = CURRENT_SCOPE
             .try_with(|scope| *scope)
             .unwrap_or(EventScope::DEFAULT);
 
-        Self { branch_id, scope }
+        Self { payload, scope }
     }
 }
 

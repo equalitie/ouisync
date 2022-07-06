@@ -46,8 +46,11 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
-        let (notify_tx, _) = broadcast::channel(32);
+    pub async fn load(
+        pool: db::Pool,
+        repository_id: RepositoryId,
+        notify_tx: broadcast::Sender<Event>,
+    ) -> Result<Self> {
         let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
         Ok(Self {

@@ -11,7 +11,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    event::Event,
+    event::{Event, Payload},
     version_vector::VersionVector,
 };
 use tokio::sync::broadcast;
@@ -150,7 +150,9 @@ impl BranchData {
 
     /// Trigger a notification event from this branch.
     pub fn notify(&self) {
-        self.notify_tx.send(Event::new(self.writer_id)).unwrap_or(0);
+        self.notify_tx
+            .send(Event::new(Payload::BranchChanged(self.writer_id)))
+            .unwrap_or(0);
     }
 
     /// Update the root version vector of this branch.
