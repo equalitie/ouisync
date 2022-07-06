@@ -78,11 +78,11 @@ impl Worker {
                 _ = instrument(self.inner.merge(), "merge") => (),
             }
 
-            wait = true;
-
             // Run the remaining jobs without interruption
             instrument(self.inner.prune(), "prune").await;
             instrument(self.inner.scan(scan::Mode::RequireAndCollect), "scan").await;
+
+            wait = true;
         }
     }
 
@@ -181,6 +181,7 @@ impl Receiver {
 
 async fn instrument<F: Future<Output = Result<()>>>(task: F, label: &str) {
     log::trace!("{} started", label);
+
     match task.await {
         Ok(()) => {
             log::trace!("{} completed", label);

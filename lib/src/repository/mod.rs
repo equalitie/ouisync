@@ -27,6 +27,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
+    scoped_task::{self, ScopedJoinHandle},
     store::Store,
     sync::broadcast::ThrottleReceiver,
 };
@@ -37,9 +38,12 @@ use tokio::{
     task,
 };
 
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
+    _worker_task: ScopedJoinHandle<()>,
 }
 
 impl Repository {
@@ -178,7 +182,7 @@ impl Repository {
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
 
         // Lazy block downloading requires at least read access because it needs to be able to
@@ -212,13 +216,14 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run());
+        let worker_task = scoped_task::spawn(worker.run());
 
         task::spawn(report_sync_progress(shared.store.clone()));
 
         Ok(Self {
             shared,
             worker_handle,
+            _worker_task: worker_task,
         })
     }
 
