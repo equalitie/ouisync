@@ -59,6 +59,13 @@ impl BranchData {
         Ok(())
     }
 
+    /// Remove all snapshots of this branch except the latest one.
+    pub async fn remove_old_snapshots(&self, conn: &mut db::Connection) -> Result<()> {
+        let root = self.load_root(conn).await?;
+        root.remove_recursively_all_older(conn).await?;
+        Ok(())
+    }
+
     /// Returns the id of the replica that owns this branch.
     pub fn id(&self) -> &PublicKey {
         &self.writer_id

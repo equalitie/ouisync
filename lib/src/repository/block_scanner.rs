@@ -14,7 +14,7 @@ use tokio::{
     sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
 
-/// Utility that traverses the repository scanning for missing and unreachable blocks. It then
+/// Worker that traverses the repository scanning for missing and unreachable blocks. It then
 /// requests the missing blocks (from `BlockTracker`) and deletes the unreachable blocks.
 pub(super) struct BlockScanner {
     shared: Arc<Shared>,
@@ -64,9 +64,6 @@ impl BlockScanner {
     }
 
     async fn process(&self, mode: Mode) -> Result<()> {
-        // FIXME: this should run in all access modes but currently it does only in read and write:
-        self.remove_outdated_branches().await?;
-
         self.prepare_unreachable_blocks().await?;
         self.traverse_root(mode).await?;
         self.remove_unreachable_blocks().await?;
@@ -82,8 +79,6 @@ impl BlockScanner {
         let mut result = Ok(());
 
         for branch in branches {
-            // We already removed outdated branches at this point, so every remaining root
-            // directory version is up to date.
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
             if result.is_ok() {
@@ -173,29 +168,6 @@ impl BlockScanner {
         Ok(())
     }
 
-    async fn remove_outdated_branches(&self) -> Result<()> {
-        let mut conn = self.shared.store.db().acquire().await?;
-        let local_id = self.shared.local_branch().map(|branch| *branch.id());
-        let outdated_branches = utils::outdated_branches(
-            &mut conn,
-            self.shared.collect_branches()?,
-            local_id.as_ref(),
-        )
-        .await?;
-        drop(conn);
-
-        for branch in outdated_branches {
-            // Never remove local branch
-            if Some(branch.id()) == local_id.as_ref() {
-                continue;
-            }
-
-            self.shared.remove_branch(branch.id()).await?;
-        }
-
-        Ok(())
-    }
-
     async fn prepare_unreachable_blocks(&self) -> Result<()> {
         let mut conn = self.shared.store.db().acquire().await?;
         block::mark_all_unreachable(&mut conn).await
@@ -248,16 +220,7 @@ pub(super) struct BlockScannerHandle {
 impl BlockScannerHandle {
     /// Trigger garbage collection and wait for it to complete.
     pub async fn collect(&self) -> Result<()> {
-        let (result_tx, result_rx) = oneshot::channel();
-
-        self.command_tx
-            .send(Command::Collect(result_tx))
-            .await
-            .unwrap_or(());
-
-        // When this returns error it means the task has been terminated which can only happen when
-        // the repository itself was dropped. We treat it as if the gc completed successfully.
-        result_rx.await.unwrap_or(Ok(()))
+        utils::oneshot(&self.command_tx, Command::Collect).await
     }
 }
 

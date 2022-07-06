@@ -123,6 +123,10 @@ impl Branch {
         self.blob_cache.contains(self.id(), blob_id)
     }
 
+    pub(crate) fn is_any_blob_open(&self) -> bool {
+        self.blob_cache.contains_any(self.id())
+    }
+
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         match self.open_root(conn).await {
             Ok(root) => root.debug_print(conn, print).await,

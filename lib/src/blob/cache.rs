@@ -60,6 +60,15 @@ impl BlobCache {
             .unwrap_or(false)
     }
 
+    pub fn contains_any(&self, branch_id: &PublicKey) -> bool {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(branch_id)
+            .map(|branch| branch.values().any(|slot| slot.strong_count() > 0))
+            .unwrap_or(false)
+    }
+
     /// Subscribe to notifications about a `Shared` getting dropped.
     pub fn subscribe(&self) -> drop_notify::Receiver {
         self.drop_tx.subscribe()

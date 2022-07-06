@@ -1,4 +1,4 @@
-use super::Shared;
+use super::{utils, Shared};
 use crate::{
     branch::Branch,
     error::{Error, Result},
@@ -15,7 +15,7 @@ use tokio::{
     },
 };
 
-/// Utility that merges remote branches into the local one.
+/// Worker that merges remote branches into the local one.
 pub(super) struct Merger {
     inner: Inner,
     command_rx: mpsc::Receiver<Command>,
@@ -160,16 +160,7 @@ pub(super) struct MergerHandle {
 
 impl MergerHandle {
     pub async fn merge(&self) -> Result<()> {
-        let (result_tx, result_rx) = oneshot::channel();
-
-        self.command_tx
-            .send(Command::Merge(result_tx))
-            .await
-            .unwrap_or(());
-
-        // When this returns error it means the task has been terminated which can only happen when
-        // the repository itself was dropped. We treat it as if the merge completed successfully.
-        result_rx.await.unwrap_or(Ok(()))
+        utils::oneshot(&self.command_tx, Command::Merge).await
     }
 }
 

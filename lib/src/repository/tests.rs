@@ -1067,7 +1067,7 @@ async fn remove_branch() {
     drop(conn);
     drop(file);
 
-    repo.shared.remove_branch(&remote_id).await.unwrap();
+    repo.shared.store.index.remove_branch(&remote_id);
 
     // The forked file still exists
     assert_eq!(read_file(&repo, "foo.txt").await, b"foo");

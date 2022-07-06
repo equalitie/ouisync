@@ -102,20 +102,9 @@ impl Index {
             .collect()
     }
 
-    /// Remove the branch including all its blocks, except those that are also referenced from
-    /// other branch(es).
-    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
-        let branch = self.shared.branches.lock().unwrap().remove(id);
-        let branch = if let Some(branch) = branch {
-            branch
-        } else {
-            return Ok(());
-        };
-
-        let mut conn = self.pool.acquire().await?;
-        branch.destroy(&mut conn).await?;
-
-        Ok(())
+    /// Removes the branch.
+    pub fn remove_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
+        self.shared.branches.lock().unwrap().remove(id)
     }
 
     /// Subscribe to change notification from all current and future branches.

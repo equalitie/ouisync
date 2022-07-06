@@ -1,6 +1,7 @@
 mod block_scanner;
 mod id;
 mod merger;
+mod pruner;
 #[cfg(test)]
 mod tests;
 mod utils;
@@ -10,6 +11,7 @@ pub use self::id::RepositoryId;
 use self::{
     block_scanner::{BlockScanner, BlockScannerHandle},
     merger::{Merger, MergerHandle},
+    pruner::{Pruner, PrunerHandle},
 };
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
@@ -44,6 +46,7 @@ use tokio::{
 pub struct Repository {
     shared: Arc<Shared>,
     merger_handle: Option<MergerHandle>,
+    pruner_handle: PrunerHandle,
     block_scanner_handle: Option<BlockScannerHandle>,
 }
 
@@ -224,6 +227,9 @@ impl Repository {
             None
         };
 
+        let (pruner, pruner_handle) = Pruner::new(shared.clone());
+        task::spawn(pruner.run());
+
         // BlockScanner requires at least read access to be able to traverse the repository.
         let block_scanner_handle = if shared.secrets.can_read() {
             let (block_scanner, handle) = BlockScanner::new(shared.clone());
@@ -238,6 +244,7 @@ impl Repository {
         Ok(Self {
             shared,
             merger_handle,
+            pruner_handle,
             block_scanner_handle,
         })
     }
@@ -457,11 +464,13 @@ impl Repository {
     /// It's usually not necessary to call this method because the gc runs automatically in the
     /// background.
     pub async fn force_garbage_collection(&self) -> Result<()> {
-        self.block_scanner_handle
-            .as_ref()
-            .ok_or(Error::PermissionDenied)?
-            .collect()
-            .await
+        self.pruner_handle.prune().await?;
+
+        if let Some(block_scanner) = &self.block_scanner_handle {
+            block_scanner.collect().await?;
+        }
+
+        Ok(())
     }
 
     /// Force the merge to run and wait for it to complete, returning its result.
@@ -634,16 +643,6 @@ impl Shared {
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()
-    }
-
-    /// Removes the branch with the given id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if trying to remove the local branch.
-    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
-        assert_ne!(id, &self.this_writer_id, "can't remove local branch");
-        self.store.index.remove_branch(id).await
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
