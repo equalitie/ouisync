@@ -899,15 +899,15 @@ async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<Branch>) {
     let pool = db::create(&db::Store::Temporary).await.unwrap();
-    let (notify_tx, _) = broadcast::channel(1);
+    let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
-    let blob_cache = Arc::new(BlobCache::new());
+    let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
 
     let branches = {
         let pool = &pool;
         future::join_all((0..branch_count).map(|_| {
             let id = PublicKey::generate(&mut rng);
-            let notify_tx = notify_tx.clone();
+            let event_tx = event_tx.clone();
             let secrets = secrets.clone();
             let blob_cache = blob_cache.clone();
 
@@ -916,7 +916,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
                     &mut pool.acquire().await.unwrap(),
                     id,
                     &secrets.write_keys,
-                    notify_tx,
+                    event_tx,
                 )
                 .await
                 .unwrap();

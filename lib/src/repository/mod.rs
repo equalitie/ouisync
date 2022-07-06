@@ -179,7 +179,7 @@ impl Repository {
         enable_merger: bool,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(256);
-        let index = Index::load(pool, *secrets.id(), event_tx).await?;
+        let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
 
         // Lazy block downloading requires at least read access because it needs to be able to
         // traverse the repository in order to enumarate reachable blocks.
@@ -198,7 +198,7 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            blob_cache: Arc::new(BlobCache::new()),
+            blob_cache: Arc::new(BlobCache::new(event_tx)),
         });
 
         let local_branch = if enable_merger {

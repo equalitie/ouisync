@@ -4,7 +4,6 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventScope},
     joint_directory::JointDirectory,
-    sync::drop_notify,
 };
 use log::Level;
 use std::{future::Future, sync::Arc};
@@ -123,9 +122,8 @@ struct Inner {
 impl Inner {
     fn subscribe(&self) -> Receiver {
         Receiver {
-            notify: self.shared.store.index.subscribe(),
-            blob_close: self.shared.blob_cache.subscribe(),
-            event_scope: self.event_scope,
+            rx: self.shared.store.index.subscribe(),
+            ignore_scope: self.event_scope,
         }
     }
 
@@ -164,24 +162,18 @@ impl Inner {
 }
 
 struct Receiver {
-    notify: broadcast::Receiver<Event>,
-    blob_close: drop_notify::Receiver,
-    event_scope: EventScope,
+    rx: broadcast::Receiver<Event>,
+    ignore_scope: EventScope,
 }
 
 impl Receiver {
     async fn recv(&mut self) -> bool {
         loop {
-            select! {
-                event = self.notify.recv() => {
-                    match event {
-                        Ok(event) if event.scope != self.event_scope => break true,
-                        Ok(_) => continue,
-                        Err(RecvError::Lagged(_)) => break true,
-                        Err(RecvError::Closed) => break false,
-                    }
-                }
-                event = self.blob_close.dropped() => break event.is_ok(),
+            match self.rx.recv().await {
+                Ok(event) if event.scope != self.ignore_scope => break true,
+                Ok(_) => continue,
+                Err(RecvError::Lagged(_)) => break true,
+                Err(RecvError::Closed) => break false,
             }
         }
     }

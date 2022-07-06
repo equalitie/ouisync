@@ -81,8 +81,6 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
 }
 
-// FIXME: this currently fail due to infinite event cycle in worker
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
     let repo = Repository::create(

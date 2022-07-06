@@ -1,27 +1,24 @@
 use super::inner::{MaybeInitShared, Shared};
-use crate::{
-    blob_id::BlobId,
-    crypto::sign::PublicKey,
-    sync::{drop_notify, Mutex as AsyncMutex},
-};
+use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event, sync::Mutex as AsyncMutex};
 use std::{
     collections::HashMap,
     sync::{Mutex as BlockingMutex, Weak},
 };
+use tokio::sync::broadcast;
 
 pub(crate) struct BlobCache {
     slots: BlockingMutex<BranchMap>,
-    drop_tx: drop_notify::Sender,
+    event_tx: broadcast::Sender<Event>,
 }
 
 type BlobMap = HashMap<BlobId, Weak<AsyncMutex<Shared>>>;
 type BranchMap = HashMap<PublicKey, BlobMap>;
 
 impl BlobCache {
-    pub fn new() -> Self {
+    pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
         Self {
             slots: BlockingMutex::new(HashMap::new()),
-            drop_tx: drop_notify::Sender::new(),
+            event_tx,
         }
     }
 
@@ -44,7 +41,7 @@ impl BlobCache {
         if let Some(shared) = slot.upgrade() {
             shared.into()
         } else {
-            let shared = Shared::uninit_with_drop_notify(self.drop_tx.clone());
+            let shared = Shared::uninit_with_close_notify(self.event_tx.clone());
             *slot = shared.downgrade();
             shared
         }
@@ -67,10 +64,5 @@ impl BlobCache {
             .get(branch_id)
             .map(|branch| branch.values().any(|slot| slot.strong_count() > 0))
             .unwrap_or(false)
-    }
-
-    /// Subscribe to notifications about a `Shared` getting dropped.
-    pub fn subscribe(&self) -> drop_notify::Receiver {
-        self.drop_tx.subscribe()
     }
 }

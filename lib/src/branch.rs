@@ -192,13 +192,13 @@ mod tests {
         let repository_id = secrets.id;
         let (event_tx, _) = broadcast::channel(1);
 
-        let index = Index::load(pool.clone(), repository_id, event_tx)
+        let index = Index::load(pool.clone(), repository_id, event_tx.clone())
             .await
             .unwrap();
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
-        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new()));
+        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
         (pool, branch)
     }
