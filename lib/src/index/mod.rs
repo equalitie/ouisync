@@ -322,41 +322,21 @@ impl Index {
 
         for (id, complete) in statuses {
             if complete {
-                self.update_root_node(conn, id).await?;
+                self.update_root_node(id);
             }
         }
 
         Ok(())
     }
 
-    async fn update_root_node(
-        &self,
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<()> {
-        let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
-
-        let remove_older = match self.shared.branches.lock().unwrap().entry(writer_id) {
-            Entry::Vacant(entry) => {
-                let branch = BranchData::new(node.proof.writer_id, self.shared.notify_tx.clone());
-                let branch = Arc::new(branch);
-                entry.insert(branch).notify();
-                true
-            }
-            Entry::Occupied(entry) => {
-                entry.get().notify();
-                // TODO: always remove older
-                false
-            }
-        };
-
-        if remove_older {
-            // We could have accumulated a bunch of incomplete root nodes before this
-            // particular one became complete. We want to remove those.
-            node.remove_recursively_all_older(conn).await?;
-        }
-
-        Ok(())
+    fn update_root_node(&self, writer_id: PublicKey) {
+        self.shared
+            .branches
+            .lock()
+            .unwrap()
+            .entry(writer_id)
+            .or_insert_with(|| Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone())))
+            .notify();
     }
 
     async fn check_parent_node_exists(
