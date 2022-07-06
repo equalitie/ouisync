@@ -1,18 +1,12 @@
-mod block_scanner;
 mod id;
-mod merger;
-mod pruner;
 #[cfg(test)]
 mod tests;
 mod utils;
+mod worker;
 
 pub use self::id::RepositoryId;
 
-use self::{
-    block_scanner::{BlockScanner, BlockScannerHandle},
-    merger::{Merger, MergerHandle},
-    pruner::{Pruner, PrunerHandle},
-};
+use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
     blob::BlobCache,
@@ -45,9 +39,7 @@ use tokio::{
 
 pub struct Repository {
     shared: Arc<Shared>,
-    merger_handle: Option<MergerHandle>,
-    pruner_handle: PrunerHandle,
-    block_scanner_handle: Option<BlockScannerHandle>,
+    worker_handle: WorkerHandle,
 }
 
 impl Repository {
@@ -219,33 +211,14 @@ impl Repository {
             None
         };
 
-        let merger_handle = if let Some(local_branch) = local_branch {
-            let (merger, handle) = Merger::new(shared.clone(), local_branch);
-            task::spawn(merger.run());
-            Some(handle)
-        } else {
-            None
-        };
-
-        let (pruner, pruner_handle) = Pruner::new(shared.clone());
-        task::spawn(pruner.run());
-
-        // BlockScanner requires at least read access to be able to traverse the repository.
-        let block_scanner_handle = if shared.secrets.can_read() {
-            let (block_scanner, handle) = BlockScanner::new(shared.clone());
-            task::spawn(block_scanner.run());
-            Some(handle)
-        } else {
-            None
-        };
+        let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
+        task::spawn(worker.run());
 
         task::spawn(report_sync_progress(shared.store.clone()));
 
         Ok(Self {
             shared,
-            merger_handle,
-            pruner_handle,
-            block_scanner_handle,
+            worker_handle,
         })
     }
 
@@ -464,13 +437,7 @@ impl Repository {
     /// It's usually not necessary to call this method because the gc runs automatically in the
     /// background.
     pub async fn force_garbage_collection(&self) -> Result<()> {
-        self.pruner_handle.prune().await?;
-
-        if let Some(block_scanner) = &self.block_scanner_handle {
-            block_scanner.collect().await?;
-        }
-
-        Ok(())
+        self.worker_handle.collect().await
     }
 
     /// Force the merge to run and wait for it to complete, returning its result.
@@ -478,11 +445,7 @@ impl Repository {
     /// It's usually not necessary to call this method because the merger runs automatically in the
     /// background.
     pub async fn force_merge(&self) -> Result<()> {
-        self.merger_handle
-            .as_ref()
-            .ok_or(Error::PermissionDenied)?
-            .merge()
-            .await
+        self.worker_handle.merge().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
