@@ -83,7 +83,7 @@ pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
 
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
-pub mod uninitialized_watch {
+pub(crate) mod uninitialized_watch {
     use tokio::sync::watch as w;
 
     pub struct Sender<T>(w::Sender<Option<T>>);
@@ -125,5 +125,50 @@ pub mod uninitialized_watch {
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         let (tx, rx) = w::channel(None);
         (Sender(tx), Receiver(rx))
+    }
+}
+
+/// Simple mpmc channel that signals when a sender drops. The sender is `Clone` so the channel can
+/// be used to watch multiple values.
+pub(crate) mod drop_notify {
+    use super::uninitialized_watch;
+    use std::sync::Arc;
+    pub use tokio::sync::watch::error::RecvError;
+
+    // TODO: consider creating a PR against tokio to make `watch::Sender` Clone.
+    #[derive(Clone)]
+    pub struct Sender(Arc<uninitialized_watch::Sender<()>>);
+
+    impl Sender {
+        pub fn new() -> Self {
+            let (tx, _) = uninitialized_watch::channel();
+            Self(Arc::new(tx))
+        }
+        pub fn subscribe(&self) -> Receiver {
+            Receiver(self.0.subscribe())
+        }
+    }
+
+    impl Default for Sender {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Drop for Sender {
+        fn drop(&mut self) {
+            self.0.send(()).unwrap_or(())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct Receiver(uninitialized_watch::Receiver<()>);
+
+    impl Receiver {
+        /// Wait until one sender has been dropped. Returns an error if there are no more sender at
+        /// the time this is called.
+        pub async fn dropped(&mut self) -> Result<(), RecvError> {
+            self.0.changed().await
+        }
     }
 }
