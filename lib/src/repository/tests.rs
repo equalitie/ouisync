@@ -847,7 +847,7 @@ async fn version_vector_recreate_deleted_file() {
     let mut conn = repo.db().acquire().await.unwrap();
     assert_eq!(
         file.version_vector(&mut conn).await.unwrap(),
-        vv![local_id => 3]
+        vv![local_id => 3 /* = 1*create + 1*remove + 1*create again */]
     );
 }
 

@@ -6,7 +6,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef},
+    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef, TombstoneRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -18,7 +18,7 @@ use camino::{Utf8Component, Utf8Path};
 use either::Either;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt, iter, mem,
 };
 
@@ -52,11 +52,19 @@ impl JointDirectory {
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.
     pub fn entries(&self) -> impl Iterator<Item = JointEntryRef> {
+        self.merge_entries().map(|(_, merge)| merge).flatten()
+    }
+
+    fn merge_entries(&self) -> impl Iterator<Item = (&str, Merge)> {
         let entries = self.versions.values().map(|directory| directory.entries());
         let entries = SortedUnion::new(entries, |entry| entry.name());
         let entries = Accumulate::new(entries, |entry| entry.name());
-
-        entries.flat_map(|(_, entries)| Merge::new(entries.into_iter(), self.local_branch.as_ref()))
+        entries.map(|(name, entries)| {
+            (
+                name,
+                Merge::new(entries.into_iter(), self.local_branch.as_ref()),
+            )
+        })
     }
 
     /// Returns all versions of an entry with the given name. Concurrent file versions are returned
@@ -284,31 +292,57 @@ impl JointDirectory {
 
         let mut bump = true;
 
-        for entry in self.entries() {
-            match entry {
-                JointEntryRef::File(entry) => {
-                    let mut conn = db.acquire().await?;
-                    let mut file = entry.open(&mut conn).await?;
+        let mut check_for_removal = HashMap::new();
 
-                    match file.fork(&mut conn, local_branch.clone()).await {
-                        Ok(()) => (),
-                        Err(Error::EntryExists) => {
-                            // This error indicates the local and the remote files are in conflict and
-                            // so can't be automatically merged. We still proceed with merging the
-                            // remaining entries but we won't mark this directory as merged (by bumping its
-                            // vv) to prevent the conflicting remote file from being collected.
-                            bump = false;
+        for (name, mut merge) in self.merge_entries() {
+            let dir = merge.take_dir();
+            let tombstones = mem::take(&mut merge.tombstones);
+            let mut overwritten = false;
+
+            for entry in merge {
+                match entry {
+                    JointEntryRef::File(entry) => {
+                        let mut conn = db.acquire().await?;
+                        let mut file = entry.open(&mut conn).await?;
+
+                        match file.fork(&mut conn, local_branch.clone()).await {
+                            Ok(()) => {
+                                overwritten = true;
+                            }
+                            Err(Error::EntryExists) => {
+                                // This error indicates the local and the remote files are in conflict and
+                                // so can't be automatically merged. We still proceed with merging the
+                                // remaining entries but we won't mark this directory as merged (by bumping its
+                                // vv) to prevent the conflicting remote file from being collected.
+                                bump = false;
+                            }
+                            Err(error) => return Err(error),
                         }
-                        Err(error) => return Err(error),
                     }
+                    // We already "took" the directory out above.
+                    JointEntryRef::Directory(_) => unreachable!(),
                 }
-                JointEntryRef::Directory(entry) => {
-                    let mut conn = db.acquire().await?;
-                    let mut dir = entry.open(&mut conn, MissingVersionStrategy::Fail).await?;
-                    drop(conn);
+            }
 
-                    dir.merge(db).await?;
-                }
+            // If the the entry has not been overwritten by a fork, then we still need to check
+            // whether some of the tombstones aren't "happened after" our local version of the file
+            // entry and remove it if so.
+            if !overwritten && !tombstones.is_empty() {
+                check_for_removal.insert(
+                    name.to_string(),
+                    tombstones
+                        .iter()
+                        .map(|t| t.version_vector().clone())
+                        .collect::<Vec<_>>(),
+                );
+            }
+
+            if let Some(dir) = dir {
+                let mut conn = db.acquire().await?;
+                let mut dir = dir.open(&mut conn, MissingVersionStrategy::Fail).await?;
+                drop(conn);
+
+                dir.merge(db).await?;
             }
         }
 
@@ -318,6 +352,12 @@ impl JointDirectory {
         // beginning of this function.
         let local_version = self.local_version_mut().unwrap();
         local_version.refresh(&mut conn).await?;
+
+        for (name, mut tombstones) in check_for_removal {
+            local_version
+                .try_remove_entry_with(&mut conn, name, tombstones.drain(..))
+                .await?;
+        }
 
         if bump {
             local_version.bump(&mut conn, new_version_vector).await?;
@@ -587,6 +627,7 @@ struct Merge<'a> {
     // when not needed.
     files: VecDeque<FileRef<'a>>,
     directories: Vec<DirectoryRef<'a>>,
+    tombstones: Vec<TombstoneRef<'a>>,
     needs_disambiguation: bool,
     local_branch: Option<&'a Branch>,
 }
@@ -600,14 +641,16 @@ impl<'a> Merge<'a> {
     {
         let mut files = VecDeque::new();
         let mut directories = vec![];
+        let mut tombstones = vec![];
 
+        // Note that doing this will remove files that have been removed by tombstones as well.
         let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
 
         for entry in entries {
             match entry {
                 EntryRef::File(file) => files.push_back(file),
                 EntryRef::Directory(dir) => directories.push(dir),
-                EntryRef::Tombstone(_) => {}
+                EntryRef::Tombstone(tombstone) => tombstones.push(tombstone),
             }
         }
 
@@ -616,9 +659,14 @@ impl<'a> Merge<'a> {
         Self {
             files,
             directories,
+            tombstones,
             needs_disambiguation,
             local_branch,
         }
+    }
+
+    fn take_dir(&mut self) -> Option<JointDirectoryRef<'a>> {
+        JointDirectoryRef::new(mem::take(&mut self.directories), self.local_branch)
     }
 }
 
@@ -626,9 +674,8 @@ impl<'a> Iterator for Merge<'a> {
     type Item = JointEntryRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if !self.directories.is_empty() {
-            return JointDirectoryRef::new(mem::take(&mut self.directories), self.local_branch)
-                .map(JointEntryRef::Directory);
+        if let Some(joint_dir_ref) = self.take_dir() {
+            return Some(JointEntryRef::Directory(joint_dir_ref));
         }
 
         let file = self.files.pop_front()?;
