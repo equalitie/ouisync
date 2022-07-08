@@ -66,7 +66,8 @@ impl VersionVector {
     /// the maximum of the corresponding entries of the input vectors. Returns whether `self` was
     /// modified.
     ///
-    /// This operation is commutative, associative and idempotent.
+    /// This operation is commutative, associative and idempotent with respect to the "returned"
+    /// `self`. But it is not commutative with respect to the returned value.
     pub fn merge(&mut self, other: &Self) -> bool {
         let mut modified = false;
 
@@ -81,6 +82,9 @@ impl VersionVector {
 
     /// Merges `other` into `self` and optionally increments the version at `id` to make sure the
     /// resulting vector is strictly greater than it was before.
+    ///
+    /// This operation is not commutative because it only increments the version at `id` if the
+    /// *left hand side* has changed.
     pub fn bump(&mut self, other: &Self, id: &PublicKey) {
         if !self.merge(other) {
             self.increment(*id);

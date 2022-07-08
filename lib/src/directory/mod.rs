@@ -496,7 +496,12 @@ impl Directory {
             match self.lookup(name) {
                 Ok(old_entry) => {
                     let mut new_entry = old_entry.clone_data();
-                    new_entry.version_vector_mut().merge(&vv);
+
+                    // Note: the `bump` funtion is not commutative.
+                    let mut vv = vv;
+                    vv.bump(new_entry.version_vector(), self.branch().id());
+                    *new_entry.version_vector_mut() = vv;
+
                     new_entry
                 }
                 Err(Error::EntryNotFound) => {
