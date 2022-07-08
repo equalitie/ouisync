@@ -94,12 +94,21 @@ impl Content {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }
                     EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
-                    // Always overwrite tombstones but update the new version vector so it's more up to
-                    // date than the tombstone.
+                    // Always overwrite tombstones but in case the new entry is a file or a
+                    // directory (not another tombstone which could happen e.g. when merging) also
+                    // update the new version vector so it's more up to date than the tombstone.
                     EntryData::Tombstone(old_data) => {
-                        let mut vv = old_data.version_vector.clone();
-                        vv.bump(new_data.version_vector(), branch.id());
-                        *new_data.version_vector_mut() = vv;
+                        if new_data.is_tombstone() {
+                            // Tombstones don't have any data and thus are indistinguishable from
+                            // one to another. So we don't have to force incrementing the vv.
+                            new_data
+                                .version_vector_mut()
+                                .merge(&old_data.version_vector);
+                        } else {
+                            let mut vv = old_data.version_vector.clone();
+                            vv.bump(new_data.version_vector(), branch.id());
+                            *new_data.version_vector_mut() = vv;
+                        }
                     }
                 }
 

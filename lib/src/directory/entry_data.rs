@@ -30,6 +30,10 @@ impl EntryData {
         Self::Tombstone(EntryTombstoneData { version_vector })
     }
 
+    pub fn is_tombstone(&self) -> bool {
+        matches!(self, Self::Tombstone(_))
+    }
+
     pub fn version_vector(&self) -> &VersionVector {
         match self {
             Self::File(f) => &f.version_vector,

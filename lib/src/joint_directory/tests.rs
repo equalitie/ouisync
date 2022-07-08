@@ -805,6 +805,46 @@ async fn merge_concurrent_directories() {
     dir.lookup("cat.jpg").unwrap().file().unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_file_and_tombstone() {
+    // Create two branches.
+    let (pool, branches) = setup(2).await;
+    let mut conn = pool.acquire().await.unwrap();
+
+    // Create a file in the local one.
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut file = create_file(&mut conn, &mut local_root, "dog.jpg", &[], &branches[0]).await;
+    let file_vv = file.version_vector(&mut conn).await.unwrap();
+
+    // Fork the file into the remote branch.
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    file.fork(&mut conn, branches[1].clone()).await.unwrap();
+
+    // Remove the file in the remote branch.
+    remote_root
+        .remove_entry(&mut conn, "dog.jpg", branches[1].id(), file_vv)
+        .await
+        .unwrap();
+
+    drop(conn);
+
+    // Merge should remove the file from the local branch.
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&pool)
+        .await
+        .unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    local_root.refresh(&mut conn).await.unwrap();
+
+    assert_eq!(local_root.entries().count(), 1);
+
+    let entry = local_root.entries().next().unwrap();
+
+    assert_eq!(entry.name(), "dog.jpg");
+    assert!(entry.is_tombstone());
+}
+
 // TODO: merge directory with missing blocks
 
 #[tokio::test(flavor = "multi_thread")]

@@ -7,7 +7,7 @@ mod parent_context;
 mod tests;
 
 pub use self::{
-    entry::{DirectoryRef, EntryRef, FileRef},
+    entry::{DirectoryRef, EntryRef, FileRef, TombstoneRef},
     entry_type::EntryType,
 };
 pub(crate) use self::{entry_data::EntryData, parent_context::ParentContext};
@@ -181,6 +181,35 @@ impl Directory {
             OverwriteStrategy::Remove,
         )
         .await
+    }
+
+    /// For each version vector V in the `version_vectors` argument, if the entry correspoding to
+    /// `name` is "happened before" V, then replace the entry with a tombstone with V as its
+    /// version vector.
+    pub(crate) async fn try_remove_entry_with<'a, I>(
+        &mut self,
+        conn: &mut db::Connection,
+        name: String,
+        version_vectors: I,
+    ) -> Result<()>
+    where
+        I: Iterator<Item = VersionVector>,
+    {
+        let mut tx = conn.begin().await?;
+
+        let mut content = self.load(&mut tx).await?;
+
+        for tombstone in version_vectors.map(EntryData::tombstone) {
+            match content.insert(self.branch(), name.clone(), tombstone) {
+                Ok(()) => {}
+                Err(Error::EntryExists) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        self.save(&mut tx, &content, OverwriteStrategy::Remove)
+            .await?;
+        self.commit(tx, content, VersionVector::new()).await
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the

@@ -550,8 +550,8 @@ impl Repository {
             }
         };
 
-        let branches = self.shared.branches.lock().await;
-        for (writer_id, branch) in &*branches {
+        let branches = self.shared.branches.lock().await.clone();
+        for (writer_id, branch) in &branches {
             let print = print.indent();
             let local = if *writer_id == self.shared.this_writer_id {
                 " (local)"
