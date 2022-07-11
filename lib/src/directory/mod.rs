@@ -126,7 +126,7 @@ impl Directory {
         file.save(&mut tx).await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVector::new()).await?;
 
         Ok(file)
     }
@@ -153,7 +153,7 @@ impl Directory {
             .await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVector::new()).await?;
 
         Ok(dir)
     }
@@ -172,18 +172,17 @@ impl Directory {
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
-        let tx = conn.begin().await?;
-        self.remove_entry_with_overwrite_strategy(
-            tx,
-            name,
-            branch_id,
-            vv,
-            OverwriteStrategy::Remove,
-        )
-        .await
+        let mut tx = conn.begin().await?;
+        let content = self
+            .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
+            .await?;
+        tx.commit().await?;
+        self.finalize(content);
+
+        Ok(())
     }
 
-    /// For each version vector V in the `version_vectors` argument, if the entry correspoding to
+    /// For each version vector V in the `version_vectors` argument, if the entry corresponding to
     /// `name` is "happened before" V, then replace the entry with a tombstone with V as its
     /// version vector.
     pub(crate) async fn try_remove_entry_with<'a, I>(
@@ -209,7 +208,7 @@ impl Directory {
 
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await
+        self.commit(tx, content, &VersionVector::new()).await
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -228,16 +227,9 @@ impl Directory {
     ///
     /// # Cancel safety
     ///
-    /// This function is partially cancel safe in the sense that it will never lose data. However,
-    /// in the case of cancellation, it can happen that the entry ends up being already inserted
-    /// into the destination but not yet removed from the source. This will behave similarly to a
-    /// hard link with the important difference that removing the entry from either location  would
-    /// leave it dangling in the other. The only way to currently resolve the situation without
-    /// removing the data is to copy it somewhere else, then remove both source and destination
-    /// entries and then move the data back.
-    ///
-    /// TODO: Improve cancel-safety either by making the whole operation atomic or by implementing
-    /// proper hard links.
+    /// This function is atomic and thus cancel safe. Either the entry is both removed from the src
+    /// directory and inserted into the dst directory or, in case of error or cancellation, none of
+    /// those operations happen.
     pub(crate) async fn move_entry(
         &mut self,
         conn: &mut db::Connection,
@@ -250,30 +242,32 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        {
-            let tx = conn.begin().await?;
-            dst_dir
-                .insert_entry_with_overwrite_strategy(
-                    tx,
-                    dst_name.to_owned(),
-                    dst_data,
-                    OverwriteStrategy::Remove,
-                )
-                .await?;
-        }
+        let mut tx = conn.begin().await?;
 
-        {
-            let tx = conn.begin().await?;
-            let branch_id = *self.branch().id();
-            self.remove_entry_with_overwrite_strategy(
-                tx,
+        let dst_content = dst_dir
+            .begin_insert_entry(
+                &mut tx,
+                dst_name.to_owned(),
+                dst_data,
+                OverwriteStrategy::Remove,
+            )
+            .await?;
+
+        let branch_id = *self.branch().id();
+        let src_content = self
+            .begin_remove_entry(
+                &mut tx,
                 src_name,
                 &branch_id,
                 src_vv,
                 OverwriteStrategy::Keep,
             )
             .await?;
-        }
+
+        tx.commit().await?;
+
+        self.finalize(src_content);
+        dst_dir.finalize(dst_content);
 
         Ok(())
     }
@@ -319,10 +313,10 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn bump(
+    pub(crate) async fn merge_version_vector(
         &mut self,
         conn: &mut db::Connection,
-        vv: VersionVector,
+        vv: &VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
         self.commit(tx, Content::empty(), vv).await
@@ -466,18 +460,18 @@ impl Directory {
         }
     }
 
-    async fn remove_entry_with_overwrite_strategy(
+    async fn begin_remove_entry(
         &mut self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
         overwrite: OverwriteStrategy,
-    ) -> Result<()> {
+    ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut tx).await?),
+            Ok(EntryRef::Directory(entry)) => Some(entry.open(tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };
@@ -497,7 +491,7 @@ impl Directory {
                 Ok(old_entry) => {
                     let mut new_entry = old_entry.clone_data();
 
-                    // Note: the `bump` funtion is not commutative.
+                    // Note: the `bump` function is not commutative.
                     let mut vv = vv;
                     vv.bump(new_entry.version_vector(), self.branch().id());
                     *new_entry.version_vector_mut() = vv;
@@ -511,22 +505,23 @@ impl Directory {
             }
         };
 
-        self.insert_entry_with_overwrite_strategy(tx, name.to_owned(), new_entry, overwrite)
+        self.begin_insert_entry(tx, name.to_owned(), new_entry, overwrite)
             .await
     }
 
-    /// Atomically inserts the given entry into this directory and commits the change.
-    async fn insert_entry_with_overwrite_strategy(
+    async fn begin_insert_entry(
         &mut self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         name: String,
         entry: EntryData,
         overwrite: OverwriteStrategy,
-    ) -> Result<()> {
-        let mut content = self.load(&mut tx).await?;
+    ) -> Result<Content> {
+        let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, entry)?;
-        self.save(&mut tx, &content, overwrite).await?;
-        self.commit(tx, content, VersionVector::new()).await
+        self.save(tx, &content, overwrite).await?;
+        self.bump(tx, &VersionVector::new()).await?;
+
+        Ok(content)
     }
 
     async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
@@ -569,16 +564,25 @@ impl Directory {
 
     /// Atomically commits any pending changes in this directory and updates the version vectors of
     /// it and all its ancestors.
-    #[async_recursion]
-    async fn commit<'a>(
-        &'a mut self,
-        tx: db::Transaction<'a>,
+    async fn commit(
+        &mut self,
+        mut tx: db::Transaction<'_>,
         content: Content,
-        bump: VersionVector,
+        bump: &VersionVector,
     ) -> Result<()> {
+        self.bump(&mut tx, bump).await?;
+        tx.commit().await?;
+        self.finalize(content);
+
+        Ok(())
+    }
+
+    /// Updates the version vectors of this directory and all its ancestors.
+    #[async_recursion]
+    async fn bump(&mut self, tx: &mut db::Transaction<'_>, bump: &VersionVector) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
-        if let Some(ctx) = self.parent.as_mut() {
-            ctx.commit(tx, self.blob.branch().clone(), bump).await?;
+        if let Some(parent) = self.parent.as_mut() {
+            parent.bump(tx, self.blob.branch().clone(), bump).await
         } else {
             let write_keys = self
                 .branch()
@@ -586,15 +590,18 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, &bump, write_keys).await?;
+            self.branch().data().bump(tx, bump, write_keys).await
         }
+    }
 
+    /// Finalize pending modifications. Call this only after the db transaction is committed.
+    fn finalize(&mut self, content: Content) {
         if !content.is_empty() {
             self.entries = content;
             self.entries.clear_overwritten_blobs();
         }
 
-        Ok(())
+        self.branch().data().notify();
     }
 }
 

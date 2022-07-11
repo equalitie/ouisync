@@ -291,7 +291,6 @@ impl JointDirectory {
         drop(conn);
 
         let mut bump = true;
-
         let mut check_for_removal = HashMap::new();
 
         for (name, mut merge) in self.merge_entries() {
@@ -360,7 +359,9 @@ impl JointDirectory {
         }
 
         if bump {
-            local_version.bump(&mut conn, new_version_vector).await?;
+            local_version
+                .merge_version_vector(&mut conn, &new_version_vector)
+                .await?;
         }
 
         Ok(local_version.clone())
