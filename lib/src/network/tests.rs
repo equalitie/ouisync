@@ -420,11 +420,14 @@ async fn create_changeset(
     }
 
     let mut cx = index.pool.acquire().await.unwrap();
-    let tx = cx.begin().await.unwrap();
+    let mut tx = cx.begin().await.unwrap();
     branch
-        .bump(tx, &VersionVector::new(), write_keys)
+        .bump(&mut tx, &VersionVector::new(), write_keys)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
+
+    branch.notify();
 }
 
 async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, write_keys: &Keypair) {

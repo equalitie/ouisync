@@ -126,7 +126,7 @@ impl Directory {
         file.save(&mut tx).await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVector::new()).await?;
 
         Ok(file)
     }
@@ -153,7 +153,7 @@ impl Directory {
             .await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVector::new()).await?;
 
         Ok(dir)
     }
@@ -209,7 +209,7 @@ impl Directory {
 
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, VersionVector::new()).await
+        self.commit(tx, content, &VersionVector::new()).await
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -322,7 +322,7 @@ impl Directory {
     pub(crate) async fn merge_version_vector(
         &mut self,
         conn: &mut db::Connection,
-        vv: VersionVector,
+        vv: &VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
         self.commit(tx, Content::empty(), vv).await
@@ -526,7 +526,7 @@ impl Directory {
         let mut content = self.load(&mut tx).await?;
         content.insert(self.branch(), name, entry)?;
         self.save(&mut tx, &content, overwrite).await?;
-        self.commit(tx, content, VersionVector::new()).await
+        self.commit(tx, content, &VersionVector::new()).await
     }
 
     async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
@@ -569,16 +569,25 @@ impl Directory {
 
     /// Atomically commits any pending changes in this directory and updates the version vectors of
     /// it and all its ancestors.
-    #[async_recursion]
-    async fn commit<'a>(
-        &'a mut self,
-        tx: db::Transaction<'a>,
+    async fn commit(
+        &mut self,
+        mut tx: db::Transaction<'_>,
         content: Content,
-        bump: VersionVector,
+        bump: &VersionVector,
     ) -> Result<()> {
+        self.bump(&mut tx, bump).await?;
+        tx.commit().await?;
+        self.finalize(content);
+
+        Ok(())
+    }
+
+    /// Updates the version vectors of this directory and all its ancestors.
+    #[async_recursion]
+    async fn bump(&mut self, tx: &mut db::Transaction<'_>, bump: &VersionVector) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
-        if let Some(ctx) = self.parent.as_mut() {
-            ctx.commit(tx, self.blob.branch().clone(), bump).await?;
+        if let Some(parent) = self.parent.as_mut() {
+            parent.bump(tx, self.blob.branch().clone(), bump).await
         } else {
             let write_keys = self
                 .branch()
@@ -586,15 +595,18 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, &bump, write_keys).await?;
+            self.branch().data().bump(tx, bump, write_keys).await
         }
+    }
 
+    /// Finalize pending modifications. Call this only after the db transaction is committed.
+    fn finalize(&mut self, content: Content) {
         if !content.is_empty() {
             self.entries = content;
             self.entries.clear_overwritten_blobs();
         }
 
-        Ok(())
+        self.branch().data().notify();
     }
 }
 

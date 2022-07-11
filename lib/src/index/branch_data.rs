@@ -163,11 +163,11 @@ impl BranchData {
     /// it doesn't execute at all.
     pub async fn bump(
         &self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         vv: &VersionVector,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let root_node = self.load_root(&mut tx).await?;
+        let root_node = self.load_root(tx).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
         new_vv.bump(vv, self.id());
@@ -179,11 +179,7 @@ impl BranchData {
             write_keys,
         );
 
-        root_node.update_proof(&mut tx, new_proof).await?;
-
-        tx.commit().await?;
-
-        self.notify();
+        root_node.update_proof(tx, new_proof).await?;
 
         Ok(())
     }

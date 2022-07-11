@@ -24,22 +24,20 @@ impl ParentContext {
         }
     }
 
-    /// Atomically finalizes any pending modifications to the entry that holds this parent context.
-    /// This updates the version vector of this entry and all its ancestors, flushes them and
-    /// finally commits the transaction.
-    pub async fn commit(
+    /// This updates the version vector of this entry and all its ancestors.
+    pub async fn bump(
         &self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         branch: Branch,
-        merge: VersionVector,
+        bump: &VersionVector,
     ) -> Result<()> {
-        let mut directory = self.directory(&mut tx, branch).await?;
+        let mut directory = self.directory(tx, branch).await?;
         let mut content = directory.entries.clone();
-        content.bump(directory.branch(), &self.entry_name, &merge)?;
+        content.bump(directory.branch(), &self.entry_name, bump)?;
         directory
-            .save(&mut tx, &content, OverwriteStrategy::Keep)
+            .save(tx, &content, OverwriteStrategy::Keep)
             .await?;
-        directory.commit(tx, content, merge).await?;
+        directory.bump(tx, bump).await?;
 
         Ok(())
     }
@@ -70,7 +68,7 @@ impl ParentContext {
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
         let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
-        directory.commit(tx, content, VersionVector::new()).await?;
+        directory.commit(tx, content, &VersionVector::new()).await?;
 
         let directory_id = *directory.locator().blob_id();
         let parent = directory.parent.clone();
