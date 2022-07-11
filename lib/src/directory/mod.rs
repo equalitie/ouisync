@@ -172,18 +172,17 @@ impl Directory {
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
-        let tx = conn.begin().await?;
-        self.remove_entry_with_overwrite_strategy(
-            tx,
-            name,
-            branch_id,
-            vv,
-            OverwriteStrategy::Remove,
-        )
-        .await
+        let mut tx = conn.begin().await?;
+        let content = self
+            .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
+            .await?;
+        tx.commit().await?;
+        self.finalize(content);
+
+        Ok(())
     }
 
-    /// For each version vector V in the `version_vectors` argument, if the entry correspoding to
+    /// For each version vector V in the `version_vectors` argument, if the entry corresponding to
     /// `name` is "happened before" V, then replace the entry with a tombstone with V as its
     /// version vector.
     pub(crate) async fn try_remove_entry_with<'a, I>(
@@ -251,28 +250,33 @@ impl Directory {
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
         {
-            let tx = conn.begin().await?;
-            dst_dir
-                .insert_entry_with_overwrite_strategy(
-                    tx,
+            let mut tx = conn.begin().await?;
+            let content = dst_dir
+                .begin_insert_entry(
+                    &mut tx,
                     dst_name.to_owned(),
                     dst_data,
                     OverwriteStrategy::Remove,
                 )
                 .await?;
+            tx.commit().await?;
+            dst_dir.finalize(content);
         }
 
         {
-            let tx = conn.begin().await?;
+            let mut tx = conn.begin().await?;
             let branch_id = *self.branch().id();
-            self.remove_entry_with_overwrite_strategy(
-                tx,
-                src_name,
-                &branch_id,
-                src_vv,
-                OverwriteStrategy::Keep,
-            )
-            .await?;
+            let content = self
+                .begin_remove_entry(
+                    &mut tx,
+                    src_name,
+                    &branch_id,
+                    src_vv,
+                    OverwriteStrategy::Keep,
+                )
+                .await?;
+            tx.commit().await?;
+            self.finalize(content);
         }
 
         Ok(())
@@ -466,18 +470,18 @@ impl Directory {
         }
     }
 
-    async fn remove_entry_with_overwrite_strategy(
+    async fn begin_remove_entry(
         &mut self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
         vv: VersionVector,
         overwrite: OverwriteStrategy,
-    ) -> Result<()> {
+    ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut tx).await?),
+            Ok(EntryRef::Directory(entry)) => Some(entry.open(tx).await?),
             Ok(_) | Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
         };
@@ -497,7 +501,7 @@ impl Directory {
                 Ok(old_entry) => {
                     let mut new_entry = old_entry.clone_data();
 
-                    // Note: the `bump` funtion is not commutative.
+                    // Note: the `bump` function is not commutative.
                     let mut vv = vv;
                     vv.bump(new_entry.version_vector(), self.branch().id());
                     *new_entry.version_vector_mut() = vv;
@@ -511,22 +515,23 @@ impl Directory {
             }
         };
 
-        self.insert_entry_with_overwrite_strategy(tx, name.to_owned(), new_entry, overwrite)
+        self.begin_insert_entry(tx, name.to_owned(), new_entry, overwrite)
             .await
     }
 
-    /// Atomically inserts the given entry into this directory and commits the change.
-    async fn insert_entry_with_overwrite_strategy(
+    async fn begin_insert_entry(
         &mut self,
-        mut tx: db::Transaction<'_>,
+        tx: &mut db::Transaction<'_>,
         name: String,
         entry: EntryData,
         overwrite: OverwriteStrategy,
-    ) -> Result<()> {
-        let mut content = self.load(&mut tx).await?;
+    ) -> Result<Content> {
+        let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, entry)?;
-        self.save(&mut tx, &content, overwrite).await?;
-        self.commit(tx, content, &VersionVector::new()).await
+        self.save(tx, &content, overwrite).await?;
+        self.bump(tx, &VersionVector::new()).await?;
+
+        Ok(content)
     }
 
     async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
