@@ -2,17 +2,14 @@ use super::{utils, Shared};
 use crate::{
     branch::Branch,
     error::{Error, Result},
-    event::{Event, EventScope},
+    event::{EventScope, IgnoreScopeReceiver},
     joint_directory::JointDirectory,
 };
 use log::Level;
 use std::{future::Future, sync::Arc};
 use tokio::{
     select,
-    sync::{
-        broadcast::{self, error::RecvError},
-        mpsc, oneshot,
-    },
+    sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
 
 /// Background worker to perform various jobs on the repository:
@@ -50,8 +47,9 @@ impl Worker {
             if wait {
                 select! {
                     event = rx.recv() => {
-                        if !event {
-                            break
+                        match event {
+                            Ok(_) | Err(RecvError::Lagged(_)) => (),
+                            Err(RecvError::Closed) => break,
                         }
                     }
                     command = self.command_rx.recv() => {
@@ -68,11 +66,12 @@ impl Worker {
             // Run the merge job but interrupt and restart it when we receive another notification.
             select! {
                 event = rx.recv() => {
-                    if event {
-                        wait = false;
-                        continue
-                    } else {
-                        break
+                    match event {
+                        Ok(_) | Err(RecvError::Lagged(_)) => {
+                            wait = false;
+                            continue
+                        }
+                        Err(RecvError::Closed) => break,
                     }
                 }
                 _ = instrument(self.inner.merge(), "merge") => (),
@@ -120,11 +119,8 @@ struct Inner {
 }
 
 impl Inner {
-    fn subscribe(&self) -> Receiver {
-        Receiver {
-            rx: self.shared.store.index.subscribe(),
-            ignore_scope: self.event_scope,
-        }
+    fn subscribe(&self) -> IgnoreScopeReceiver {
+        IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope)
     }
 
     async fn merge(&self) -> Result<()> {
@@ -158,24 +154,6 @@ impl Inner {
         self.prune().await?;
         self.scan(scan::Mode::Collect).await?;
         Ok(())
-    }
-}
-
-struct Receiver {
-    rx: broadcast::Receiver<Event>,
-    ignore_scope: EventScope,
-}
-
-impl Receiver {
-    async fn recv(&mut self) -> bool {
-        loop {
-            match self.rx.recv().await {
-                Ok(event) if event.scope != self.ignore_scope => break true,
-                Ok(_) => continue,
-                Err(RecvError::Lagged(_)) => break true,
-                Err(RecvError::Closed) => break false,
-            }
-        }
     }
 }
 

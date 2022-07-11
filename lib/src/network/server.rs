@@ -6,7 +6,7 @@ use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    event::{Event, Payload},
+    event::BranchChangedReceiver,
     index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
@@ -163,18 +163,14 @@ impl<'a> Monitor<'a> {
     }
 
     async fn run(self) -> Result<()> {
-        let mut subscription = self.index.subscribe();
+        let mut subscription = BranchChangedReceiver::new(self.index.subscribe());
 
         // send initial branches
         self.handle_all_branches_changed().await?;
 
         loop {
             match subscription.recv().await {
-                Ok(Event {
-                    payload: Payload::BranchChanged(branch_id),
-                    ..
-                }) => self.handle_branch_changed(branch_id).await?,
-                Ok(_) => continue,
+                Ok(branch_id) => self.handle_branch_changed(branch_id).await?,
                 Err(RecvError::Lagged(_)) => self.handle_all_branches_changed().await?,
                 Err(RecvError::Closed) => break,
             }

@@ -21,7 +21,7 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
-    event::Event,
+    event::BranchChangedReceiver,
     file::File,
     index::{BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
@@ -422,8 +422,8 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.store.index.subscribe()
+    pub fn subscribe(&self) -> BranchChangedReceiver {
+        BranchChangedReceiver::new(self.shared.store.index.subscribe())
     }
 
     /// Gets the access mode this repository is opened in.

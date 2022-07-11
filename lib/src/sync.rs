@@ -4,7 +4,7 @@ use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use std::future::Future;
 
 /// MPMC broadcast channel
-pub(crate) mod broadcast {
+pub mod broadcast {
     use std::time::{Duration, Instant};
     use tokio::{select, sync::broadcast, time};
 
