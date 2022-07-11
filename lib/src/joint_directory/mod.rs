@@ -360,7 +360,9 @@ impl JointDirectory {
         }
 
         if bump {
-            local_version.bump(&mut conn, new_version_vector).await?;
+            local_version
+                .merge_version_vector(&mut conn, new_version_vector)
+                .await?;
         }
 
         Ok(local_version.clone())

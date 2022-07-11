@@ -319,7 +319,7 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn bump(
+    pub(crate) async fn merge_version_vector(
         &mut self,
         conn: &mut db::Connection,
         vv: VersionVector,
