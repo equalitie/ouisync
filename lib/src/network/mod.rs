@@ -775,10 +775,10 @@ impl Inner {
                     return false;
                 }
 
-                if source == PeerSource::Dht {
-                    if ip_addr.is_private() || ip_addr.is_loopback() || ip_addr.is_link_local() {
-                        return false;
-                    }
+                if source == PeerSource::Dht
+                    && (ip_addr.is_private() || ip_addr.is_loopback() || ip_addr.is_link_local())
+                {
+                    return false;
                 }
             }
             SocketAddr::V6(addr) => {
@@ -791,13 +791,12 @@ impl Inner {
                     return false;
                 }
 
-                if source == PeerSource::Dht {
-                    if ip_addr.is_loopback()
+                if source == PeerSource::Dht
+                    && (ip_addr.is_loopback()
                         || ip::is_unicast_link_local(ip_addr)
-                        || ip::is_unique_local(ip_addr)
-                    {
-                        return false;
-                    }
+                        || ip::is_unique_local(ip_addr))
+                {
+                    return false;
                 }
             }
         }
@@ -985,7 +984,7 @@ async fn perform_handshake(
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
-    Ok(runtime_id::exchange(&this_runtime_id, stream).await?)
+    Ok(runtime_id::exchange(this_runtime_id, stream).await?)
 }
 
 #[derive(Debug, Error)]

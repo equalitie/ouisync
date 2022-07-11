@@ -11,7 +11,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    event::Event,
+    event::{Event, Payload},
     version_vector::VersionVector,
 };
 use tokio::sync::broadcast;
@@ -56,6 +56,13 @@ impl BranchData {
 
         self.notify();
 
+        Ok(())
+    }
+
+    /// Remove all snapshots of this branch except the latest one.
+    pub async fn remove_old_snapshots(&self, conn: &mut db::Connection) -> Result<()> {
+        let root = self.load_root(conn).await?;
+        root.remove_recursively_all_older(conn).await?;
         Ok(())
     }
 
@@ -143,7 +150,9 @@ impl BranchData {
 
     /// Trigger a notification event from this branch.
     pub fn notify(&self) {
-        self.notify_tx.send(Event::new(self.writer_id)).unwrap_or(0);
+        self.notify_tx
+            .send(Event::new(Payload::BranchChanged(self.writer_id)))
+            .unwrap_or(0);
     }
 
     /// Update the root version vector of this branch.

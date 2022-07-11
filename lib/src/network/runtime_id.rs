@@ -94,7 +94,7 @@ where
     Ok(their_runtime_id)
 }
 
-const TO_SIGN_PREFIX: &[u8; 10] = &b"runtime-id";
+const TO_SIGN_PREFIX: &[u8; 10] = b"runtime-id";
 
 fn to_sign(buf: &[u8; 32]) -> [u8; 32 + TO_SIGN_PREFIX.len()] {
     let mut out = [0u8; 32 + TO_SIGN_PREFIX.len()];

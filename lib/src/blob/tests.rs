@@ -516,13 +516,13 @@ async fn fork_case(
     let (mut rng, pool, src_branch) = setup(rng_seed).await;
     let mut conn = pool.acquire().await.unwrap();
 
-    let (notify_tx, _) = broadcast::channel(1);
+    let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(
         BranchData::create(
             &mut conn,
             PublicKey::random(),
             src_branch.keys().write().unwrap(),
-            notify_tx,
+            event_tx.clone(),
         )
         .await
         .unwrap(),
@@ -530,7 +530,7 @@ async fn fork_case(
     let dst_branch = Branch::new(
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(BlobCache::new()),
+        Arc::new(BlobCache::new(event_tx)),
     );
 
     let src_locator = if src_locator_is_root {
@@ -613,16 +613,20 @@ async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
     let secrets = WriteSecrets::generate(&mut rng);
     let pool = db::create(&db::Store::Temporary).await.unwrap();
 
-    let (notify_tx, _) = broadcast::channel(1);
+    let (event_tx, _) = broadcast::channel(1);
     let branch = BranchData::create(
         &mut pool.acquire().await.unwrap(),
         PublicKey::random(),
         &secrets.write_keys,
-        notify_tx,
+        event_tx.clone(),
     )
     .await
     .unwrap();
-    let branch = Branch::new(Arc::new(branch), secrets.into(), Arc::new(BlobCache::new()));
+    let branch = Branch::new(
+        Arc::new(branch),
+        secrets.into(),
+        Arc::new(BlobCache::new(event_tx)),
+    );
 
     (rng, pool, branch)
 }

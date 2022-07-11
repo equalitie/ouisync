@@ -170,6 +170,7 @@ mod tests {
         blob::BlobCache,
         crypto::sign::PublicKey,
         db,
+        event::Event,
         index::BranchData,
     };
     use std::sync::Arc;
@@ -274,25 +275,27 @@ mod tests {
     async fn setup() -> (db::Pool, Branch, Branch) {
         let pool = db::create(&db::Store::Temporary).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
-        let blob_cache = Arc::new(BlobCache::new());
+        let (event_tx, _) = broadcast::channel(1);
+        let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
 
-        let branch0 = create_branch(&pool, keys.clone(), blob_cache.clone()).await;
-        let branch1 = create_branch(&pool, keys.clone(), blob_cache).await;
+        let branch0 =
+            create_branch(&pool, event_tx.clone(), keys.clone(), blob_cache.clone()).await;
+        let branch1 = create_branch(&pool, event_tx, keys.clone(), blob_cache).await;
 
         (pool, branch0, branch1)
     }
 
     async fn create_branch(
         pool: &db::Pool,
+        event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
         blob_cache: Arc<BlobCache>,
     ) -> Branch {
-        let (notify_tx, _) = broadcast::channel(1);
         let branch_data = BranchData::create(
             &mut pool.acquire().await.unwrap(),
             PublicKey::random(),
             keys.write().unwrap(),
-            notify_tx,
+            event_tx,
         )
         .await
         .unwrap();

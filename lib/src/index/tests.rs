@@ -345,7 +345,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
             .unwrap();
     }
 
-    let remote_branch = store.index.get_branch(&remote_id).await.unwrap();
+    let remote_branch = store.index.get_branch(&remote_id).unwrap();
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
@@ -387,7 +387,8 @@ async fn setup_with_rng(rng: &mut StdRng) -> (Index, Keypair) {
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
-    let index = Index::load(pool, repository_id).await.unwrap();
+    let (event_tx, _) = broadcast::channel(1);
+    let index = Index::load(pool, repository_id, event_tx).await.unwrap();
 
     (index, write_keys)
 }

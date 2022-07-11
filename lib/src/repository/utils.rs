@@ -7,27 +7,25 @@ use crate::{
     version_vector::VersionVector,
 };
 
-/// Filter outdated branches
-pub(super) async fn outdated_branches(
+/// Partition the branches into up-to-date and outdated
+pub(super) async fn partition_branches(
     conn: &mut db::Connection,
     branches: Vec<Branch>,
     local_id: Option<&PublicKey>,
-) -> Result<Vec<Branch>> {
-    let mut branches_with_vv = Vec::new();
+) -> Result<(Vec<Branch>, Vec<Branch>)> {
+    let mut branches_with_vv = Vec::with_capacity(branches.len());
 
     for branch in branches {
         let vv = branch.version_vector(conn).await?;
         branches_with_vv.push((branch, vv));
     }
 
-    let (_, outdated): (_, Vec<_>) = versioned::partition(branches_with_vv, local_id);
+    let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(branches_with_vv, local_id);
 
-    Ok(outdated
-        .into_iter()
-        // Avoid deleting empty branches before any content is added to them.
-        .filter(|(_, vv)| !vv.is_empty())
-        .map(|(branch, _)| branch)
-        .collect())
+    Ok((
+        uptodate.into_iter().map(|(branch, _)| branch).collect(),
+        outdated.into_iter().map(|(branch, _)| branch).collect(),
+    ))
 }
 
 impl Versioned for (Branch, VersionVector) {

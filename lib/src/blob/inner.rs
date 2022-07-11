@@ -1,8 +1,18 @@
 //! Innternal state of Blob
 
 use super::open_block::OpenBlock;
-use crate::{block::BLOCK_SIZE, branch::Branch, locator::Locator, sync::Mutex};
-use std::sync::{Arc, Weak};
+use crate::{
+    block::BLOCK_SIZE,
+    branch::Branch,
+    event::{Event, Payload},
+    locator::Locator,
+    sync::Mutex,
+};
+use std::{
+    fmt,
+    sync::{Arc, Weak},
+};
+use tokio::sync::broadcast;
 
 // State unique to each instance of a blob.
 #[derive(Clone)]
@@ -14,30 +24,51 @@ pub(super) struct Unique {
 }
 
 // State shared among multiple instances of the same blob.
-#[derive(Debug)]
 pub(crate) struct Shared {
     pub(super) len: u64,
+    event_tx: broadcast::Sender<Event>,
 }
 
 impl Shared {
     pub fn uninit() -> MaybeInitShared {
+        let (tx, _) = broadcast::channel(1);
+        Self::uninit_with_close_notify(tx)
+    }
+
+    pub fn uninit_with_close_notify(tx: broadcast::Sender<Event>) -> MaybeInitShared {
         MaybeInitShared {
-            shared: Self::new(0),
+            shared: Self::new(0, tx),
             init: false,
         }
     }
 
     pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
-        Self::new(self.len)
+        Self::new(self.len, self.event_tx.clone())
     }
 
-    fn new(len: u64) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self { len }))
+    fn new(len: u64, event_tx: broadcast::Sender<Event>) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { len, event_tx }))
     }
 
     // Total number of blocks in this blob including the possibly partially filled final block.
     pub fn block_count(&self) -> u32 {
         block_count(self.len)
+    }
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        self.event_tx
+            .send(Event::new(Payload::BlobClosed))
+            .unwrap_or(0);
+    }
+}
+
+impl fmt::Debug for Shared {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Shared")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
     }
 }
 

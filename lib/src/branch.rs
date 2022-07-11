@@ -123,6 +123,10 @@ impl Branch {
         self.blob_cache.contains(self.id(), blob_id)
     }
 
+    pub(crate) fn is_any_blob_open(&self) -> bool {
+        self.blob_cache.contains_any(self.id())
+    }
+
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
         match self.open_root(conn).await {
             Ok(root) => root.debug_print(conn, print).await,
@@ -151,6 +155,7 @@ mod tests {
         index::{Index, Proof},
         locator::Locator,
     };
+    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -185,12 +190,15 @@ mod tests {
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
         let repository_id = secrets.id;
+        let (event_tx, _) = broadcast::channel(1);
 
-        let index = Index::load(pool.clone(), repository_id).await.unwrap();
+        let index = Index::load(pool.clone(), repository_id, event_tx.clone())
+            .await
+            .unwrap();
 
         let proof = Proof::first(writer_id, &secrets.write_keys);
         let branch = index.create_branch(proof).await.unwrap();
-        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new()));
+        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
         (pool, branch)
     }

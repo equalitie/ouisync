@@ -1,16 +1,12 @@
-mod block_scanner;
 mod id;
-mod merger;
 #[cfg(test)]
 mod tests;
 mod utils;
+mod worker;
 
 pub use self::id::RepositoryId;
 
-use self::{
-    block_scanner::{BlockScanner, BlockScannerHandle},
-    merger::{Merger, MergerHandle},
-};
+use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
     blob::BlobCache,
@@ -25,31 +21,27 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
-    event::Event,
+    event::BranchChangedReceiver,
     file::File,
     index::{BranchData, Index, Proof},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
     store::Store,
-    sync::{broadcast::ThrottleReceiver, Mutex},
+    sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use futures_util::future;
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
 };
 
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
 pub struct Repository {
     shared: Arc<Shared>,
-    merger_handle: Option<MergerHandle>,
-    block_scanner_handle: Option<BlockScannerHandle>,
+    worker_handle: WorkerHandle,
 }
 
 impl Repository {
@@ -88,9 +80,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        let index = Index::load(pool, *access_secrets.id()).await?;
-
-        Self::new(index, this_writer_id, access_secrets, enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
     }
 
     /// Opens an existing repository.
@@ -180,17 +170,19 @@ impl Repository {
         drop(conn);
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
-        let index = Index::load(pool, *access_secrets.id()).await?;
 
-        Self::new(index, this_writer_id, access_secrets, enable_merger).await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
     }
 
     async fn new(
-        index: Index,
+        pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
     ) -> Result<Self> {
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
+
         // Lazy block downloading requires at least read access because it needs to be able to
         // traverse the repository in order to enumarate reachable blocks.
         let block_tracker = if secrets.can_read() {
@@ -208,11 +200,10 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            branches: Mutex::new(HashMap::new()),
-            blob_cache: Arc::new(BlobCache::new()),
+            blob_cache: Arc::new(BlobCache::new(event_tx)),
         });
 
-        let local_branch = if enable_merger {
+        let local_branch = if shared.secrets.can_write() && enable_merger {
             match shared.get_or_create_local_branch().await {
                 Ok(branch) => Some(branch),
                 Err(Error::PermissionDenied) => None,
@@ -222,29 +213,14 @@ impl Repository {
             None
         };
 
-        let merger_handle = if let Some(local_branch) = local_branch {
-            let (merger, handle) = Merger::new(shared.clone(), local_branch);
-            task::spawn(merger.run());
-            Some(handle)
-        } else {
-            None
-        };
-
-        // BlockScanner requires at least read access to be able to traverse the repository.
-        let block_scanner_handle = if shared.secrets.can_read() {
-            let (block_scanner, handle) = BlockScanner::new(shared.clone());
-            task::spawn(block_scanner.run());
-            Some(handle)
-        } else {
-            None
-        };
+        let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
+        task::spawn(worker.run());
 
         task::spawn(report_sync_progress(shared.store.clone()));
 
         Ok(Self {
             shared,
-            merger_handle,
-            block_scanner_handle,
+            worker_handle,
         })
     }
 
@@ -432,8 +408,8 @@ impl Repository {
     }
 
     /// Returns the local branch if it exists.
-    pub async fn local_branch(&self) -> Option<Branch> {
-        self.shared.local_branch().await
+    pub fn local_branch(&self) -> Option<Branch> {
+        self.shared.local_branch()
     }
 
     /// Returns the local branch if it exists or create it otherwise. The repository must have
@@ -443,8 +419,8 @@ impl Repository {
     }
 
     /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.store.index.subscribe()
+    pub fn subscribe(&self) -> BranchChangedReceiver {
+        BranchChangedReceiver::new(self.shared.store.index.subscribe())
     }
 
     /// Gets the access mode this repository is opened in.
@@ -463,11 +439,7 @@ impl Repository {
     /// It's usually not necessary to call this method because the gc runs automatically in the
     /// background.
     pub async fn force_garbage_collection(&self) -> Result<()> {
-        self.block_scanner_handle
-            .as_ref()
-            .ok_or(Error::PermissionDenied)?
-            .collect()
-            .await
+        self.worker_handle.collect().await
     }
 
     /// Force the merge to run and wait for it to complete, returning its result.
@@ -475,11 +447,7 @@ impl Repository {
     /// It's usually not necessary to call this method because the merger runs automatically in the
     /// background.
     pub async fn force_merge(&self) -> Result<()> {
-        self.merger_handle
-            .as_ref()
-            .ok_or(Error::PermissionDenied)?
-            .merge()
-            .await
+        self.worker_handle.merge().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -490,8 +458,8 @@ impl Repository {
             return Err(Error::PermissionDenied);
         }
 
-        let local_branch = self.local_branch().await;
-        let branches = self.shared.collect_branches().await?;
+        let local_branch = self.local_branch();
+        let branches = self.shared.collect_branches()?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -550,17 +518,24 @@ impl Repository {
             }
         };
 
-        let branches = self.shared.branches.lock().await.clone();
-        for (writer_id, branch) in &branches {
+        let branches = match self.shared.collect_branches() {
+            Ok(branches) => branches,
+            Err(error) => {
+                print.display(&format_args!("failed to collect branches: {:?}", error));
+                return;
+            }
+        };
+
+        for branch in branches {
             let print = print.indent();
-            let local = if *writer_id == self.shared.this_writer_id {
+            let local = if branch.id() == &self.shared.this_writer_id {
                 " (local)"
             } else {
                 ""
             };
             print.display(&format_args!(
                 "Branch ID: {:?}{}, root block ID:{:?}",
-                writer_id,
+                branch.id(),
                 local,
                 branch.root_block_id(&mut conn).await
             ));
@@ -593,7 +568,7 @@ impl Repository {
         let proof = Proof::first(remote_id, write_keys);
         let branch = self.shared.store.index.create_branch(proof).await?;
 
-        self.shared.inflate(branch).await
+        self.shared.inflate(branch)
     }
 }
 
@@ -601,22 +576,20 @@ struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
-    // Cache for `Branch` instances to make them persistent over the lifetime of the program.
-    branches: Mutex<HashMap<PublicKey, Branch>>,
     // Cache for open blobs to track multiple instances of the same blob.
     blob_cache: Arc<BlobCache>,
 }
 
 impl Shared {
-    pub async fn local_branch(&self) -> Option<Branch> {
-        match self.store.index.get_branch(&self.this_writer_id).await {
-            Some(data) => self.inflate(data).await.ok(),
-            None => None,
-        }
+    pub fn local_branch(&self) -> Option<Branch> {
+        self.store
+            .index
+            .get_branch(&self.this_writer_id)
+            .and_then(|data| self.inflate(data).ok())
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id).await {
+        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
             data
         } else if let Some(write_keys) = self.secrets.write_keys() {
             let proof = Proof::first(self.this_writer_id, write_keys);
@@ -625,53 +598,31 @@ impl Shared {
             return Err(Error::PermissionDenied);
         };
 
-        self.inflate(data).await
+        self.inflate(data)
     }
 
-    pub async fn collect_branches(&self) -> Result<Vec<Branch>> {
-        future::try_join_all(
-            self.store
-                .index
-                .collect_branches()
-                .await
-                .into_iter()
-                .map(|data| self.inflate(data)),
-        )
-        .await
-    }
-
-    /// Removes the branch with the given id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if trying to remove the local branch.
-    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
-        assert_ne!(id, &self.this_writer_id, "can't remove local branch");
-
-        self.branches.lock().await.remove(id);
-        self.store.index.remove_branch(id).await
+    pub fn collect_branches(&self) -> Result<Vec<Branch>> {
+        self.store
+            .index
+            .collect_branches()
+            .into_iter()
+            .map(|data| self.inflate(data))
+            .collect()
     }
 
     // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
     // and putting it into the cache if it does not.
-    async fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
-        match self.branches.lock().await.entry(*data.id()) {
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
-            Entry::Vacant(entry) => {
-                let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+    fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
+        let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
-                // Only the local branch is writable.
-                let keys = if *data.id() == self.this_writer_id {
-                    keys
-                } else {
-                    keys.read_only()
-                };
+        // Only the local branch is writable.
+        let keys = if *data.id() == self.this_writer_id {
+            keys
+        } else {
+            keys.read_only()
+        };
 
-                let branch = Branch::new(data, keys, self.blob_cache.clone());
-                entry.insert(branch.clone());
-                Ok(branch)
-            }
-        }
+        Ok(Branch::new(data, keys, self.blob_cache.clone()))
     }
 }
 

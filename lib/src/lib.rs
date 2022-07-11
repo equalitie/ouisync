@@ -49,7 +49,7 @@ pub use self::{
     config::ConfigStore,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
-    event::Event,
+    event::BranchChangedReceiver,
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,

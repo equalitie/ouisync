@@ -27,13 +27,12 @@ use crate::{
     error::{Error, Result},
     event::Event,
     repository::RepositoryId,
-    sync::RwLock,
 };
 use futures_util::TryStreamExt;
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, HashMap},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -47,15 +46,18 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub async fn load(pool: db::Pool, repository_id: RepositoryId) -> Result<Self> {
-        let (notify_tx, _) = broadcast::channel(32);
+    pub async fn load(
+        pool: db::Pool,
+        repository_id: RepositoryId,
+        notify_tx: broadcast::Sender<Event>,
+    ) -> Result<Self> {
         let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
 
         Ok(Self {
             pool,
             shared: Arc::new(Shared {
                 repository_id,
-                branches: RwLock::new(branches),
+                branches: Mutex::new(branches),
                 notify_tx,
             }),
         })
@@ -65,20 +67,23 @@ impl Index {
         &self.shared.repository_id
     }
 
-    pub async fn get_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
-        self.shared.branches.read().await.get(id).cloned()
+    pub fn get_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
+        self.shared.branches.lock().unwrap().get(id).cloned()
     }
 
     pub async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
-        // IMPORTANT: Make sure to always acquire a db connection before the `branches` lock, to
-        // avoid deadlock.
         let mut conn = self.pool.acquire().await?;
-        let mut branches = self.shared.branches.write().await;
+        let root_node = RootNode::create(&mut conn, proof, Summary::FULL).await?;
 
-        match branches.entry(proof.writer_id) {
+        match self
+            .shared
+            .branches
+            .lock()
+            .unwrap()
+            .entry(root_node.proof.writer_id)
+        {
             Entry::Occupied(_) => Err(Error::EntryExists),
             Entry::Vacant(entry) => {
-                let root_node = RootNode::create(&mut conn, proof, Summary::FULL).await?;
                 let branch =
                     BranchData::new(root_node.proof.writer_id, self.shared.notify_tx.clone());
                 let branch = Arc::new(branch);
@@ -90,30 +95,19 @@ impl Index {
         }
     }
 
-    pub async fn collect_branches(&self) -> Vec<Arc<BranchData>> {
+    pub fn collect_branches(&self) -> Vec<Arc<BranchData>> {
         self.shared
             .branches
-            .read()
-            .await
+            .lock()
+            .unwrap()
             .values()
             .cloned()
             .collect()
     }
 
-    /// Remove the branch including all its blocks, except those that are also referenced from
-    /// other branch(es).
-    pub async fn remove_branch(&self, id: &PublicKey) -> Result<()> {
-        let branch = self.shared.branches.write().await.remove(id);
-        let branch = if let Some(branch) = branch {
-            branch
-        } else {
-            return Ok(());
-        };
-
-        let mut conn = self.pool.acquire().await?;
-        branch.destroy(&mut conn).await?;
-
-        Ok(())
+    /// Removes the branch.
+    pub fn remove_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
+        self.shared.branches.lock().unwrap().remove(id)
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -320,34 +314,21 @@ impl Index {
 
         for (id, complete) in statuses {
             if complete {
-                self.update_root_node(conn, id).await?;
+                self.update_root_node(id);
             }
         }
 
         Ok(())
     }
 
-    async fn update_root_node(
-        &self,
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<()> {
-        match self.shared.branches.write().await.entry(writer_id) {
-            Entry::Vacant(entry) => {
-                // We could have accumulated a bunch of incomplete root nodes before this
-                // particular one became complete. We want to remove those.
-                let node = RootNode::load_latest_complete_by_writer(conn, writer_id).await?;
-                node.remove_recursively_all_older(conn).await?;
-
-                let branch = BranchData::new(node.proof.writer_id, self.shared.notify_tx.clone());
-                let branch = Arc::new(branch);
-
-                entry.insert(branch).notify()
-            }
-            Entry::Occupied(entry) => entry.get().notify(),
-        }
-
-        Ok(())
+    fn update_root_node(&self, writer_id: PublicKey) {
+        self.shared
+            .branches
+            .lock()
+            .unwrap()
+            .entry(writer_id)
+            .or_insert_with(|| Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone())))
+            .notify();
     }
 
     async fn check_parent_node_exists(
@@ -365,7 +346,7 @@ impl Index {
 
 struct Shared {
     repository_id: RepositoryId,
-    branches: RwLock<Branches>,
+    branches: Mutex<Branches>,
     notify_tx: broadcast::Sender<Event>,
 }
 
