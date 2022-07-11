@@ -20,11 +20,13 @@ use tokio::{
 pub(super) struct Worker {
     inner: Inner,
     command_rx: mpsc::Receiver<Command>,
+    abort_rx: oneshot::Receiver<()>,
 }
 
 impl Worker {
     pub fn new(shared: Arc<Shared>, local_branch: Option<Branch>) -> (Self, WorkerHandle) {
         let (command_tx, command_rx) = mpsc::channel(1);
+        let (abort_tx, abort_rx) = oneshot::channel();
 
         let inner = Inner {
             shared,
@@ -32,78 +34,55 @@ impl Worker {
             event_scope: EventScope::new(),
         };
 
-        let worker = Self { inner, command_rx };
-        let handle = WorkerHandle { command_tx };
+        let worker = Self {
+            inner,
+            command_rx,
+            abort_rx,
+        };
+        let handle = WorkerHandle {
+            command_tx,
+            _abort_tx: abort_tx,
+        };
 
         (worker, handle)
     }
 
-    pub async fn run(mut self) {
-        let mut rx = self.inner.subscribe();
-        let mut wait = false;
-
-        loop {
-            // Wait for notification or command.
-            if wait {
-                select! {
-                    event = rx.recv() => {
-                        match event {
-                            Ok(_) | Err(RecvError::Lagged(_)) => (),
-                            Err(RecvError::Closed) => break,
-                        }
-                    }
-                    command = self.command_rx.recv() => {
-                        if let Some(command) = command {
-                            self.handle_command(command).await;
-                            continue;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Run the merge job but interrupt and restart it when we receive another notification.
-            select! {
-                event = rx.recv() => {
-                    match event {
-                        Ok(_) | Err(RecvError::Lagged(_)) => {
-                            wait = false;
-                            continue
-                        }
-                        Err(RecvError::Closed) => break,
-                    }
-                }
-                _ = instrument(self.inner.merge(), "merge") => (),
-            }
-
-            // Run the remaining jobs without interruption
-            instrument(self.inner.prune(), "prune").await;
-            instrument(self.inner.scan(scan::Mode::RequireAndCollect), "scan").await;
-
-            wait = true;
-        }
-    }
-
-    async fn handle_command(&self, command: Command) {
-        match command {
-            Command::Merge(result_tx) => result_tx.send(self.inner.merge().await).unwrap_or(()),
-            Command::Collect(result_tx) => result_tx.send(self.inner.collect().await).unwrap_or(()),
+    pub async fn run(self) {
+        select! {
+            _ = self.inner.run(self.command_rx) => (),
+            _ = self.abort_rx => (),
         }
     }
 }
 
+/// Handle to interact with the worker. Aborts the worker task when dropped.
 pub(super) struct WorkerHandle {
     command_tx: mpsc::Sender<Command>,
+    _abort_tx: oneshot::Sender<()>,
 }
 
 impl WorkerHandle {
     pub async fn merge(&self) -> Result<()> {
-        utils::oneshot(&self.command_tx, Command::Merge).await
+        self.oneshot(Command::Merge).await
     }
 
     pub async fn collect(&self) -> Result<()> {
-        utils::oneshot(&self.command_tx, Command::Collect).await
+        self.oneshot(Command::Collect).await
+    }
+
+    async fn oneshot<F>(&self, command_fn: F) -> Result<()>
+    where
+        F: FnOnce(oneshot::Sender<Result<()>>) -> Command,
+    {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.command_tx
+            .send(command_fn(result_tx))
+            .await
+            .unwrap_or(());
+
+        // When this returns error it means the worker has been terminated which we treat as
+        // success, for simplicity.
+        result_rx.await.unwrap_or(Ok(()))
     }
 }
 
@@ -119,8 +98,59 @@ struct Inner {
 }
 
 impl Inner {
-    fn subscribe(&self) -> IgnoreScopeReceiver {
-        IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope)
+    async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
+        let mut event_rx =
+            IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope);
+        let mut wait = false;
+
+        loop {
+            // Wait for notification or command.
+            if wait {
+                select! {
+                    event = event_rx.recv() => {
+                        match event {
+                            Ok(_) | Err(RecvError::Lagged(_)) => (),
+                            Err(RecvError::Closed) => break,
+                        }
+                    }
+                    command = command_rx.recv() => {
+                        if let Some(command) = command {
+                            self.handle_command(command).await;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Run the merge job but interrupt and restart it when we receive another notification.
+            select! {
+                event = event_rx.recv() => {
+                    match event {
+                        Ok(_) | Err(RecvError::Lagged(_)) => {
+                            wait = false;
+                            continue
+                        }
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+                _ = instrument(self.merge(), "merge") => (),
+            }
+
+            // Run the remaining jobs without interruption
+            instrument(self.prune(), "prune").await;
+            instrument(self.scan(scan::Mode::RequireAndCollect), "scan").await;
+
+            wait = true;
+        }
+    }
+
+    async fn handle_command(&self, command: Command) {
+        match command {
+            Command::Merge(result_tx) => result_tx.send(self.merge().await).unwrap_or(()),
+            Command::Collect(result_tx) => result_tx.send(self.collect().await).unwrap_or(()),
+        }
     }
 
     async fn merge(&self) -> Result<()> {

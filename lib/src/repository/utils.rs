@@ -6,7 +6,6 @@ use crate::{
     joint_directory::versioned::{self, Versioned},
     version_vector::VersionVector,
 };
-use tokio::sync::{mpsc, oneshot};
 
 /// Partition the branches into up-to-date and outdated
 pub(super) async fn partition_branches(
@@ -37,16 +36,4 @@ impl Versioned for (Branch, VersionVector) {
     fn branch_id(&self) -> &PublicKey {
         self.0.id()
     }
-}
-
-pub(super) async fn oneshot<T, F>(command_tx: &mpsc::Sender<T>, command_fn: F) -> Result<()>
-where
-    F: FnOnce(oneshot::Sender<Result<()>>) -> T,
-{
-    let (result_tx, result_rx) = oneshot::channel();
-    command_tx.send(command_fn(result_tx)).await.unwrap_or(());
-
-    // When this returns error it means the worker has been terminated which we treat as
-    // success, for simplicity.
-    result_rx.await.unwrap_or(Ok(()))
 }
