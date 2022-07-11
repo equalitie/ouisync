@@ -227,16 +227,9 @@ impl Directory {
     ///
     /// # Cancel safety
     ///
-    /// This function is partially cancel safe in the sense that it will never lose data. However,
-    /// in the case of cancellation, it can happen that the entry ends up being already inserted
-    /// into the destination but not yet removed from the source. This will behave similarly to a
-    /// hard link with the important difference that removing the entry from either location  would
-    /// leave it dangling in the other. The only way to currently resolve the situation without
-    /// removing the data is to copy it somewhere else, then remove both source and destination
-    /// entries and then move the data back.
-    ///
-    /// TODO: Improve cancel-safety either by making the whole operation atomic or by implementing
-    /// proper hard links.
+    /// This function is atomic and thus cancel safe. Either the entry is both removed from the src
+    /// directory and inserted into the dst directory or, in case of error or cancellation, none of
+    /// those operations happen.
     pub(crate) async fn move_entry(
         &mut self,
         conn: &mut db::Connection,
@@ -249,35 +242,32 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        {
-            let mut tx = conn.begin().await?;
-            let content = dst_dir
-                .begin_insert_entry(
-                    &mut tx,
-                    dst_name.to_owned(),
-                    dst_data,
-                    OverwriteStrategy::Remove,
-                )
-                .await?;
-            tx.commit().await?;
-            dst_dir.finalize(content);
-        }
+        let mut tx = conn.begin().await?;
 
-        {
-            let mut tx = conn.begin().await?;
-            let branch_id = *self.branch().id();
-            let content = self
-                .begin_remove_entry(
-                    &mut tx,
-                    src_name,
-                    &branch_id,
-                    src_vv,
-                    OverwriteStrategy::Keep,
-                )
-                .await?;
-            tx.commit().await?;
-            self.finalize(content);
-        }
+        let dst_content = dst_dir
+            .begin_insert_entry(
+                &mut tx,
+                dst_name.to_owned(),
+                dst_data,
+                OverwriteStrategy::Remove,
+            )
+            .await?;
+
+        let branch_id = *self.branch().id();
+        let src_content = self
+            .begin_remove_entry(
+                &mut tx,
+                src_name,
+                &branch_id,
+                src_vv,
+                OverwriteStrategy::Keep,
+            )
+            .await?;
+
+        tx.commit().await?;
+
+        self.finalize(src_content);
+        dst_dir.finalize(dst_content);
 
         Ok(())
     }
