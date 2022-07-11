@@ -246,7 +246,7 @@ mod prune {
                 continue;
             }
 
-            // Don't remove branches that are in use. We get notified when they stopped being used
+            // Don't remove branches that are in use. We get notified when they stop being used
             // so we can try again.
             if branch.is_any_blob_open() {
                 continue;

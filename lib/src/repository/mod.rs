@@ -205,7 +205,7 @@ impl Repository {
             blob_cache: Arc::new(BlobCache::new(event_tx)),
         });
 
-        let local_branch = if enable_merger {
+        let local_branch = if shared.secrets.can_write() && enable_merger {
             match shared.get_or_create_local_branch().await {
                 Ok(branch) => Some(branch),
                 Err(Error::PermissionDenied) => None,
