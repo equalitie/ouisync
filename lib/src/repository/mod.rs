@@ -23,12 +23,13 @@ use crate::{
     error::{Error, Result},
     event::BranchChangedReceiver,
     file::File,
-    index::{BranchData, Index, Proof},
+    index::{BranchData, Index, Proof, EMPTY_INNER_HASH},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
     store::Store,
     sync::broadcast::ThrottleReceiver,
+    version_vector::VersionVector,
 };
 use camino::Utf8Path;
 use std::{sync::Arc, time::Duration};
@@ -565,7 +566,12 @@ impl Repository {
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
-        let proof = Proof::first(remote_id, write_keys);
+        let proof = Proof::new(
+            remote_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            write_keys,
+        );
         let branch = self.shared.store.index.create_branch(proof).await?;
 
         self.shared.inflate(branch)
@@ -592,7 +598,12 @@ impl Shared {
         let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
             data
         } else if let Some(write_keys) = self.secrets.write_keys() {
-            let proof = Proof::first(self.this_writer_id, write_keys);
+            let proof = Proof::new(
+                self.this_writer_id,
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                write_keys,
+            );
             self.store.index.create_branch(proof).await?
         } else {
             return Err(Error::PermissionDenied);

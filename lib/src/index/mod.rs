@@ -129,6 +129,11 @@ impl Index {
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
 
+        // Ignore branches with empty version vectors because they have no content yet.
+        if proof.version_vector.is_empty() {
+            return Ok(false);
+        }
+
         let mut conn = self.pool.acquire().await?;
 
         // Load latest complete root nodes of all known branches.

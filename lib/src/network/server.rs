@@ -207,6 +207,11 @@ impl<'a> Monitor<'a> {
             return Ok(());
         }
 
+        if root_node.proof.version_vector.is_empty() {
+            // Do not send branches with empty version vectors because they have no content yet
+            return Ok(());
+        }
+
         log::trace!(
             "{} handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
             ChannelInfo::current(),

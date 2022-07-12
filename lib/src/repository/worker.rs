@@ -219,7 +219,7 @@ mod merge {
 
         let vv_after = if log::log_enabled!(Level::Trace) {
             let mut conn = shared.store.db().acquire().await?;
-            Some(local_branch.version_vector(&mut conn).await)
+            Some(local_branch.version_vector(&mut conn).await?)
         } else {
             None
         };

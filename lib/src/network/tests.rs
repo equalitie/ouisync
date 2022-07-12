@@ -11,7 +11,7 @@ use crate::{
     event::Event,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, Proof, RootNode,
+        BranchData, Index, Proof, RootNode, EMPTY_INNER_HASH,
     },
     repository::RepositoryId,
     store::Store,
@@ -324,7 +324,12 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
     let (event_tx, _) = broadcast::channel(1);
 
     let index = Index::load(db, repository_id, event_tx).await.unwrap();
-    let proof = Proof::first(writer_id, write_keys);
+    let proof = Proof::new(
+        writer_id,
+        VersionVector::new(),
+        *EMPTY_INNER_HASH,
+        write_keys,
+    );
     index.create_branch(proof).await.unwrap();
 
     let store = Store {
@@ -367,6 +372,10 @@ async fn wait_until_snapshots_in_sync(
     let server_root = load_latest_root_node(server_index, server_id)
         .await
         .unwrap();
+
+    if server_root.proof.version_vector.is_empty() {
+        return;
+    }
 
     loop {
         if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
