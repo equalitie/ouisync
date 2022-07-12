@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
                 device_id,
                 master_secret,
                 access_secrets.clone(),
-                false,
+                !options.disable_merger,
             )
             .await?;
 
