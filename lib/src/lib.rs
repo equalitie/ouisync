@@ -18,7 +18,7 @@ mod block;
 mod branch;
 mod config;
 mod deadlock;
-mod debug_printer;
+mod debug;
 mod directory;
 mod error;
 mod event;
@@ -47,7 +47,7 @@ pub use self::{
     block::BLOCK_SIZE,
     branch::Branch,
     config::ConfigStore,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     event::BranchChangedReceiver,

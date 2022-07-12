@@ -6,7 +6,7 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     error::{Error, Result},
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};

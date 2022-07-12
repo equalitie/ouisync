@@ -23,7 +23,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     error::{Error, Result},
     event::Event,
     repository::RepositoryId,

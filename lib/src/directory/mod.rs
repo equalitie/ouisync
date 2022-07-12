@@ -18,7 +18,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -26,7 +26,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::mem;
+use std::{fmt, mem};
 
 /// What to do with the existing entry when inserting a new entry in its place.
 pub(crate) enum OverwriteStrategy {
@@ -602,6 +602,23 @@ impl Directory {
         }
 
         self.branch().data().notify();
+    }
+}
+
+impl fmt::Debug for Directory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Directory")
+            .field(
+                "name",
+                &self
+                    .parent
+                    .as_ref()
+                    .map(|parent| parent.entry_name())
+                    .unwrap_or("/"),
+            )
+            .field("branch", self.branch().id())
+            .field("blob_id", self.locator().blob_id())
+            .finish()
     }
 }
 

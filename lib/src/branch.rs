@@ -5,7 +5,7 @@ use crate::{
     block::BlockId,
     crypto::sign::PublicKey,
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     directory::{Directory, EntryRef},
     error::{Error, Result},
     file::File,

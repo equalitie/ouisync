@@ -17,7 +17,7 @@ use crate::{
         sign::{self, PublicKey},
     },
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
