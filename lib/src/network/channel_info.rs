@@ -43,7 +43,9 @@ impl fmt::Display for ChannelInfo {
         write!(
             f,
             "[{:?} -> {:?} ({:?})]",
-            self.this_runtime_id, self.that_runtime_id, self.channel,
+            self.this_runtime_id.as_public_key(),
+            self.that_runtime_id.as_public_key(),
+            self.channel,
         )
     }
 }

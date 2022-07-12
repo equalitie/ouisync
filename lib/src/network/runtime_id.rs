@@ -49,6 +49,10 @@ impl PublicRuntimeId {
     {
         io.write_all(self.public.as_ref()).await
     }
+
+    pub fn as_public_key(&self) -> &PublicKey {
+        &self.public
+    }
 }
 
 impl AsRef<[u8]> for PublicRuntimeId {
