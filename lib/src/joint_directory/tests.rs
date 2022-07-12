@@ -642,17 +642,18 @@ async fn merge_is_idempotent() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn merge_roundtrip() {
+async fn merge_create_file_roundtrip() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
+    // remote: create the file
     create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
     drop(conn);
 
-    // remote -> local
+    // local: merge from remote
     JointDirectory::new(
         Some(branches[0].clone()),
         [local_root.clone(), remote_root.clone()],
@@ -665,7 +666,7 @@ async fn merge_roundtrip() {
     let local_vv0 = branches[0].version_vector(&mut conn).await.unwrap();
     drop(conn);
 
-    // local -> remote
+    // remote: merge from local
     JointDirectory::new(
         Some(branches[1].clone()),
         [local_root.clone(), remote_root.clone()],
@@ -675,10 +676,12 @@ async fn merge_roundtrip() {
     .unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
-    let remote_vv0 = branches[0].version_vector(&mut conn).await.unwrap();
+    let remote_vv0 = branches[1].version_vector(&mut conn).await.unwrap();
     drop(conn);
 
-    // remote -> local (this has no effect)
+    assert_eq!(local_vv0, remote_vv0);
+
+    // local: merge from remote - this has no effect
     JointDirectory::new(
         Some(branches[0].clone()),
         [local_root.clone(), remote_root.clone()],
@@ -692,7 +695,7 @@ async fn merge_roundtrip() {
     drop(conn);
     assert_eq!(local_vv1, local_vv0);
 
-    // local -> remote (this has no effect either)
+    // remote: merge from local - this has no effect either
     JointDirectory::new(Some(branches[1].clone()), [local_root, remote_root])
         .merge(&pool)
         .await
@@ -701,6 +704,80 @@ async fn merge_roundtrip() {
     let mut conn = pool.acquire().await.unwrap();
     let remote_vv1 = branches[1].version_vector(&mut conn).await.unwrap();
     assert_eq!(remote_vv1, remote_vv0);
+}
+
+// FIXME: tombstone merging is currently not idempotent
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_create_and_delete_file_roundtrip() {
+    let (pool, branches) = setup(2).await;
+    let mut conn = pool.acquire().await.unwrap();
+
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+
+    // local: create the file
+    create_file(
+        &mut conn,
+        &mut local_root,
+        "monkey.jpg",
+        b"v0",
+        &branches[0],
+    )
+    .await;
+    drop(conn);
+
+    // remote: merge from local
+    JointDirectory::new(
+        Some(branches[1].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    remote_root.refresh(&mut conn).await.unwrap();
+
+    // remote: remove the file
+    let file_vv = remote_root
+        .lookup("monkey.jpg")
+        .unwrap()
+        .version_vector()
+        .clone();
+    remote_root
+        .remove_entry(&mut conn, "monkey.jpg", branches[1].id(), file_vv)
+        .await
+        .unwrap();
+    drop(conn);
+
+    // local: merge from remote
+    JointDirectory::new(
+        Some(branches[0].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let local_vv = branches[0].version_vector(&mut conn).await.unwrap();
+    drop(conn);
+
+    // remote: merge from local
+    JointDirectory::new(
+        Some(branches[1].clone()),
+        [local_root.clone(), remote_root.clone()],
+    )
+    .merge(&pool)
+    .await
+    .unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let remote_vv = branches[1].version_vector(&mut conn).await.unwrap();
+    drop(conn);
+
+    assert_eq!(local_vv, remote_vv);
 }
 
 #[tokio::test(flavor = "multi_thread")]

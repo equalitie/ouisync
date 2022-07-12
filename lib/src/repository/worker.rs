@@ -190,7 +190,6 @@ impl Inner {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
-    use log::Level;
 
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches = shared.collect_branches()?;
@@ -206,27 +205,9 @@ mod merge {
             }
         }
 
-        let vv_before = if log::log_enabled!(Level::Trace) {
-            let mut conn = shared.store.db().acquire().await?;
-            Some(local_branch.version_vector(&mut conn).await?)
-        } else {
-            None
-        };
-
         JointDirectory::new(Some(local_branch.clone()), roots)
             .merge(shared.store.db())
             .await?;
-
-        let vv_after = if log::log_enabled!(Level::Trace) {
-            let mut conn = shared.store.db().acquire().await?;
-            Some(local_branch.version_vector(&mut conn).await?)
-        } else {
-            None
-        };
-
-        if let (Some(vv_before), Some(vv_after)) = (vv_before, vv_after) {
-            log::trace!("merge complete: {:?} -> {:?}", vv_before, vv_after);
-        }
 
         Ok(())
     }
