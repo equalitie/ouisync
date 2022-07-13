@@ -30,7 +30,7 @@ impl Content {
         }
     }
 
-    pub(super) fn deserialize(mut input: &[u8]) -> Result<Self> {
+    pub fn deserialize(mut input: &[u8]) -> Result<Self> {
         let version = vint64::decode(&mut input).map_err(|_| Error::MalformedDirectory)?;
         let content = match version {
             VERSION => bincode::deserialize(input).map_err(|_| Error::MalformedDirectory),
@@ -46,7 +46,7 @@ impl Content {
         })
     }
 
-    pub(super) fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> Vec<u8> {
         let mut output = Vec::new();
         output.extend_from_slice(vint64::encode(VERSION).as_ref());
         bincode::serialize_into(&mut output, &self.entries)
@@ -54,61 +54,44 @@ impl Content {
         output
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub(super) fn iter(&self) -> btree_map::Iter<String, EntryData> {
+    pub fn iter(&self) -> btree_map::Iter<String, EntryData> {
         self.entries.iter()
     }
 
-    pub(super) fn get_key_value(&self, name: &str) -> Option<(&String, &EntryData)> {
+    pub fn get_key_value(&self, name: &str) -> Option<(&String, &EntryData)> {
         self.entries.get_key_value(name)
     }
 
-    pub(super) fn insert(
-        &mut self,
-        branch: &Branch,
-        name: String,
-        mut new_data: EntryData,
-    ) -> Result<()> {
+    pub fn insert(&mut self, branch: &Branch, name: String, new_data: EntryData) -> Result<()> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
             }
             Entry::Occupied(mut entry) => {
+                // Overwrite entries only if the new version is more up to date than the old
+                // version. Additionally, if the old entry is `File`, overwrite it only if it's not
+                // currently open.
                 match entry.get() {
-                    // Overwrite files only if the new version is more up to date than the old
-                    // version and the old version is not currently open.
                     EntryData::File(old_data)
                         if new_data.version_vector() > &old_data.version_vector
                             && !branch.is_blob_open(&old_data.blob_id) =>
                     {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }
-                    // Overwrite directories only if the new version is more up to date than the
-                    // old version.
                     EntryData::Directory(old_data)
                         if new_data.version_vector() > &old_data.version_vector =>
                     {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }
-                    EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
-                    // Always overwrite tombstones with files or directories but update the new
-                    // version vector so that the inserted entry is newer than the existing
-                    // tombstone.
-                    EntryData::Tombstone(old_data) if !new_data.is_tombstone() => {
-                        let mut vv = old_data.version_vector.clone();
-                        vv.bump(new_data.version_vector(), branch.id());
-                        *new_data.version_vector_mut() = vv;
-                    }
-                    // Overwrite tombstones with tombstones only if the new tombstone is newer than
-                    // the old one.
                     EntryData::Tombstone(old_data)
                         if new_data.version_vector() > &old_data.version_vector => {}
-                    // Otherwise return an error so that this operation doesn't modify the
-                    // directory.
-                    EntryData::Tombstone(_) => return Err(Error::EntryExists),
+                    EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_) => {
+                        return Err(Error::EntryExists)
+                    }
                 }
 
                 entry.insert(new_data);
@@ -119,7 +102,7 @@ impl Content {
     }
 
     /// Updates the version vector of entry at `name`.
-    pub(super) fn bump(&mut self, branch: &Branch, name: &str, bump: &VersionVector) -> Result<()> {
+    pub fn bump(&mut self, branch: &Branch, name: &str, bump: &VersionVector) -> Result<()> {
         self.entries
             .get_mut(name)
             .ok_or(Error::EntryNotFound)?
@@ -129,12 +112,21 @@ impl Content {
         Ok(())
     }
 
-    pub(super) fn overwritten_blobs(&self) -> &[BlobId] {
+    pub fn overwritten_blobs(&self) -> &[BlobId] {
         &self.overwritten_blobs
     }
 
-    pub(super) fn clear_overwritten_blobs(&mut self) {
+    pub fn clear_overwritten_blobs(&mut self) {
         self.overwritten_blobs.clear()
+    }
+
+    /// Initial version vector for a new entry to be inserted.
+    pub fn initial_version_vector(&self, name: &str) -> VersionVector {
+        if let Some(EntryData::Tombstone(entry)) = self.entries.get(name) {
+            entry.version_vector.clone()
+        } else {
+            VersionVector::new()
+        }
     }
 }
 
