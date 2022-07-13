@@ -78,38 +78,37 @@ impl Content {
             }
             Entry::Occupied(mut entry) => {
                 match entry.get() {
-                    // Overwrite files only if the new version is more up to date than the old version
-                    // and the old version is not currently open.
+                    // Overwrite files only if the new version is more up to date than the old
+                    // version and the old version is not currently open.
                     EntryData::File(old_data)
                         if new_data.version_vector() > &old_data.version_vector
                             && !branch.is_blob_open(&old_data.blob_id) =>
                     {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }
-                    // Overwrite directories only if the new version is more up to date than the old
-                    // version.
+                    // Overwrite directories only if the new version is more up to date than the
+                    // old version.
                     EntryData::Directory(old_data)
                         if new_data.version_vector() > &old_data.version_vector =>
                     {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }
                     EntryData::File(_) | EntryData::Directory(_) => return Err(Error::EntryExists),
-                    // Always overwrite tombstones but in case the new entry is a file or a
-                    // directory (not another tombstone which could happen e.g. when merging) also
-                    // update the new version vector so it's more up to date than the tombstone.
-                    EntryData::Tombstone(old_data) => {
-                        if new_data.is_tombstone() {
-                            // Tombstones don't have any data and thus are indistinguishable from
-                            // one to another. So we don't have to force incrementing the vv.
-                            new_data
-                                .version_vector_mut()
-                                .merge(&old_data.version_vector);
-                        } else {
-                            let mut vv = old_data.version_vector.clone();
-                            vv.bump(new_data.version_vector(), branch.id());
-                            *new_data.version_vector_mut() = vv;
-                        }
+                    // Always overwrite tombstones with files or directories but update the new
+                    // version vector so that the inserted entry is newer than the existing
+                    // tombstone.
+                    EntryData::Tombstone(old_data) if !new_data.is_tombstone() => {
+                        let mut vv = old_data.version_vector.clone();
+                        vv.bump(new_data.version_vector(), branch.id());
+                        *new_data.version_vector_mut() = vv;
                     }
+                    // Overwrite tombstones with tombstones only if the new tombstone is newer than
+                    // the old one.
+                    EntryData::Tombstone(old_data)
+                        if new_data.version_vector() > &old_data.version_vector => {}
+                    // Otherwise return an error so that this operation doesn't modify the
+                    // directory.
+                    EntryData::Tombstone(_) => return Err(Error::EntryExists),
                 }
 
                 entry.insert(new_data);

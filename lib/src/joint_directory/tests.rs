@@ -706,8 +706,6 @@ async fn merge_create_file_roundtrip() {
     assert_eq!(remote_vv1, remote_vv0);
 }
 
-// FIXME: tombstone merging is currently not idempotent
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_and_delete_file_roundtrip() {
     let (pool, branches) = setup(2).await;

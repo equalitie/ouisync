@@ -195,20 +195,26 @@ impl Directory {
         I: Iterator<Item = VersionVector>,
     {
         let mut tx = conn.begin().await?;
-
         let mut content = self.load(&mut tx).await?;
+        let mut changed = false;
 
         for tombstone in version_vectors.map(EntryData::tombstone) {
             match content.insert(self.branch(), name.clone(), tombstone) {
-                Ok(()) => {}
+                Ok(()) => {
+                    changed = true;
+                }
                 Err(Error::EntryExists) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        self.save(&mut tx, &content, OverwriteStrategy::Remove)
-            .await?;
-        self.commit(tx, content, &VersionVector::new()).await
+        if changed {
+            self.save(&mut tx, &content, OverwriteStrategy::Remove)
+                .await?;
+            self.commit(tx, content, &VersionVector::new()).await
+        } else {
+            Ok(())
+        }
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the

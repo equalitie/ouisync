@@ -206,42 +206,6 @@ fn concurrent_read_and_delete_file() {
     let _b = b_handle.join().unwrap();
 }
 
-#[ignore]
-#[test]
-fn create_and_delete_file() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
-
-    // Create the file by A
-    println!("A: create foo.txt");
-    fs::write(a.root().join("foo.txt"), "hello from A").unwrap();
-
-    thread::sleep(Duration::from_secs(1));
-
-    // Delete it by B
-    println!("B: delete bar.txt");
-    fs::remove_file(b.root().join("foo.txt")).unwrap();
-
-    // println!("B: create bar.txt");
-    // fs::write(b.root().join("bar.txt"), "hello from B").unwrap();
-
-    // println!("B: append to foo.txt");
-    // {
-    //     use std::io::Write;
-
-    //     let mut f = std::fs::File::options()
-    //         .append(true)
-    //         .open(b.root().join("foo.txt"))
-    //         .unwrap();
-    //     f.write_all(b"\nhello from B").unwrap();
-    // }
-
-    thread::sleep(Duration::from_secs(60 * 60));
-}
-
 #[test]
 fn relay() {
     // Create three nodes: A, B and R where A and B are connected only to R but not to each other.
