@@ -17,6 +17,15 @@ pub(crate) enum Request {
     Block(BlockId),
 }
 
+impl Request {
+    pub(crate) fn is_index_node_request(&self) -> bool {
+        match self {
+            Request::ChildNodes(_) => true,
+            Request::Block(_) => false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.

@@ -1,7 +1,9 @@
 use super::message::Request;
+use crate::repository;
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
+    sync::Weak,
     time::{Duration, Instant},
 };
 use tokio::{sync::OwnedSemaphorePermit, time};
@@ -16,17 +18,29 @@ pub(super) const MAX_PENDING_REQUESTS: usize = 32;
 // triggered.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub(super) struct PendingRequests(HashMap<Request, RequestData>);
+pub(super) struct PendingRequests {
+    monitored: Weak<repository::MonitoredValues>,
+    map: HashMap<Request, RequestData>,
+}
 
 impl PendingRequests {
-    pub fn new() -> Self {
-        Self(HashMap::new())
+    pub fn new(monitored: Weak<repository::MonitoredValues>) -> Self {
+        Self {
+            monitored,
+            map: HashMap::new(),
+        }
     }
 
     pub fn insert(&mut self, request: Request, permit: OwnedSemaphorePermit) -> bool {
-        match self.0.entry(request) {
+        match self.map.entry(request) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
+                if request.is_index_node_request() {
+                    if let Some(monitored) = self.monitored.upgrade() {
+                        *monitored.index_request_count.get() += 1;
+                    }
+                }
+
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
                     _permit: permit,
@@ -37,7 +51,16 @@ impl PendingRequests {
     }
 
     pub fn remove(&mut self, request: &Request) -> bool {
-        self.0.remove(request).is_some()
+        if self.map.remove(request).is_some() {
+            if request.is_index_node_request() {
+                if let Some(monitored) = self.monitored.upgrade() {
+                    *monitored.index_request_count.get() -= 1;
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Wait until a pending request expires and remove it from the collection. If there are
@@ -47,14 +70,27 @@ impl PendingRequests {
     /// is dropped before being driven to completion.
     pub async fn expired(&mut self) {
         if let Some((&request, &RequestData { timestamp, .. })) = self
-            .0
+            .map
             .iter()
             .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
         {
             time::sleep_until((timestamp + REQUEST_TIMEOUT).into()).await;
-            self.0.remove(&request);
+            self.remove(&request);
         } else {
             future::pending().await
+        }
+    }
+}
+
+impl Drop for PendingRequests {
+    fn drop(&mut self) {
+        if let Some(monitored) = self.monitored.upgrade() {
+            let count = self
+                .map
+                .keys()
+                .filter(|request| request.is_index_node_request())
+                .count();
+            *monitored.index_request_count.get() -= count;
         }
     }
 }

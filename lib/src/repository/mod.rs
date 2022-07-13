@@ -27,7 +27,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
-    state_monitor::StateMonitor,
+    state_monitor::{MonitoredValue, StateMonitor},
     store::Store,
     sync::broadcast::ThrottleReceiver,
     version_vector::VersionVector,
@@ -216,8 +216,14 @@ impl Repository {
             BlockTracker::greedy()
         };
 
+        let monitor = parent_monitor.make_child(hex::encode(index.repository_id().as_ref()));
+
+        let monitored = Arc::new(MonitoredValues {
+            index_request_count: monitor.make_value("index_request_count".into(), 0),
+        });
+
         let store = Store {
-            monitor: parent_monitor.make_child(format!("{:?}", index.repository_id())),
+            monitored: Arc::downgrade(&monitored),
             index,
             block_tracker,
         };
@@ -227,6 +233,7 @@ impl Repository {
             this_writer_id,
             secrets,
             blob_cache: Arc::new(BlobCache::new(event_tx)),
+            _monitored: monitored,
         });
 
         let local_branch = if shared.secrets.can_write() && enable_merger {
@@ -603,12 +610,19 @@ impl Repository {
     }
 }
 
+pub(crate) struct MonitoredValues {
+    // This indicates how many requests for index nodes are currently in flight.  It is used by the
+    // UI to indicate that the index is being synchronized.
+    pub index_request_count: MonitoredValue<usize>,
+}
+
 struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
     // Cache for open blobs to track multiple instances of the same blob.
     blob_cache: Arc<BlobCache>,
+    _monitored: Arc<MonitoredValues>,
 }
 
 impl Shared {

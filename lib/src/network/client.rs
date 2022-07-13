@@ -37,13 +37,14 @@ impl Client {
     ) -> Self {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
+        let monitored = store.monitored.clone();
 
         Self {
             store,
             tx,
             rx,
             request_limiter,
-            pending_requests: PendingRequests::new(),
+            pending_requests: PendingRequests::new(monitored),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),

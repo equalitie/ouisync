@@ -6,13 +6,17 @@ use crate::{
     error::{Error, Result},
     index::{self, Index},
     progress::Progress,
-    state_monitor::StateMonitor,
+    repository::MonitoredValues,
 };
 use sqlx::{Connection, Row};
+use std::sync::Weak;
 
 #[derive(Clone)]
 pub struct Store {
-    pub(crate) monitor: StateMonitor,
+    // This is `Weak` because `Store` can outlive `Repository` and if we wanted to recreate the
+    // repository again while the previous `Store` is still alive, we would create "ambiguous"
+    // monitored values.
+    pub(crate) monitored: Weak<MonitoredValues>,
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
 }
