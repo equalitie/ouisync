@@ -80,17 +80,6 @@ impl VersionVector {
         modified
     }
 
-    /// Merges `other` into `self` and optionally increments the version at `id` to make sure the
-    /// resulting vector is strictly greater than it was before.
-    ///
-    /// This operation is not commutative because it only increments the version at `id` if the
-    /// *left hand side* has changed.
-    pub fn bump(&mut self, other: &Self, id: &PublicKey) {
-        if !self.merge(other) {
-            self.increment(*id);
-        }
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.values().all(|version| *version == 0)
     }

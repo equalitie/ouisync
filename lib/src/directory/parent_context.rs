@@ -1,7 +1,7 @@
 use super::OverwriteStrategy;
 use crate::{
     blob::Blob, blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
-    locator::Locator, version_vector::VersionVector,
+    index::VersionVectorOp, locator::Locator, version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -29,15 +29,15 @@ impl ParentContext {
         &self,
         tx: &mut db::Transaction<'_>,
         branch: Branch,
-        bump: &VersionVector,
+        op: &VersionVectorOp,
     ) -> Result<()> {
         let mut directory = self.directory(tx, branch).await?;
         let mut content = directory.entries.clone();
-        content.bump(directory.branch(), &self.entry_name, bump)?;
+        content.bump(directory.branch(), &self.entry_name, op)?;
         directory
             .save(tx, &content, OverwriteStrategy::Keep)
             .await?;
-        directory.bump(tx, bump).await?;
+        directory.bump(tx, op).await?;
 
         Ok(())
     }
@@ -68,7 +68,9 @@ impl ParentContext {
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
         let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
-        directory.commit(tx, content, &VersionVector::new()).await?;
+        directory
+            .commit(tx, content, &VersionVectorOp::IncrementLocal)
+            .await?;
 
         let directory_id = *directory.locator().blob_id();
         let parent = directory.parent.clone();

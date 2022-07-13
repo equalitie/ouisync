@@ -6,6 +6,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     error::{Error, Result},
+    index::VersionVectorOp,
     version_vector::VersionVector,
 };
 use std::collections::{
@@ -102,12 +103,14 @@ impl Content {
     }
 
     /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, branch: &Branch, name: &str, bump: &VersionVector) -> Result<()> {
-        self.entries
-            .get_mut(name)
-            .ok_or(Error::EntryNotFound)?
-            .version_vector_mut()
-            .bump(bump, branch.id());
+    pub fn bump(&mut self, branch: &Branch, name: &str, op: &VersionVectorOp) -> Result<()> {
+        op.apply(
+            branch.id(),
+            self.entries
+                .get_mut(name)
+                .ok_or(Error::EntryNotFound)?
+                .version_vector_mut(),
+        );
 
         Ok(())
     }

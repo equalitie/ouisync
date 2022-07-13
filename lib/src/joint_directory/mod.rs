@@ -362,7 +362,7 @@ impl JointDirectory {
 
         if bump {
             local_version
-                .merge_version_vector(&mut conn, &new_version_vector)
+                .merge_version_vector(&mut conn, new_version_vector)
                 .await?;
         }
 

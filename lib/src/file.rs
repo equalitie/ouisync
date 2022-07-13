@@ -5,6 +5,7 @@ use crate::{
     db,
     directory::{Directory, ParentContext},
     error::{Error, Result},
+    index::VersionVectorOp,
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -96,7 +97,11 @@ impl File {
         let mut tx = conn.begin().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
-            .bump(&mut tx, self.branch().clone(), &VersionVector::new())
+            .bump(
+                &mut tx,
+                self.branch().clone(),
+                &VersionVectorOp::IncrementLocal,
+            )
             .await?;
         tx.commit().await?;
         self.branch().data().notify();

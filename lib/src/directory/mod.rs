@@ -21,6 +21,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
+    index::VersionVectorOp,
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -129,7 +130,8 @@ impl Directory {
         file.save(&mut tx).await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, &VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+            .await?;
 
         Ok(file)
     }
@@ -159,7 +161,8 @@ impl Directory {
             .await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, &VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+            .await?;
 
         Ok(dir)
     }
@@ -302,10 +305,11 @@ impl Directory {
     pub(crate) async fn merge_version_vector(
         &mut self,
         conn: &mut db::Connection,
-        vv: &VersionVector,
+        vv: VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
-        self.commit(tx, Content::empty(), vv).await
+        self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
+            .await
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
@@ -503,7 +507,7 @@ impl Directory {
         let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, data)?;
         self.save(tx, &content, overwrite).await?;
-        self.bump(tx, &VersionVector::new()).await?;
+        self.bump(tx, &VersionVectorOp::IncrementLocal).await?;
 
         Ok(content)
     }
@@ -552,9 +556,9 @@ impl Directory {
         &mut self,
         mut tx: db::Transaction<'_>,
         content: Content,
-        bump: &VersionVector,
+        op: &VersionVectorOp,
     ) -> Result<()> {
-        self.bump(&mut tx, bump).await?;
+        self.bump(&mut tx, op).await?;
         tx.commit().await?;
         self.finalize(content);
 
@@ -563,10 +567,10 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::Transaction<'_>, bump: &VersionVector) -> Result<()> {
+    async fn bump(&mut self, tx: &mut db::Transaction<'_>, op: &VersionVectorOp) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
-            parent.bump(tx, self.blob.branch().clone(), bump).await
+            parent.bump(tx, self.blob.branch().clone(), op).await
         } else {
             let write_keys = self
                 .branch()
@@ -574,7 +578,7 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, bump, write_keys).await
+            self.branch().data().bump(tx, op, write_keys).await
         }
     }
 
