@@ -27,6 +27,7 @@ use crate::{
     error::{Error, Result},
     event::Event,
     repository::RepositoryId,
+    version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
 use std::{
@@ -365,5 +366,24 @@ impl From<ProofError> for ReceiveError {
 impl From<sqlx::Error> for ReceiveError {
     fn from(error: sqlx::Error) -> Self {
         Self::from(Error::from(error))
+    }
+}
+
+/// Operation on version vector
+pub(crate) enum VersionVectorOp {
+    IncrementLocal,
+    Merge(VersionVector),
+}
+
+impl VersionVectorOp {
+    pub fn apply(&self, local_id: &PublicKey, target: &mut VersionVector) {
+        match self {
+            Self::IncrementLocal => {
+                target.increment(*local_id);
+            }
+            Self::Merge(other) => {
+                target.merge(other);
+            }
+        }
     }
 }

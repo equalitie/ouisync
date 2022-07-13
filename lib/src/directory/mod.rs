@@ -21,6 +21,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
+    index::VersionVectorOp,
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -107,9 +108,13 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
         let mut tx = conn.begin().await?;
+        let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
-        let data = EntryData::file(blob_id, VersionVector::first(*self.branch().id()));
+        let version_vector = content
+            .initial_version_vector(&name)
+            .incremented(*self.branch().id());
+        let data = EntryData::file(blob_id, version_vector);
         let parent =
             ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
         let shared = self.branch().fetch_blob_shared(blob_id);
@@ -121,12 +126,12 @@ impl Directory {
             shared,
         );
 
-        let mut content = self.load(&mut tx).await?;
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, &VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+            .await?;
 
         Ok(file)
     }
@@ -138,22 +143,26 @@ impl Directory {
         name: String,
     ) -> Result<Self> {
         let mut tx = conn.begin().await?;
+        let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
-        let data = EntryData::directory(blob_id, VersionVector::first(*self.branch().id()));
+        let version_vector = content
+            .initial_version_vector(&name)
+            .incremented(*self.branch().id());
+        let data = EntryData::directory(blob_id, version_vector);
         let parent =
             ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
 
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
-        let mut content = self.load(&mut tx).await?;
         content.insert(self.branch(), name, data)?;
         dir.save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
             .await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, &VersionVector::new()).await?;
+        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+            .await?;
 
         Ok(dir)
     }
@@ -173,48 +182,22 @@ impl Directory {
         vv: VersionVector,
     ) -> Result<()> {
         let mut tx = conn.begin().await?;
-        let content = self
+
+        let content = match self
             .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
-            .await?;
+            .await
+        {
+            Ok(content) => content,
+            // `EntryExists` in this case means the tombstone already exists which means the entry
+            // is already removed.
+            Err(Error::EntryExists) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+
         tx.commit().await?;
         self.finalize(content);
 
         Ok(())
-    }
-
-    /// For each version vector V in the `version_vectors` argument, if the entry corresponding to
-    /// `name` is "happened before" V, then replace the entry with a tombstone with V as its
-    /// version vector.
-    pub(crate) async fn try_remove_entry_with<'a, I>(
-        &mut self,
-        conn: &mut db::Connection,
-        name: String,
-        version_vectors: I,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = VersionVector>,
-    {
-        let mut tx = conn.begin().await?;
-        let mut content = self.load(&mut tx).await?;
-        let mut changed = false;
-
-        for tombstone in version_vectors.map(EntryData::tombstone) {
-            match content.insert(self.branch(), name.clone(), tombstone) {
-                Ok(()) => {
-                    changed = true;
-                }
-                Err(Error::EntryExists) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
-        if changed {
-            self.save(&mut tx, &content, OverwriteStrategy::Remove)
-                .await?;
-            self.commit(tx, content, &VersionVector::new()).await
-        } else {
-            Ok(())
-        }
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -322,10 +305,11 @@ impl Directory {
     pub(crate) async fn merge_version_vector(
         &mut self,
         conn: &mut db::Connection,
-        vv: &VersionVector,
+        vv: VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;
-        self.commit(tx, Content::empty(), vv).await
+        self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
+            .await
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
@@ -476,42 +460,40 @@ impl Directory {
     ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
-        let old_dir = match self.lookup(name) {
-            Ok(EntryRef::Directory(entry)) => Some(entry.open(tx).await?),
-            Ok(_) | Err(Error::EntryNotFound) => None,
-            Err(error) => return Err(error),
-        };
-
-        if let Some(dir) = &old_dir {
-            if matches!(overwrite, OverwriteStrategy::Remove)
-                && dir.entries().any(|entry| !entry.is_tombstone())
-            {
-                return Err(Error::DirectoryNotEmpty);
+        if matches!(overwrite, OverwriteStrategy::Remove) {
+            match self.lookup(name) {
+                Ok(EntryRef::Directory(entry)) => {
+                    if entry
+                        .open(tx)
+                        .await?
+                        .entries()
+                        .any(|entry| !entry.is_tombstone())
+                    {
+                        return Err(Error::DirectoryNotEmpty);
+                    }
+                }
+                Ok(_) | Err(Error::EntryNotFound) => (),
+                Err(error) => return Err(error),
             }
         }
 
-        let new_entry = if branch_id == self.branch().id() {
-            EntryData::tombstone(vv.incremented(*self.branch().id()))
-        } else {
-            match self.lookup(name) {
-                Ok(old_entry) => {
-                    let mut new_entry = old_entry.clone_data();
-
-                    // Note: the `bump` function is not commutative.
-                    let mut vv = vv;
-                    vv.bump(new_entry.version_vector(), self.branch().id());
-                    *new_entry.version_vector_mut() = vv;
-
-                    new_entry
-                }
-                Err(Error::EntryNotFound) => {
+        let new_data = match self.lookup(name) {
+            Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
+                if branch_id == self.branch().id() {
                     EntryData::tombstone(vv.incremented(*self.branch().id()))
+                } else {
+                    let mut new_data = old_entry.clone_data();
+                    new_data.version_vector_mut().merge(&vv);
+                    new_data.version_vector_mut().increment(*self.branch().id());
+                    new_data
                 }
-                Err(e) => return Err(e),
             }
+            Ok(EntryRef::Tombstone(_)) => EntryData::tombstone(vv),
+            Err(Error::EntryNotFound) => EntryData::tombstone(vv.incremented(*self.branch().id())),
+            Err(e) => return Err(e),
         };
 
-        self.begin_insert_entry(tx, name.to_owned(), new_entry, overwrite)
+        self.begin_insert_entry(tx, name.to_owned(), new_data, overwrite)
             .await
     }
 
@@ -519,13 +501,13 @@ impl Directory {
         &mut self,
         tx: &mut db::Transaction<'_>,
         name: String,
-        entry: EntryData,
+        data: EntryData,
         overwrite: OverwriteStrategy,
     ) -> Result<Content> {
         let mut content = self.load(tx).await?;
-        content.insert(self.branch(), name, entry)?;
+        content.insert(self.branch(), name, data)?;
         self.save(tx, &content, overwrite).await?;
-        self.bump(tx, &VersionVector::new()).await?;
+        self.bump(tx, &VersionVectorOp::IncrementLocal).await?;
 
         Ok(content)
     }
@@ -574,9 +556,9 @@ impl Directory {
         &mut self,
         mut tx: db::Transaction<'_>,
         content: Content,
-        bump: &VersionVector,
+        op: &VersionVectorOp,
     ) -> Result<()> {
-        self.bump(&mut tx, bump).await?;
+        self.bump(&mut tx, op).await?;
         tx.commit().await?;
         self.finalize(content);
 
@@ -585,10 +567,10 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::Transaction<'_>, bump: &VersionVector) -> Result<()> {
+    async fn bump(&mut self, tx: &mut db::Transaction<'_>, op: &VersionVectorOp) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
-            parent.bump(tx, self.blob.branch().clone(), bump).await
+            parent.bump(tx, self.blob.branch().clone(), op).await
         } else {
             let write_keys = self
                 .branch()
@@ -596,7 +578,7 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, bump, write_keys).await
+            self.branch().data().bump(tx, op, write_keys).await
         }
     }
 

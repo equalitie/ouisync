@@ -11,7 +11,7 @@ use crate::{
     event::Event,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, Proof, RootNode, EMPTY_INNER_HASH,
+        BranchData, Index, Proof, RootNode, VersionVectorOp, EMPTY_INNER_HASH,
     },
     repository::RepositoryId,
     store::Store,
@@ -431,7 +431,7 @@ async fn create_changeset(
     let mut cx = index.pool.acquire().await.unwrap();
     let mut tx = cx.begin().await.unwrap();
     branch
-        .bump(&mut tx, &VersionVector::new(), write_keys)
+        .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
     tx.commit().await.unwrap();

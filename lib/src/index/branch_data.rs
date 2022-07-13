@@ -2,6 +2,7 @@ use super::{
     node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
+    VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -175,13 +176,13 @@ impl BranchData {
     pub async fn bump(
         &self,
         tx: &mut db::Transaction<'_>,
-        vv: &VersionVector,
+        op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
         let root_node = self.load_root(tx).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
-        new_vv.bump(vv, self.id());
+        op.apply(self.id(), &mut new_vv);
 
         let new_proof = Proof::new(
             root_node.proof.writer_id,
