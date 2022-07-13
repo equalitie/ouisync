@@ -45,14 +45,14 @@ pub(super) struct DhtDiscovery {
     dht_v6: Option<RestartableDht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
-    monitor: Arc<StateMonitor>,
+    monitor: StateMonitor,
 }
 
 impl DhtDiscovery {
     pub async fn new(
         socket_v4: Option<quic::SideChannel>,
         socket_v6: Option<quic::SideChannel>,
-        monitor: Arc<StateMonitor>,
+        monitor: StateMonitor,
     ) -> Self {
         let dht_v4 = if let Some(socket_v4) = socket_v4 {
             Some(start_dht(socket_v4, &monitor).await)
@@ -116,7 +116,7 @@ impl DhtDiscovery {
     }
 }
 
-async fn start_dht(socket: quic::SideChannel, monitor: &Arc<StateMonitor>) -> RestartableDht {
+async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
     // TODO: Unwrap
     let local_addr = socket.local_addr().unwrap();
 
@@ -246,7 +246,7 @@ impl Lookup {
         dht_v4: Option<RestartableDht>,
         dht_v6: Option<RestartableDht>,
         info_hash: InfoHash,
-        monitor: &Arc<StateMonitor>,
+        monitor: &StateMonitor,
     ) -> Self {
         let (wake_up_tx, mut wake_up_rx) = watch::channel(());
         // Mark the initial value as seen so the change notification is not triggered immediately
@@ -294,7 +294,7 @@ impl Lookup {
         seen_peers: Arc<SeenPeers>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
         mut wake_up: watch::Receiver<()>,
-        monitor: &Arc<StateMonitor>,
+        monitor: &StateMonitor,
     ) -> ScopedJoinHandle<()> {
         let state =
             monitor.make_value::<Cow<'static, str>>("state".into(), Cow::Borrowed("started"));

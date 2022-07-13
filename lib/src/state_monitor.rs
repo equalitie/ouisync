@@ -13,24 +13,66 @@ use std::{
 
 // --- StateMonitor
 
+#[derive(Clone)]
 pub struct StateMonitor {
+    shared: Arc<StateMonitorShared>,
+}
+
+struct StateMonitorShared {
     name: String,
-    parent: Option<Arc<StateMonitor>>,
+    parent: Option<Arc<StateMonitorShared>>,
     inner: Mutex<StateMonitorInner>,
 }
 
-pub struct StateMonitorInner {
+struct StateMonitorInner {
     // Incremented on each change, can be used by monitors to determine whether a child has
     // changed.
     version: u64,
     values: BTreeMap<String, MonitoredValueHandle>,
-    children: BTreeMap<String, Weak<StateMonitor>>,
+    children: BTreeMap<String, Weak<StateMonitorShared>>,
     on_change: uninitialized_watch::Sender<()>,
 }
 
 impl StateMonitor {
-    pub fn make_root() -> Arc<Self> {
-        Arc::new(Self {
+    pub fn make_root() -> Self {
+        Self {
+            shared: StateMonitorShared::make_root(),
+        }
+    }
+
+    pub fn make_child<S: Into<String>>(self: &Self, name: S) -> Self {
+        Self {
+            shared: self.shared.make_child(name),
+        }
+    }
+
+    pub fn locate(self: &Self, path: &str) -> Option<Self> {
+        self.shared.locate(path).map(|shared| Self { shared })
+    }
+
+    /// Creates a new monitored value. The caller is responsible for ensuring that there is always
+    /// at most one value of a given `name` per StateMonitor instance.
+    ///
+    /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
+    /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
+    /// this is only a monitoring piece of code.
+    pub fn make_value<T: 'static + fmt::Debug + Sync + Send>(
+        self: &Self,
+        name: String,
+        value: T,
+    ) -> MonitoredValue<T> {
+        self.shared.make_value(name, value)
+    }
+
+    /// Get notified whenever there is a change in this StateMonitor
+    pub fn subscribe(self: &Self) -> uninitialized_watch::Receiver<()> {
+        self.shared.subscribe()
+    }
+}
+
+impl StateMonitorShared {
+    fn make_root() -> Arc<Self> {
+        Arc::new(StateMonitorShared {
             name: "".into(),
             parent: None,
             inner: Mutex::new(StateMonitorInner {
@@ -42,7 +84,7 @@ impl StateMonitor {
         })
     }
 
-    pub fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<StateMonitor> {
+    fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<Self> {
         let mut is_new = false;
         let name = name.into();
         let name_clone = name.clone();
@@ -80,7 +122,7 @@ impl StateMonitor {
         child
     }
 
-    pub fn locate(self: &Arc<Self>, path: &str) -> Option<Arc<Self>> {
+    fn locate(self: &Arc<Self>, path: &str) -> Option<Arc<Self>> {
         if path.is_empty() {
             return Some(self.clone());
         }
@@ -106,13 +148,7 @@ impl StateMonitor {
         })
     }
 
-    /// Creates a new monitored value. The caller is responsible for ensuring that there is always
-    /// at most one value of a given `name` per StateMonitor instance.
-    ///
-    /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
-    /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
-    /// this is only a monitoring piece of code.
-    pub fn make_value<T: 'static + fmt::Debug + Sync + Send>(
+    fn make_value<T: 'static + fmt::Debug + Sync + Send>(
         self: &Arc<Self>,
         name: String,
         value: T,
@@ -147,8 +183,7 @@ impl StateMonitor {
         }
     }
 
-    /// Get notified whenever there is a change in this StateMonitor
-    pub fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
+    fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
         self.lock().on_change.subscribe()
     }
 
@@ -170,7 +205,7 @@ impl StateMonitor {
     }
 }
 
-impl Drop for StateMonitor {
+impl Drop for StateMonitorShared {
     fn drop(&mut self) {
         if let Some(parent) = &self.parent {
             let name = self.name.clone();
@@ -188,7 +223,7 @@ impl Drop for StateMonitor {
 
 pub struct MonitoredValue<T> {
     name: String,
-    monitor: Arc<StateMonitor>,
+    monitor: Arc<StateMonitorShared>,
     value: Arc<Mutex<T>>,
 }
 
@@ -218,7 +253,7 @@ impl<T> MonitoredValue<T> {
 }
 
 pub struct MutexGuardWrap<'a, T> {
-    monitor: Arc<StateMonitor>,
+    monitor: Arc<StateMonitorShared>,
     guard: MutexGuard<'a, T>,
 }
 
@@ -273,7 +308,7 @@ impl Serialize for StateMonitor {
     where
         S: Serializer,
     {
-        let lock = self.lock();
+        let lock = self.shared.lock();
 
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
@@ -286,7 +321,7 @@ impl Serialize for StateMonitor {
 }
 
 struct ValuesSerializer<'a>(&'a BTreeMap<String, MonitoredValueHandle>);
-struct ChildrenSerializer<'a>(&'a BTreeMap<String, Weak<StateMonitor>>);
+struct ChildrenSerializer<'a>(&'a BTreeMap<String, Weak<StateMonitorShared>>);
 
 impl<'a> Serialize for ValuesSerializer<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

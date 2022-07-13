@@ -68,7 +68,7 @@ use tokio::{
 
 pub struct Network {
     inner: Arc<Inner>,
-    pub monitor: Arc<StateMonitor>,
+    pub monitor: StateMonitor,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<Tasks>,
@@ -500,7 +500,7 @@ struct Tasks {
 }
 
 struct Inner {
-    monitor: Arc<StateMonitor>,
+    monitor: StateMonitor,
     quic_connector_v4: Option<quic::Connector>,
     quic_connector_v6: Option<quic::Connector>,
     quic_listener_local_addr_v4: Option<SocketAddr>,
