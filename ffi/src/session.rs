@@ -7,7 +7,7 @@ use super::{
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::{Network, NetworkOptions},
-    ConfigStore, Error, Result,
+    ConfigStore, Error, Result, StateMonitor,
 };
 use std::{
     future::Future,
@@ -80,7 +80,15 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
-        let network = match runtime.block_on(Network::new(&NetworkOptions::default(), config)) {
+        let root_monitor = StateMonitor::make_root();
+        let repos_monitor = root_monitor.make_child("Repositories");
+        let network_monitor = root_monitor.make_child("Network");
+
+        let network = match runtime.block_on(Network::new(
+            &NetworkOptions::default(),
+            config,
+            network_monitor,
+        )) {
             Ok(network) => network,
             Err(error) => {
                 sender.send_result(port, Err(error.into()));
@@ -93,6 +101,8 @@ pub unsafe extern "C" fn session_open(
             device_id,
             network,
             sender,
+            root_monitor,
+            repos_monitor,
             _logger: logger,
         };
 
@@ -118,7 +128,7 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
         }
     };
 
-    if let Some(monitor) = get().network.monitor.locate(path) {
+    if let Some(monitor) = get().root_monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
         Bytes::from_vec(bytes)
     } else {
@@ -147,7 +157,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
     let session = get();
     let sender = session.sender();
 
-    if let Some(monitor) = get().network.monitor.locate(path) {
+    if let Some(monitor) = get().root_monitor.locate(path) {
         let mut rx = monitor.subscribe();
 
         let handle = session.runtime().spawn(async move {
@@ -222,6 +232,8 @@ pub(super) struct Session {
     device_id: DeviceId,
     network: Network,
     sender: Sender,
+    root_monitor: StateMonitor,
+    repos_monitor: StateMonitor,
     _logger: Logger,
 }
 
@@ -236,6 +248,10 @@ impl Session {
 
     pub(super) fn network(&self) -> &Network {
         &self.network
+    }
+
+    pub(super) fn repos_monitor(&self) -> &StateMonitor {
+        &self.repos_monitor
     }
 }
 
@@ -264,6 +280,10 @@ where
 
     pub(super) fn device_id(&self) -> &DeviceId {
         &self.session.device_id
+    }
+
+    pub(super) fn repos_monitor(&self) -> &StateMonitor {
+        self.session.repos_monitor()
     }
 }
 

@@ -49,6 +49,8 @@ pub unsafe extern "C" fn repository_create(
             share_token.into_secrets()
         };
 
+        let repos_monitor = ctx.repos_monitor().clone();
+
         ctx.spawn(async move {
             let repository = Repository::create(
                 &store.into_std_path_buf().into(),
@@ -56,6 +58,7 @@ pub unsafe extern "C" fn repository_create(
                 MasterSecret::Password(master_password),
                 access_secrets,
                 ENABLE_MERGER,
+                &repos_monitor,
             )
             .await?;
 
@@ -89,12 +92,15 @@ pub unsafe extern "C" fn repository_open(
             Some(Password::new(utils::ptr_to_str(master_password)?))
         };
 
+        let repos_monitor = ctx.repos_monitor().clone();
+
         ctx.spawn(async move {
             let repository = Repository::open(
                 &store.into_std_path_buf().into(),
                 device_id,
                 master_password.map(MasterSecret::Password),
                 ENABLE_MERGER,
+                &repos_monitor,
             )
             .await?;
 

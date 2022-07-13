@@ -27,6 +27,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
+    state_monitor::StateMonitor,
     store::Store,
     sync::broadcast::ThrottleReceiver,
     version_vector::VersionVector,
@@ -53,6 +54,7 @@ impl Repository {
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let pool = db::create(store).await?;
         Self::create_in(
@@ -61,6 +63,7 @@ impl Repository {
             master_secret,
             access_secrets,
             enable_merger,
+            parent_monitor,
         )
         .await
     }
@@ -72,6 +75,7 @@ impl Repository {
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
@@ -81,7 +85,14 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        Self::new(
+            pool,
+            this_writer_id,
+            access_secrets,
+            enable_merger,
+            parent_monitor,
+        )
+        .await
     }
 
     /// Opens an existing repository.
@@ -95,6 +106,7 @@ impl Repository {
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         Self::open_with_mode(
             store,
@@ -102,6 +114,7 @@ impl Repository {
             master_secret,
             AccessMode::Write,
             enable_merger,
+            parent_monitor,
         )
         .await
     }
@@ -114,6 +127,7 @@ impl Repository {
         master_secret: Option<MasterSecret>,
         max_access_mode: AccessMode,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let pool = db::open(store).await?;
         Self::open_in(
@@ -122,6 +136,7 @@ impl Repository {
             master_secret,
             max_access_mode,
             enable_merger,
+            parent_monitor,
         )
         .await
     }
@@ -135,6 +150,7 @@ impl Repository {
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
 
@@ -172,7 +188,14 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger).await
+        Self::new(
+            pool,
+            this_writer_id,
+            access_secrets,
+            enable_merger,
+            parent_monitor,
+        )
+        .await
     }
 
     async fn new(
@@ -180,6 +203,7 @@ impl Repository {
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
@@ -193,6 +217,7 @@ impl Repository {
         };
 
         let store = Store {
+            monitor: parent_monitor.make_child(format!("{:?}", index.repository_id())),
             index,
             block_tracker,
         };

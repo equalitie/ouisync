@@ -6,11 +6,13 @@ use crate::{
     error::{Error, Result},
     index::{self, Index},
     progress::Progress,
+    state_monitor::StateMonitor,
 };
 use sqlx::{Connection, Row};
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) monitor: StateMonitor,
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
 }

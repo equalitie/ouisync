@@ -76,7 +76,11 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(options: &NetworkOptions, config: ConfigStore) -> Result<Self, NetworkError> {
+    pub async fn new(
+        options: &NetworkOptions,
+        config: ConfigStore,
+        monitor: StateMonitor,
+    ) -> Result<Self, NetworkError> {
         let (quic_connector_v4, quic_listener_v4, udp_socket_v4) =
             if let Some(addr) = options.listen_quic_addr_v4() {
                 Self::bind_quic_listener(addr, &config)
@@ -123,8 +127,6 @@ impl Network {
 
         let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| *l.local_addr());
         let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| *l.local_addr());
-
-        let monitor = StateMonitor::make_root();
 
         let hole_puncher_v4 = udp_socket_v4.as_ref().map(|s| s.create_sender());
         let hole_puncher_v6 = udp_socket_v6.as_ref().map(|s| s.create_sender());
