@@ -23,7 +23,7 @@ use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     error::{Error, Result},
     event::Event,
     repository::RepositoryId,
@@ -121,13 +121,18 @@ impl Index {
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
-    /// received node was more up-to-date than the corresponding branch stored by this replica.
+    /// received node has any new information compared to all the nodes already stored locally.
     pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
         summary: Summary,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
+
+        // Ignore branches with empty version vectors because they have no content yet.
+        if proof.version_vector.is_empty() {
+            return Ok(false);
+        }
 
         let mut conn = self.pool.acquire().await?;
 
@@ -138,51 +143,22 @@ impl Index {
             .await?;
 
         // If the received node is outdated relative to any branch we have, ignore it.
-        for node in nodes.values() {
-            if node.proof.writer_id == proof.writer_id {
-                // this will be checked further down.
-                continue;
-            }
-
-            if proof.version_vector < node.proof.version_vector {
-                return Ok(false);
-            }
-        }
-
-        // Whether to create new node. We create only if we don't have the branch yet or if the
-        // received one is strictly newer than the one we have.
-        let create;
-        // Whether the remote replica's branch is more up-to-date than ours.
-        let updated;
-
-        if let Some(old_node) = nodes.get(&proof.writer_id) {
+        let uptodate = nodes.values().all(|old_node| {
             match proof
                 .version_vector
                 .partial_cmp(&old_node.proof.version_vector)
             {
-                Some(Ordering::Greater) => {
-                    create = true;
-                    updated = true;
-                }
-                Some(Ordering::Equal) => {
-                    create = false;
-                    updated = !old_node
-                        .summary
-                        .is_up_to_date_with(&summary)
-                        .unwrap_or(true);
-                }
-                Some(Ordering::Less) | None => {
-                    // outdated or invalid
-                    create = false;
-                    updated = false;
-                }
+                Some(Ordering::Greater) => true,
+                Some(Ordering::Equal) => !old_node
+                    .summary
+                    .is_up_to_date_with(&summary)
+                    .unwrap_or(true),
+                Some(Ordering::Less) => false,
+                None => proof.writer_id != old_node.proof.writer_id,
             }
-        } else {
-            create = true;
-            updated = proof.hash != *EMPTY_INNER_HASH;
-        };
+        });
 
-        if create {
+        if uptodate {
             let hash = proof.hash;
 
             match RootNode::create(&mut conn, proof, Summary::INCOMPLETE).await {
@@ -190,9 +166,11 @@ impl Index {
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }
-        }
 
-        Ok(updated)
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Receive inner nodes from other replica and store them into the db.

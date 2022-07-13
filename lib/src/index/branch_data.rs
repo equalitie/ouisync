@@ -41,8 +41,19 @@ impl BranchData {
         notify_tx: broadcast::Sender<Event>,
     ) -> Result<Self> {
         use super::node::Summary;
+        use crate::index::EMPTY_INNER_HASH;
 
-        RootNode::create(conn, Proof::first(writer_id, write_keys), Summary::FULL).await?;
+        RootNode::create(
+            conn,
+            Proof::new(
+                writer_id,
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                write_keys,
+            ),
+            Summary::FULL,
+        )
+        .await?;
 
         Ok(Self::new(writer_id, notify_tx))
     }

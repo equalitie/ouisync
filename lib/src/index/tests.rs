@@ -18,7 +18,12 @@ async fn receive_valid_root_node() {
     let remote_id = PublicKey::random();
 
     index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -37,7 +42,13 @@ async fn receive_valid_root_node() {
     // Receive root node from the remote replica.
     index
         .receive_root_node(
-            Proof::first(remote_id, &write_keys).into(),
+            Proof::new(
+                remote_id,
+                VersionVector::first(remote_id),
+                *EMPTY_INNER_HASH,
+                &write_keys,
+            )
+            .into(),
             Summary::INCOMPLETE,
         )
         .await
@@ -63,7 +74,12 @@ async fn receive_root_node_with_invalid_proof() {
     let remote_id = PublicKey::random();
 
     index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -71,13 +87,57 @@ async fn receive_root_node_with_invalid_proof() {
     let invalid_write_keys = Keypair::random();
     let result = index
         .receive_root_node(
-            Proof::first(remote_id, &invalid_write_keys).into(),
+            Proof::new(
+                remote_id,
+                VersionVector::first(remote_id),
+                *EMPTY_INNER_HASH,
+                &invalid_write_keys,
+            )
+            .into(),
             Summary::INCOMPLETE,
         )
         .await;
     assert_matches!(result, Err(ReceiveError::InvalidProof));
 
     // The invalid root was not written to the db.
+    let mut conn = index.pool.acquire().await.unwrap();
+    assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_root_node_with_empty_version_vector() {
+    let (index, write_keys) = setup().await;
+
+    let local_id = PublicKey::random();
+    let remote_id = PublicKey::random();
+
+    index
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
+        .await
+        .unwrap();
+
+    index
+        .receive_root_node(
+            Proof::new(
+                remote_id,
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                &write_keys,
+            )
+            .into(),
+            Summary::INCOMPLETE,
+        )
+        .await
+        .unwrap();
+
     let mut conn = index.pool.acquire().await.unwrap();
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
@@ -93,7 +153,12 @@ async fn receive_duplicate_root_node() {
     let remote_id = PublicKey::random();
 
     index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -135,7 +200,12 @@ async fn receive_root_node_with_existing_hash() {
     let remote_id = PublicKey::generate(&mut rng);
 
     let local_branch = index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -193,7 +263,12 @@ async fn receive_valid_child_nodes() {
     let remote_id = PublicKey::random();
 
     index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -253,7 +328,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
     let local_id = PublicKey::random();
 
     index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 
@@ -298,7 +378,12 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let local_id = PublicKey::generate(&mut rng);
     store
         .index
-        .create_branch(Proof::first(local_id, &write_keys))
+        .create_branch(Proof::new(
+            local_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            &write_keys,
+        ))
         .await
         .unwrap();
 

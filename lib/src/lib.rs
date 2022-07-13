@@ -6,7 +6,6 @@ mod macros;
 
 pub mod crypto;
 pub mod db;
-pub mod debug_printer;
 pub mod device_id;
 pub mod network;
 pub mod path;
@@ -19,6 +18,7 @@ mod block;
 mod branch;
 mod config;
 mod deadlock;
+mod debug;
 mod directory;
 mod error;
 mod event;
@@ -47,6 +47,7 @@ pub use self::{
     block::BLOCK_SIZE,
     branch::Branch,
     config::ConfigStore,
+    debug::DebugPrinter,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     event::BranchChangedReceiver,

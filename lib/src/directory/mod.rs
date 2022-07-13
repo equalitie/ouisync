@@ -18,7 +18,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    debug_printer::DebugPrinter,
+    debug::DebugPrinter,
     error::{Error, Result},
     file::File,
     locator::Locator,
@@ -26,7 +26,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use sqlx::Connection;
-use std::mem;
+use std::{fmt, mem};
 
 /// What to do with the existing entry when inserting a new entry in its place.
 pub(crate) enum OverwriteStrategy {
@@ -195,20 +195,26 @@ impl Directory {
         I: Iterator<Item = VersionVector>,
     {
         let mut tx = conn.begin().await?;
-
         let mut content = self.load(&mut tx).await?;
+        let mut changed = false;
 
         for tombstone in version_vectors.map(EntryData::tombstone) {
             match content.insert(self.branch(), name.clone(), tombstone) {
-                Ok(()) => {}
+                Ok(()) => {
+                    changed = true;
+                }
                 Err(Error::EntryExists) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        self.save(&mut tx, &content, OverwriteStrategy::Remove)
-            .await?;
-        self.commit(tx, content, &VersionVector::new()).await
+        if changed {
+            self.save(&mut tx, &content, OverwriteStrategy::Remove)
+                .await?;
+            self.commit(tx, content, &VersionVector::new()).await
+        } else {
+            Ok(())
+        }
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -602,6 +608,23 @@ impl Directory {
         }
 
         self.branch().data().notify();
+    }
+}
+
+impl fmt::Debug for Directory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Directory")
+            .field(
+                "name",
+                &self
+                    .parent
+                    .as_ref()
+                    .map(|parent| parent.entry_name())
+                    .unwrap_or("/"),
+            )
+            .field("branch", self.branch().id())
+            .field("blob_id", self.locator().blob_id())
+            .finish()
     }
 }
 

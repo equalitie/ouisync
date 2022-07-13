@@ -1,12 +1,12 @@
 use super::{utils, Shared};
 use crate::{
     branch::Branch,
+    debug::instrument,
     error::{Error, Result},
     event::{EventScope, IgnoreScopeReceiver},
     joint_directory::JointDirectory,
 };
-use log::Level;
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc, oneshot},
@@ -135,12 +135,12 @@ impl Inner {
                         Err(RecvError::Closed) => break,
                     }
                 }
-                _ = instrument(self.merge(), "merge") => (),
+                result = self.merge() => result.unwrap_or(()),
             }
 
             // Run the remaining jobs without interruption
-            instrument(self.prune(), "prune").await;
-            instrument(self.scan(scan::Mode::RequireAndCollect), "scan").await;
+            self.prune().await.unwrap_or(());
+            self.scan(scan::Mode::RequireAndCollect).await.unwrap_or(());
 
             wait = true;
         }
@@ -160,16 +160,16 @@ impl Inner {
             return Ok(());
         };
 
-        // Run the merge within `event_scope` so we can distinguish the events triggered by the
-        // merge itself from any other events and not interrupt the merge by the event it itself
-        // triggered.
-        self.event_scope
-            .apply(merge::run(&self.shared, local_branch))
-            .await
+        instrument(
+            "merge",
+            self.event_scope
+                .apply(merge::run(&self.shared, local_branch)),
+        )
+        .await
     }
 
     async fn prune(&self) -> Result<()> {
-        prune::run(&self.shared).await
+        instrument("prune", self.event_scope.apply(prune::run(&self.shared))).await
     }
 
     async fn scan(&self, mode: scan::Mode) -> Result<()> {
@@ -177,36 +177,13 @@ impl Inner {
             return Ok(());
         }
 
-        scan::run(&self.shared, mode).await
+        instrument("scan", scan::run(&self.shared, mode)).await
     }
 
     async fn collect(&self) -> Result<()> {
         self.prune().await?;
         self.scan(scan::Mode::Collect).await?;
         Ok(())
-    }
-}
-
-async fn instrument<F: Future<Output = Result<()>>>(task: F, label: &str) {
-    log::trace!("{} started", label);
-
-    match task.await {
-        Ok(()) => {
-            log::trace!("{} completed", label);
-        }
-        Err(error) => {
-            // `BlockNotFound` means that a block is not downloaded yet. This error
-            // is harmless because the job will be attempted again on the next
-            // change notification. We reduce the log severity for them to avoid
-            // log spam.
-            let level = if let Error::BlockNotFound(_) = error {
-                Level::Trace
-            } else {
-                Level::Error
-            };
-
-            log::log!(level, "{} failed: {:?}", label, error);
-        }
     }
 }
 
@@ -220,6 +197,7 @@ mod merge {
 
         for branch in branches {
             let mut conn = shared.store.db().acquire().await?;
+
             match branch.open_root(&mut conn).await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
@@ -257,6 +235,7 @@ mod prune {
             // Don't remove branches that are in use. We get notified when they stop being used
             // so we can try again.
             if branch.is_any_blob_open() {
+                log::trace!("not removing outdated branch {:?} - in use", branch.id());
                 continue;
             }
 

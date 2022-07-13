@@ -1,4 +1,3 @@
-use super::node::EMPTY_INNER_HASH;
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey, Signature},
@@ -45,17 +44,6 @@ impl Proof {
             hash,
             signature,
         })
-    }
-
-    /// Proof for the first snapshot of a newly created branch.
-    pub fn first(writer_id: PublicKey, write_keys: &Keypair) -> Self {
-        Self::new(
-            writer_id,
-            // TODO: shouldn't we start with `VersionVector::first(writer_id)` ?
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            write_keys,
-        )
     }
 
     pub fn into_version_vector(self) -> VersionVector {

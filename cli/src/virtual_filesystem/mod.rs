@@ -17,7 +17,7 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
-    debug_printer::DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
+    DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
     MissingVersionStrategy, Repository, Result,
 };
 use std::{
