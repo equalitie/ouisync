@@ -6,7 +6,7 @@ use crate::{
     branch::Branch,
     crypto::sign::PublicKey,
     db,
-    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef, TombstoneRef},
+    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -295,7 +295,7 @@ impl JointDirectory {
 
         for (name, mut merge) in self.merge_entries() {
             let dir = merge.take_dir();
-            let tombstones = mem::take(&mut merge.tombstones);
+            let tombstone_vv = merge.tombstone.take();
             let mut overwritten = false;
 
             for entry in merge {
@@ -323,17 +323,13 @@ impl JointDirectory {
                 }
             }
 
-            // If the the entry has not been overwritten by a fork, then we still need to check
-            // whether some of the tombstones aren't "happened after" our local version of the file
-            // entry and remove it if so.
-            if !overwritten && !tombstones.is_empty() {
-                check_for_removal.insert(
-                    name.to_string(),
-                    tombstones
-                        .iter()
-                        .map(|entry| entry.version_vector().clone())
-                        .collect::<Vec<_>>(),
-                );
+            // If the entry has not been overwritten by a fork, then we still need to check
+            // whether a tombstone isn't "happened after" our local version of the file entry and
+            // remove it if so.
+            if !overwritten {
+                if let Some(tombstone_vv) = tombstone_vv {
+                    check_for_removal.insert(name.to_string(), tombstone_vv.into_owned());
+                }
             }
 
             if let Some(dir) = dir {
@@ -352,12 +348,10 @@ impl JointDirectory {
         let local_version = self.local_version_mut().unwrap();
         local_version.refresh(&mut conn).await?;
 
-        for (name, tombstones) in check_for_removal {
-            for vv in tombstones {
-                local_version
-                    .remove_entry(&mut conn, &name, local_branch.id(), vv)
-                    .await?;
-            }
+        for (name, tombstone_vv) in check_for_removal {
+            local_version
+                .remove_entry(&mut conn, &name, local_branch.id(), tombstone_vv)
+                .await?;
         }
 
         if bump {
@@ -630,7 +624,7 @@ struct Merge<'a> {
     // when not needed.
     files: VecDeque<FileRef<'a>>,
     directories: Vec<DirectoryRef<'a>>,
-    tombstones: Vec<TombstoneRef<'a>>,
+    tombstone: Option<Cow<'a, VersionVector>>,
     needs_disambiguation: bool,
     local_branch: Option<&'a Branch>,
 }
@@ -644,7 +638,7 @@ impl<'a> Merge<'a> {
     {
         let mut files = VecDeque::new();
         let mut directories = vec![];
-        let mut tombstones = vec![];
+        let mut tombstone: Option<Cow<VersionVector>> = None;
 
         // Note that doing this will remove files that have been removed by tombstones as well.
         let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
@@ -653,7 +647,16 @@ impl<'a> Merge<'a> {
             match entry {
                 EntryRef::File(file) => files.push_back(file),
                 EntryRef::Directory(dir) => directories.push(dir),
-                EntryRef::Tombstone(tombstone) => tombstones.push(tombstone),
+                EntryRef::Tombstone(new_tombstone) => {
+                    let new_tombstone = if let Some(mut old_tombstone) = tombstone.take() {
+                        old_tombstone.to_mut().merge(new_tombstone.version_vector());
+                        old_tombstone
+                    } else {
+                        Cow::Borrowed(new_tombstone.version_vector())
+                    };
+
+                    tombstone = Some(new_tombstone);
+                }
             }
         }
 
@@ -662,7 +665,7 @@ impl<'a> Merge<'a> {
         Self {
             files,
             directories,
-            tombstones,
+            tombstone,
             needs_disambiguation,
             local_branch,
         }
