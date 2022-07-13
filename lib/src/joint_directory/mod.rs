@@ -331,7 +331,7 @@ impl JointDirectory {
                     name.to_string(),
                     tombstones
                         .iter()
-                        .map(|t| t.version_vector().clone())
+                        .map(|entry| entry.version_vector().clone())
                         .collect::<Vec<_>>(),
                 );
             }
@@ -352,10 +352,12 @@ impl JointDirectory {
         let local_version = self.local_version_mut().unwrap();
         local_version.refresh(&mut conn).await?;
 
-        for (name, mut tombstones) in check_for_removal {
-            local_version
-                .try_remove_entry_with(&mut conn, name, tombstones.drain(..))
-                .await?;
+        for (name, tombstones) in check_for_removal {
+            for vv in tombstones {
+                local_version
+                    .remove_entry(&mut conn, &name, local_branch.id(), vv)
+                    .await?;
+            }
         }
 
         if bump {

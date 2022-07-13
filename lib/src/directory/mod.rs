@@ -179,48 +179,22 @@ impl Directory {
         vv: VersionVector,
     ) -> Result<()> {
         let mut tx = conn.begin().await?;
-        let content = self
+
+        let content = match self
             .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
-            .await?;
+            .await
+        {
+            Ok(content) => content,
+            // `EntryExists` in this case means the tombstone already exists which means the entry
+            // is already removed.
+            Err(Error::EntryExists) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+
         tx.commit().await?;
         self.finalize(content);
 
         Ok(())
-    }
-
-    /// For each version vector V in the `version_vectors` argument, if the entry corresponding to
-    /// `name` is "happened before" V, then replace the entry with a tombstone with V as its
-    /// version vector.
-    pub(crate) async fn try_remove_entry_with<'a, I>(
-        &mut self,
-        conn: &mut db::Connection,
-        name: String,
-        version_vectors: I,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = VersionVector>,
-    {
-        let mut tx = conn.begin().await?;
-        let mut content = self.load(&mut tx).await?;
-        let mut changed = false;
-
-        for tombstone in version_vectors.map(EntryData::tombstone) {
-            match content.insert(self.branch(), name.clone(), tombstone) {
-                Ok(()) => {
-                    changed = true;
-                }
-                Err(Error::EntryExists) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
-        if changed {
-            self.save(&mut tx, &content, OverwriteStrategy::Remove)
-                .await?;
-            self.commit(tx, content, &VersionVector::new()).await
-        } else {
-            Ok(())
-        }
     }
 
     /// Adds a tombstone to where the entry is being moved from and creates a new entry at the
@@ -499,22 +473,20 @@ impl Directory {
             }
         }
 
-        let new_data = if branch_id == self.branch().id() {
-            EntryData::tombstone(vv.incremented(*self.branch().id()))
-        } else {
-            match self.lookup(name) {
-                Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
+        let new_data = match self.lookup(name) {
+            Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
+                if branch_id == self.branch().id() {
+                    EntryData::tombstone(vv.incremented(*self.branch().id()))
+                } else {
                     let mut new_data = old_entry.clone_data();
                     new_data.version_vector_mut().merge(&vv);
                     new_data.version_vector_mut().increment(*self.branch().id());
                     new_data
                 }
-                Ok(EntryRef::Tombstone(_)) => EntryData::tombstone(vv),
-                Err(Error::EntryNotFound) => {
-                    EntryData::tombstone(vv.incremented(*self.branch().id()))
-                }
-                Err(e) => return Err(e),
             }
+            Ok(EntryRef::Tombstone(_)) => EntryData::tombstone(vv),
+            Err(Error::EntryNotFound) => EntryData::tombstone(vv.incremented(*self.branch().id())),
+            Err(e) => return Err(e),
         };
 
         self.begin_insert_entry(tx, name.to_owned(), new_data, overwrite)
