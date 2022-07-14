@@ -219,7 +219,9 @@ impl Repository {
         let monitor = parent_monitor.make_child(hex::encode(index.repository_id().as_ref()));
 
         let monitored = Arc::new(MonitoredValues {
-            index_request_count: monitor.make_value("index_request_count".into(), 0),
+            index_requests_inflight: monitor.make_value("index_requests_inflight".into(), 0),
+            block_requests_inflight: monitor.make_value("block_requests_inflight".into(), 0),
+            total_request_cummulative: monitor.make_value("total_request_cummulative".into(), 0),
         });
 
         let store = Store {
@@ -613,7 +615,9 @@ impl Repository {
 pub(crate) struct MonitoredValues {
     // This indicates how many requests for index nodes are currently in flight.  It is used by the
     // UI to indicate that the index is being synchronized.
-    pub index_request_count: MonitoredValue<usize>,
+    pub index_requests_inflight: MonitoredValue<usize>,
+    pub block_requests_inflight: MonitoredValue<usize>,
+    pub total_request_cummulative: MonitoredValue<usize>,
 }
 
 struct Shared {

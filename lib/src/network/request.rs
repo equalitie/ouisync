@@ -35,16 +35,11 @@ impl PendingRequests {
         match self.map.entry(request) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
-                if request.is_index_node_request() {
-                    if let Some(monitored) = self.monitored.upgrade() {
-                        *monitored.index_request_count.get() += 1;
-                    }
-                }
-
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
                     _permit: permit,
                 });
+                self.request_added(&request);
                 true
             }
         }
@@ -52,11 +47,7 @@ impl PendingRequests {
 
     pub fn remove(&mut self, request: &Request) -> bool {
         if self.map.remove(request).is_some() {
-            if request.is_index_node_request() {
-                if let Some(monitored) = self.monitored.upgrade() {
-                    *monitored.index_request_count.get() -= 1;
-                }
-            }
+            self.request_removed(request);
             true
         } else {
             false
@@ -80,17 +71,30 @@ impl PendingRequests {
             future::pending().await
         }
     }
+
+    fn request_added(&self, request: &Request) {
+        if let Some(monitored) = self.monitored.upgrade() {
+            match request {
+                Request::ChildNodes(_) => *monitored.index_requests_inflight.get() += 1,
+                Request::Block(_) => *monitored.block_requests_inflight.get() += 1,
+            }
+        }
+    }
+
+    fn request_removed(&self, request: &Request) {
+        if let Some(monitored) = self.monitored.upgrade() {
+            match request {
+                Request::ChildNodes(_) => *monitored.index_requests_inflight.get() -= 1,
+                Request::Block(_) => *monitored.block_requests_inflight.get() -= 1,
+            }
+        }
+    }
 }
 
 impl Drop for PendingRequests {
     fn drop(&mut self) {
-        if let Some(monitored) = self.monitored.upgrade() {
-            let count = self
-                .map
-                .keys()
-                .filter(|request| request.is_index_node_request())
-                .count();
-            *monitored.index_request_count.get() -= count;
+        for request in self.map.keys() {
+            self.request_removed(request);
         }
     }
 }
