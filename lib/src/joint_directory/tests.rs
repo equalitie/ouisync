@@ -157,10 +157,11 @@ async fn conflict_directories() {
         .collect();
     assert_eq!(directories.len(), 1);
     assert_eq!(directories[0].name(), "dir");
+    assert_eq!(directories[0].unique_name(), "dir");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn conflict_file_and_directory() {
+async fn conflict_file_and_single_version_directory() {
     let (pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
@@ -196,18 +197,74 @@ async fn conflict_file_and_directory() {
         .unwrap();
 
     assert_eq!(dir_entry.name(), "config");
-    assert_eq!(dir_entry.unique_name(), "config");
+    assert_eq!(
+        &dir_entry.unique_name(),
+        &conflict::create_unique_name("config", branches[1].id())
+    );
 
     let entries = root.lookup("config");
     assert_eq!(entries.count(), 2);
 
-    let entry = root.lookup_unique("config").unwrap();
-    assert_eq!(entry.entry_type(), EntryType::Directory);
+    assert_matches!(root.lookup_unique("config"), Err(Error::AmbiguousEntry));
 
     let name = conflict::create_unique_name("config", branches[0].id());
     let entry = root.lookup_unique(&name).unwrap();
     assert_eq!(entry.entry_type(), EntryType::File);
     assert_eq!(entry.file().unwrap().branch().id(), branches[0].id());
+
+    let name = conflict::create_unique_name("config", branches[1].id());
+    let entry = root.lookup_unique(&name).unwrap();
+    assert_eq!(entry.entry_type(), EntryType::Directory);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conflict_file_and_multi_version_directory() {
+    let (pool, mut branches) = setup(3).await;
+    let mut conn = pool.acquire().await.unwrap();
+
+    // Sort the branches by their ids because directory disambiguator is the lexicographically
+    // first branch id.
+    branches.sort_by(|lhs, rhs| lhs.id().cmp(rhs.id()));
+
+    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    create_file(&mut conn, &mut root0, "config", &[], &branches[0]).await;
+
+    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    root1
+        .create_directory(&mut conn, "config".to_owned())
+        .await
+        .unwrap();
+
+    let mut root2 = branches[2].open_or_create_root(&mut conn).await.unwrap();
+    root2
+        .create_directory(&mut conn, "config".to_owned())
+        .await
+        .unwrap();
+
+    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1, root2]);
+
+    let entries: Vec<_> = root.entries().collect();
+    assert_eq!(entries.len(), 2);
+
+    let file_entry = entries
+        .iter()
+        .find(|entry| matches!(entry, JointEntryRef::File(_)))
+        .unwrap();
+
+    assert_eq!(
+        &file_entry.unique_name(),
+        &conflict::create_unique_name("config", branches[0].id())
+    );
+
+    let dir_entry = entries
+        .iter()
+        .find(|entry| matches!(entry, JointEntryRef::Directory(_)))
+        .unwrap();
+
+    assert_eq!(
+        &dir_entry.unique_name(),
+        &conflict::create_unique_name("config", branches[1].id())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

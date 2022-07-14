@@ -92,22 +92,14 @@ impl JointDirectory {
     ///   to unambiguously lookup a directory even in the presence of conflicting files.
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
         // First try exact match as it is more common.
-        let mut last_file = None;
-
-        for entry in
-            Merge::new(self.entry_versions(name), self.local_branch.as_ref()).ignore_tombstones()
-        {
-            match entry {
-                JointEntryRef::Directory(_) => return Ok(entry),
-                JointEntryRef::File(_) if last_file.is_none() => {
-                    last_file = Some(entry);
-                }
-                JointEntryRef::File(_) => return Err(Error::AmbiguousEntry),
+        let mut entries =
+            Merge::new(self.entry_versions(name), self.local_branch.as_ref()).ignore_tombstones();
+        if let Some(entry) = entries.next() {
+            if entries.next().is_none() {
+                return Ok(entry);
+            } else {
+                return Err(Error::AmbiguousEntry);
             }
-        }
-
-        if let Some(entry) = last_file {
-            return Ok(entry);
         }
 
         // If not found, extract the disambiguator and try to lookup an entry whose branch id
@@ -115,30 +107,14 @@ impl JointDirectory {
         let (name, branch_id_prefix) = conflict::parse_unique_name(name);
         let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
-        let entries = self
-            .entry_versions(name)
-            .filter_map(|entry| entry.file().ok())
-            .filter(|entry| entry.branch().id().starts_with(&branch_id_prefix));
-
-        // At this point, `entries` contains files from only a single author. It may still be the
-        // case however that there are multiple versions of the entry because each branch may
-        // contain one.
-        // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
-        // no single author/replica can create concurrent versions of an entry.
-        //
-        // TODO: This piece of code is outdated. The above expression should always return at most
-        // one entry.
-        let mut entries =
-            versioned::keep_maximal(entries, self.local_branch.as_ref().map(Branch::id))
-                .into_iter();
+        let mut entries = Merge::new(self.entry_versions(name), self.local_branch.as_ref())
+            .ignore_tombstones()
+            .filter(|entry| entry.first_branch().id().starts_with(&branch_id_prefix));
 
         let first = entries.next().ok_or(Error::EntryNotFound)?;
 
         if entries.next().is_none() {
-            Ok(JointEntryRef::File(JointFileRef {
-                file: first,
-                needs_disambiguation: true,
-            }))
+            Ok(first)
         } else {
             Err(Error::AmbiguousEntry)
         }
@@ -228,7 +204,7 @@ impl JointDirectory {
             .map(|entry| {
                 let name = entry.name().to_owned();
                 let branch_id = match &entry {
-                    JointEntryRef::File(entry) => *entry.branch_id(),
+                    JointEntryRef::File(entry) => *entry.branch().id(),
                     JointEntryRef::Directory(_) => *local_branch.id(),
                 };
                 let vv = entry.version_vector().into_owned();
@@ -435,7 +411,7 @@ impl<'a> JointEntryRef<'a> {
     pub fn unique_name(&self) -> Cow<'a, str> {
         match self {
             Self::File(r) => r.unique_name(),
-            Self::Directory(r) => Cow::from(r.name()),
+            Self::Directory(r) => r.unique_name(),
         }
     }
 
@@ -464,6 +440,13 @@ impl<'a> JointEntryRef<'a> {
         match self {
             Self::Directory(r) => Ok(r),
             Self::File(_) => Err(Error::EntryIsFile),
+        }
+    }
+
+    fn first_branch(&self) -> &Branch {
+        match self {
+            Self::File(r) => r.branch(),
+            Self::Directory(r) => r.first_version().branch(),
         }
     }
 }
@@ -498,8 +481,8 @@ impl<'a> JointFileRef<'a> {
         self.file.version_vector()
     }
 
-    pub fn branch_id(&self) -> &PublicKey {
-        self.file.branch().id()
+    pub fn branch(&self) -> &Branch {
+        self.file.branch()
     }
 
     pub fn parent(&self) -> &Directory {
@@ -514,25 +497,39 @@ impl<'a> JointFileRef<'a> {
 pub struct JointDirectoryRef<'a> {
     versions: Vec<DirectoryRef<'a>>,
     local_branch: Option<&'a Branch>,
+    needs_disambiguation: bool,
 }
 
 impl<'a> JointDirectoryRef<'a> {
-    fn new(versions: Vec<DirectoryRef<'a>>, local_branch: Option<&'a Branch>) -> Option<Self> {
+    fn new(
+        versions: Vec<DirectoryRef<'a>>,
+        local_branch: Option<&'a Branch>,
+        needs_disambiguation: bool,
+    ) -> Option<Self> {
         if versions.is_empty() {
             None
         } else {
             Some(Self {
                 versions,
                 local_branch,
+                needs_disambiguation,
             })
         }
     }
 
     pub fn name(&self) -> &'a str {
-        self.versions
-            .first()
-            .expect("joint directory must contain at least one directory")
-            .name()
+        self.first_version().name()
+    }
+
+    pub fn unique_name(&self) -> Cow<'a, str> {
+        if self.needs_disambiguation {
+            Cow::from(conflict::create_unique_name(
+                self.name(),
+                self.first_version().branch().id(),
+            ))
+        } else {
+            Cow::from(self.name())
+        }
     }
 
     pub fn version_vector(&self) -> VersionVector {
@@ -591,6 +588,12 @@ impl<'a> JointDirectoryRef<'a> {
     pub(crate) fn versions(&self) -> &[DirectoryRef] {
         &self.versions
     }
+
+    fn first_version(&self) -> &DirectoryRef<'a> {
+        self.versions
+            .first()
+            .expect("joint directory must contain at least one directory")
+    }
 }
 
 impl fmt::Debug for JointDirectoryRef<'_> {
@@ -637,9 +640,11 @@ impl<'a> Iterator for Existing<'a> {
     type Item = JointEntryRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(dir) =
-            JointDirectoryRef::new(mem::take(&mut self.directories), self.local_branch)
-        {
+        if let Some(dir) = JointDirectoryRef::new(
+            mem::take(&mut self.directories),
+            self.local_branch,
+            self.needs_disambiguation,
+        ) {
             return Some(JointEntryRef::Directory(dir));
         }
 
