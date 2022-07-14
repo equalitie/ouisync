@@ -62,7 +62,7 @@ impl AccessSecrets {
         }
     }
 
-    pub(crate) fn id(&self) -> &RepositoryId {
+    pub fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } | Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }) => id,
         }

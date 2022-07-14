@@ -129,6 +129,17 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>
     });
 }
 
+/// Return the RepositoryId of the repository in the low hex format.
+/// User is responsible for deallocating the returned string.
+#[no_mangle]
+pub unsafe extern "C" fn repository_low_hex_id(
+    handle: SharedHandle<RepositoryHolder>,
+) -> *const c_char
+{
+    let holder = handle.get();
+    utils::str_to_ptr(&hex::encode(holder.repository.secrets().id().as_ref()))
+}
+
 /// Returns the type of repository entry (file, directory, ...).
 /// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
 #[no_mangle]
