@@ -54,39 +54,45 @@ async fn conflict_independent_files() {
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
 
-    let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
-    assert_eq!(files.len(), 2);
+    let entries: Vec<_> = root.entries().collect();
+    assert_eq!(entries.len(), 2);
 
-    for branch in &branches {
-        let file = files
-            .iter()
-            .find(|file| file.branch().id() == branch.id())
-            .unwrap();
-        assert_eq!(file.name(), "file.txt");
+    let file0 = entries
+        .iter()
+        .find(|file| file.first_branch().id() == branches[0].id())
+        .unwrap();
 
-        assert_matches!(
-            root.lookup_unique(&conflict::create_unique_name("file.txt", branch.id()))
-                .unwrap(),
-            JointEntryRef::File(file_ref) => {
-                assert_eq!(file_ref.name(), file.name());
-                assert!(file_ref.needs_disambiguation);
-            }
-        );
-    }
+    let unique_name = conflict::create_unique_name("file.txt", branches[0].id());
 
-    let files: Vec<_> = root
-        .lookup("file.txt")
-        .map(|entry| entry.file().unwrap())
-        .collect();
-    assert_eq!(files.len(), 2);
+    assert_eq!(file0.name(), "file.txt");
+    assert_eq!(&file0.unique_name(), &unique_name);
 
-    for branch in &branches {
-        let file = files
-            .iter()
-            .find(|file| file.branch().id() == branch.id())
-            .unwrap();
-        assert_eq!(file.name(), "file.txt");
-    }
+    let file_ref = root.lookup_unique(&unique_name).unwrap().file().unwrap();
+    assert_eq!(file_ref.name(), file0.name());
+    assert_eq!(file_ref.branch().id(), branches[0].id());
+
+    let file1 = entries
+        .iter()
+        .find(|file| file.first_branch().id() == branches[1].id())
+        .unwrap();
+
+    let unique_name = conflict::create_unique_name("file.txt", branches[1].id());
+
+    assert_eq!(file1.name(), "file.txt");
+    assert_eq!(&file1.unique_name(), &unique_name);
+
+    let file_ref = root.lookup_unique(&unique_name).unwrap().file().unwrap();
+    assert_eq!(file_ref.name(), file1.name());
+    assert_eq!(file_ref.branch().id(), branches[1].id());
+
+    let entries: Vec<_> = root.lookup("file.txt").collect();
+    assert_eq!(entries.len(), 2);
+    assert!(entries
+        .iter()
+        .any(|entry| entry.first_branch().id() == branches[0].id()),);
+    assert!(entries
+        .iter()
+        .any(|entry| entry.first_branch().id() == branches[1].id()));
 
     assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
 
@@ -117,16 +123,19 @@ async fn conflict_forked_files() {
 
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
 
-    let files: Vec<_> = root.entries().map(|entry| entry.file().unwrap()).collect();
-
-    assert_eq!(files.len(), 2);
+    let entries: Vec<_> = root.entries().collect();
+    assert_eq!(entries.len(), 2);
 
     for branch in &branches {
-        let file = files
+        let file = entries
             .iter()
-            .find(|file| file.branch().id() == branch.id())
+            .find(|entry| entry.first_branch().id() == branch.id())
             .unwrap();
         assert_eq!(file.name(), "file.txt");
+        assert_eq!(
+            &file.unique_name(),
+            &conflict::create_unique_name("file.txt", branch.id())
+        );
     }
 
     assert_unique_and_ordered(2, root.entries());

@@ -300,6 +300,9 @@ fn concurrent_update() {
         check_concurrent_versions(&b.root().join(file_name), &[&content_1a, &content_1b])
     });
 
+    // This part of the test currently fails. See https://github.com/equalitie/ouisync/issues/50
+    // for more details.
+
     /*
     let content_2a: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
 
