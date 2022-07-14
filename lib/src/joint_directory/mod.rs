@@ -682,19 +682,18 @@ impl<'a> Merge<'a> {
             }
         }
 
+        let needs_disambiguation = files.len() + if directories.is_empty() { 0 } else { 1 } > 1;
+
         match tombstone {
             Some(tombstone) if files.is_empty() && directories.is_empty() => {
                 Self::Tombstone(tombstone)
             }
-            Some(_) | None => {
-                let needs_disambiguation = files.len() > 1;
-                Self::Existing(Existing {
-                    files,
-                    directories,
-                    needs_disambiguation,
-                    local_branch,
-                })
-            }
+            Some(_) | None => Self::Existing(Existing {
+                files,
+                directories,
+                needs_disambiguation,
+                local_branch,
+            }),
         }
     }
 

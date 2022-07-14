@@ -178,17 +178,25 @@ async fn conflict_file_and_directory() {
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
-    assert_eq!(
-        entries.iter().map(|entry| entry.name()).collect::<Vec<_>>(),
-        ["config", "config"]
-    );
-    assert!(entries.iter().any(|entry| match entry {
-        JointEntryRef::File(file) => file.inner().branch().id() == branches[0].id(),
-        JointEntryRef::Directory(_) => false,
-    }));
-    assert!(entries
+
+    let file_entry = entries
         .iter()
-        .any(|entry| entry.entry_type() == EntryType::Directory));
+        .find(|entry| matches!(entry, JointEntryRef::File(_)))
+        .unwrap();
+
+    assert_eq!(file_entry.name(), "config");
+    assert_eq!(
+        &file_entry.unique_name(),
+        &conflict::create_unique_name("config", branches[0].id())
+    );
+
+    let dir_entry = entries
+        .iter()
+        .find(|entry| matches!(entry, JointEntryRef::Directory(_)))
+        .unwrap();
+
+    assert_eq!(dir_entry.name(), "config");
+    assert_eq!(dir_entry.unique_name(), "config");
 
     let entries = root.lookup("config");
     assert_eq!(entries.count(), 2);
