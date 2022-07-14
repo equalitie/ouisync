@@ -175,6 +175,59 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn overwrite_block() {
+        let mut conn = setup().await.acquire().await.unwrap();
+        let mut rng = rand::thread_rng();
+
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
+        let (notify_tx, _) = broadcast::channel(1);
+
+        let branch = BranchData::create(
+            &mut conn,
+            PublicKey::random(),
+            &write_keys,
+            notify_tx.clone(),
+        )
+        .await
+        .unwrap();
+
+        let locator = Locator::head(rng.gen());
+        let locator = locator.encode(&read_key);
+
+        let mut buffer = vec![0; BLOCK_SIZE];
+
+        rng.fill(&mut buffer[..]);
+        let id0 = BlockId::from_content(&buffer);
+        block::write(&mut conn, &id0, &buffer, &rng.gen())
+            .await
+            .unwrap();
+
+        branch
+            .insert(&mut conn, &id0, &locator, &write_keys)
+            .await
+            .unwrap();
+
+        assert!(block::exists(&mut conn, &id0).await.unwrap());
+        assert_eq!(block::count(&mut conn).await.unwrap(), 1);
+
+        rng.fill(&mut buffer[..]);
+        let id1 = BlockId::from_content(&buffer);
+        block::write(&mut conn, &id1, &buffer, &rng.gen())
+            .await
+            .unwrap();
+
+        branch
+            .insert(&mut conn, &id1, &locator, &write_keys)
+            .await
+            .unwrap();
+
+        assert!(!block::exists(&mut conn, &id0).await.unwrap());
+        assert!(block::exists(&mut conn, &id1).await.unwrap());
+        assert_eq!(block::count(&mut conn).await.unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn receive_valid_blocks() {
         let pool = setup().await;
 
