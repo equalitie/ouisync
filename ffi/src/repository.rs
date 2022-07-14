@@ -134,8 +134,7 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>
 #[no_mangle]
 pub unsafe extern "C" fn repository_low_hex_id(
     handle: SharedHandle<RepositoryHolder>,
-) -> *const c_char
-{
+) -> *const c_char {
     let holder = handle.get();
     utils::str_to_ptr(&hex::encode(holder.repository.secrets().id().as_ref()))
 }

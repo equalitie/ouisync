@@ -4,14 +4,17 @@ use super::{
     request::PendingRequests,
 };
 use crate::{
-    repository::MonitoredValues,
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    repository::MonitoredValues,
     store::Store,
 };
-use std::{collections::VecDeque, sync::{Arc, Weak}};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Weak},
+};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -27,7 +30,7 @@ pub(crate) struct Client {
     recv_queue: VecDeque<Success>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
-    monitored: Weak<MonitoredValues>
+    monitored: Weak<MonitoredValues>,
 }
 
 impl Client {
