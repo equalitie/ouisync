@@ -146,7 +146,7 @@ type ContentV1 = BTreeMap<String, EntryData>;
 type ContentV0 = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
 
 fn upgrade_from_v0(v0: ContentV0) -> ContentV1 {
-    use crate::versioned_file_name;
+    use crate::conflict;
 
     let mut v1 = BTreeMap::new();
 
@@ -160,7 +160,7 @@ fn upgrade_from_v0(v0: ContentV0) -> ContentV1 {
             // If there is more than one version, create unique name for each of them and insert
             // them as separate entries
             for (author_id, data) in versions {
-                v1.insert(versioned_file_name::create(&name, &author_id), data);
+                v1.insert(conflict::create_unique_name(&name, &author_id), data);
             }
         }
     }

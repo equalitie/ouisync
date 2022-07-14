@@ -436,7 +436,7 @@ impl Inner {
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
                 entry.open(&mut conn).await?.len().await,
-                Representation::File(*entry.branch_id()),
+                Representation::File(*entry.branch().id()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry
