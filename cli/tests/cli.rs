@@ -1,12 +1,14 @@
 mod utils;
 
-use anyhow::format_err;
-
 use self::utils::{check_eq, eventually, eventually_with_timeout, Bin, CountWrite, RngRead};
+use anyhow::{format_err, Result};
+use rand::{distributions::Standard, Rng};
 use std::{
+    collections::HashSet,
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Write},
     net::Ipv4Addr,
+    path::{Path, PathBuf},
     thread,
     time::Duration,
 };
@@ -240,4 +242,120 @@ fn relay() {
 
         check_eq(dst.0, size)
     });
+}
+
+#[test]
+fn concurrent_update() {
+    let a = Bin::start([], None);
+    let b = Bin::start(
+        [(Ipv4Addr::LOCALHOST, a.port()).into()],
+        Some(a.share_token()),
+    );
+
+    let file_name = "test.txt";
+    let mut rng = rand::thread_rng();
+
+    // Create a file with initial content by A
+    let content_0a: Vec<u8> = (&mut rng).sample_iter(Standard).take(32).collect();
+    fs::write(a.root().join(file_name), &content_0a).unwrap();
+
+    // Wait until B sees it
+    eventually(|| check_eq(&fs::read(b.root().join(file_name))?, &content_0a));
+
+    // Open the file by both replicas
+    let mut file_a = File::options()
+        .write(true)
+        .open(a.root().join(file_name))
+        .unwrap();
+
+    let mut file_b = File::options()
+        .write(true)
+        .open(b.root().join(file_name))
+        .unwrap();
+
+    // Write to it concurrently by both replicas
+    let content_1a: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
+    let handle_a = thread::spawn(move || {
+        file_a.write_all(&content_1a).unwrap();
+        (file_a, content_1a)
+    });
+
+    let content_1b: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
+    let handle_b = thread::spawn(move || {
+        file_b.write_all(&content_1b).unwrap();
+        (file_b, content_1b)
+    });
+
+    let (file_a, content_1a) = handle_a.join().unwrap();
+    let (file_b, content_1b) = handle_b.join().unwrap();
+
+    drop(file_a);
+    drop(file_b);
+
+    // Both replicas see two concurrent versions of the file
+    eventually(|| {
+        check_concurrent_versions(&a.root().join(file_name), &[&content_1a, &content_1b])
+    });
+    eventually(|| {
+        check_concurrent_versions(&b.root().join(file_name), &[&content_1a, &content_1b])
+    });
+
+    /*
+    let content_2a: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
+
+    // Update the file again, using the non-disambiguated filename
+    let mut file = File::options()
+        .write(true)
+        .open(a.root().join(file_name))
+        .unwrap();
+    file.write_all(&content_2a).unwrap();
+    drop(file);
+
+    // Both replicas still see two concurrent versions
+    eventually(|| {
+        check_concurrent_versions(&a.root().join(file_name), &[&content_2a, &content_1b])
+    });
+
+    eventually(|| {
+        check_concurrent_versions(&b.root().join(file_name), &[&content_2a, &content_1b])
+    });
+
+    */
+}
+
+fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> Result<()> {
+    let dir = file_path.parent().unwrap();
+
+    // Collect all entries from the directory that start with `file_path`
+    let version_paths = fs::read_dir(dir)?
+        .map(|entry| Ok(entry?.path()))
+        .filter(|entry_path| {
+            if let Ok(entry_path) = entry_path {
+                // Can't use `Path::starts_with` because that only considers whole path segments.
+                entry_path
+                    .to_str()
+                    .unwrap()
+                    .starts_with(file_path.to_str().unwrap())
+            } else {
+                true
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    check_eq(version_paths.len(), expected_contents.len())?;
+
+    // Check that for each item from `expected_contents` there is exactly one file version with
+    // that content
+    let actual_contents = version_paths
+        .into_iter()
+        .map(|path: PathBuf| fs::read(path).map_err(Into::into))
+        .collect::<Result<HashSet<_>>>()?;
+
+    for expected_content in expected_contents {
+        if !actual_contents.contains(*expected_content) {
+            return Err(format_err!("expected content missing"));
+        }
+    }
+
+    Ok(())
 }
