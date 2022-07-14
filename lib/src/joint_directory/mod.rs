@@ -4,6 +4,7 @@ pub(crate) mod versioned;
 
 use crate::{
     branch::Branch,
+    conflict,
     crypto::sign::PublicKey,
     db,
     directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef},
@@ -11,7 +12,6 @@ use crate::{
     file::File,
     iterator::{Accumulate, SortedUnion},
     version_vector::VersionVector,
-    versioned_file_name,
 };
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
@@ -112,7 +112,7 @@ impl JointDirectory {
 
         // If not found, extract the disambiguator and try to lookup an entry whose branch id
         // matches it.
-        let (name, branch_id_prefix) = versioned_file_name::parse(name);
+        let (name, branch_id_prefix) = conflict::parse_unique_name(name);
         let branch_id_prefix = branch_id_prefix.ok_or(Error::EntryNotFound)?;
 
         let entries = self
@@ -125,6 +125,9 @@ impl JointDirectory {
         // contain one.
         // NOTE: Using keep_maximal may be an overkill in this case because of the invariant that
         // no single author/replica can create concurrent versions of an entry.
+        //
+        // TODO: This piece of code is outdated. The above expression should always return at most
+        // one entry.
         let mut entries =
             versioned::keep_maximal(entries, self.local_branch.as_ref().map(Branch::id))
                 .into_iter();
@@ -478,7 +481,7 @@ impl<'a> JointFileRef<'a> {
 
     pub fn unique_name(&self) -> Cow<'a, str> {
         if self.needs_disambiguation {
-            Cow::from(versioned_file_name::create(
+            Cow::from(conflict::create_unique_name(
                 self.name(),
                 self.file.branch().id(),
             ))

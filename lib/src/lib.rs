@@ -17,6 +17,7 @@ mod blob_id;
 mod block;
 mod branch;
 mod config;
+mod conflict;
 mod deadlock;
 mod debug;
 mod directory;
@@ -39,7 +40,6 @@ mod store;
 mod test_utils;
 #[cfg_attr(test, macro_use)]
 mod version_vector;
-mod versioned_file_name;
 
 pub use self::{
     access_control::{AccessMode, AccessSecrets, MasterSecret, ShareToken},

@@ -65,7 +65,7 @@ async fn conflict_independent_files() {
         assert_eq!(file.name(), "file.txt");
 
         assert_matches!(
-            root.lookup_unique(&versioned_file_name::create("file.txt", branch.id()))
+            root.lookup_unique(&conflict::create_unique_name("file.txt", branch.id()))
                 .unwrap(),
             JointEntryRef::File(file_ref) => {
                 assert_eq!(file_ref.name(), file.name());
@@ -196,7 +196,7 @@ async fn conflict_file_and_directory() {
     let entry = root.lookup_unique("config").unwrap();
     assert_eq!(entry.entry_type(), EntryType::Directory);
 
-    let name = versioned_file_name::create("config", branches[0].id());
+    let name = conflict::create_unique_name("config", branches[0].id());
     let entry = root.lookup_unique(&name).unwrap();
     assert_eq!(entry.entry_type(), EntryType::File);
     assert_eq!(entry.file().unwrap().branch().id(), branches[0].id());
