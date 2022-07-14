@@ -243,6 +243,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };
@@ -279,6 +280,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };
@@ -316,6 +318,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: std::sync::Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };

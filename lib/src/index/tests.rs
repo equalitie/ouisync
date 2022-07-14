@@ -9,6 +9,7 @@ use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sqlx::Connection;
+use std::sync::Weak;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -369,6 +370,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (index, write_keys) = setup().await;
     let store = Store {
+        monitored: Weak::new(),
         index,
         block_tracker: BlockTracker::lazy(),
     };

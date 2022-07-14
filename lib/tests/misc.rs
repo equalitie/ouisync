@@ -4,7 +4,7 @@ use self::common::Env;
 use assert_matches::assert_matches;
 use ouisync::{
     crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error,
-    File, MasterSecret, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, time::Duration};
@@ -102,9 +102,13 @@ async fn relay() {
     let mut env = Env::with_seed(0);
 
     // The "relay" peer.
-    let network_r = Network::new(&common::test_network_options(), ConfigStore::null())
-        .await
-        .unwrap();
+    let network_r = Network::new(
+        &common::test_network_options(),
+        ConfigStore::null(),
+        StateMonitor::make_root(),
+    )
+    .await
+    .unwrap();
 
     let network_a =
         common::create_peer_connected_to(*network_r.tcp_listener_local_addr_v4().unwrap()).await;
@@ -383,6 +387,7 @@ async fn recreate_local_branch() {
         master_secret_a.clone(),
         access_secrets.clone(),
         true,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -411,6 +416,7 @@ async fn recreate_local_branch() {
         Some(master_secret_a.clone()),
         AccessMode::Read,
         true,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -452,9 +458,15 @@ async fn recreate_local_branch() {
     .unwrap();
 
     // A: Reopen in write mode
-    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a), true)
-        .await
-        .unwrap();
+    let repo_a = Repository::open(
+        &store_a,
+        device_id_a,
+        Some(master_secret_a),
+        true,
+        &StateMonitor::make_root(),
+    )
+    .await
+    .unwrap();
 
     // A: Modify the repo
     repo_a.create_file("bar.txt").await.unwrap();
