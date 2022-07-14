@@ -5,7 +5,7 @@ use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
 use ouisync_lib::{
-    device_id, network::Network, AccessSecrets, ConfigStore, Repository, ShareToken,
+    device_id, network::Network, AccessSecrets, ConfigStore, Repository, ShareToken, StateMonitor,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -42,6 +42,8 @@ async fn main() -> Result<()> {
     // Create repositories
     let mut repos = HashMap::new();
 
+    let root_monitor = StateMonitor::make_root();
+
     for name in &options.create {
         let secret = options.secret_for_repo(name)?;
         let repo = Repository::create(
@@ -50,6 +52,7 @@ async fn main() -> Result<()> {
             secret,
             AccessSecrets::random_write(),
             !options.disable_merger,
+            &root_monitor,
         )
         .await?;
 
@@ -72,6 +75,7 @@ async fn main() -> Result<()> {
                 device_id,
                 options.secret_for_repo(name).ok(),
                 false,
+                &root_monitor,
             )
             .await?
             .secrets()
@@ -111,6 +115,7 @@ async fn main() -> Result<()> {
                 master_secret,
                 access_secrets.clone(),
                 !options.disable_merger,
+                &root_monitor,
             )
             .await?;
 
@@ -126,7 +131,9 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network = Network::new(&options.network, config).await?;
+    let network =
+        Network::new(&options.network, config, root_monitor.make_child("Network")).await?;
+
     let network_handle = network.handle();
 
     // Mount repositories
@@ -140,6 +147,7 @@ async fn main() -> Result<()> {
                 device_id,
                 options.secret_for_repo(name).ok(),
                 !options.disable_merger,
+                &root_monitor,
             )
             .await?
         };

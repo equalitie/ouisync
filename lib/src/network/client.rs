@@ -8,9 +8,13 @@ use crate::{
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    repository::MonitoredValues,
     store::Store,
 };
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Weak},
+};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -26,6 +30,7 @@ pub(crate) struct Client {
     recv_queue: VecDeque<Success>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
+    monitored: Weak<MonitoredValues>,
 }
 
 impl Client {
@@ -37,17 +42,19 @@ impl Client {
     ) -> Self {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
+        let monitored = store.monitored.clone();
 
         Self {
             store,
             tx,
             rx,
             request_limiter,
-            pending_requests: PendingRequests::new(),
+            pending_requests: PendingRequests::new(monitored.clone()),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
             block_tracker,
+            monitored,
         }
     }
 
@@ -92,6 +99,10 @@ impl Client {
         if !self.pending_requests.insert(request, permit) {
             // The same request is already in-flight.
             return;
+        }
+
+        if let Some(monitored) = self.monitored.upgrade() {
+            *monitored.total_request_cummulative.get() += 1;
         }
 
         self.tx.send(Content::Request(request)).await.unwrap_or(());

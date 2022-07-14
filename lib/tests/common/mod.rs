@@ -1,7 +1,7 @@
 use ouisync::{
     db,
     network::{Network, NetworkOptions},
-    AccessSecrets, ConfigStore, MasterSecret, PeerAddr, Repository,
+    AccessSecrets, ConfigStore, MasterSecret, PeerAddr, Repository, StateMonitor,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -53,6 +53,7 @@ impl Env {
             MasterSecret::generate(&mut self.rng),
             secrets,
             true,
+            &StateMonitor::make_root(),
         )
         .await
         .unwrap()
@@ -70,9 +71,13 @@ impl Env {
 
 // Create two `Network` instances connected together.
 pub(crate) async fn create_connected_peers() -> (Network, Network) {
-    let a = Network::new(&test_network_options(), ConfigStore::null())
-        .await
-        .unwrap();
+    let a = Network::new(
+        &test_network_options(),
+        ConfigStore::null(),
+        StateMonitor::make_root(),
+    )
+    .await
+    .unwrap();
 
     let b = create_peer_connected_to(*a.tcp_listener_local_addr_v4().unwrap()).await;
 
@@ -87,6 +92,7 @@ pub(crate) async fn create_peer_connected_to(addr: SocketAddr) -> Network {
             ..test_network_options()
         },
         ConfigStore::null(),
+        StateMonitor::make_root(),
     )
     .await
     .unwrap()

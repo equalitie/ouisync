@@ -14,6 +14,7 @@ async fn root_directory_always_exists() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -38,6 +39,7 @@ async fn count_leaf_nodes_sanity_checks() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -89,6 +91,7 @@ async fn merge() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         true,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -131,6 +134,7 @@ async fn recreate_previously_deleted_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -173,6 +177,7 @@ async fn recreate_previously_deleted_directory() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -204,6 +209,7 @@ async fn concurrent_read_and_create_dir() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -255,6 +261,7 @@ async fn concurrent_write_and_read_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -371,6 +378,7 @@ async fn interleaved_flush() {
             MasterSecret::random(),
             AccessSecrets::random_write(),
             false,
+            &StateMonitor::make_root(),
         )
         .await
         .unwrap();
@@ -431,6 +439,7 @@ async fn append_to_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -466,6 +475,7 @@ async fn blind_access_non_empty_repo() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -486,9 +496,16 @@ async fn blind_access_non_empty_repo() {
         (Some(MasterSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open_in(pool.clone(), device_id, master_secret, access_mode, false)
-            .await
-            .unwrap();
+        let repo = Repository::open_in(
+            pool.clone(),
+            device_id,
+            master_secret,
+            access_mode,
+            false,
+            &StateMonitor::make_root(),
+        )
+        .await
+        .unwrap();
 
         // Reading files is not allowed.
         assert_matches!(
@@ -525,6 +542,7 @@ async fn blind_access_empty_repo() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -536,6 +554,7 @@ async fn blind_access_empty_repo() {
         Some(MasterSecret::random()),
         AccessMode::Read,
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -556,6 +575,7 @@ async fn read_access_same_replica() {
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -576,6 +596,7 @@ async fn read_access_same_replica() {
         Some(master_secret),
         AccessMode::Read,
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -623,6 +644,7 @@ async fn read_access_different_replica() {
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -643,6 +665,7 @@ async fn read_access_different_replica() {
         Some(master_secret),
         AccessMode::Read,
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -664,6 +687,7 @@ async fn truncate_forked_remote_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -685,6 +709,7 @@ async fn attempt_to_modify_remote_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -723,6 +748,7 @@ async fn version_vector_create_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -794,6 +820,7 @@ async fn version_vector_deep_hierarchy() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -832,6 +859,7 @@ async fn version_vector_recreate_deleted_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -859,6 +887,7 @@ async fn version_vector_fork_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -898,6 +927,7 @@ async fn version_vector_empty_directory() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -922,6 +952,7 @@ async fn file_conflict_modify_local() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -1001,6 +1032,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -1040,6 +1072,7 @@ async fn remove_branch() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
+        &StateMonitor::make_root(),
     )
     .await
     .unwrap();

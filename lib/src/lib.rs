@@ -56,5 +56,6 @@ pub use self::{
     joint_entry::JointEntry,
     network::peer_addr::PeerAddr,
     repository::Repository,
+    state_monitor::StateMonitor,
     store::Store as RepositoryStore,
 };

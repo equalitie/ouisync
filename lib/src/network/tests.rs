@@ -23,7 +23,12 @@ use futures_util::{
     FutureExt,
 };
 use rand::prelude::*;
-use std::{fmt, future::Future, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    future::Future,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 use test_strategy::proptest;
 use tokio::{
     pin, select,
@@ -333,6 +338,7 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
     index.create_branch(proof).await.unwrap();
 
     let store = Store {
+        monitored: Weak::new(),
         index,
         block_tracker: BlockTracker::greedy(),
     };

@@ -38,7 +38,7 @@ pub(crate) struct PortForwarder {
 }
 
 impl PortForwarder {
-    pub fn new(monitor: Arc<StateMonitor>) -> Self {
+    pub fn new(monitor: StateMonitor) -> Self {
         let mappings = Arc::new(Mutex::new(Default::default()));
 
         let (on_change_tx, on_change_rx) = watch::channel(());
@@ -94,7 +94,7 @@ impl PortForwarder {
     async fn run(
         mappings: Arc<Mutex<Mappings>>,
         on_change_rx: watch::Receiver<()>,
-        monitor: Arc<StateMonitor>,
+        monitor: StateMonitor,
     ) -> Result<(), rupnp::Error> {
         // Devices may have a timeout period when they don't respond to repeated queries, the
         // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
@@ -299,7 +299,7 @@ struct PerIGDPortForwarder {
     on_change_rx: watch::Receiver<()>,
     mappings: Arc<Mutex<Mappings>>,
     active_mappings: Mutex<HashMap<MappingData, ScopedJoinHandle<()>>>,
-    monitor: Arc<StateMonitor>,
+    monitor: StateMonitor,
 }
 
 impl PerIGDPortForwarder {
@@ -348,7 +348,7 @@ impl PerIGDPortForwarder {
         &self,
         data: MappingData,
         local_ip: net::IpAddr,
-        monitor: &Arc<StateMonitor>,
+        monitor: &StateMonitor,
     ) -> ScopedJoinHandle<()> {
         let service = self.service.clone();
         let device_uri = self.device_url.clone();
@@ -381,7 +381,7 @@ impl PerIGDPortForwarder {
         local_ip: net::IpAddr,
         service: Service,
         device_url: Uri,
-        monitor: Arc<StateMonitor>,
+        monitor: StateMonitor,
     ) {
         let lease_duration = Duration::from_secs(5 * 60);
         let sleep_delta = Duration::from_secs(5);

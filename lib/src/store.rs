@@ -6,11 +6,17 @@ use crate::{
     error::{Error, Result},
     index::{self, Index},
     progress::Progress,
+    repository::MonitoredValues,
 };
 use sqlx::{Connection, Row};
+use std::sync::Weak;
 
 #[derive(Clone)]
 pub struct Store {
+    // This is `Weak` because `Store` can outlive `Repository` and if we wanted to recreate the
+    // repository again while the previous `Store` is still alive, we would create "ambiguous"
+    // monitored values.
+    pub(crate) monitored: Weak<MonitoredValues>,
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
 }
@@ -237,6 +243,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };
@@ -273,6 +280,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };
@@ -310,6 +318,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::load(pool, repository_id, event_tx).await.unwrap();
         let store = Store {
+            monitored: std::sync::Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
         };

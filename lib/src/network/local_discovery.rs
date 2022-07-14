@@ -41,7 +41,7 @@ pub(super) struct LocalDiscovery {
 }
 
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort, monitor: Arc<StateMonitor>) -> io::Result<Self> {
+    pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> io::Result<Self> {
         let id = OsRng.gen();
         let socket_provider = Arc::new(SocketProvider::new());
 
@@ -191,7 +191,7 @@ async fn run_beacon(
     id: InsecureRuntimeId,
     listener_port: PeerPort,
     seen_peers: SeenPeers,
-    monitor: Arc<StateMonitor>,
+    monitor: StateMonitor,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
     let beacons_sent = monitor.make_value::<u64>("beacons_sent".into(), 0);
