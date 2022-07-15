@@ -135,16 +135,17 @@ impl StateMonitorShared {
             None => (path, None),
         };
 
-        let lock = self.lock();
+        // Unwrap OK because children are responsible for removing themselves from the map on
+        // Drop.
+        let child = self
+            .lock()
+            .children
+            .get(child)
+            .map(|child| child.upgrade().unwrap());
 
-        lock.children.get(child).and_then(|child| {
-            // Unwrap OK because children are responsible for removing themselves from the map on
-            // Drop.
-            let child = child.upgrade().unwrap();
-            match rest {
-                Some(rest) => child.locate(rest),
-                None => Some(child),
-            }
+        child.and_then(|child| match rest {
+            Some(rest) => child.locate(rest),
+            None => Some(child),
         })
     }
 
@@ -247,32 +248,37 @@ impl<T> MonitoredValue<T> {
     pub fn get(&self) -> MutexGuardWrap<'_, T> {
         MutexGuardWrap {
             monitor: self.monitor.clone(),
-            guard: self.value.lock().unwrap(),
+            guard: Some(self.value.lock().unwrap()),
         }
     }
 }
 
 pub struct MutexGuardWrap<'a, T> {
     monitor: Arc<StateMonitorShared>,
-    guard: MutexGuard<'a, T>,
+    // This is only None in the destructor.
+    guard: Option<MutexGuard<'a, T>>,
 }
 
 impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        &*self.guard
+        &*(self.guard.as_ref().unwrap())
     }
 }
 
 impl<'a, T> core::ops::DerefMut for MutexGuardWrap<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        &mut *self.guard
+        &mut *(self.guard.as_mut().unwrap())
     }
 }
 
 impl<'a, T> Drop for MutexGuardWrap<'a, T> {
     fn drop(&mut self) {
+        {
+            // Unlock this before we try to lock the parent monitor.
+            self.guard.take();
+        }
         self.monitor.changed(self.monitor.lock());
     }
 }
