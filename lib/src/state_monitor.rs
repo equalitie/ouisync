@@ -40,13 +40,13 @@ impl StateMonitor {
         }
     }
 
-    pub fn make_child<S: Into<String>>(self: &Self, name: S) -> Self {
+    pub fn make_child<S: Into<String>>(&self, name: S) -> Self {
         Self {
             shared: self.shared.make_child(name),
         }
     }
 
-    pub fn locate(self: &Self, path: &str) -> Option<Self> {
+    pub fn locate(&self, path: &str) -> Option<Self> {
         self.shared.locate(path).map(|shared| Self { shared })
     }
 
@@ -57,7 +57,7 @@ impl StateMonitor {
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
     pub fn make_value<T: 'static + fmt::Debug + Sync + Send>(
-        self: &Self,
+        &self,
         name: String,
         value: T,
     ) -> MonitoredValue<T> {
@@ -65,7 +65,7 @@ impl StateMonitor {
     }
 
     /// Get notified whenever there is a change in this StateMonitor
-    pub fn subscribe(self: &Self) -> uninitialized_watch::Receiver<()> {
+    pub fn subscribe(&self) -> uninitialized_watch::Receiver<()> {
         self.shared.subscribe()
     }
 }

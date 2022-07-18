@@ -490,6 +490,65 @@ async fn recreate_local_branch() {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_many_files() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers().await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let num_files = 10;
+    let min_size = 0;
+    let max_size = 128 * 1024;
+
+    let contents: Vec<_> = (0..num_files)
+        .map(|_| {
+            let size = env.rng.gen_range(min_size..max_size);
+            let mut buffer = vec![0; size];
+            env.rng.fill(&mut buffer[..]);
+            buffer
+        })
+        .collect();
+
+    for (index, content) in contents.iter().enumerate() {
+        let mut file = repo_a
+            .create_file(format!("file-{}.dat", index))
+            .await
+            .unwrap();
+
+        write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
+
+        let mut conn = repo_a.db().acquire().await.unwrap();
+        file.flush(&mut conn).await.unwrap();
+    }
+
+    time::timeout(
+        Duration::from_secs(10),
+        common::eventually(&repo_b, || async {
+            for (index, content) in contents.iter().enumerate() {
+                if !check_file_version_content(
+                    &repo_b,
+                    &format!("file-{}.dat", index),
+                    None,
+                    content,
+                )
+                .await
+                {
+                    return false;
+                }
+
+                println!("got {}/{}", index + 1, contents.len());
+            }
+
+            true
+        }),
+    )
+    .await
+    .unwrap()
+}
+
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
@@ -502,44 +561,51 @@ async fn expect_file_version_content(
     branch_id: Option<&PublicKey>,
     expected_content: &[u8],
 ) {
-    let db = repo.db().clone();
-
-    common::eventually(repo, || async {
-        let result = if let Some(branch_id) = branch_id {
-            repo.open_file_version(path, branch_id).await
-        } else {
-            repo.open_file(path).await
-        };
-
-        let mut file = match result {
-            Ok(file) => file,
-            // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
-            // and so the file entry is not in it yet.
-            //
-            // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
-            Err(error) => panic!("unexpected error: {:?}", error),
-        };
-
-        let actual_content = match read_in_chunks(&db, &mut file, 4096).await {
-            Ok(content) => content,
-            // `EntryNotFound` can still happen even here if merge runs in the middle of reading
-            // the file - we opened the file while it was still in the remote branch but then that
-            // branch got merged into the local one and deleted. That means the file no longer
-            // exists in the remote branch and attempt to read from it further results in this
-            // error.
-            // TODO: this is not ideal as the only way to resolve this problem is to reopen the
-            // file (unlike the `BlockNotFound` error where we just need to read it again when the
-            // block gets downloaded). This should probably be considered a bug.
-            //
-            // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
-            Err(error) => panic!("unexpected error: {:?}", error),
-        };
-
-        actual_content == expected_content
+    common::eventually(repo, || {
+        check_file_version_content(repo, path, branch_id, expected_content)
     })
     .await
+}
+
+async fn check_file_version_content(
+    repo: &Repository,
+    path: &str,
+    branch_id: Option<&PublicKey>,
+    expected_content: &[u8],
+) -> bool {
+    let result = if let Some(branch_id) = branch_id {
+        repo.open_file_version(path, branch_id).await
+    } else {
+        repo.open_file(path).await
+    };
+
+    let mut file = match result {
+        Ok(file) => file,
+        // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
+        // and so the file entry is not in it yet.
+        //
+        // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
+        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error) => panic!("unexpected error: {:?}", error),
+    };
+
+    let actual_content = match read_in_chunks(repo.db(), &mut file, 4096).await {
+        Ok(content) => content,
+        // `EntryNotFound` can still happen even here if merge runs in the middle of reading
+        // the file - we opened the file while it was still in the remote branch but then that
+        // branch got merged into the local one and deleted. That means the file no longer
+        // exists in the remote branch and attempt to read from it further results in this
+        // error.
+        // TODO: this is not ideal as the only way to resolve this problem is to reopen the
+        // file (unlike the `BlockNotFound` error where we just need to read it again when the
+        // block gets downloaded). This should probably be considered a bug.
+        //
+        // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
+        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error) => panic!("unexpected error: {:?}", error),
+    };
+
+    actual_content == expected_content
 }
 
 // Wait until A is in sync with B, that is: both repos have local branches, they have non-empty
