@@ -267,45 +267,63 @@ mod scan {
 
     #[derive(Copy, Clone)]
     pub(super) enum Mode {
-        // require missing blocks and collect unreachable blocks
-        RequireAndCollect,
+        // only require missing blocks
+        Require,
         // only collect unreachable blocks
         Collect,
+        // require missing blocks and collect unreachable blocks
+        RequireAndCollect,
+    }
+
+    impl Mode {
+        fn intersect(self, other: Self) -> Option<Self> {
+            match (self, other) {
+                (Self::Require, Self::Require)
+                | (Self::Require, Self::RequireAndCollect)
+                | (Self::RequireAndCollect, Self::Require) => Some(Self::Require),
+                (Self::Collect, Self::Collect)
+                | (Self::Collect, Self::RequireAndCollect)
+                | (Self::RequireAndCollect, Self::Collect) => Some(Self::Collect),
+                (Self::RequireAndCollect, Self::RequireAndCollect) => Some(Self::RequireAndCollect),
+                (Self::Require, Self::Collect) | (Self::Collect, Self::Require) => None,
+            }
+        }
     }
 
     pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
         prepare_unreachable_blocks(shared).await?;
-        traverse_root(shared, mode).await?;
-        remove_unreachable_blocks(shared).await?;
+        let mode = traverse_root(shared, mode).await?;
+
+        if matches!(mode, Mode::Collect | Mode::RequireAndCollect) {
+            remove_unreachable_blocks(shared).await?;
+        }
 
         Ok(())
     }
 
-    async fn traverse_root(shared: &Shared, mode: Mode) -> Result<()> {
+    async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
         let branches = shared.collect_branches()?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
-        let mut result = Ok(());
 
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            if result.is_ok() {
-                let mut conn = shared.store.db().acquire().await?;
+            let mut conn = shared.store.db().acquire().await?;
 
-                match branch.open_root(&mut conn).await {
-                    Ok(dir) => versions.push(dir),
-                    Err(Error::EntryNotFound) => {
-                        // `EntryNotFound` here just means this is a newly created branch with no
-                        // content yet. It is safe to ignore it.
-                        continue;
-                    }
-                    Err(error) => {
-                        // Remember the error but keep processing the remaining branches so that we
-                        // find all the missing blocks.
-                        result = Err(error);
-                    }
+            match branch.open_root(&mut conn).await {
+                Ok(dir) => versions.push(dir),
+                Err(Error::EntryNotFound) => {
+                    // `EntryNotFound` here just means this is a newly created branch with no
+                    // content yet. It is safe to ignore it.
+                    continue;
+                }
+                Err(error) => {
+                    // On error, we can still proceed with finding missing blocks, but we can't
+                    // proceed with garbage collection because we could incorrectly mark some
+                    // blocks as unreachable due to not being able to descend into this directory.
+                    mode = mode.intersect(Mode::Require).ok_or(error)?;
                 }
             }
         }
@@ -314,20 +332,14 @@ mod scan {
             process_blocks(shared, mode, entry).await?;
         }
 
-        // If there was en error opening any version of the root directory we can't proceed because
-        // we might not have access to all the entries and we could fail to identify some missing
-        // blocks and/or incorrectly mark some as unreachable.
-        result?;
-
         let local_branch = shared.local_branch();
         traverse(shared, mode, JointDirectory::new(local_branch, versions)).await
     }
 
     #[async_recursion]
-    async fn traverse(shared: &Shared, mode: Mode, dir: JointDirectory) -> Result<()> {
+    async fn traverse(shared: &Shared, mut mode: Mode, dir: JointDirectory) -> Result<Mode> {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
-        let mut result = Ok(());
 
         let mut conn = shared.store.db().acquire().await?;
 
@@ -346,14 +358,14 @@ mod scan {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    if result.is_ok() {
-                        match entry.open(&mut conn, MissingVersionStrategy::Fail).await {
-                            Ok(dir) => subdirs.push(dir),
-                            Err(error) => {
-                                // Remember the error but keep processing the remaining entries so
-                                // that we find all the missing blocks.
-                                result = Err(error);
-                            }
+                    match entry.open(&mut conn, MissingVersionStrategy::Fail).await {
+                        Ok(dir) => subdirs.push(dir),
+                        Err(error) => {
+                            // On error, we can still proceed with finding missing blocks, but we
+                            // can't proceed with garbage collection because we could incorrectly
+                            // mark some blocks as unreachable due to not being able to descend
+                            // into this directory.
+                            mode = mode.intersect(Mode::Require).ok_or(error)?;
                         }
                     }
                 }
@@ -366,15 +378,11 @@ mod scan {
             process_blocks(shared, mode, entry).await?;
         }
 
-        // If there was en error opening any of the subdirectories we can't proceed further because
-        // we might not have access to all the entries.
-        result?;
-
         for dir in subdirs {
-            traverse(shared, mode, dir).await?;
+            mode = traverse(shared, mode, dir).await?;
         }
 
-        Ok(())
+        Ok(mode)
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
@@ -397,9 +405,11 @@ mod scan {
         let mut conn = shared.store.db().acquire().await?;
 
         while let Some(block_id) = block_ids.next(&mut conn).await? {
-            block::mark_reachable(&mut conn, &block_id).await?;
+            if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
+                block::mark_reachable(&mut conn, &block_id).await?;
+            }
 
-            if matches!(mode, Mode::RequireAndCollect) {
+            if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
                 require_missing_block(shared, &mut conn, block_id).await?;
             }
         }
