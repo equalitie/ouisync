@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::Env;
+use self::common::{Env, Proto};
 use ouisync::{db, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng};
 use std::{io::SeekFrom, time::Duration};
@@ -30,7 +30,7 @@ async fn local_delete_local_file() {
 async fn local_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers().await;
+    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
@@ -65,7 +65,7 @@ async fn local_delete_remote_file() {
 async fn remote_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers().await;
+    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
@@ -118,7 +118,7 @@ async fn local_truncate_local_file() {
 async fn local_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers().await;
+    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
@@ -164,7 +164,7 @@ async fn local_truncate_remote_file() {
 async fn remote_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers().await;
+    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = network_l.handle().register(repo_l.store().clone());
     let _reg_r = network_r.handle().register(repo_r.store().clone());
@@ -204,7 +204,7 @@ async fn remote_truncate_remote_file() {
 async fn concurrent_delete_update() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers().await;
+    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let reg_l = network_l.handle().register(repo_l.store().clone());
     let reg_r = network_r.handle().register(repo_r.store().clone());

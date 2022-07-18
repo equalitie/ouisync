@@ -1,14 +1,14 @@
 mod common;
 
-use self::common::Env;
+use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use ouisync::{
     crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error,
     File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, time::Duration};
-use tokio::time;
+use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
+use tokio::{task, time};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -18,7 +18,7 @@ async fn relink_repository() {
     let mut env = Env::with_seed(0);
 
     // Create two peers and connect them together.
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
 
     let (repo_a, repo_b) = env.create_linked_repos().await;
 
@@ -66,7 +66,7 @@ async fn relink_repository() {
 async fn remove_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -100,10 +100,11 @@ async fn relay() {
     let file_size = 4 * 1024 * 1024;
 
     let mut env = Env::with_seed(0);
+    let proto = Proto::Tcp;
 
     // The "relay" peer.
     let network_r = Network::new(
-        &common::test_network_options(),
+        &common::test_network_options(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
@@ -111,9 +112,9 @@ async fn relay() {
     .unwrap();
 
     let network_a =
-        common::create_peer_connected_to(*network_r.tcp_listener_local_addr_v4().unwrap()).await;
+        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_r)).await;
     let network_b =
-        common::create_peer_connected_to(*network_r.tcp_listener_local_addr_v4().unwrap()).await;
+        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_r)).await;
 
     let repo_a = env.create_repo().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
@@ -153,7 +154,7 @@ async fn transfer_large_file() {
 
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -183,7 +184,7 @@ async fn transfer_multiple_files_sequentially() {
 
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -226,7 +227,7 @@ async fn transfer_multiple_files_sequentially() {
 async fn sync_during_file_write() {
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -301,7 +302,7 @@ async fn sync_during_file_write() {
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -375,7 +376,7 @@ async fn concurrent_modify_open_file() {
 async fn recreate_local_branch() {
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
 
     let store_a = env.next_store();
     let device_id_a = env.rng.gen();
@@ -494,7 +495,7 @@ async fn recreate_local_branch() {
 async fn transfer_many_files() {
     let mut env = Env::with_seed(0);
 
-    let (network_a, network_b) = common::create_connected_peers().await;
+    let (network_a, network_b) = common::create_connected_peers(Proto::Quic).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -511,21 +512,28 @@ async fn transfer_many_files() {
             buffer
         })
         .collect();
+    let contents = Arc::new(contents);
 
-    for (index, content) in contents.iter().enumerate() {
-        let mut file = repo_a
-            .create_file(format!("file-{}.dat", index))
-            .await
-            .unwrap();
+    let task_a = task::spawn({
+        let contents = contents.clone();
+        async move {
+            for (index, content) in contents.iter().enumerate() {
+                let mut file = repo_a
+                    .create_file(format!("file-{}.dat", index))
+                    .await
+                    .unwrap();
 
-        write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
+                write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
 
-        let mut conn = repo_a.db().acquire().await.unwrap();
-        file.flush(&mut conn).await.unwrap();
-    }
+                let mut conn = repo_a.db().acquire().await.unwrap();
+                file.flush(&mut conn).await.unwrap();
 
-    time::timeout(
-        Duration::from_secs(10),
+                // println!("put {}/{}", index + 1, contents.len());
+            }
+        }
+    });
+
+    let task_b = task::spawn(async move {
         common::eventually(&repo_b, || async {
             for (index, content) in contents.iter().enumerate() {
                 if !check_file_version_content(
@@ -539,12 +547,18 @@ async fn transfer_many_files() {
                     return false;
                 }
 
-                println!("got {}/{}", index + 1, contents.len());
+                // println!("get {}/{}", index + 1, contents.len());
             }
 
             true
-        }),
-    )
+        })
+        .await
+    });
+
+    time::timeout(Duration::from_secs(30), async move {
+        task_a.await.unwrap();
+        task_b.await.unwrap();
+    })
     .await
     .unwrap()
 }

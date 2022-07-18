@@ -1,3 +1,6 @@
+// Probably false positive triggered by `task_local`
+#![allow(clippy::declare_interior_mutable_const)]
+
 use super::{message::MessageChannel, runtime_id::PublicRuntimeId};
 use std::{fmt, future::Future};
 use tokio::task_local;

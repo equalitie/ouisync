@@ -69,27 +69,56 @@ impl Env {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Proto {
+    Tcp,
+    Quic,
+}
+
+impl Proto {
+    pub fn of(addr: &PeerAddr) -> Self {
+        match addr {
+            PeerAddr::Tcp(_) => Self::Tcp,
+            PeerAddr::Quic(_) => Self::Quic,
+        }
+    }
+
+    pub fn wrap_addr(&self, addr: SocketAddr) -> PeerAddr {
+        match self {
+            Self::Tcp => PeerAddr::Tcp(addr),
+            Self::Quic => PeerAddr::Quic(addr),
+        }
+    }
+
+    pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
+        match self {
+            Self::Tcp => PeerAddr::Tcp(*network.tcp_listener_local_addr_v4().unwrap()),
+            Self::Quic => PeerAddr::Quic(*network.quic_listener_local_addr_v4().unwrap()),
+        }
+    }
+}
+
 // Create two `Network` instances connected together.
-pub(crate) async fn create_connected_peers() -> (Network, Network) {
+pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
     let a = Network::new(
-        &test_network_options(),
+        &test_network_options(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
     .await
     .unwrap();
 
-    let b = create_peer_connected_to(*a.tcp_listener_local_addr_v4().unwrap()).await;
+    let b = create_peer_connected_to(proto.listener_local_addr_v4(&a)).await;
 
     (a, b)
 }
 
 // Create a `Network` instance connected only to the given address.
-pub(crate) async fn create_peer_connected_to(addr: SocketAddr) -> Network {
+pub(crate) async fn create_peer_connected_to(addr: PeerAddr) -> Network {
     Network::new(
         &NetworkOptions {
-            peers: vec![PeerAddr::Tcp(addr)],
-            ..test_network_options()
+            peers: vec![addr],
+            ..test_network_options(Proto::of(&addr))
         },
         ConfigStore::null(),
         StateMonitor::make_root(),
@@ -98,9 +127,9 @@ pub(crate) async fn create_peer_connected_to(addr: SocketAddr) -> Network {
     .unwrap()
 }
 
-pub(crate) fn test_network_options() -> NetworkOptions {
+pub(crate) fn test_network_options(proto: Proto) -> NetworkOptions {
     NetworkOptions {
-        bind: vec![PeerAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into())],
+        bind: vec![proto.wrap_addr((Ipv4Addr::LOCALHOST, 0).into())],
         disable_local_discovery: true,
         disable_upnp: true,
         disable_dht: true,

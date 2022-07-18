@@ -1,3 +1,6 @@
+// Probably false positive triggered by `task_local`
+#![allow(clippy::declare_interior_mutable_const)]
+
 use crate::crypto::sign::PublicKey;
 use std::{
     future::Future,
