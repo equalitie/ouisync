@@ -1,4 +1,5 @@
 use super::{
+    barrier::Barrier,
     client::Client,
     connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
@@ -129,7 +130,7 @@ async fn maintain_link(
     request_limiter: Arc<Semaphore>,
 ) {
     loop {
-        match barrier(&mut stream, &mut sink).await {
+        match Barrier::new(&mut stream, &mut sink).run().await {
             Ok(()) => (),
             Err(ChannelClosed) => break,
         }
@@ -148,15 +149,6 @@ async fn maintain_link(
     }
 }
 
-/// Ensures there are no more in-flight messages beween us and the peer.
-async fn barrier(stream: &mut ContentStream, sink: &mut ContentSink) -> Result<(), ChannelClosed> {
-    sink.send(vec![]).await?;
-    sink.send(vec![rand::random()]).await?;
-    while stream.recv().await?.len() != 1 {}
-
-    Ok(())
-}
-
 async fn establish_channel<'a>(
     role: Role,
     stream: &'a mut ContentStream,
@@ -166,8 +158,9 @@ async fn establish_channel<'a>(
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
             log::debug!(
-                "{} established encrypted channel as {:?}",
+                "{} established encrypted channel for repo:{:?} as {:?}",
                 ChannelInfo::current(),
+                index.repository_id(),
                 role
             );
 
@@ -175,8 +168,9 @@ async fn establish_channel<'a>(
         }
         Err(error) => {
             log::warn!(
-                "{} failed to establish encrypted channel as {:?}: {}",
+                "{} failed to establish encrypted channel for repo:{:?} as {:?}: {}",
                 ChannelInfo::current(),
+                index.repository_id(),
                 role,
                 error
             );

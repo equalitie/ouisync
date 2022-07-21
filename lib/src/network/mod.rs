@@ -1,3 +1,4 @@
+mod barrier;
 mod channel_info;
 mod client;
 mod config_keys;
