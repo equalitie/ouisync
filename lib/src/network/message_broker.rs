@@ -1,9 +1,10 @@
 use super::{
+    barrier::{Barrier, BarrierError},
     client::Client,
     connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
-    message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
+    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     raw,
     request::MAX_PENDING_REQUESTS,
     runtime_id::PublicRuntimeId,
@@ -12,10 +13,12 @@ use super::{
 use crate::{
     index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
 };
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     select,
@@ -128,10 +131,25 @@ async fn maintain_link(
     store: Store,
     request_limiter: Arc<Semaphore>,
 ) {
+    let mut backoff = ExponentialBackoffBuilder::new()
+        .with_initial_interval(Duration::from_millis(100))
+        .with_max_interval(Duration::from_secs(5))
+        .with_max_elapsed_time(None)
+        .build();
+
+    let mut next_sleep = None;
+
     loop {
-        match barrier(&mut stream, &mut sink).await {
+        if let Some(sleep) = next_sleep {
+            tokio::time::sleep(sleep).await;
+        }
+
+        next_sleep = backoff.next_backoff();
+
+        match Barrier::new(&mut stream, &mut sink).run().await {
             Ok(()) => (),
-            Err(ChannelClosed) => break,
+            Err(BarrierError::Failure) => continue,
+            Err(BarrierError::ChannelClosed) => break,
         }
 
         let (crypto_stream, crypto_sink) =
@@ -148,15 +166,6 @@ async fn maintain_link(
     }
 }
 
-/// Ensures there are no more in-flight messages beween us and the peer.
-async fn barrier(stream: &mut ContentStream, sink: &mut ContentSink) -> Result<(), ChannelClosed> {
-    sink.send(vec![]).await?;
-    sink.send(vec![rand::random()]).await?;
-    while stream.recv().await?.len() != 1 {}
-
-    Ok(())
-}
-
 async fn establish_channel<'a>(
     role: Role,
     stream: &'a mut ContentStream,
@@ -166,8 +175,9 @@ async fn establish_channel<'a>(
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
             log::debug!(
-                "{} established encrypted channel as {:?}",
+                "{} established encrypted channel for repo:{:?} as {:?}",
                 ChannelInfo::current(),
+                index.repository_id(),
                 role
             );
 
@@ -175,8 +185,9 @@ async fn establish_channel<'a>(
         }
         Err(error) => {
             log::warn!(
-                "{} failed to establish encrypted channel as {:?}: {}",
+                "{} failed to establish encrypted channel for repo:{:?} as {:?}: {}",
                 ChannelInfo::current(),
+                index.repository_id(),
                 role,
                 error
             );
