@@ -31,6 +31,27 @@ type MsgData = [u8; MSG_SIZE];
 /// then send a barrier message to the first while the first one will think it's the response to
 /// it's first message. The second peer will then not receive its response.
 ///
+/// The construction of the algorithm went as follows: the two peers need to ensure that the entire
+/// barrier agreement happens within a single instance of Barrier on one side and a single instance
+/// of a Barrier on the other side. To ensure this, both peers choose a random `barrier_id` which
+/// they send to each other. This is then echoed from the other side and upon reception of the echo
+/// each peer is able to check that the other side knows it's `barrier_id`. Let's call this process
+/// "sync on barrier ID".
+///
+/// To be able to do the above, we needed to perform two steps:
+///
+/// Step #1: Send our barrier ID to the peer, and
+/// Step #2: Receive our barrier ID from the peer.
+///
+/// As such, it may happen that one peer is currently performing the step #1 while the other peer
+/// is performing the step #2. Thus we need to ensure that they're both performing the two steps in
+/// sync. Let's call this process "sync on step".
+///
+/// Finally, because each "step" consists of sending and receiving (exchanging) a message, we must
+/// ensure that the exchange does not happen across steps. Or in other words: it must not be the
+/// case that a peer sends a message in one step, but receives a message from the other peer's
+/// previous step. Let's call this process "sync on exchange".
+///
 /// TODO: This is one of those algorithms where a formal correctness proof would be welcome.
 pub(super) struct Barrier<'a> {
     // Barrier ID is used to ensure that the other peer is communicating with this instance of
