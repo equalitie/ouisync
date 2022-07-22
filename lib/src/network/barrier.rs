@@ -49,7 +49,7 @@ impl<'a> Barrier<'a> {
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), ChannelClosed> {
+    pub async fn run(&mut self) -> Result<(), BarrierError> {
         use std::cmp::max;
 
         // I think we send this empty message in order to break the encryption on the other side and
@@ -61,7 +61,7 @@ impl<'a> Barrier<'a> {
         loop {
             if this_round > 256 {
                 log::error!("Barrier algorithm failed");
-                return Err(ChannelClosed);
+                return Err(BarrierError::Failure);
             }
 
             let (their_barrier_id, their_round, their_step) =
@@ -184,4 +184,18 @@ fn parse_message(data: &[u8]) -> Option<Msg> {
         Round::from_le_bytes(round_data.try_into().unwrap()),
         Step::from_le_bytes(step_data.try_into().unwrap()),
     ))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BarrierError {
+    #[error("Barrier algorithm failed")]
+    Failure,
+    #[error("Channel closed")]
+    ChannelClosed,
+}
+
+impl From<ChannelClosed> for BarrierError {
+    fn from(_: ChannelClosed) -> Self {
+        Self::ChannelClosed
+    }
 }

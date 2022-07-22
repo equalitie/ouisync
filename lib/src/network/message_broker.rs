@@ -1,10 +1,10 @@
 use super::{
-    barrier::Barrier,
+    barrier::{Barrier, BarrierError},
     client::Client,
     connection::ConnectionPermit,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
-    message_dispatcher::{ChannelClosed, ContentSink, ContentStream, MessageDispatcher},
+    message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     raw,
     request::MAX_PENDING_REQUESTS,
     runtime_id::PublicRuntimeId,
@@ -13,10 +13,12 @@ use super::{
 use crate::{
     index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
 };
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     select,
@@ -129,10 +131,25 @@ async fn maintain_link(
     store: Store,
     request_limiter: Arc<Semaphore>,
 ) {
+    let mut backoff = ExponentialBackoffBuilder::new()
+        .with_initial_interval(Duration::from_millis(100))
+        .with_max_interval(Duration::from_secs(5))
+        .with_max_elapsed_time(None)
+        .build();
+
+    let mut next_sleep = None;
+
     loop {
+        if let Some(sleep) = next_sleep {
+            tokio::time::sleep(sleep).await;
+        }
+
+        next_sleep = backoff.next_backoff();
+
         match Barrier::new(&mut stream, &mut sink).run().await {
             Ok(()) => (),
-            Err(ChannelClosed) => break,
+            Err(BarrierError::Failure) => continue,
+            Err(BarrierError::ChannelClosed) => break,
         }
 
         let (crypto_stream, crypto_sink) =
