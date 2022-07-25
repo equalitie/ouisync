@@ -170,7 +170,10 @@ impl<'a> Monitor<'a> {
         loop {
             match subscription.recv().await {
                 Ok(branch_id) => self.handle_branch_changed(branch_id).await?,
-                Err(RecvError::Lagged(_)) => self.handle_all_branches_changed().await?,
+                Err(RecvError::Lagged(_)) => {
+                    tracing::warn!("event receiver lagged");
+                    self.handle_all_branches_changed().await?
+                }
                 Err(RecvError::Closed) => break,
             }
         }

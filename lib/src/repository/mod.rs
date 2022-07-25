@@ -4,6 +4,7 @@ mod tests;
 mod utils;
 mod worker;
 
+pub(crate) use self::id::LocalId;
 pub use self::id::RepositoryId;
 
 use self::worker::{Worker, WorkerHandle};
@@ -38,6 +39,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
 };
+use tracing::instrument::Instrument;
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -228,6 +230,7 @@ impl Repository {
             monitored: Arc::downgrade(&monitored),
             index,
             block_tracker,
+            local_id: LocalId::new(),
         };
 
         let shared = Arc::new(Shared {
@@ -249,7 +252,8 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run());
+        let worker_span = tracing::debug_span!("worker", repo = %shared.store.local_id);
+        task::spawn(worker.run().instrument(worker_span));
 
         task::spawn(report_sync_progress(shared.store.clone()));
 
@@ -714,6 +718,7 @@ async fn report_sync_progress(store: Store) {
         if next_progress != prev_progress {
             prev_progress = next_progress;
             tracing::debug!(
+                repo = %store.local_id,
                 "sync progress: {} bytes ({:.1})",
                 prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()

@@ -81,14 +81,14 @@ impl MessageBroker {
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
-    /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
-    /// to actually be created.
+    /// counterpart needs to call this too with matching repository id for the link to actually be
+    /// created.
     pub fn create_link(&mut self, store: Store) {
+        let span = tracing::debug_span!(parent: &self.span, "link", repo = %store.local_id);
+        let span_enter = span.enter();
+
         let channel = MessageChannel::from(store.index.repository_id());
         let (abort_tx, abort_rx) = oneshot::channel();
-
-        let span = tracing::debug_span!(parent: &self.span, "link", channel = ?channel);
-        let span_enter = span.enter();
 
         match self.links.entry(channel) {
             Entry::Occupied(mut entry) => {

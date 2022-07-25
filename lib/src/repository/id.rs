@@ -4,7 +4,11 @@ use crate::crypto::{
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{
+    fmt,
+    str::FromStr,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 #[derive(PartialEq, Eq, Clone, Debug, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
@@ -67,5 +71,22 @@ impl From<PublicKey> for RepositoryId {
 impl Hashable for RepositoryId {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         self.0.update_hash(state)
+    }
+}
+
+/// Simple numeric id that is unique only locally. Useful mostly for debugging.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub(crate) struct LocalId(u32);
+
+impl LocalId {
+    pub fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Display for LocalId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
