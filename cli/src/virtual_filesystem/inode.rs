@@ -31,7 +31,7 @@ impl InodeMap {
         let inode = index_to_inode(index);
         assert_eq!(inode, FUSE_ROOT_ID);
 
-        log::trace!("Create inode {} for /", FUSE_ROOT_ID);
+        tracing::trace!("Create inode {} for /", FUSE_ROOT_ID);
 
         Self {
             forward,
@@ -71,7 +71,7 @@ impl InodeMap {
 
                 entry.insert(inode);
 
-                log::trace!(
+                tracing::trace!(
                     "Create inode {} for {}",
                     inode,
                     PathDisplay(&self.forward, inode, None)
@@ -107,7 +107,7 @@ impl InodeMap {
 
             let fwd_removed = self.reverse.remove(&key);
 
-            log::trace!(
+            tracing::trace!(
                 "Remove inode {} for {}",
                 inode,
                 PathDisplay(&self.forward, key.parent, Some(&key.unique_name))

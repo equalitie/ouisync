@@ -556,7 +556,7 @@ impl<'a> JointDirectoryRef<'a> {
                         .map(|local_branch| version.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
-                    log::error!(
+                    tracing::error!(
                         "failed to open directory '{}' on the local branch: {:?}",
                         self.name(),
                         e
@@ -572,7 +572,7 @@ impl<'a> JointDirectoryRef<'a> {
                     continue;
                 }
                 Err(e) => {
-                    log::error!(
+                    tracing::error!(
                         "failed to open directory '{}' on a remote branch: {:?}",
                         self.name(),
                         e

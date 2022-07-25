@@ -99,7 +99,7 @@ impl LocalDiscovery {
                 Err(error) => {
                     if !recv_error_reported {
                         recv_error_reported = true;
-                        log::error!("Failed to receive discovery message: {}", error);
+                        tracing::error!("Failed to receive discovery message: {}", error);
                     }
                     self.socket_provider.mark_bad(socket).await;
                     sleep(ERROR_DELAY).await;
@@ -111,7 +111,7 @@ impl LocalDiscovery {
                 match bincode::deserialize(&recv_buffer[..size]) {
                     Ok(versioned_message) => versioned_message,
                     Err(error) => {
-                        log::error!("Malformed discovery message: {}", error);
+                        tracing::error!("Malformed discovery message: {}", error);
                         continue;
                     }
                 };
@@ -119,7 +119,7 @@ impl LocalDiscovery {
             if &versioned_message.magic != PROTOCOL_MAGIC
                 || versioned_message.version != PROTOCOL_VERSION
             {
-                log::warn!(
+                tracing::warn!(
                     "Incompatible protocol version (our:{}, their:{})",
                     PROTOCOL_VERSION,
                     versioned_message.version
@@ -146,7 +146,7 @@ impl LocalDiscovery {
 
             // TODO: Consider `spawn`ing this, so it doesn't block this function.
             if let Err(error) = send(&socket, msg, addr).await {
-                log::error!("Failed to send discovery message: {}", error);
+                tracing::error!("Failed to send discovery message: {}", error);
                 self.socket_provider.mark_bad(socket).await;
             }
         } else {
@@ -216,7 +216,7 @@ async fn run_beacon(
             Err(error) => {
                 if !error_shown {
                     error_shown = true;
-                    log::error!("Failed to send discovery message: {}", error);
+                    tracing::error!("Failed to send discovery message: {}", error);
                 }
                 socket_provider.mark_bad(socket).await;
                 sleep(ERROR_DELAY).await;

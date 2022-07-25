@@ -12,6 +12,7 @@ use std::{
     io,
 };
 use tokio::{fs::File, io::AsyncWriteExt};
+use tracing_subscriber::EnvFilter;
 
 pub(crate) const APP_NAME: &str = "ouisync";
 
@@ -25,7 +26,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    env_logger::init();
+    init_log();
 
     let config = if !options.temp {
         ConfigStore::new(options.config_dir()?)
@@ -121,7 +122,7 @@ async fn main() -> Result<()> {
 
             entry.insert(repo);
 
-            log::info!("share token accepted: {}", token);
+            tracing::info!("share token accepted: {}", token);
         } else {
             return Err(format_err!(
                 "can't accept share token for repository {:?} - already exists",
@@ -207,4 +208,15 @@ async fn terminated() -> io::Result<()> {
 #[cfg(not(unix))]
 async fn terminated() -> io::Result<()> {
     tokio::signal::ctrl_c().await
+}
+
+fn init_log() {
+    tracing_subscriber::fmt()
+        // uncomment to enable pretty log output (more readable but also more verbose)
+        // .pretty()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_file(true)
+        .with_line_number(true)
+        .with_target(false)
+        .init();
 }

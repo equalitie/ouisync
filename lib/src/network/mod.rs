@@ -328,11 +328,11 @@ impl Network {
         match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
             Ok(listener) => match listener.local_addr() {
                 Ok(addr) => {
-                    log::info!("Configured {} TCP listener on {:?}", proto, addr);
+                    tracing::info!("Configured {} TCP listener on {:?}", proto, addr);
                     Some((listener, addr))
                 }
                 Err(err) => {
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to get an address of {} TCP listener: {:?}",
                         proto,
                         err
@@ -341,7 +341,7 @@ impl Network {
                 }
             },
             Err(err) => {
-                log::warn!(
+                tracing::warn!(
                     "Failed to bind listener to {} TCP address {:?}: {:?}",
                     proto,
                     preferred_addr,
@@ -365,7 +365,7 @@ impl Network {
         {
             Ok(socket) => socket,
             Err(err) => {
-                log::error!(
+                tracing::error!(
                     "Failed to bind {} QUIC socket to {:?}: {:?}",
                     proto,
                     preferred_addr,
@@ -378,7 +378,7 @@ impl Network {
         let socket = match socket.into_std() {
             Ok(socket) => socket,
             Err(err) => {
-                log::error!(
+                tracing::error!(
                     "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
                     proto,
                     err
@@ -389,7 +389,7 @@ impl Network {
 
         match quic::configure(socket) {
             Ok((connector, listener, side_channel)) => {
-                log::info!(
+                tracing::info!(
                     "Configured {} QUIC stack on {:?}",
                     proto,
                     listener.local_addr()
@@ -397,7 +397,7 @@ impl Network {
                 Some((connector, listener, side_channel))
             }
             Err(e) => {
-                log::warn!("Failed to configure {} QUIC stack: {}", proto, e);
+                tracing::warn!("Failed to configure {} QUIC stack: {}", proto, e);
                 None
             }
         }
@@ -573,7 +573,9 @@ impl Inner {
         if let Some(port) = port {
             *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
         } else {
-            log::error!("Failed to enable local discovery because we don't have an IPv4 listener");
+            tracing::error!(
+                "Failed to enable local discovery because we don't have an IPv4 listener"
+            );
         }
     }
 
@@ -583,7 +585,7 @@ impl Inner {
         let discovery = match LocalDiscovery::new(listener_port, monitor) {
             Ok(discovery) => discovery,
             Err(error) => {
-                log::error!("Failed to create LocalDiscovery: {}", error);
+                tracing::error!("Failed to create LocalDiscovery: {}", error);
                 return;
             }
         };
@@ -603,7 +605,7 @@ impl Inner {
             let (socket, addr) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(error) => {
-                    log::error!("Failed to accept incoming TCP connection: {}", error);
+                    tracing::error!("Failed to accept incoming TCP connection: {}", error);
                     break;
                 }
             };
@@ -626,7 +628,7 @@ impl Inner {
             let socket = match listener.accept().await {
                 Ok(socket) => socket,
                 Err(error) => {
-                    log::error!("Failed to accept incoming QUIC connection: {}", error);
+                    tracing::error!("Failed to accept incoming QUIC connection: {}", error);
                     break;
                 }
             };
@@ -740,7 +742,7 @@ impl Inner {
                     return Some(socket);
                 }
                 None => {
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to create {} connection to address {:?}",
                         source,
                         addr,
@@ -864,7 +866,7 @@ impl Inner {
     ) {
         let addr = permit.addr();
 
-        log::info!("New {} connection: {:?}", peer_source, addr);
+        tracing::info!("New {} connection: {:?}", peer_source, addr);
 
         permit.mark_as_handshaking();
 
@@ -872,23 +874,23 @@ impl Inner {
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
                 Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
+                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
                 Err(ref error @ HandshakeError::BadMagic) => {
-                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
+                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
                 Err(HandshakeError::Fatal(error)) => {
-                    log::error!("Failed to perform handshake with {:?}: {}", addr, error);
+                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
                     return;
                 }
             };
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            log::debug!("Connection from self, discarding");
+            tracing::debug!("Connection from self, discarding");
             return;
         }
 
@@ -903,7 +905,7 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    log::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
+                    tracing::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
 
                     let mut broker = MessageBroker::new(
                         self.this_runtime_id.public(),
@@ -925,7 +927,7 @@ impl Inner {
         }
 
         released.notified().await;
-        log::info!(
+        tracing::info!(
             "Lost {} connection: {:?} {:?}",
             peer_source,
             that_runtime_id,

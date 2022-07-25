@@ -120,7 +120,7 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
     let path = match utils::ptr_to_str(path) {
         Ok(s) => s,
         Err(e) => {
-            log::error!(
+            tracing::error!(
                 "Failed to parse input in session_get_state_monitor: {:?}",
                 e
             );
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
     let path = match utils::ptr_to_str(path) {
         Ok(s) => s,
         Err(e) => {
-            log::error!(
+            tracing::error!(
                 "Failed to parse input in session_get_state_monitor: {:?}",
                 e
             );
@@ -314,7 +314,7 @@ impl Sender {
                 (self.post_c_object_fn)(port, &mut value.into());
             }
             Err(error) => {
-                log::error!("ffi error: {:?}", error);
+                tracing::error!("ffi error: {:?}", error);
                 (self.post_c_object_fn)(port, &mut error.to_error_code().into());
                 (self.post_c_object_fn)(port, &mut error.to_string().into());
             }

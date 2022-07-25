@@ -65,14 +65,14 @@ where
 
     impl<'a> Drop for LogOnDrop<'a> {
         fn drop(&mut self) {
-            log::trace!("{}: [cancelled]", self.0);
+            tracing::trace!("{}: [cancelled]", self.0);
         }
     }
 
     let log_on_drop = LogOnDrop(label);
     let result = task.await;
 
-    log::trace!("{}: {:?}", label, result);
+    tracing::trace!("{}: {:?}", label, result);
     mem::forget(log_on_drop);
 
     result

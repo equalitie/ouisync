@@ -153,7 +153,7 @@ impl Client {
         match result {
             Ok(()) => Ok(()),
             Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                log::warn!(
+                tracing::warn!(
                     "{} failed to handle response: {}",
                     ChannelInfo::current(),
                     error
@@ -169,7 +169,7 @@ impl Client {
         proof: UntrustedProof,
         summary: Summary,
     ) -> Result<(), ReceiveError> {
-        log::trace!(
+        tracing::trace!(
             "{} handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
             ChannelInfo::current(),
             proof.hash,
@@ -191,7 +191,7 @@ impl Client {
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
     ) -> Result<(), ReceiveError> {
-        log::trace!(
+        tracing::trace!(
             "{} handle_inner_nodes({:?})",
             ChannelInfo::current(),
             nodes.hash()
@@ -214,7 +214,7 @@ impl Client {
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<(), ReceiveError> {
-        log::trace!(
+        tracing::trace!(
             "{} handle_leaf_nodes({:?})",
             ChannelInfo::current(),
             nodes.hash()
@@ -234,7 +234,7 @@ impl Client {
         data: BlockData,
         nonce: BlockNonce,
     ) -> Result<(), ReceiveError> {
-        log::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
+        tracing::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
 
         match self.store.write_received_block(&data, &nonce).await {
             Ok(_) => Ok(()),

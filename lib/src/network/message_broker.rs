@@ -83,7 +83,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    log::warn!("{} not creating link - already exists", channel_info);
+                    tracing::warn!("{} not creating link - already exists", channel_info);
                     return;
                 }
             }
@@ -92,7 +92,7 @@ impl MessageBroker {
             }
         }
 
-        log::debug!("{} creating link", channel_info);
+        tracing::debug!("{} creating link", channel_info);
 
         let role = Role::determine(
             store.index.repository_id(),
@@ -110,7 +110,7 @@ impl MessageBroker {
                 _ = abort_rx => (),
             }
 
-            log::debug!("{} link destroyed", channel_info)
+            tracing::debug!("{} link destroyed", channel_info)
         };
 
         task::spawn(channel_info.apply(task));
@@ -174,7 +174,7 @@ async fn establish_channel<'a>(
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
-            log::debug!(
+            tracing::debug!(
                 "{} established encrypted channel for repo:{:?} as {:?}",
                 ChannelInfo::current(),
                 index.repository_id(),
@@ -184,7 +184,7 @@ async fn establish_channel<'a>(
             Ok(io)
         }
         Err(error) => {
-            log::warn!(
+            tracing::warn!(
                 "{} failed to establish encrypted channel for repo:{:?} as {:?}: {}",
                 ChannelInfo::current(),
                 index.repository_id(),
@@ -226,21 +226,21 @@ async fn recv_messages(
         let content = match stream.recv().await {
             Ok(content) => content,
             Err(RecvError::Crypto) => {
-                log::warn!(
+                tracing::warn!(
                     "{} failed to decrypt incoming message",
                     ChannelInfo::current()
                 );
                 return ControlFlow::Continue;
             }
             Err(RecvError::Exhausted) => {
-                log::debug!(
+                tracing::debug!(
                     "{} incoming message nonce counter exhausted",
                     ChannelInfo::current()
                 );
                 return ControlFlow::Continue;
             }
             Err(RecvError::Closed) => {
-                log::debug!("{} message stream closed", ChannelInfo::current());
+                tracing::debug!("{} message stream closed", ChannelInfo::current());
                 return ControlFlow::Break;
             }
         };
@@ -248,7 +248,7 @@ async fn recv_messages(
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
-                log::warn!(
+                tracing::warn!(
                     "{} failed to deserialize incoming message: {}",
                     ChannelInfo::current(),
                     error
@@ -283,14 +283,14 @@ async fn send_messages(
         match sink.send(content).await {
             Ok(()) => (),
             Err(SendError::Exhausted) => {
-                log::debug!(
+                tracing::debug!(
                     "{} outgoing message nonce counter exhausted",
                     ChannelInfo::current()
                 );
                 return ControlFlow::Continue;
             }
             Err(SendError::Closed) => {
-                log::debug!("{} message sink closed", ChannelInfo::current());
+                tracing::debug!("{} message sink closed", ChannelInfo::current());
                 return ControlFlow::Break;
             }
         }
@@ -309,7 +309,7 @@ async fn run_client(
     match client.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("{} client failed: {:?}", ChannelInfo::current(), error);
+            tracing::error!("{} client failed: {:?}", ChannelInfo::current(), error);
             ControlFlow::Continue
         }
     }
@@ -326,7 +326,7 @@ async fn run_server(
     match server.run().await {
         Ok(()) => forever().await,
         Err(error) => {
-            log::error!("{} server failed: {:?}", ChannelInfo::current(), error);
+            tracing::error!("{} server failed: {:?}", ChannelInfo::current(), error);
             ControlFlow::Continue
         }
     }

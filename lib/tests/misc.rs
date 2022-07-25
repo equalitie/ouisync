@@ -657,7 +657,7 @@ async fn write_in_chunks(db: &db::Pool, file: &mut File, content: &[u8], chunk_s
         file.write(&mut conn, &content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
-            log::debug!(
+            tracing::debug!(
                 "file write progress: {}/{} MB",
                 to_megabytes(end),
                 to_megabytes(content.len())
