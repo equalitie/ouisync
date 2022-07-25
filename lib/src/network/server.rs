@@ -7,13 +7,13 @@ use crate::{
     index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
-use std::{fmt, time::Duration};
+use std::time::Duration;
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc},
     time::{self, MissedTickBehavior},
 };
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -92,8 +92,8 @@ impl<'a> Responder<'a> {
         }
     }
 
+    #[instrument(level = "trace", skip(self), fields(found), ret)]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
-        let reporter = RequestReporter::new("handle_child_nodes", &parent_hash);
         self.stats.node();
 
         let mut conn = self.index.pool.acquire().await?;
@@ -105,6 +105,8 @@ impl<'a> Responder<'a> {
         drop(conn);
 
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
+            Span::current().record("found", &true);
+
             if !inner_nodes.is_empty() {
                 self.tx.send(Response::InnerNodes(inner_nodes)).await;
             }
@@ -112,18 +114,16 @@ impl<'a> Responder<'a> {
             if !leaf_nodes.is_empty() {
                 self.tx.send(Response::LeafNodes(leaf_nodes)).await;
             }
-
-            reporter.ok();
         } else {
+            Span::current().record("found", &false);
             self.tx.send(Response::ChildNodesError(parent_hash)).await;
-            reporter.not_found();
         }
 
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self), fields(found), ret)]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
-        let reporter = RequestReporter::new("handle_block", &id);
         self.stats.block();
 
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
@@ -133,13 +133,13 @@ impl<'a> Responder<'a> {
 
         match result {
             Ok(nonce) => {
+                Span::current().record("found", &true);
                 self.tx.send(Response::Block { content, nonce }).await;
-                reporter.ok();
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
+                Span::current().record("found", &false);
                 self.tx.send(Response::BlockError(id)).await;
-                reporter.not_found();
                 Ok(())
             }
             Err(error) => {
@@ -212,11 +212,11 @@ impl<'a> Monitor<'a> {
         }
 
         tracing::trace!(
-            "handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
-            root_node.proof.writer_id,
-            root_node.proof.hash,
-            root_node.proof.version_vector,
-            root_node.summary.missing_blocks_count(),
+            branch_id = ?root_node.proof.writer_id,
+            hash = ?root_node.proof.hash,
+            vv = ?root_node.proof.version_vector,
+            missing_blocks = root_node.summary.missing_blocks_count(),
+            "handle_branch_changed",
         );
 
         let response = Response::RootNode {
@@ -252,61 +252,6 @@ impl Sender {
     }
 }
 
-struct RequestReporter<'a, T>
-where
-    T: fmt::Debug,
-{
-    label: &'static str,
-    id: &'a T,
-    status: Status,
-}
-
-impl<'a, T> RequestReporter<'a, T>
-where
-    T: fmt::Debug,
-{
-    fn new(label: &'static str, id: &'a T) -> Self {
-        Self {
-            label,
-            id,
-            status: Status::Error,
-        }
-    }
-
-    fn not_found(mut self) {
-        self.status = Status::NotFound;
-    }
-
-    fn ok(mut self) {
-        self.status = Status::Ok;
-    }
-}
-
-impl<'a, T> Drop for RequestReporter<'a, T>
-where
-    T: fmt::Debug,
-{
-    fn drop(&mut self) {
-        tracing::trace!("{}({:?}) - {}", self.label, self.id, self.status)
-    }
-}
-
-enum Status {
-    Ok,
-    NotFound,
-    Error,
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Ok => write!(f, "ok"),
-            Self::NotFound => write!(f, "not found"),
-            Self::Error => write!(f, "error"),
-        }
-    }
-}
-
 struct Stats {
     nodes: u64,
     blocks: u64,
@@ -338,10 +283,10 @@ impl Stats {
         }
 
         tracing::debug!(
-            "request stats - nodes: {}, blocks: {}, total: {}",
-            self.nodes,
-            self.blocks,
-            self.nodes + self.blocks
+            nodes = self.nodes,
+            blocks = self.blocks,
+            total = self.nodes + self.blocks,
+            "request stats",
         );
 
         self.report = false;

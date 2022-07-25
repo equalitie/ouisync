@@ -106,8 +106,6 @@ impl Client {
             *monitored.total_request_cummulative.get() += 1;
         }
 
-        tracing::trace!(?request, "send");
-
         self.tx.send(Content::Request(request)).await.unwrap_or(());
     }
 
