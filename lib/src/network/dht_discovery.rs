@@ -146,10 +146,10 @@ async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> Restart
         async move {
             if dht.bootstrapped(None).await {
                 *first_bootstrap.get() = "done";
-                log::info!("DHT {} bootstrap complete", protocol);
+                tracing::info!("DHT {} bootstrap complete", protocol);
             } else {
                 *first_bootstrap.get() = "failed";
-                log::error!("DHT {} bootstrap failed", protocol);
+                tracing::error!("DHT {} bootstrap failed", protocol);
 
                 // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
                 // is preserved for the user to see.
@@ -306,7 +306,7 @@ impl Lookup {
             loop {
                 seen_peers.start_new_round();
 
-                log::debug!("DHT Starting search for info hash: {:?}", info_hash);
+                tracing::debug!("DHT Starting search for info hash: {:?}", info_hash);
                 *state.get() = Cow::Borrowed("making request");
 
                 // find peers for the repo and also announce that we have it.
@@ -324,7 +324,7 @@ impl Lookup {
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
-                        log::debug!("DHT found peer for {:?}: {:?}", info_hash, peer.addr());
+                        tracing::debug!("DHT found peer for {:?}: {:?}", info_hash, peer.addr());
 
                         for tx in requests.lock().unwrap().values() {
                             tx.send(peer.clone()).unwrap_or(());
@@ -339,7 +339,7 @@ impl Lookup {
 
                 {
                     let time: DateTime<Local> = (SystemTime::now() + duration).into();
-                    log::debug!(
+                    tracing::debug!(
                         "DHT search for {:?} ended. Next one scheduled at {} (in {:?})",
                         info_hash,
                         time.format("%T"),
@@ -350,10 +350,10 @@ impl Lookup {
 
                 select! {
                     _ = time::sleep(duration) => {
-                        log::debug!("DHT sleep duration passed")
+                        tracing::debug!("DHT sleep duration passed")
                     },
                     _ = wake_up.changed() => {
-                        log::debug!("DHT wake up")
+                        tracing::debug!("DHT wake up")
                     },
                 }
             }

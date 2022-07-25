@@ -261,7 +261,7 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
         if actual_count == expected_count {
             true
         } else {
-            log::debug!(
+            tracing::debug!(
                 "block count - actual: {}, expected: {}",
                 actual_count,
                 expected_count

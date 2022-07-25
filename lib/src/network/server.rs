@@ -212,7 +212,7 @@ impl<'a> Monitor<'a> {
             return Ok(());
         }
 
-        log::trace!(
+        tracing::trace!(
             "{} handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
             ChannelInfo::current(),
             root_node.proof.writer_id,
@@ -289,7 +289,7 @@ where
     T: fmt::Debug,
 {
     fn drop(&mut self) {
-        log::trace!(
+        tracing::trace!(
             "{} {}({:?}) - {}",
             ChannelInfo::current(),
             self.label,
@@ -345,7 +345,7 @@ impl Stats {
             return;
         }
 
-        log::debug!(
+        tracing::debug!(
             "{} request stats - nodes: {}, blocks: {}, total: {}",
             ChannelInfo::current(),
             self.nodes,

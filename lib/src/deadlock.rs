@@ -180,7 +180,7 @@ where
     match time::timeout(WARNING_TIMEOUT, &mut fut).await {
         Ok(output) => output,
         Err(_) => {
-            log::warn!("{}", message);
+            tracing::warn!("{}", message);
             fut.await
         }
     }

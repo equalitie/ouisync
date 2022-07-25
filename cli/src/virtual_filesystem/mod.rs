@@ -79,7 +79,7 @@ impl Drop for MountGuard {
             // an error. We don't care about that error (we are shutting down the filesystem
             // anyway), so it should be ok to just suppress the panic.
             if panic::catch_unwind(AssertUnwindSafe(move || session.join())).is_err() {
-                log::error!("panic in BackgroundSession::join");
+                tracing::error!("panic in BackgroundSession::join");
             }
         }
     }
@@ -99,7 +99,7 @@ macro_rules! try_request {
         match $result {
             Ok(value) => value,
             Err(error) => {
-                log::error!("{:?}", error);
+                tracing::error!("{:?}", error);
                 $reply.error(to_error_code(&error));
                 return;
             }
@@ -127,11 +127,11 @@ impl VirtualFilesystem {
 
 impl fuser::Filesystem for VirtualFilesystem {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), c_int> {
-        log::debug!("init (config: {:?})", config);
+        tracing::debug!("init (config: {:?})", config);
 
         // Enable open with truncate
         if config.add_capabilities(FUSE_CAP_ATOMIC_O_TRUNC).is_err() {
-            log::error!("required fuse capability FUSE_CAP_ATOMIC_O_TRUNC not supported");
+            tracing::error!("required fuse capability FUSE_CAP_ATOMIC_O_TRUNC not supported");
             return Err(libc::ENOSYS);
         }
 
@@ -148,7 +148,7 @@ impl fuser::Filesystem for VirtualFilesystem {
     // called for the entries in `readdir` though (see the comment in that function for more
     // details).
     fn forget(&mut self, _req: &Request, inode: Inode, lookups: u64) {
-        log::debug!(
+        tracing::debug!(
             "forget {} (lookups={})",
             self.inner.inodes.path_display(inode, None),
             lookups
@@ -425,7 +425,7 @@ impl Inner {
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
+        tracing::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
@@ -454,7 +454,7 @@ impl Inner {
     }
 
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
-        log::debug!("getattr {}", self.inodes.path_display(inode, None));
+        tracing::debug!("getattr {}", self.inodes.path_display(inode, None));
 
         let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
 
@@ -482,7 +482,7 @@ impl Inner {
 
         let mut scope = FormatOptionScope::new(", ");
 
-        log::debug!(
+        tracing::debug!(
             "setattr {} ({:#o}{}{}{}{:?}{:?}{:?}{}{:?}{:?}{:?}{:#x})",
             self.inodes.path_display(inode, None),
             scope.add("mode=", mode),
@@ -538,7 +538,7 @@ impl Inner {
     }
 
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
-        log::debug!(
+        tracing::debug!(
             "opendir {} (flags={})",
             self.inodes.path_display(inode, None),
             flags
@@ -551,7 +551,7 @@ impl Inner {
     }
 
     fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
-        log::debug!(
+        tracing::debug!(
             "releasedir {} (handle={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -576,7 +576,7 @@ impl Inner {
         // Want to keep the `if`s uncollapsed here for readability.
         #![allow(clippy::collapsible_if)]
 
-        log::debug!(
+        tracing::debug!(
             "readdir {} (handle={}, offset={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -584,7 +584,7 @@ impl Inner {
         );
 
         // Print state when the user does `ls <ouisync-mount-root>/`
-        if log::log_enabled!(log::Level::Debug) {
+        if tracing::enabled!(tracing::Level::DEBUG) {
             if inode == 1 && offset == 0 {
                 self.debug_print(DebugPrinter::new()).await;
             }
@@ -652,7 +652,7 @@ impl Inner {
     ) -> Result<FileAttr> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!(
+        tracing::debug!(
             "mkdir {} (mode={:#o}, umask={:#o})",
             self.inodes.path_display(parent, Some(name)),
             mode,
@@ -673,14 +673,14 @@ impl Inner {
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
+        tracing::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
 
         let parent_path = self.inodes.get(parent).calculate_path();
         self.repository.remove_entry(parent_path.join(name)).await
     }
 
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
-        log::debug!(
+        tracing::debug!(
             "fsyncdir {} (handle={}, datasync={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -702,7 +702,7 @@ impl Inner {
     ) -> Result<(FileAttr, FileHandle, u32)> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!(
+        tracing::debug!(
             "create {} (mode={:#o}, umask={:#o}, flags={})",
             self.inodes.path_display(parent, Some(name)),
             mode,
@@ -727,7 +727,7 @@ impl Inner {
     }
 
     async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
-        log::debug!(
+        tracing::debug!(
             "open {} (flags={})",
             self.inodes.path_display(inode, None),
             flags
@@ -760,7 +760,7 @@ impl Inner {
         flags: OpenFlags,
         flush: bool,
     ) -> Result<()> {
-        log::debug!(
+        tracing::debug!(
             "release {} (handle={}, flags={}, flush={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -789,7 +789,7 @@ impl Inner {
         size: u32,
         flags: OpenFlags,
     ) -> Result<Vec<u8>> {
-        log::debug!(
+        tracing::debug!(
             "read {} (handle={}, offset={}, size={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -823,7 +823,7 @@ impl Inner {
         data: &[u8],
         flags: OpenFlags,
     ) -> Result<u32> {
-        log::debug!(
+        tracing::debug!(
             "write {} (handle={}, offset={}, data.len={}, flags={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -845,7 +845,7 @@ impl Inner {
     }
 
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
-        log::debug!(
+        tracing::debug!(
             "flush {} (handle={})",
             self.inodes.path_display(inode, None),
             handle
@@ -856,7 +856,7 @@ impl Inner {
     }
 
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
-        log::debug!(
+        tracing::debug!(
             "fsync {} (handle={}, datasync={})",
             self.inodes.path_display(inode, None),
             handle,
@@ -871,7 +871,7 @@ impl Inner {
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
+        tracing::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         self.repository.remove_entry(path).await?;
@@ -889,7 +889,7 @@ impl Inner {
         let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
         let dst_name = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        log::debug!(
+        tracing::debug!(
             "rename {} -> {} (flags={:#x})",
             self.inodes.path_display(src_parent, Some(src_name)),
             self.inodes.path_display(dst_parent, Some(dst_name)),

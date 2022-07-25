@@ -48,7 +48,7 @@ impl PortForwarder {
             async move {
                 let result = Self::run(mappings, on_change_rx, monitor).await;
                 // Warning, because we don't actually expect this to happen.
-                log::warn!("UPnP port forwarding ended ({:?})", result)
+                tracing::warn!("UPnP port forwarding ended ({:?})", result)
             }
         });
 
@@ -73,7 +73,7 @@ impl PortForwarder {
                 *entry.get_mut() += 1;
             }
             hash_map::Entry::Vacant(entry) => {
-                log::info!(
+                tracing::info!(
                     "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
                     external,
                     internal,
@@ -134,7 +134,7 @@ impl PortForwarder {
                         // This happens e.g. when a device has no connection to the internet. Let's log
                         // the information but keep looping for when we get back online.
                         if !error_logged {
-                            log::debug!("Error discovering device URLs: {:?}", e);
+                            tracing::debug!("Error discovering device URLs: {:?}", e);
                             error_logged = true;
                         }
                         sleep(ERROR_SLEEP_DURATION).await;
@@ -149,7 +149,7 @@ impl PortForwarder {
                 let device_url = match result {
                     Ok(device_url) => device_url,
                     Err(e) => {
-                        log::debug!("Failed to contact one of the UPnP devices: {:?}", e);
+                        tracing::debug!("Failed to contact one of the UPnP devices: {:?}", e);
                         continue;
                     }
                 };
@@ -224,7 +224,7 @@ impl PortForwarder {
 
                 if first_attempt {
                     if let Err(e) = result {
-                        log::warn!("UPnP port forwarding on IGD {:?} ended: {}", device_url, e);
+                        tracing::warn!("UPnP port forwarding on IGD {:?} ended: {}", device_url, e);
                     }
                 }
 
@@ -409,7 +409,7 @@ impl PerIGDPortForwarder {
             if !ext_port_reported {
                 ext_port_reported = true;
 
-                log::info!(
+                tracing::info!(
                     "UPnP port forwarding started on external port {}:{}",
                     mapping.protocol,
                     mapping.external

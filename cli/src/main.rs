@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
 
             entry.insert(repo);
 
-            log::info!("share token accepted: {}", token);
+            tracing::info!("share token accepted: {}", token);
         } else {
             return Err(format_err!(
                 "can't accept share token for repository {:?} - already exists",

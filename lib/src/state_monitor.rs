@@ -165,7 +165,7 @@ impl StateMonitorShared {
                 });
             }
             map::Entry::Occupied(mut e) => {
-                log::error!(
+                tracing::error!(
                     "StateMonitor: Monitored value of the same name ({:?}) already exists",
                     name
                 );

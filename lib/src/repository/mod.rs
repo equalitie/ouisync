@@ -506,7 +506,7 @@ impl Repository {
                     continue;
                 }
                 Err(error) => {
-                    log::error!(
+                    tracing::error!(
                         "failed to open root directory in branch {:?}: {:?}",
                         branch.id(),
                         error
@@ -706,14 +706,14 @@ async fn report_sync_progress(store: Store) {
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
-                log::error!("failed to retrieve sync progress: {:?}", error);
+                tracing::error!("failed to retrieve sync progress: {:?}", error);
                 continue;
             }
         };
 
         if next_progress != prev_progress {
             prev_progress = next_progress;
-            log::debug!(
+            tracing::debug!(
                 "sync progress: {} bytes ({:.1})",
                 prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()

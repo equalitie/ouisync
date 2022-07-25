@@ -81,7 +81,7 @@ impl<'a> Barrier<'a> {
 
         loop {
             if this_round > 256 {
-                log::error!("Barrier algorithm failed");
+                tracing::error!("Barrier algorithm failed");
                 return Err(BarrierError::Failure);
             }
 

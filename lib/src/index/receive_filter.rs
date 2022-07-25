@@ -120,7 +120,7 @@ async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Re
 
 async fn remove_all(pool: db::Pool, client_id: u64) {
     if let Err(error) = try_remove_all(pool, client_id).await {
-        log::error!(
+        tracing::error!(
             "Failed to cleanup ReceiveFilter(client_id: {}): {:?}",
             client_id,
             error

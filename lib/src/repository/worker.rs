@@ -235,11 +235,11 @@ mod prune {
             // Don't remove branches that are in use. We get notified when they stop being used
             // so we can try again.
             if branch.is_any_blob_open() {
-                log::trace!("not removing outdated branch {:?} - in use", branch.id());
+                tracing::trace!("not removing outdated branch {:?} - in use", branch.id());
                 continue;
             }
 
-            log::trace!("removing outdated branch {:?}", branch.id());
+            tracing::trace!("removing outdated branch {:?}", branch.id());
             shared.store.index.remove_branch(branch.id());
             branch.data().destroy(&mut conn).await?;
         }
@@ -395,7 +395,7 @@ mod scan {
         let count = block::remove_unreachable(&mut conn).await?;
 
         if count > 0 {
-            log::debug!("unreachable blocks removed: {}", count);
+            tracing::debug!("unreachable blocks removed: {}", count);
         }
 
         Ok(())
