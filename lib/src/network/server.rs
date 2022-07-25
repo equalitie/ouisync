@@ -1,7 +1,4 @@
-use super::{
-    channel_info::ChannelInfo,
-    message::{Content, Request, Response},
-};
+use super::message::{Content, Request, Response};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
@@ -16,6 +13,7 @@ use tokio::{
     sync::{broadcast::error::RecvError, mpsc},
     time::{self, MissedTickBehavior},
 };
+use tracing::instrument;
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -34,6 +32,7 @@ impl Server {
         }
     }
 
+    #[instrument(name = "server", skip_all, ret)]
     pub async fn run(&mut self) -> Result<()> {
         let Self { index, tx, rx } = self;
         let responder = Responder::new(index, tx, rx);
@@ -213,8 +212,7 @@ impl<'a> Monitor<'a> {
         }
 
         tracing::trace!(
-            "{} handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
-            ChannelInfo::current(),
+            "handle_branch_changed(branch_id: {:?}, hash: {:?}, vv: {:?}, missing blocks: {})",
             root_node.proof.writer_id,
             root_node.proof.hash,
             root_node.proof.version_vector,
@@ -289,13 +287,7 @@ where
     T: fmt::Debug,
 {
     fn drop(&mut self) {
-        tracing::trace!(
-            "{} {}({:?}) - {}",
-            ChannelInfo::current(),
-            self.label,
-            self.id,
-            self.status
-        )
+        tracing::trace!("{}({:?}) - {}", self.label, self.id, self.status)
     }
 }
 
@@ -346,8 +338,7 @@ impl Stats {
         }
 
         tracing::debug!(
-            "{} request stats - nodes: {}, blocks: {}, total: {}",
-            ChannelInfo::current(),
+            "request stats - nodes: {}, blocks: {}, total: {}",
             self.nodes,
             self.blocks,
             self.nodes + self.blocks

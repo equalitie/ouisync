@@ -10,9 +10,7 @@ use super::{
     runtime_id::PublicRuntimeId,
     server::Server,
 };
-use crate::{
-    index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
-};
+use crate::{index::Index, repository::RepositoryId, store::Store};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -87,7 +85,6 @@ impl MessageBroker {
     /// to actually be created.
     pub fn create_link(&mut self, store: Store) {
         let channel = MessageChannel::from(store.index.repository_id());
-        let channel_info = ChannelInfo::new(channel, self.this_runtime_id, self.that_runtime_id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
         let span = tracing::debug_span!(parent: &self.span, "link", channel = ?channel);
@@ -131,7 +128,7 @@ impl MessageBroker {
         };
         let task = task.instrument(span);
 
-        task::spawn(channel_info.apply(task));
+        task::spawn(task);
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
@@ -312,10 +309,7 @@ async fn run_client(
 
     match client.run().await {
         Ok(()) => forever().await,
-        Err(error) => {
-            tracing::error!("client failed: {:?}", error);
-            ControlFlow::Continue
-        }
+        Err(_) => ControlFlow::Continue,
     }
 }
 
@@ -329,10 +323,7 @@ async fn run_server(
 
     match server.run().await {
         Ok(()) => forever().await,
-        Err(error) => {
-            tracing::error!("server failed: {:?}", error);
-            ControlFlow::Continue
-        }
+        Err(_) => ControlFlow::Continue,
     }
 }
 

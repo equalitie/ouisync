@@ -1,5 +1,4 @@
 use super::{
-    channel_info::ChannelInfo,
     message::{Content, Request, Response},
     request::PendingRequests,
 };
@@ -19,6 +18,7 @@ use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
+use tracing::instrument;
 
 pub(crate) struct Client {
     store: Store,
@@ -58,6 +58,7 @@ impl Client {
         }
     }
 
+    #[instrument(name = "client", skip_all, ret)]
     pub async fn run(&mut self) -> Result<()> {
         loop {
             select! {
@@ -153,11 +154,7 @@ impl Client {
         match result {
             Ok(()) => Ok(()),
             Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                tracing::warn!(
-                    "{} failed to handle response: {}",
-                    ChannelInfo::current(),
-                    error
-                );
+                tracing::warn!("failed to handle response: {}", error);
                 Ok(())
             }
             Err(ReceiveError::Fatal(error)) => Err(error),
@@ -170,8 +167,7 @@ impl Client {
         summary: Summary,
     ) -> Result<(), ReceiveError> {
         tracing::trace!(
-            "{} handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
-            ChannelInfo::current(),
+            "handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
             proof.hash,
             proof.version_vector,
             summary.missing_blocks_count()
@@ -191,11 +187,7 @@ impl Client {
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!(
-            "{} handle_inner_nodes({:?})",
-            ChannelInfo::current(),
-            nodes.hash()
-        );
+        tracing::trace!("handle_inner_nodes({:?})", nodes.hash());
 
         let updated = self
             .store
@@ -214,11 +206,7 @@ impl Client {
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!(
-            "{} handle_leaf_nodes({:?})",
-            ChannelInfo::current(),
-            nodes.hash()
-        );
+        tracing::trace!("handle_leaf_nodes({:?})", nodes.hash());
 
         let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
@@ -234,7 +222,7 @@ impl Client {
         data: BlockData,
         nonce: BlockNonce,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
+        tracing::trace!("handle_block({:?})", data.id);
 
         match self.store.write_received_block(&data, &nonce).await {
             Ok(_) => Ok(()),
