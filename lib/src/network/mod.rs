@@ -65,7 +65,7 @@ use tokio::{
     sync::mpsc,
     task, time,
 };
-use tracing::instrument;
+use tracing::{field, instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -865,39 +865,25 @@ impl Inner {
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
-        tracing::info!("Established");
-        tracing::debug!("Handshake started");
+        tracing::info!("connection established");
 
         permit.mark_as_handshaking();
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
-                Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    tracing::error!("Handshake failed: {}", error);
+                Err(HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
-                Err(ref error @ HandshakeError::BadMagic) => {
-                    tracing::error!("Handshake failed: {}", error);
-                    return;
-                }
-                Err(HandshakeError::Fatal(error)) => {
-                    tracing::error!("Handshake failed: {}", error);
-                    return;
-                }
+                Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return,
             };
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            tracing::debug!("Connection from self, discarding");
+            tracing::debug!("connection from self, discarding");
             return;
         }
-
-        tracing::debug!(
-            that_runtime_id = ?that_runtime_id.as_public_key(),
-            "Handshake completed",
-        );
 
         permit.mark_as_active();
 
@@ -930,7 +916,7 @@ impl Inner {
         }
 
         released.notified().await;
-        tracing::info!("Lost");
+        tracing::info!("connection lost");
 
         // Remove the broker if it has no more connections.
         let mut state = self.state.lock().unwrap();
@@ -965,6 +951,17 @@ pub enum ConnectError {
 //------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
+#[instrument(
+    level = "trace",
+    skip_all,
+    fields(
+        this_version = ?this_version,
+        that_version,
+        this_runtime_id = ?this_runtime_id.as_public_key(),
+        that_runtime_id
+    ),
+    ret
+)]
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -982,12 +979,19 @@ async fn perform_handshake(
     }
 
     let that_version = Version::read_from(stream).await?;
+    Span::current().record("that_version", &field::debug(&that_version));
 
     if that_version > this_version {
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
-    Ok(runtime_id::exchange(this_runtime_id, stream).await?)
+    let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
+    Span::current().record(
+        "that_runtime_id",
+        &field::debug(that_runtime_id.as_public_key()),
+    );
+
+    Ok(that_runtime_id)
 }
 
 #[derive(Debug, Error)]
