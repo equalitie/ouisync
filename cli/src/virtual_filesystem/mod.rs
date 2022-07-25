@@ -23,12 +23,14 @@ use ouisync_lib::{
 use std::{
     convert::TryInto,
     ffi::OsStr,
+    fmt,
     io::{self, SeekFrom},
     os::raw::c_int,
     panic::{self, AssertUnwindSafe},
     path::Path,
     time::{Duration, SystemTime},
 };
+use tracing::{instrument, Span};
 
 // Name of the filesystem.
 const FS_NAME: &str = "ouisync";
@@ -99,12 +101,17 @@ macro_rules! try_request {
         match $result {
             Ok(value) => value,
             Err(error) => {
-                tracing::error!("{:?}", error);
                 $reply.error(to_error_code(&error));
                 return;
             }
         }
     };
+}
+
+macro_rules! record_fmt {
+    ($name:expr, $($args:tt)*) => {{
+        Span::current().record($name, &format_args!($($args)*));
+    }}
 }
 
 struct VirtualFilesystem {
@@ -127,7 +134,7 @@ impl VirtualFilesystem {
 
 impl fuser::Filesystem for VirtualFilesystem {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), c_int> {
-        tracing::debug!("init (config: {:?})", config);
+        tracing::debug!(?config, "init");
 
         // Enable open with truncate
         if config.add_capabilities(FUSE_CAP_ATOMIC_O_TRUNC).is_err() {
@@ -148,12 +155,7 @@ impl fuser::Filesystem for VirtualFilesystem {
     // called for the entries in `readdir` though (see the comment in that function for more
     // details).
     fn forget(&mut self, _req: &Request, inode: Inode, lookups: u64) {
-        tracing::debug!(
-            "forget {} (lookups={})",
-            self.inner.inodes.path_display(inode, None),
-            lookups
-        );
-        self.inner.inodes.forget(inode, lookups)
+        self.inner.forget(inode, lookups)
     }
 
     fn getattr(&mut self, _req: &Request, inode: Inode, reply: ReplyAttr) {
@@ -340,7 +342,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             ),
             reply
         );
-        reply.data(&data);
+        reply.data(&data.into_inner());
     }
 
     fn write(
@@ -422,10 +424,11 @@ struct Inner {
 }
 
 impl Inner {
+    #[instrument(level = "debug", skip_all, fields(path), ret)]
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
-        tracing::debug!("lookup {}", self.inodes.path_display(parent, Some(name)));
+        self.record_path(parent, Some(name));
 
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
@@ -453,8 +456,15 @@ impl Inner {
         Ok(make_file_attr(inode, entry.entry_type(), len))
     }
 
+    #[instrument(level = "debug", skip(self, inode), fields(path), ret)]
+    fn forget(&mut self, inode: Inode, lookups: u64) {
+        self.record_path(inode, None);
+        self.inodes.forget(inode, lookups)
+    }
+
+    #[instrument(level = "debug", skip_all, fields(path), ret)]
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
-        tracing::debug!("getattr {}", self.inodes.path_display(inode, None));
+        self.record_path(inode, None);
 
         let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
 
@@ -462,6 +472,7 @@ impl Inner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(level = "debug", skip_all, fields(path), ret)]
     async fn setattr(
         &mut self,
         inode: Inode,
@@ -478,13 +489,14 @@ impl Inner {
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
     ) -> Result<FileAttr> {
+        self.record_path(inode, None);
+
         let local_branch = self.repository.get_or_create_local_branch().await?;
 
         let mut scope = FormatOptionScope::new(", ");
 
         tracing::debug!(
-            "setattr {} ({:#o}{}{}{}{:?}{:?}{:?}{}{:?}{:?}{:?}{:#x})",
-            self.inodes.path_display(inode, None),
+            "attrs: {:#o}{}{}{}{:?}{:?}{:?}{}{:?}{:?}{:?}{:#x}",
             scope.add("mode=", mode),
             scope.add("uid=", uid),
             scope.add("gid=", gid),
@@ -537,12 +549,9 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, %flags), ret)]
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
-        tracing::debug!(
-            "opendir {} (flags={})",
-            self.inodes.path_display(inode, None),
-            flags
-        );
+        self.record_path(inode, None);
 
         let dir = self.open_directory_by_inode(inode).await?;
         let handle = self.entries.insert(JointEntry::Directory(dir));
@@ -550,13 +559,9 @@ impl Inner {
         Ok(handle)
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, handle, %flags), ret)]
     fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
-        tracing::debug!(
-            "releasedir {} (handle={}, flags={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            flags
-        );
+        self.record_path(inode, None);
 
         // TODO: what about `flags`?
 
@@ -566,6 +571,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, handle, offset), ret)]
     async fn readdir(
         &mut self,
         inode: Inode,
@@ -573,21 +579,11 @@ impl Inner {
         offset: i64,
         reply: &mut ReplyDirectory,
     ) -> Result<()> {
-        // Want to keep the `if`s uncollapsed here for readability.
-        #![allow(clippy::collapsible_if)]
-
-        tracing::debug!(
-            "readdir {} (handle={}, offset={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            offset
-        );
+        self.record_path(inode, None);
 
         // Print state when the user does `ls <ouisync-mount-root>/`
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            if inode == 1 && offset == 0 {
-                self.debug_print(DebugPrinter::new()).await;
-            }
+        if tracing::enabled!(tracing::Level::DEBUG) && inode == 1 && offset == 0 {
+            self.debug_print(DebugPrinter::new()).await;
         }
 
         if offset < 0 {
@@ -598,16 +594,12 @@ impl Inner {
         let dir = self.entries.get_directory(handle)?;
 
         // Handle . and ..
-        if offset <= 0 {
-            if reply.add(inode, 1, FileType::Directory, ".") {
-                return Ok(());
-            }
+        if offset <= 0 && reply.add(inode, 1, FileType::Directory, ".") {
+            return Ok(());
         }
 
-        if offset <= 1 && parent != 0 {
-            if reply.add(parent, 2, FileType::Directory, "..") {
-                return Ok(());
-            }
+        if offset <= 1 && parent != 0 && reply.add(parent, 2, FileType::Directory, "..") {
+            return Ok(());
         }
 
         // Index of the first "real" entry (excluding . and ..)
@@ -643,6 +635,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, mode, umask), ret)]
     async fn mkdir(
         &mut self,
         parent: Inode,
@@ -650,14 +643,11 @@ impl Inner {
         mode: u32,
         umask: u32,
     ) -> Result<FileAttr> {
-        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        record_fmt!("mode", "{:#o}", mode);
+        record_fmt!("umask", "{:#o}", umask);
 
-        tracing::debug!(
-            "mkdir {} (mode={:#o}, umask={:#o})",
-            self.inodes.path_display(parent, Some(name)),
-            mode,
-            umask
-        );
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        self.record_path(parent, Some(name));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let dir = self.repository.create_directory(path).await?;
@@ -670,28 +660,25 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }
 
+    #[instrument(level = "debug", skip_all, fields(path), ret)]
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
-
-        tracing::debug!("rmdir {}", self.inodes.path_display(parent, Some(name)));
+        self.record_path(parent, Some(name));
 
         let parent_path = self.inodes.get(parent).calculate_path();
         self.repository.remove_entry(parent_path.join(name)).await
     }
 
+    #[instrument(level = "debug", skip(self, inode), fields(path), ret)]
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
-        tracing::debug!(
-            "fsyncdir {} (handle={}, datasync={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            datasync
-        );
+        self.record_path(inode, None);
 
         // All directory operations are immediatelly synced, so there is nothing to do here.
 
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, mode, umask, %flags), ret)]
     async fn create(
         &mut self,
         parent: Inode,
@@ -700,15 +687,11 @@ impl Inner {
         umask: u32,
         flags: OpenFlags,
     ) -> Result<(FileAttr, FileHandle, u32)> {
-        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        record_fmt!("mode", "{:#o}", mode);
+        record_fmt!("umask", "{:#o}", umask);
 
-        tracing::debug!(
-            "create {} (mode={:#o}, umask={:#o}, flags={})",
-            self.inodes.path_display(parent, Some(name)),
-            mode,
-            umask,
-            flags
-        );
+        let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
+        self.record_path(parent, Some(name));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
@@ -726,12 +709,9 @@ impl Inner {
         Ok((attr, handle, 0))
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, %flags), ret)]
     async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
-        tracing::debug!(
-            "open {} (flags={})",
-            self.inodes.path_display(inode, None),
-            flags
-        );
+        self.record_path(inode, None);
 
         let mut file = self.open_file_by_inode(inode).await?;
 
@@ -753,6 +733,7 @@ impl Inner {
         Ok((handle, 0))
     }
 
+    #[instrument(level = "debug", skip_all, fields(path, handle, %flags, flush), ret)]
     async fn release(
         &mut self,
         inode: Inode,
@@ -760,13 +741,7 @@ impl Inner {
         flags: OpenFlags,
         flush: bool,
     ) -> Result<()> {
-        tracing::debug!(
-            "release {} (handle={}, flags={}, flush={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            flags,
-            flush
-        );
+        self.record_path(inode, None);
 
         // TODO: what about `flags`?
         let file = self.entries.get_file_mut(handle)?;
@@ -781,6 +756,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self, inode, flags), fields(path, %flags), ret)]
     async fn read(
         &mut self,
         inode: Inode,
@@ -788,15 +764,8 @@ impl Inner {
         offset: i64,
         size: u32,
         flags: OpenFlags,
-    ) -> Result<Vec<u8>> {
-        tracing::debug!(
-            "read {} (handle={}, offset={}, size={}, flags={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            offset,
-            size,
-            flags
-        );
+    ) -> Result<CustomDebug<Vec<u8>>> {
+        self.record_path(inode, None);
 
         // TODO: what about flags?
 
@@ -812,9 +781,15 @@ impl Inner {
         let len = file.read(&mut conn, &mut buffer).await?;
         buffer.truncate(len);
 
-        Ok(buffer)
+        Ok(CustomDebug(buffer))
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, inode, data, flags),
+        fields(path, data.len = data.len(), %flags),
+        ret
+    )]
     async fn write(
         &mut self,
         inode: Inode,
@@ -823,14 +798,7 @@ impl Inner {
         data: &[u8],
         flags: OpenFlags,
     ) -> Result<u32> {
-        tracing::debug!(
-            "write {} (handle={}, offset={}, data.len={}, flags={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            offset,
-            data.len(),
-            flags,
-        );
+        self.record_path(inode, None);
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         let local_branch = self.repository.get_or_create_local_branch().await?;
@@ -844,40 +812,34 @@ impl Inner {
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 
+    #[instrument(level = "debug", skip(self, inode), fields(path), ret)]
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
-        tracing::debug!(
-            "flush {} (handle={})",
-            self.inodes.path_display(inode, None),
-            handle
-        );
+        self.record_path(inode, None);
 
         let mut conn = self.repository.db().acquire().await?;
         self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
+    #[instrument(level = "debug", skip(self, inode), fields(path), ret)]
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
-        tracing::debug!(
-            "fsync {} (handle={}, datasync={})",
-            self.inodes.path_display(inode, None),
-            handle,
-            datasync
-        );
+        self.record_path(inode, None);
 
         // TODO: what about `datasync`?
         let mut conn = self.repository.db().acquire().await?;
         self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(path), ret)]
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
-
-        tracing::debug!("unlink {}", self.inodes.path_display(parent, Some(name)));
+        self.record_path(parent, Some(name));
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         self.repository.remove_entry(path).await?;
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all, fields(src_path, dst_path, flags), ret)]
     async fn rename(
         &mut self,
         src_parent: Inode,
@@ -886,14 +848,20 @@ impl Inner {
         dst_name: &OsStr,
         flags: u32,
     ) -> Result<()> {
-        let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
-        let dst_name = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        record_fmt!("flags", "{:#x}", flags);
 
-        tracing::debug!(
-            "rename {} -> {} (flags={:#x})",
+        let src_name = src_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        record_fmt!(
+            "src_path",
+            "{}",
             self.inodes.path_display(src_parent, Some(src_name)),
+        );
+
+        let dst_name = dst_name.to_str().ok_or(Error::NonUtf8FileName)?;
+        record_fmt!(
+            "dst_path",
+            "{}",
             self.inodes.path_display(dst_parent, Some(dst_name)),
-            flags,
         );
 
         let src_dir = self.inodes.get(src_parent).calculate_path();
@@ -943,6 +911,10 @@ impl Inner {
         print.display(&"VirtualFilesystem::Inner");
         self.entries.debug_print(print.indent()).await;
         self.repository.debug_print(print.indent()).await;
+    }
+
+    fn record_path(&self, inode: Inode, last: Option<&str>) {
+        record_fmt!("path", "{}", self.inodes.path_display(inode, last))
     }
 }
 
@@ -1005,5 +977,23 @@ fn to_file_type(entry_type: EntryType) -> FileType {
     match entry_type {
         EntryType::File => FileType::RegularFile,
         EntryType::Directory => FileType::Directory,
+    }
+}
+
+// Wrapper that provides custom `Debug` output for types that don't implement `Debug` or whose
+// `Debug` impl is not suitable for our purposes.
+struct CustomDebug<T>(T);
+
+impl<T> CustomDebug<T> {
+    fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl fmt::Debug for CustomDebug<Vec<u8>> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Vec<u8>")
+            .field("len", &self.0.len())
+            .finish_non_exhaustive()
     }
 }
