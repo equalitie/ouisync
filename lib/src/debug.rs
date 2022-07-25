@@ -1,6 +1,3 @@
-use crate::error::Result;
-use std::{fmt::Debug, future::Future, mem};
-
 #[derive(Clone)]
 pub struct DebugPrinter {
     // Used for indentation
@@ -54,26 +51,4 @@ impl Default for DebugPrinter {
     fn default() -> Self {
         DebugPrinter::new()
     }
-}
-
-pub(crate) async fn instrument<F, T>(label: &str, task: F) -> Result<T>
-where
-    F: Future<Output = Result<T>>,
-    T: Debug,
-{
-    struct LogOnDrop<'a>(&'a str);
-
-    impl<'a> Drop for LogOnDrop<'a> {
-        fn drop(&mut self) {
-            tracing::trace!("{}: [cancelled]", self.0);
-        }
-    }
-
-    let log_on_drop = LogOnDrop(label);
-    let result = task.await;
-
-    tracing::trace!("{}: {:?}", label, result);
-    mem::forget(log_on_drop);
-
-    result
 }
