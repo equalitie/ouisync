@@ -148,7 +148,7 @@ fn print_cstr(priority: LogPriority, message: &CStr) {
 }
 
 fn setup_logger() {
-    use paranoid_android::AndroidLogMakeWriter;
+    use paranoid_android::{AndroidLogMakeWriter, Buffer};
     use tracing_subscriber::{
         filter::{LevelFilter, Targets},
         fmt,
@@ -159,7 +159,10 @@ fn setup_logger() {
     tracing_subscriber::registry()
         .with(
             fmt::layer()
-                .with_writer(AndroidLogMakeWriter::new(TAG.to_owned()))
+                .with_writer(AndroidLogMakeWriter::with_buffer(
+                    TAG.to_owned(),
+                    Buffer::Main,
+                ))
                 .with_target(false)
                 .with_file(true)
                 .with_line_number(true),
