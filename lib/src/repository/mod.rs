@@ -39,7 +39,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
 };
-use tracing::instrument::Instrument;
+use tracing::{instrument, instrument::Instrument};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -50,6 +50,7 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
+    #[instrument(level = "info", skip_all, fields(store), err)]
     pub async fn create(
         store: &db::Store,
         device_id: DeviceId,
@@ -103,6 +104,7 @@ impl Repository {
     ///
     /// * `master_secret` - A user provided secret to encrypt the access secrets. If not provided,
     ///                     the repository will be opened as a blind replica.
+    #[instrument(level = "info", skip_all, fields(store), err)]
     pub async fn open(
         store: &db::Store,
         device_id: DeviceId,
@@ -123,6 +125,7 @@ impl Repository {
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
     /// access mode the repository was created with.
+    #[instrument(level = "info", skip_all, fields(store, max_access_mode), err)]
     pub async fn open_with_mode(
         store: &db::Store,
         device_id: DeviceId,
@@ -226,11 +229,14 @@ impl Repository {
             total_request_cummulative: monitor.make_value("total_request_cummulative".into(), 0),
         });
 
+        let local_id = LocalId::new();
+        tracing::info!(%local_id);
+
         let store = Store {
             monitored: Arc::downgrade(&monitored),
             index,
             block_tracker,
-            local_id: LocalId::new(),
+            local_id,
         };
 
         let shared = Arc::new(Shared {
@@ -252,7 +258,7 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        let worker_span = tracing::debug_span!("worker", repo = %shared.store.local_id);
+        let worker_span = tracing::debug_span!("worker", local_id = %shared.store.local_id);
         task::spawn(worker.run().instrument(worker_span));
 
         task::spawn(report_sync_progress(shared.store.clone()));

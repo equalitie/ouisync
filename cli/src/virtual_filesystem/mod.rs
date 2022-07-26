@@ -25,6 +25,7 @@ use std::{
     ffi::OsStr,
     fmt,
     io::{self, SeekFrom},
+    ops::Deref,
     os::raw::c_int,
     panic::{self, AssertUnwindSafe},
     path::Path,
@@ -342,7 +343,7 @@ impl fuser::Filesystem for VirtualFilesystem {
             ),
             reply
         );
-        reply.data(&data.into_inner());
+        reply.data(&data);
     }
 
     fn write(
@@ -425,7 +426,7 @@ struct Inner {
 
 impl Inner {
     #[instrument(level = "debug", skip_all, fields(path), ret)]
-    async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
+    async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<CustomDebug<FileAttr>> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
         self.record_path(parent, Some(name));
@@ -463,7 +464,7 @@ impl Inner {
     }
 
     #[instrument(level = "debug", skip_all, fields(path), ret)]
-    async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
+    async fn getattr(&mut self, inode: Inode) -> Result<CustomDebug<FileAttr>> {
         self.record_path(inode, None);
 
         let entry = self.open_entry_by_inode(self.inodes.get(inode)).await?;
@@ -488,7 +489,7 @@ impl Inner {
         chgtime: Option<SystemTime>,
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
-    ) -> Result<FileAttr> {
+    ) -> Result<CustomDebug<FileAttr>> {
         self.record_path(inode, None);
 
         let local_branch = self.repository.get_or_create_local_branch().await?;
@@ -642,7 +643,7 @@ impl Inner {
         name: &OsStr,
         mode: u32,
         umask: u32,
-    ) -> Result<FileAttr> {
+    ) -> Result<CustomDebug<FileAttr>> {
         record_fmt!("mode", "{:#o}", mode);
         record_fmt!("umask", "{:#o}", umask);
 
@@ -686,7 +687,7 @@ impl Inner {
         mode: u32,
         umask: u32,
         flags: OpenFlags,
-    ) -> Result<(FileAttr, FileHandle, u32)> {
+    ) -> Result<(CustomDebug<FileAttr>, FileHandle, u32)> {
         record_fmt!("mode", "{:#o}", mode);
         record_fmt!("umask", "{:#o}", umask);
 
@@ -918,12 +919,12 @@ impl Inner {
     }
 }
 
-async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
+async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> CustomDebug<FileAttr> {
     make_file_attr(inode, entry.entry_type(), entry.len().await)
 }
 
-fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
-    FileAttr {
+fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> CustomDebug<FileAttr> {
+    CustomDebug(FileAttr {
         ino: inode,
         size: len,
         blocks: 0,                      // TODO: ?
@@ -942,7 +943,7 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
         rdev: 0,
         blksize: 0, // ?
         flags: 0,
-    }
+    })
 }
 
 // TODO: consider moving this to `impl Error`
@@ -984,9 +985,11 @@ fn to_file_type(entry_type: EntryType) -> FileType {
 // `Debug` impl is not suitable for our purposes.
 struct CustomDebug<T>(T);
 
-impl<T> CustomDebug<T> {
-    fn into_inner(self) -> T {
-        self.0
+impl<T> Deref for CustomDebug<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -994,6 +997,16 @@ impl fmt::Debug for CustomDebug<Vec<u8>> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Vec<u8>")
             .field("len", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for CustomDebug<FileAttr> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("FileAttr")
+            .field("ino", &self.0.ino)
+            .field("size", &self.0.size)
+            .field("kind", &self.0.kind)
             .finish_non_exhaustive()
     }
 }
