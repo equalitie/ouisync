@@ -34,7 +34,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
-use std::{sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
@@ -258,7 +258,8 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        let worker_span = tracing::debug_span!("worker", local_id = %shared.store.local_id);
+        let worker_span =
+            tracing::debug_span!(parent: None, "worker", local_id = %shared.store.local_id);
         task::spawn(worker.run().instrument(worker_span));
 
         task::spawn(report_sync_progress(shared.store.clone()));
@@ -294,6 +295,7 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
@@ -308,6 +310,7 @@ impl Repository {
     }
 
     /// Open a specific version of the file at the given path.
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
@@ -325,12 +328,14 @@ impl Repository {
     }
 
     /// Opens a directory at the given path (relative to the repository root)
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         let mut conn = self.db().acquire().await?;
         self.cd(&mut conn, path).await
     }
 
     /// Creates a new file at the given path.
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
         let mut conn = self.db().acquire().await?;
@@ -340,6 +345,7 @@ impl Repository {
     }
 
     /// Creates a new directory at the given path.
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
         let mut conn = self.db().acquire().await?;
@@ -349,6 +355,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
@@ -360,6 +367,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
+    #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
@@ -370,6 +378,12 @@ impl Repository {
 
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
+    #[instrument(
+        level = "info",
+        skip(src_dir_path, dst_dir_path),
+        fields(src_dir_path = %src_dir_path.as_ref(), dst_dir_path = %dst_dir_path.as_ref()),
+        err
+    )]
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
         src_dir_path: S,
@@ -619,6 +633,14 @@ impl Repository {
         let branch = self.shared.store.index.create_branch(proof).await?;
 
         self.shared.inflate(branch)
+    }
+}
+
+impl fmt::Debug for Repository {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Repository")
+            .field("local_id", &format_args!("{}", self.shared.store.local_id))
+            .finish_non_exhaustive()
     }
 }
 
