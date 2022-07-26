@@ -13,7 +13,7 @@ use crate::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, Proof, RootNode, VersionVectorOp, EMPTY_INNER_HASH,
     },
-    repository::RepositoryId,
+    repository::{LocalId, RepositoryId},
     store::Store,
     test_utils,
     version_vector::VersionVector,
@@ -341,6 +341,7 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
         monitored: Weak::new(),
         index,
         block_tracker: BlockTracker::greedy(),
+        local_id: LocalId::new(),
     };
 
     (store, writer_id)

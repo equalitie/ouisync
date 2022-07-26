@@ -1,5 +1,4 @@
 mod barrier;
-mod channel_info;
 mod client;
 mod config_keys;
 mod connection;
@@ -66,6 +65,7 @@ use tokio::{
     sync::mpsc,
     task, time,
 };
+use tracing::{field, instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -858,39 +858,30 @@ impl Inner {
         }
     }
 
+    #[instrument(name = "connection", skip(self, stream, permit), fields(addr = ?permit.addr()))]
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
     ) {
-        let addr = permit.addr();
-
-        tracing::info!("New {} connection: {:?}", peer_source, addr);
+        tracing::info!("connection established");
 
         permit.mark_as_handshaking();
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
                 Ok(writer_id) => writer_id,
-                Err(ref error @ HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
+                Err(HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     self.on_protocol_mismatch(their_version);
                     return;
                 }
-                Err(ref error @ HandshakeError::BadMagic) => {
-                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
-                    return;
-                }
-                Err(HandshakeError::Fatal(error)) => {
-                    tracing::error!("Failed to perform handshake with {:?}: {}", addr, error);
-                    return;
-                }
+                Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return,
             };
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            tracing::debug!("Connection from self, discarding");
+            tracing::debug!("connection from self, discarding");
             return;
         }
 
@@ -905,8 +896,6 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    tracing::info!("Connected to replica {:?} {:?}", that_runtime_id, addr);
-
                     let mut broker = MessageBroker::new(
                         self.this_runtime_id.public(),
                         that_runtime_id,
@@ -927,12 +916,7 @@ impl Inner {
         }
 
         released.notified().await;
-        tracing::info!(
-            "Lost {} connection: {:?} {:?}",
-            peer_source,
-            that_runtime_id,
-            addr
-        );
+        tracing::info!("connection lost");
 
         // Remove the broker if it has no more connections.
         let mut state = self.state.lock().unwrap();
@@ -967,6 +951,17 @@ pub enum ConnectError {
 //------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
+#[instrument(
+    level = "trace",
+    skip_all,
+    fields(
+        this_version = ?this_version,
+        that_version,
+        this_runtime_id = ?this_runtime_id.as_public_key(),
+        that_runtime_id
+    ),
+    ret
+)]
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -984,12 +979,19 @@ async fn perform_handshake(
     }
 
     let that_version = Version::read_from(stream).await?;
+    Span::current().record("that_version", &field::debug(&that_version));
 
     if that_version > this_version {
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
-    Ok(runtime_id::exchange(this_runtime_id, stream).await?)
+    let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
+    Span::current().record(
+        "that_runtime_id",
+        &field::debug(that_runtime_id.as_public_key()),
+    );
+
+    Ok(that_runtime_id)
 }
 
 #[derive(Debug, Error)]

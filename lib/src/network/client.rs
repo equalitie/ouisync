@@ -1,5 +1,4 @@
 use super::{
-    channel_info::ChannelInfo,
     message::{Content, Request, Response},
     request::PendingRequests,
 };
@@ -19,6 +18,7 @@ use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
+use tracing::{instrument, Span};
 
 pub(crate) struct Client {
     store: Store,
@@ -58,6 +58,7 @@ impl Client {
         }
     }
 
+    #[instrument(name = "client", skip_all, ret)]
     pub async fn run(&mut self) -> Result<()> {
         loop {
             select! {
@@ -151,34 +152,32 @@ impl Client {
         };
 
         match result {
-            Ok(()) => Ok(()),
-            Err(error @ (ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound)) => {
-                tracing::warn!(
-                    "{} failed to handle response: {}",
-                    ChannelInfo::current(),
-                    error
-                );
-                Ok(())
-            }
+            Ok(()) | Err(ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound) => Ok(()),
             Err(ReceiveError::Fatal(error)) => Err(error),
         }
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(
+            writer_id = ?proof.writer_id,
+            vv = ?proof.version_vector,
+            hash = ?proof.hash,
+            missing_blocks = summary.missing_blocks_count(),
+            updated
+        ),
+        ret
+    )]
     async fn handle_root_node(
         &mut self,
         proof: UntrustedProof,
         summary: Summary,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!(
-            "{} handle_root_node(hash: {:?}, vv: {:?}, missing_blocks: {})",
-            ChannelInfo::current(),
-            proof.hash,
-            proof.version_vector,
-            summary.missing_blocks_count()
-        );
-
         let hash = proof.hash;
         let updated = self.store.index.receive_root_node(proof, summary).await?;
+
+        Span::current().record("updated", &updated);
 
         if updated {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -187,21 +186,18 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash(), updated), ret)]
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!(
-            "{} handle_inner_nodes({:?})",
-            ChannelInfo::current(),
-            nodes.hash()
-        );
-
         let updated = self
             .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
+
+        Span::current().record("updated", &!updated.is_empty());
 
         for hash in updated {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -210,17 +206,14 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash(), updated), ret)]
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!(
-            "{} handle_leaf_nodes({:?})",
-            ChannelInfo::current(),
-            nodes.hash()
-        );
-
         let updated = self.store.index.receive_leaf_nodes(nodes).await?;
+
+        Span::current().record("updated", &!updated.is_empty());
 
         for block_id in updated {
             self.block_tracker.offer(block_id);
@@ -229,13 +222,12 @@ impl Client {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip_all, fields(id = ?data.id), ret)]
     async fn handle_block(
         &mut self,
         data: BlockData,
         nonce: BlockNonce,
     ) -> Result<(), ReceiveError> {
-        tracing::trace!("{} handle_block({:?})", ChannelInfo::current(), data.id);
-
         match self.store.write_received_block(&data, &nonce).await {
             Ok(_) => Ok(()),
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer

@@ -2,6 +2,7 @@ use super::{node::RootNode, node_test_utils::Snapshot, *};
 use crate::{
     block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
+    repository::LocalId,
     store::Store,
     version_vector::VersionVector,
 };
@@ -373,6 +374,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
         monitored: Weak::new(),
         index,
         block_tracker: BlockTracker::lazy(),
+        local_id: LocalId::new(),
     };
 
     let mut rng = rand::thread_rng();

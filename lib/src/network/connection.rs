@@ -66,11 +66,6 @@ impl ConnectionDeduplicator {
             self.on_change_tx.send(()).unwrap_or(());
             id
         } else {
-            tracing::trace!(
-                "ConnectionDeduplicator: Not permitting another connection ({:?}, {:?})",
-                addr,
-                dir
-            );
             return None;
         };
 

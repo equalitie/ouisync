@@ -6,7 +6,7 @@ use crate::{
     error::{Error, Result},
     index::{self, Index},
     progress::Progress,
-    repository::MonitoredValues,
+    repository::{LocalId, MonitoredValues},
 };
 use sqlx::{Connection, Row};
 use std::sync::Weak;
@@ -19,6 +19,7 @@ pub struct Store {
     pub(crate) monitored: Weak<MonitoredValues>,
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
+    pub(crate) local_id: LocalId,
 }
 
 impl Store {
@@ -246,6 +247,7 @@ mod tests {
             monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
+            local_id: LocalId::new(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
@@ -283,6 +285,7 @@ mod tests {
             monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
+            local_id: LocalId::new(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -321,6 +324,7 @@ mod tests {
             monitored: std::sync::Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
+            local_id: LocalId::new(),
         };
 
         let all_blocks: Vec<(Block, Hash)> =

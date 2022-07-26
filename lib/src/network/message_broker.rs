@@ -10,9 +10,7 @@ use super::{
     runtime_id::PublicRuntimeId,
     server::Server,
 };
-use crate::{
-    index::Index, network::channel_info::ChannelInfo, repository::RepositoryId, store::Store,
-};
+use crate::{index::Index, repository::RepositoryId, store::Store};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -25,6 +23,7 @@ use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task,
 };
+use tracing::{instrument::Instrument, Span};
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
@@ -40,6 +39,7 @@ pub(super) struct MessageBroker {
     dispatcher: MessageDispatcher,
     links: HashMap<MessageChannel, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
+    span: Span,
 }
 
 impl MessageBroker {
@@ -49,19 +49,29 @@ impl MessageBroker {
         stream: raw::Stream,
         permit: ConnectionPermit,
     ) -> Self {
+        let span = tracing::debug_span!(
+            "message_broker",
+            this_runtime_id = ?this_runtime_id.as_public_key(),
+            that_runtime_id = ?that_runtime_id.as_public_key()
+        );
+
         let this = Self {
             this_runtime_id,
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::new(),
             request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
+            span,
         };
+
+        tracing::debug!(parent: &this.span, "message broker created");
 
         this.add_connection(stream, permit);
         this
     }
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
+        tracing::debug!(parent: &self.span, "add connection");
         self.dispatcher.bind(stream, permit)
     }
 
@@ -71,11 +81,13 @@ impl MessageBroker {
     }
 
     /// Try to establish a link between a local repository and a remote repository. The remote
-    /// counterpart needs to call this too with matching `local_name` and `remote_name` for the link
-    /// to actually be created.
+    /// counterpart needs to call this too with matching repository id for the link to actually be
+    /// created.
     pub fn create_link(&mut self, store: Store) {
+        let span = tracing::debug_span!(parent: &self.span, "link", local_id = %store.local_id);
+        let span_enter = span.enter();
+
         let channel = MessageChannel::from(store.index.repository_id());
-        let channel_info = ChannelInfo::new(channel, self.this_runtime_id, self.that_runtime_id);
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(channel) {
@@ -83,7 +95,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    tracing::warn!("{} not creating link - already exists", channel_info);
+                    tracing::warn!("not creating link - already exists");
                     return;
                 }
             }
@@ -92,7 +104,7 @@ impl MessageBroker {
             }
         }
 
-        tracing::debug!("{} creating link", channel_info);
+        tracing::debug!("creating link");
 
         let role = Role::determine(
             store.index.repository_id(),
@@ -104,22 +116,31 @@ impl MessageBroker {
         let sink = self.dispatcher.open_send(channel);
         let request_limiter = self.request_limiter.clone();
 
+        drop(span_enter);
+
         let task = async move {
             select! {
                 _ = maintain_link(role, stream, sink.clone(), store, request_limiter) => (),
                 _ = abort_rx => (),
             }
 
-            tracing::debug!("{} link destroyed", channel_info)
+            tracing::debug!("link destroyed")
         };
+        let task = task.instrument(span);
 
-        task::spawn(channel_info.apply(task));
+        task::spawn(task);
     }
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
     pub fn destroy_link(&mut self, id: &RepositoryId) {
         self.links.remove(&MessageChannel::from(id));
+    }
+}
+
+impl Drop for MessageBroker {
+    fn drop(&mut self) {
+        tracing::debug!(parent: &self.span, "message broker destroyed");
     }
 }
 
@@ -174,20 +195,13 @@ async fn establish_channel<'a>(
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
-            tracing::debug!(
-                "{} established encrypted channel for repo:{:?} as {:?}",
-                ChannelInfo::current(),
-                index.repository_id(),
-                role
-            );
+            tracing::debug!("established encrypted channel as {:?}", role);
 
             Ok(io)
         }
         Err(error) => {
             tracing::warn!(
-                "{} failed to establish encrypted channel for repo:{:?} as {:?}: {}",
-                ChannelInfo::current(),
-                index.repository_id(),
+                "failed to establish encrypted channel as {:?}: {}",
                 role,
                 error
             );
@@ -226,21 +240,15 @@ async fn recv_messages(
         let content = match stream.recv().await {
             Ok(content) => content,
             Err(RecvError::Crypto) => {
-                tracing::warn!(
-                    "{} failed to decrypt incoming message",
-                    ChannelInfo::current()
-                );
+                tracing::warn!("failed to decrypt incoming message",);
                 return ControlFlow::Continue;
             }
             Err(RecvError::Exhausted) => {
-                tracing::debug!(
-                    "{} incoming message nonce counter exhausted",
-                    ChannelInfo::current()
-                );
+                tracing::debug!("incoming message nonce counter exhausted",);
                 return ControlFlow::Continue;
             }
             Err(RecvError::Closed) => {
-                tracing::debug!("{} message stream closed", ChannelInfo::current());
+                tracing::debug!("message stream closed");
                 return ControlFlow::Break;
             }
         };
@@ -248,11 +256,7 @@ async fn recv_messages(
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
-                tracing::warn!(
-                    "{} failed to deserialize incoming message: {}",
-                    ChannelInfo::current(),
-                    error
-                );
+                tracing::warn!("failed to deserialize incoming message: {}", error);
                 continue; // TODO: should we return `ControlFlow::Continue` here as well?
             }
         };
@@ -283,14 +287,11 @@ async fn send_messages(
         match sink.send(content).await {
             Ok(()) => (),
             Err(SendError::Exhausted) => {
-                tracing::debug!(
-                    "{} outgoing message nonce counter exhausted",
-                    ChannelInfo::current()
-                );
+                tracing::debug!("outgoing message nonce counter exhausted",);
                 return ControlFlow::Continue;
             }
             Err(SendError::Closed) => {
-                tracing::debug!("{} message sink closed", ChannelInfo::current());
+                tracing::debug!("message sink closed");
                 return ControlFlow::Break;
             }
         }
@@ -308,10 +309,7 @@ async fn run_client(
 
     match client.run().await {
         Ok(()) => forever().await,
-        Err(error) => {
-            tracing::error!("{} client failed: {:?}", ChannelInfo::current(), error);
-            ControlFlow::Continue
-        }
+        Err(_) => ControlFlow::Continue,
     }
 }
 
@@ -325,10 +323,7 @@ async fn run_server(
 
     match server.run().await {
         Ok(()) => forever().await,
-        Err(error) => {
-            tracing::error!("{} server failed: {:?}", ChannelInfo::current(), error);
-            ControlFlow::Continue
-        }
+        Err(_) => ControlFlow::Continue,
     }
 }
 

@@ -1,7 +1,6 @@
 use super::{utils, Shared};
 use crate::{
     branch::Branch,
-    debug::instrument,
     error::{Error, Result},
     event::{EventScope, IgnoreScopeReceiver},
     joint_directory::JointDirectory,
@@ -11,6 +10,7 @@ use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
+use tracing::instrument;
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
@@ -160,16 +160,13 @@ impl Inner {
             return Ok(());
         };
 
-        instrument(
-            "merge",
-            self.event_scope
-                .apply(merge::run(&self.shared, local_branch)),
-        )
-        .await
+        self.event_scope
+            .apply(merge::run(&self.shared, local_branch))
+            .await
     }
 
     async fn prune(&self) -> Result<()> {
-        instrument("prune", self.event_scope.apply(prune::run(&self.shared))).await
+        self.event_scope.apply(prune::run(&self.shared)).await
     }
 
     async fn scan(&self, mode: scan::Mode) -> Result<()> {
@@ -177,7 +174,7 @@ impl Inner {
             return Ok(());
         }
 
-        instrument("scan", scan::run(&self.shared, mode)).await
+        scan::run(&self.shared, mode).await
     }
 
     async fn collect(&self) -> Result<()> {
@@ -191,6 +188,7 @@ impl Inner {
 mod merge {
     use super::*;
 
+    #[instrument(level = "trace", name = "merge", skip_all, err)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches = shared.collect_branches()?;
         let mut roots = Vec::with_capacity(branches.len());
@@ -217,6 +215,7 @@ mod merge {
 mod prune {
     use super::*;
 
+    #[instrument(level = "trace", name = "prune", skip_all, err)]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
 
@@ -265,7 +264,7 @@ mod scan {
     };
     use async_recursion::async_recursion;
 
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Debug)]
     pub(super) enum Mode {
         // only require missing blocks
         Require,
@@ -290,6 +289,7 @@ mod scan {
         }
     }
 
+    #[instrument(level = "trace", name = "scan", skip(shared), err)]
     pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
         prepare_unreachable_blocks(shared).await?;
         let mode = traverse_root(shared, mode).await?;
