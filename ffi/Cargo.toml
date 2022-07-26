@@ -15,7 +15,7 @@ crate-type = ["cdylib"] # TODO: we might also need `staticlib` for ios
 [dependencies]
 camino = "1.0.9"
 hex = "0.4.3"
-tracing = { version = "0.1.35", features = ["log"] }
+tracing = { version = "0.1.35" }
 ouisync-lib = { package = "ouisync", version = "0.2", path = "../lib" }
 rmp-serde = "1.1.0"
 tokio = "1.19.2"

@@ -49,7 +49,7 @@ rustls = { version = "0.20.3", default-features = false, features = ["quic", "da
 tokio = "1.19.2"
 tokio-stream = "0.1.9"
 tokio-util = "0.7.3"
-tracing = { version = "0.1.35", features = ["log"] }
+tracing = { version = "0.1.35" }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
 zeroize = "1.2.0"
