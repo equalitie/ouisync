@@ -27,6 +27,7 @@ use tokio::{
     sync::{mpsc, watch},
     time,
 };
+use tracing::instrument::Instrument;
 
 // Hardcoded DHT routers to bootstrap the DHT against.
 // TODO: add this to `NetworkOptions` so it can be overriden by the user.
@@ -299,14 +300,15 @@ impl Lookup {
         let state =
             monitor.make_value::<Cow<'static, str>>("state".into(), Cow::Borrowed("started"));
 
-        scoped_task::spawn(async move {
+        let span = tracing::debug_span!("DHT search", ?info_hash);
+        let task = async move {
             // Wait for the first request to be created
             wake_up.changed().await.unwrap_or(());
 
             loop {
                 seen_peers.start_new_round();
 
-                tracing::debug!("DHT Starting search for info hash: {:?}", info_hash);
+                tracing::debug!("starting search");
                 *state.get() = Cow::Borrowed("making request");
 
                 // find peers for the repo and also announce that we have it.
@@ -324,7 +326,7 @@ impl Lookup {
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
-                        tracing::debug!("DHT found peer for {:?}: {:?}", info_hash, peer.addr());
+                        tracing::debug!("found peer {:?}", peer.addr());
 
                         for tx in requests.lock().unwrap().values() {
                             tx.send(peer.clone()).unwrap_or(());
@@ -340,8 +342,7 @@ impl Lookup {
                 {
                     let time: DateTime<Local> = (SystemTime::now() + duration).into();
                     tracing::debug!(
-                        "DHT search for {:?} ended. Next one scheduled at {} (in {:?})",
-                        info_hash,
+                        "search ended. next one scheduled at {} (in {:?})",
                         time.format("%T"),
                         duration
                     );
@@ -350,13 +351,16 @@ impl Lookup {
 
                 select! {
                     _ = time::sleep(duration) => {
-                        tracing::debug!("DHT sleep duration passed")
+                        tracing::trace!("sleep duration passed")
                     },
                     _ = wake_up.changed() => {
-                        tracing::debug!("DHT wake up")
+                        tracing::trace!("wake up")
                     },
                 }
             }
-        })
+        };
+        let task = task.instrument(span);
+
+        scoped_task::spawn(task)
     }
 }
