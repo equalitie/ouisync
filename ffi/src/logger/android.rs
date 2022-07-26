@@ -1,6 +1,9 @@
-use android_log_sys::{LogPriority, __android_log_print};
-use android_logger::FilterBuilder;
-use log::{Level, LevelFilter};
+use ndk_sys::{
+    __android_log_print, android_LogPriority as LogPriority,
+    android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
+    android_LogPriority_ANDROID_LOG_ERROR as ANDROID_LOG_ERROR,
+    android_LogPriority_ANDROID_LOG_FATAL as ANDROID_LOG_FATAL,
+};
 use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
 use std::{
@@ -32,8 +35,8 @@ impl Logger {
         setup_logger();
 
         Ok(Self {
-            _stdout: StdRedirect::new(io::stdout(), LogPriority::DEBUG)?,
-            _stderr: StdRedirect::new(io::stderr(), LogPriority::ERROR)?,
+            _stdout: StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?,
+            _stderr: StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?,
         })
     }
 }
@@ -104,7 +107,7 @@ fn run(priority: LogPriority, reader: PipeReader, active: Arc<AtomicBool>) {
             }
             Ok(_) => break, // EOF
             Err(error) => {
-                print(LogPriority::ERROR, error.to_string());
+                print(ANDROID_LOG_ERROR, error.to_string());
                 break;
             }
         }
@@ -145,32 +148,32 @@ fn print_cstr(priority: LogPriority, message: &CStr) {
 }
 
 fn setup_logger() {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_tag(TAG)
-            .with_min_level(Level::Trace)
-            .with_filter(
-                FilterBuilder::new()
-                    // disable logs from dependencies to avoid log spam
-                    .filter(None, LevelFilter::Off)
-                    // show logs from ouisync-ffi
-                    .filter(Some(env!("CARGO_PKG_NAME")), LevelFilter::Trace)
-                    // show logs from ouisync
-                    .filter(Some("ouisync"), LevelFilter::Trace)
-                    // show DHT routing table stats
-                    .filter(Some("btdht::routing"), LevelFilter::Debug)
-                    .build(),
-            )
-            .format(|f, record| {
-                write!(
-                    f,
-                    "{} ({}:{})",
-                    record.args(),
-                    record.file().unwrap_or("?"),
-                    record.line().unwrap_or(0)
-                )
-            }),
-    )
+    use paranoid_android::AndroidLogMakeWriter;
+    use tracing_subscriber::{
+        filter::{LevelFilter, Targets},
+        fmt,
+        layer::SubscriberExt,
+        util::SubscriberInitExt,
+    };
+
+    tracing_subscriber::registry()
+        .with(
+            fmt::layer()
+                .with_writer(AndroidLogMakeWriter::new(TAG.to_owned()))
+                .with_target(false)
+                .with_file(true)
+                .with_line_number(true),
+        )
+        .with(
+            Targets::new()
+                // show logs from ouisync-ffi
+                .with_target(env!("CARGO_PKG_NAME"), LevelFilter::TRACE)
+                // show logs from ouisync
+                .with_target("ouisync", LevelFilter::TRACE)
+                // show DHT routing table stats
+                .with_target("btdht::routing", LevelFilter::DEBUG),
+        )
+        .init();
 }
 
 // Print panic messages to the andoid log as well.
@@ -193,5 +196,5 @@ fn panic_hook(info: &PanicInfo) {
         (None, None) => "panic".to_string(),
     };
 
-    print(LogPriority::FATAL, message);
+    print(ANDROID_LOG_FATAL, message);
 }
