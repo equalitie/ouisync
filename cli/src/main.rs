@@ -212,8 +212,7 @@ async fn terminated() -> io::Result<()> {
 
 fn init_log() {
     tracing_subscriber::fmt()
-        // uncomment to enable pretty log output (more readable but also more verbose)
-        // .pretty()
+        .pretty() // enable pretty log output (more readable but also more verbose)
         .with_env_filter(EnvFilter::from_default_env())
         .with_file(true)
         .with_line_number(true)

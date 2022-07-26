@@ -241,10 +241,20 @@ impl RootNode {
         Ok(())
     }
 
-    /// Updates the summaries of all nodes with the specified hash. Returns whether the nodes are
-    /// complete.
+    /// Updates the summaries of all nodes with the specified hash. Returns whether the nodes
+    /// became complete.
     pub async fn update_summaries(conn: &mut db::Connection, hash: &Hash) -> Result<bool> {
         let summary = InnerNode::compute_summary(conn, hash).await?;
+
+        // Multiple nodes with the same hash should have the same `is_complete` which is why it's
+        // enough to fetch just one.
+        let was_complete: bool =
+            sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE hash = ?")
+                .bind(hash)
+                .fetch_optional(&mut *conn)
+                .await?
+                .map(|row| row.get(0))
+                .unwrap_or(false);
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -261,7 +271,7 @@ impl RootNode {
         .execute(conn)
         .await?;
 
-        Ok(summary.is_complete)
+        Ok(!was_complete && summary.is_complete)
     }
 
     /// Removes this node including its snapshot.

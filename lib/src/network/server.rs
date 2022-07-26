@@ -13,7 +13,7 @@ use tokio::{
     sync::{broadcast::error::RecvError, mpsc},
     time::{self, MissedTickBehavior},
 };
-use tracing::{instrument, Span};
+use tracing::instrument;
 
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -32,7 +32,7 @@ impl Server {
         }
     }
 
-    #[instrument(name = "server", skip_all, ret)]
+    #[instrument(name = "server", skip_all, err)]
     pub async fn run(&mut self) -> Result<()> {
         let Self { index, tx, rx } = self;
         let responder = Responder::new(index, tx, rx);
@@ -92,7 +92,7 @@ impl<'a> Responder<'a> {
         }
     }
 
-    #[instrument(level = "trace", skip(self), fields(found), ret)]
+    #[instrument(level = "trace", skip(self), err)]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
         self.stats.node();
 
@@ -105,24 +105,24 @@ impl<'a> Responder<'a> {
         drop(conn);
 
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
-            Span::current().record("found", &true);
-
             if !inner_nodes.is_empty() {
+                tracing::trace!("inner nodes found");
                 self.tx.send(Response::InnerNodes(inner_nodes)).await;
             }
 
             if !leaf_nodes.is_empty() {
+                tracing::trace!("leaf nodes found");
                 self.tx.send(Response::LeafNodes(leaf_nodes)).await;
             }
         } else {
-            Span::current().record("found", &false);
+            tracing::trace!("child nodes not found");
             self.tx.send(Response::ChildNodesError(parent_hash)).await;
         }
 
         Ok(())
     }
 
-    #[instrument(level = "trace", skip(self), fields(found), ret)]
+    #[instrument(level = "trace", skip(self), err)]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
         self.stats.block();
 
@@ -133,12 +133,12 @@ impl<'a> Responder<'a> {
 
         match result {
             Ok(nonce) => {
-                Span::current().record("found", &true);
+                tracing::trace!("block found");
                 self.tx.send(Response::Block { content, nonce }).await;
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
-                Span::current().record("found", &false);
+                tracing::trace!("block not found");
                 self.tx.send(Response::BlockError(id)).await;
                 Ok(())
             }

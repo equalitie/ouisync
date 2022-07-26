@@ -159,6 +159,7 @@ fn setup_logger() {
     tracing_subscriber::registry()
         .with(
             fmt::layer()
+                .pretty()
                 .with_writer(AndroidLogMakeWriter::with_buffer(
                     TAG.to_owned(),
                     Buffer::Main,
