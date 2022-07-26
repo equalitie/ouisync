@@ -50,7 +50,7 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    #[instrument(level = "info", skip_all, fields(store), err)]
+    #[instrument(level = "info", skip_all, fields(?store), err)]
     pub async fn create(
         store: &db::Store,
         device_id: DeviceId,
@@ -104,7 +104,6 @@ impl Repository {
     ///
     /// * `master_secret` - A user provided secret to encrypt the access secrets. If not provided,
     ///                     the repository will be opened as a blind replica.
-    #[instrument(level = "info", skip_all, fields(store), err)]
     pub async fn open(
         store: &db::Store,
         device_id: DeviceId,
@@ -125,7 +124,7 @@ impl Repository {
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
     /// access mode the repository was created with.
-    #[instrument(level = "info", skip_all, fields(store, max_access_mode), err)]
+    #[instrument(level = "info", skip_all, fields(?store, ?max_access_mode), err)]
     pub async fn open_with_mode(
         store: &db::Store,
         device_id: DeviceId,
