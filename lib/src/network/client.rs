@@ -67,7 +67,7 @@ impl Client {
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
-                        self.enqueue_response(response).await?;
+                        self.enqueue_response(response)?;
                     } else {
                         break;
                     }
@@ -109,7 +109,7 @@ impl Client {
         self.tx.send(Content::Request(request)).await.unwrap_or(());
     }
 
-    async fn enqueue_response(&mut self, response: Response) -> Result<()> {
+    fn enqueue_response(&mut self, response: Response) -> Result<()> {
         let response = ProcessedResponse::from(response);
 
         if let Some(request) = response.to_request() {
