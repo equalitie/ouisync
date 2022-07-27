@@ -134,6 +134,10 @@ impl ContentStream {
             }
         }
     }
+
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
+    }
 }
 
 #[derive(Clone)]
@@ -151,6 +155,10 @@ impl ContentSink {
                 content,
             })
             .await
+    }
+
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
     }
 }
 

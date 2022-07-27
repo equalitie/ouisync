@@ -80,7 +80,7 @@ impl DecryptingStream<'_> {
             .ok_or(RecvError::Crypto)?;
         self.buffer.resize(plain_len, 0);
         self.cipher
-            .decrypt(&content, &mut self.buffer)
+            .decrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer)
             .map_err(|_| RecvError::Crypto)?;
 
         mem::swap(&mut content, &mut self.buffer);
@@ -103,7 +103,8 @@ impl EncryptingSink<'_> {
         }
 
         self.buffer.resize(content.len() + Cipher::tag_len(), 0);
-        self.cipher.encrypt(&content, &mut self.buffer);
+        self.cipher
+            .encrypt_ad(self.inner.channel().as_ref(), &content, &mut self.buffer);
 
         mem::swap(&mut content, &mut self.buffer);
 
