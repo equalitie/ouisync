@@ -177,7 +177,9 @@ fn setup_logger() {
                 // show DHT routing table stats
                 .with_target("btdht::routing", LevelFilter::DEBUG),
         )
-        .init();
+        .try_init()
+        // `Err` here just means the logger is already initialized, it's OK to ignore it.
+        .unwrap_or(())
 }
 
 // Print panic messages to the andoid log as well.
