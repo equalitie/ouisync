@@ -625,7 +625,11 @@ impl Repository {
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
         let proof = Proof::new(
             remote_id,
-            VersionVector::new(),
+            // Unlike the local one, remote branches start at v1 to prevent them from being
+            // immediately pruned. This is also consistent with the production, where remote
+            // branches are only created by receiving them from other replicas and we only accept
+            // them if their vv is non-empty.
+            VersionVector::first(remote_id),
             *EMPTY_INNER_HASH,
             write_keys,
         );
