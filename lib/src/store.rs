@@ -36,23 +36,24 @@ impl Store {
     pub(crate) async fn sync_progress(&self) -> Result<Progress> {
         let mut conn = self.db().acquire().await?;
 
-        // TODO: should we use `COUNT(DISTINCT ... )` ?
-        Ok(sqlx::query(
-            "SELECT
-                 COUNT(blocks.id),
-                 COUNT(snapshot_leaf_nodes.block_id)
-             FROM
-                 snapshot_leaf_nodes
-                 LEFT JOIN blocks ON blocks.id = snapshot_leaf_nodes.block_id
-         ",
-        )
-        .fetch_optional(&mut *conn)
-        .await?
-        .map(|row| Progress {
-            value: db::decode_u64(row.get(0)),
-            total: db::decode_u64(row.get(1)),
+        let total = db::decode_u64(
+            sqlx::query("SELECT COUNT(*) FROM snapshot_leaf_nodes")
+                .fetch_one(&mut *conn)
+                .await?
+                .get(0),
+        );
+
+        let present = db::decode_u64(
+            sqlx::query("SELECT COUNT(*) FROM blocks")
+                .fetch_one(&mut *conn)
+                .await?
+                .get(0),
+        );
+
+        Ok(Progress {
+            value: present,
+            total,
         })
-        .unwrap_or(Progress { value: 0, total: 0 }))
     }
 
     /// Write a block received from a remote replica to the block store. The block must already be
