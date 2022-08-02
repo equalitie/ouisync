@@ -4,10 +4,10 @@ use ouisync_lib::crypto::cipher::SecretKey;
 use rand::Rng;
 use std::{
     cell::Cell,
-    env, fmt,
+    env, fmt, fs,
     io::{self, BufRead, BufReader, Read, Write},
     net::SocketAddr,
-    path::Path,
+    path::PathBuf,
     process::{Child, ChildStdout, Command, Stdio},
     thread,
     time::Duration,
@@ -17,25 +17,32 @@ use tempfile::TempDir;
 /// Wrapper for the ouisync binary.
 pub struct Bin {
     id: Id,
-    mount_dir: TempDir,
+    base_dir: TempDir,
     port: u16,
     share_token: String,
     process: Child,
 }
 
 const REPO_NAME: &str = "test";
+const MOUNT_DIR: &str = "mnt";
 
 impl Bin {
     pub fn start(peers: impl IntoIterator<Item = SocketAddr>, share_token: Option<&str>) -> Self {
         let id = Id::new();
-        let mount_dir = TempDir::new().unwrap();
+        let base_dir = TempDir::new().unwrap();
+
+        let mount_dir = base_dir.path().join(MOUNT_DIR);
+        fs::create_dir(&mount_dir).unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
-        command.arg("--temp");
+        command.arg("--data-dir").arg(base_dir.path().join("data"));
+        command
+            .arg("--config-dir")
+            .arg(base_dir.path().join("config"));
         command.arg("--bind").arg("tcp/127.0.0.1:0");
         command
             .arg("--mount")
-            .arg(format!("{}:{}", REPO_NAME, mount_dir.path().display()));
+            .arg(format!("{}:{}", REPO_NAME, mount_dir.display()));
 
         if let Some(share_token) = share_token {
             command.arg("--accept").arg(share_token);
@@ -88,15 +95,15 @@ impl Bin {
 
         Self {
             id,
-            mount_dir,
+            base_dir,
             port,
             share_token,
             process,
         }
     }
 
-    pub fn root(&self) -> &Path {
-        self.mount_dir.path()
+    pub fn root(&self) -> PathBuf {
+        self.base_dir.path().join(MOUNT_DIR)
     }
 
     pub fn port(&self) -> u16 {

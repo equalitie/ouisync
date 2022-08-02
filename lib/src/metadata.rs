@@ -298,19 +298,17 @@ fn sign_key_to_cipher_key(sk: &sign::SecretKey) -> cipher::SecretKey {
 mod tests {
     use super::*;
     use crate::db;
+    use tempfile::TempDir;
 
-    async fn new_memory_db() -> db::PoolConnection {
-        db::create(&db::Store::Temporary)
-            .await
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap()
+    async fn setup() -> (TempDir, db::PoolConnection) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
+        let conn = pool.acquire().await.unwrap();
+        (base_dir, conn)
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn store_plaintext() {
-        let mut conn = new_memory_db().await;
+        let (_base_dir, mut conn) = setup().await;
 
         set_public(b"hello", b"world", &mut conn).await.unwrap();
 
@@ -321,7 +319,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn store_cyphertext() {
-        let mut conn = new_memory_db().await;
+        let (_base_dir, mut conn) = setup().await;
 
         let key = cipher::SecretKey::random();
 
@@ -338,7 +336,7 @@ mod tests {
     // let user claim plausible deniability in not knowing the real secret key/password.
     #[tokio::test(flavor = "multi_thread")]
     async fn bad_key_is_not_error() {
-        let mut conn = new_memory_db().await;
+        let (_base_dir, mut conn) = setup().await;
 
         let good_key = cipher::SecretKey::random();
         let bad_key = cipher::SecretKey::random();

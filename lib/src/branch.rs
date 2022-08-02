@@ -155,11 +155,12 @@ mod tests {
         index::{Index, Proof, EMPTY_INNER_HASH},
         locator::Locator,
     };
+    use tempfile::TempDir;
     use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
-        let (pool, branch) = setup().await;
+        let (_base_dir, pool, branch) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
         let dir = branch
             .ensure_directory_exists(&mut conn, "/".into())
@@ -170,7 +171,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
-        let (pool, branch) = setup().await;
+        let (_base_dir, pool, branch) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
         let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
@@ -184,8 +185,8 @@ mod tests {
         let _ = root.lookup("dir").unwrap();
     }
 
-    async fn setup() -> (db::Pool, Branch) {
-        let pool = db::create(&db::Store::Temporary).await.unwrap();
+    async fn setup() -> (TempDir, db::Pool, Branch) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
@@ -205,6 +206,6 @@ mod tests {
         let branch = index.create_branch(proof).await.unwrap();
         let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
-        (pool, branch)
+        (base_dir, pool, branch)
     }
 }

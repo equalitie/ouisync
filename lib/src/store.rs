@@ -121,12 +121,14 @@ mod tests {
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use sqlx::Connection;
+    use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
-        let mut conn = setup().await.acquire().await.unwrap();
+        let (_base_dir, pool) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
@@ -184,7 +186,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn overwrite_block() {
-        let mut conn = setup().await.acquire().await.unwrap();
+        let (_base_dir, pool) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
         let mut rng = rand::thread_rng();
 
         let read_key = SecretKey::random();
@@ -241,7 +244,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_valid_blocks() {
-        let pool = setup().await;
+        let (_base_dir, pool) = setup().await;
 
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
@@ -281,7 +284,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_orphaned_block() {
-        let pool = setup().await;
+        let (_base_dir, pool) = setup().await;
 
         let repository_id = RepositoryId::random();
         let (event_tx, _) = broadcast::channel(1);
@@ -320,7 +323,7 @@ mod tests {
     async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let pool = setup().await;
+        let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
@@ -388,7 +391,7 @@ mod tests {
         }
     }
 
-    async fn setup() -> db::Pool {
-        db::create(&db::Store::Temporary).await.unwrap()
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 }

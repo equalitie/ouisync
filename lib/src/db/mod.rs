@@ -14,6 +14,8 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
+#[cfg(test)]
+use tempfile::TempDir;
 use thiserror::Error;
 use tokio::fs;
 
@@ -160,6 +162,15 @@ pub(crate) async fn create(store: &Store) -> Result<Pool, Error> {
     migrations::run(&mut conn).await?;
 
     Ok(pool)
+}
+
+/// Creates a new database in a temporary directory. Useful for tests.
+#[cfg(test)]
+pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
+    let temp_dir = TempDir::new().map_err(Error::CreateDirectory)?;
+    let pool = create(&Store::Permanent(temp_dir.path().join("temp.db"))).await?;
+
+    Ok((temp_dir, pool))
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.

@@ -299,11 +299,12 @@ mod tests {
     };
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use sqlx::{Connection, Row};
+    use tempfile::TempDir;
     use test_strategy::proptest;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
-        let (mut conn, branch) = setup().await;
+        let (_base_dir, mut conn, branch) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -325,7 +326,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn rewrite_locator() {
         for _ in 0..32 {
-            let (mut conn, branch) = setup().await;
+            let (_base_dir, mut conn, branch) = setup().await;
             let read_key = SecretKey::random();
             let write_keys = Keypair::random();
 
@@ -360,7 +361,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
-        let (mut conn, branch) = setup().await;
+        let (_base_dir, mut conn, branch) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -408,7 +409,7 @@ mod tests {
 
     async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
-        let (mut conn, branch) = setup().await;
+        let (_base_dir, mut conn, branch) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
 
         let mut locators = Vec::new();
@@ -460,17 +461,14 @@ mod tests {
             .is_some()
     }
 
-    async fn init_db() -> db::PoolConnection {
-        db::create(&db::Store::Temporary)
-            .await
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap()
+    async fn init_db() -> (TempDir, db::PoolConnection) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
+        let conn = pool.acquire().await.unwrap();
+        (base_dir, conn)
     }
 
-    async fn setup() -> (db::PoolConnection, BranchData) {
-        let mut conn = init_db().await;
+    async fn setup() -> (TempDir, db::PoolConnection, BranchData) {
+        let (base_dir, mut conn) = init_db().await;
 
         let (notify_tx, _) = broadcast::channel(1);
         let branch = BranchData::create(
@@ -482,7 +480,7 @@ mod tests {
         .await
         .unwrap();
 
-        (conn, branch)
+        (base_dir, conn, branch)
     }
 
     fn random_head_locator() -> Locator {

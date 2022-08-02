@@ -7,11 +7,12 @@ use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -43,7 +44,7 @@ async fn no_conflict() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_independent_files() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -101,7 +102,7 @@ async fn conflict_independent_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_forked_files() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -143,7 +144,7 @@ async fn conflict_forked_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_directories() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -171,7 +172,7 @@ async fn conflict_directories() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_file_and_single_version_directory() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -228,7 +229,7 @@ async fn conflict_file_and_single_version_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_file_and_multi_version_directory() {
-    let (pool, mut branches) = setup(3).await;
+    let (_base_dir, pool, mut branches) = setup(3).await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Sort the branches by their ids because directory disambiguator is the lexicographically
@@ -278,7 +279,7 @@ async fn conflict_file_and_multi_version_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_identical_versions() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a file by one branch.
@@ -321,7 +322,7 @@ async fn conflict_identical_versions() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_open_file() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -366,7 +367,7 @@ async fn conflict_open_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cd_into_concurrent_directory() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -396,7 +397,7 @@ async fn cd_into_concurrent_directory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_non_existing_file() {
     // 0 - local, 1 - remote
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content = b"cat";
@@ -448,7 +449,7 @@ async fn merge_locally_non_existing_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_older_file() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content_v0 = b"version 0";
@@ -515,7 +516,7 @@ async fn merge_locally_older_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_newer_file() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content_v0 = b"version 0";
@@ -570,7 +571,7 @@ async fn merge_locally_newer_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_merge_concurrent_file() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -647,7 +648,7 @@ async fn attempt_to_merge_concurrent_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_is_idempotent() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -717,7 +718,7 @@ async fn merge_is_idempotent() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_file_roundtrip() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -782,7 +783,7 @@ async fn merge_create_file_roundtrip() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_and_delete_file_roundtrip() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -854,7 +855,7 @@ async fn merge_create_and_delete_file_roundtrip() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_remote_only() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
 
     let mut conn = pool.acquire().await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
@@ -874,7 +875,7 @@ async fn merge_remote_only() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_sequential_modifications() {
-    let (pool, branches) = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
+    let (_base_dir, pool, branches) = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -935,7 +936,7 @@ async fn merge_sequential_modifications() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_concurrent_directories() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -984,7 +985,7 @@ async fn merge_concurrent_directories() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_file_and_tombstone() {
     // Create two branches.
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a file in the local one.
@@ -1025,7 +1026,7 @@ async fn merge_file_and_tombstone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_non_empty_subdirectory() {
-    let (pool, branches) = setup(2).await;
+    let (_base_dir, pool, branches) = setup(2).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
@@ -1068,13 +1069,13 @@ async fn remove_non_empty_subdirectory() {
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }
 
-async fn setup(branch_count: usize) -> (db::Pool, Vec<Branch>) {
+async fn setup(branch_count: usize) -> (TempDir, db::Pool, Vec<Branch>) {
     setup_with_rng(StdRng::from_entropy(), branch_count).await
 }
 
 // Useful for debugging non-deterministic failures.
-async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<Branch>) {
-    let pool = db::create(&db::Store::Temporary).await.unwrap();
+async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, db::Pool, Vec<Branch>) {
+    let (base_dir, pool) = db::create_temp().await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
     let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
@@ -1102,7 +1103,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (db::Pool, Vec<
         .await
     };
 
-    (pool, branches)
+    (base_dir, pool, branches)
 }
 
 fn assert_unique_and_ordered<'a, I>(count: usize, mut entries: I)

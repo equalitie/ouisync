@@ -9,11 +9,12 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::future;
 use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
+use tempfile::TempDir;
 use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create the root directory and put some file in it.
@@ -51,7 +52,7 @@ async fn create_and_list_entries() {
 // TODO: test update existing directory
 #[tokio::test(flavor = "multi_thread")]
 async fn add_entry_to_existing_directory() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create empty directory and add a file to it.
@@ -70,7 +71,7 @@ async fn add_entry_to_existing_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_file() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let name = "monkey.txt";
@@ -121,7 +122,7 @@ async fn remove_file() {
 // Rename a file without moving it to another directory.
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_file() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let src_name = "zebra.txt";
@@ -184,7 +185,7 @@ async fn rename_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file_within_branch() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let file_name = "cow.txt";
@@ -298,7 +299,7 @@ async fn move_file_within_branch() {
 //     $ mv dir dst/
 #[tokio::test(flavor = "multi_thread")]
 async fn move_non_empty_directory() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let dir_name = "dir";
@@ -372,7 +373,7 @@ async fn move_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_subdirectory() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let name = "dir";
@@ -408,7 +409,7 @@ async fn remove_subdirectory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork() {
-    let (pool, branches) = setup_multiple::<2>().await;
+    let (_base_dir, pool, branches) = setup_multiple::<2>().await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a nested directory by branch 0
@@ -478,7 +479,7 @@ async fn fork() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_over_tombstone() {
-    let (pool, branches) = setup_multiple::<2>().await;
+    let (_base_dir, pool, branches) = setup_multiple::<2>().await;
     let mut conn = pool.acquire().await.unwrap();
 
     // Create a directory in branch 0 and delete it.
@@ -521,7 +522,7 @@ async fn fork_over_tombstone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn modify_directory_concurrently() {
-    let (pool, branch) = setup().await;
+    let (_base_dir, pool, branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
@@ -563,7 +564,7 @@ async fn modify_directory_concurrently() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_unique_remote_file() {
-    let (pool, local_branch) = setup().await;
+    let (_base_dir, pool, local_branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root = local_branch.open_or_create_root(&mut conn).await.unwrap();
@@ -587,7 +588,7 @@ async fn remove_unique_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_concurrent_remote_file() {
-    let (pool, local_branch) = setup().await;
+    let (_base_dir, pool, local_branch) = setup().await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root = local_branch.open_or_create_root(&mut conn).await.unwrap();
@@ -615,22 +616,22 @@ async fn remove_concurrent_remote_file() {
     assert!(local_vv > remote_vv);
 }
 
-async fn setup() -> (db::Pool, Branch) {
-    let pool = db::create(&db::Store::Temporary).await.unwrap();
+async fn setup() -> (TempDir, db::Pool, Branch) {
+    let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = WriteSecrets::random().into();
     let branch = create_branch(&pool, keys).await;
 
-    (pool, branch)
+    (base_dir, pool, branch)
 }
 
-async fn setup_multiple<const N: usize>() -> (db::Pool, [Branch; N]) {
-    let pool = db::create(&db::Store::Temporary).await.unwrap();
+async fn setup_multiple<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
+    let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches: Vec<_> =
         future::join_all((0..N).map(|_| create_branch(&pool, keys.clone()))).await;
     let branches = branches.try_into().ok().unwrap();
 
-    (pool, branches)
+    (base_dir, pool, branches)
 }
 
 async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {

@@ -11,10 +11,11 @@ use futures_util::{future, StreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sqlx::Connection;
 use std::sync::Weak;
+use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -70,7 +71,7 @@ async fn receive_valid_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_invalid_proof() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -111,7 +112,7 @@ async fn receive_root_node_with_invalid_proof() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_empty_version_vector() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -149,7 +150,7 @@ async fn receive_root_node_with_empty_version_vector() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_duplicate_root_node() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -195,7 +196,7 @@ async fn receive_duplicate_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_existing_hash() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
     let mut rng = rand::thread_rng();
 
     let local_id = PublicKey::generate(&mut rng);
@@ -259,7 +260,7 @@ async fn receive_root_node_with_existing_hash() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_child_nodes() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
@@ -325,7 +326,7 @@ async fn receive_valid_child_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_child_nodes_with_missing_root_parent() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
 
     let local_id = PublicKey::random();
 
@@ -369,7 +370,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_branch_until_new_branch_is_complete() {
-    let (index, write_keys) = setup().await;
+    let (_base_dir, index, write_keys) = setup().await;
     let store = Store {
         monitored: Weak::new(),
         index,
@@ -467,19 +468,19 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     .await;
 }
 
-async fn setup() -> (Index, Keypair) {
+async fn setup() -> (TempDir, Index, Keypair) {
     setup_with_rng(&mut StdRng::from_entropy()).await
 }
 
-async fn setup_with_rng(rng: &mut StdRng) -> (Index, Keypair) {
-    let pool = db::create(&db::Store::Temporary).await.unwrap();
+async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
+    let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let (event_tx, _) = broadcast::channel(1);
     let index = Index::load(pool, repository_id, event_tx).await.unwrap();
 
-    (index, write_keys)
+    (base_dir, index, write_keys)
 }
 
 async fn check_all_blocks_exist(
