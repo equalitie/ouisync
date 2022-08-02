@@ -142,7 +142,7 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch unless the blob is already in `dst_branch`. In that case
     /// returns `Error::EntryExists`.
-    pub async fn try_fork(&self, conn: &mut db::Connection, dst_branch: Branch) -> Result<Self> {
+    pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
         if self.unique.branch.id() == dst_branch.id() {
             return Err(Error::EntryExists);
         }
@@ -163,16 +163,11 @@ impl Blob {
         for locator in locators {
             let encoded_locator = locator.encode(read_key);
 
-            let block_id = self
-                .unique
-                .branch
-                .data()
-                .get(conn, &encoded_locator)
-                .await?;
+            let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
 
             dst_branch
                 .data()
-                .insert(conn, &block_id, &encoded_locator, write_keys)
+                .insert(tx, &block_id, &encoded_locator, write_keys)
                 .await?;
         }
 

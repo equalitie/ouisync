@@ -99,24 +99,24 @@ impl BranchData {
     ///
     /// # Cancel safety
     ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
+    /// This operation is executed inside a db transaction which makes it atomic even in the
+    /// presence of cancellation.
     pub async fn insert(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let root = self.load_root(conn).await?;
-        let mut path = load_path(conn, &root.proof.hash, encoded_locator).await?;
+        let root = self.load_root(tx).await?;
+        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
 
         // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
         // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
         assert!(!path.has_leaf(block_id));
 
         path.set_leaf(block_id);
-        save_path(conn, &root, &path, write_keys).await?;
+        save_path(tx, &root, &path, write_keys).await?;
 
         Ok(())
     }
@@ -125,8 +125,8 @@ impl BranchData {
     ///
     /// # Cancel safety
     ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
+    /// This operation is executed inside a db transaction which makes it atomic even in the
+    /// presence of cancellation.
     pub async fn remove(
         &self,
         tx: &mut db::Transaction<'_>,
