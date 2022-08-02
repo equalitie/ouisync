@@ -10,6 +10,7 @@ use crate::{
 use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
+use sqlx::Connection;
 use std::sync::Arc;
 use test_strategy::proptest;
 use tokio::sync::broadcast;
@@ -548,7 +549,10 @@ async fn fork_case(
     blob.seek(&mut conn, SeekFrom::Start(seek_pos as u64))
         .await
         .unwrap();
-    blob = blob.try_fork(&mut conn, dst_branch.clone()).await.unwrap();
+
+    let mut tx = conn.begin().await.unwrap();
+    blob = blob.try_fork(&mut tx, dst_branch.clone()).await.unwrap();
+    tx.commit().await.unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 

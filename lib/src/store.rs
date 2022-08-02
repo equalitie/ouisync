@@ -207,28 +207,32 @@ mod tests {
 
         rng.fill(&mut buffer[..]);
         let id0 = BlockId::from_content(&buffer);
-        block::write(&mut conn, &id0, &buffer, &rng.gen())
-            .await
-            .unwrap();
 
-        branch
-            .insert(&mut conn, &id0, &locator, &write_keys)
+        let mut tx = conn.begin().await.unwrap();
+        block::write(&mut tx, &id0, &buffer, &rng.gen())
             .await
             .unwrap();
+        branch
+            .insert(&mut tx, &id0, &locator, &write_keys)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         assert!(block::exists(&mut conn, &id0).await.unwrap());
         assert_eq!(block::count(&mut conn).await.unwrap(), 1);
 
         rng.fill(&mut buffer[..]);
         let id1 = BlockId::from_content(&buffer);
-        block::write(&mut conn, &id1, &buffer, &rng.gen())
-            .await
-            .unwrap();
 
-        branch
-            .insert(&mut conn, &id1, &locator, &write_keys)
+        let mut tx = conn.begin().await.unwrap();
+        block::write(&mut tx, &id1, &buffer, &rng.gen())
             .await
             .unwrap();
+        branch
+            .insert(&mut tx, &id1, &locator, &write_keys)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         assert!(!block::exists(&mut conn, &id0).await.unwrap());
         assert!(block::exists(&mut conn, &id1).await.unwrap());
