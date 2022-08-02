@@ -327,7 +327,9 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+        let index = Index::load(pool.clone(), repository_id, event_tx)
+            .await
+            .unwrap();
         let store = Store {
             monitored: std::sync::Weak::new(),
             index,
@@ -389,6 +391,9 @@ mod tests {
                 }
             );
         }
+
+        // HACK: prevent "too many open files" error.
+        pool.close().await;
     }
 
     async fn setup() -> (TempDir, db::Pool) {

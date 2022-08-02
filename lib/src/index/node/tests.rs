@@ -493,7 +493,9 @@ fn check_complete(
 
 async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let (_base_dir, mut conn) = setup().await;
+
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
     let write_keys = Keypair::generate(&mut rng);
@@ -549,6 +551,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     }
 
     assert!(root_node.summary.is_complete());
+
+    // HACK: prevent "too many open files" error.
+    drop(conn);
+    pool.close().await;
 }
 
 #[proptest]
@@ -561,7 +567,8 @@ fn summary(
 
 async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let (_base_dir, mut conn) = setup().await;
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
     let write_keys = Keypair::generate(&mut rng);
@@ -636,6 +643,10 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 
         // TODO: check also inner and leaf nodes
     }
+
+    // HACK: prevent "too many open files" error.
+    drop(conn);
+    pool.close().await;
 }
 
 async fn setup() -> (TempDir, db::PoolConnection) {
