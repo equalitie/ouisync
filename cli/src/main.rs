@@ -28,17 +28,8 @@ async fn main() -> Result<()> {
 
     init_log();
 
-    let config = if !options.temp {
-        ConfigStore::new(options.config_dir()?)
-    } else {
-        ConfigStore::null()
-    };
-
-    let device_id = if !options.temp {
-        device_id::get_or_create(&config).await?
-    } else {
-        rand::random()
-    };
+    let config = ConfigStore::new(options.config_dir()?);
+    let device_id = device_id::get_or_create(&config).await?;
 
     // Create repositories
     let mut repos = HashMap::new();
