@@ -138,10 +138,11 @@ pub(crate) async fn remove_unreachable(conn: &mut db::Connection) -> Result<usiz
 mod tests {
     use super::*;
     use rand::Rng;
+    use tempfile::TempDir;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read() {
-        let mut conn = setup().await;
+        let (_base_dir, mut conn) = setup().await;
 
         let content = random_block_content();
         let id = BlockId::from_content(&content);
@@ -157,7 +158,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_read_missing_block() {
-        let mut conn = setup().await;
+        let (_base_dir, mut conn) = setup().await;
 
         let mut buffer = vec![0; BLOCK_SIZE];
         let id = BlockId::from_content(&buffer);
@@ -171,7 +172,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_write_existing_block() {
-        let mut conn = setup().await;
+        let (_base_dir, mut conn) = setup().await;
 
         let content0 = random_block_content();
         let id = BlockId::from_content(&content0);
@@ -181,13 +182,10 @@ mod tests {
         write(&mut conn, &id, &content0, &nonce).await.unwrap();
     }
 
-    async fn setup() -> db::PoolConnection {
-        db::create(&db::Store::Temporary)
-            .await
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap()
+    async fn setup() -> (TempDir, db::PoolConnection) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
+        let conn = pool.acquire().await.unwrap();
+        (base_dir, conn)
     }
 
     fn random_block_content() -> Vec<u8> {

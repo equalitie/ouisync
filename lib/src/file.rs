@@ -183,11 +183,12 @@ mod tests {
         index::BranchData,
     };
     use std::sync::Arc;
+    use tempfile::TempDir;
     use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, branch0, branch1) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
         // Create a file owned by branch 0
@@ -252,7 +253,7 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, branch0, branch1) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
         let mut file0 = branch0
@@ -281,8 +282,8 @@ mod tests {
         }
     }
 
-    async fn setup() -> (db::Pool, Branch, Branch) {
-        let pool = db::create(&db::Store::Temporary).await.unwrap();
+    async fn setup() -> (TempDir, db::Pool, Branch, Branch) {
+        let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
         let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
@@ -291,7 +292,7 @@ mod tests {
             create_branch(&pool, event_tx.clone(), keys.clone(), blob_cache.clone()).await;
         let branch1 = create_branch(&pool, event_tx, keys.clone(), blob_cache).await;
 
-        (pool, branch0, branch1)
+        (base_dir, pool, branch0, branch1)
     }
 
     async fn create_branch(

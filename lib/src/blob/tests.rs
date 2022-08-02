@@ -12,12 +12,13 @@ use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
 use sqlx::Connection;
 use std::sync::Arc;
+use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
-    let (_, pool, branch) = setup(0).await;
+    let (_, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT, Shared::uninit());
@@ -52,7 +53,7 @@ async fn write_and_read_case(
     read_len: usize,
     rng_seed: u64,
 ) {
-    let (mut rng, pool, branch) = setup(rng_seed).await;
+    let (mut rng, _base_dir, pool, branch) = setup(rng_seed).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator = if is_root {
@@ -100,7 +101,7 @@ fn len(
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(async {
-        let (rng, pool, branch) = setup(rng_seed).await;
+        let (rng, _base_dir, pool, branch) = setup(rng_seed).await;
         let mut conn = pool.acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
@@ -148,7 +149,7 @@ fn seek_from_end(
 }
 
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
-    let (rng, pool, branch) = setup(rng_seed).await;
+    let (rng, _base_dir, pool, branch) = setup(rng_seed).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
@@ -171,7 +172,7 @@ fn seek_from_current(
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(async {
-        let (rng, pool, branch) = setup(rng_seed).await;
+        let (rng, _base_dir, pool, branch) = setup(rng_seed).await;
         let mut conn = pool.acquire().await.unwrap();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
@@ -198,7 +199,7 @@ fn seek_from_current(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_after_end() {
-    let (_, pool, branch) = setup(0).await;
+    let (_, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content = b"content";
@@ -220,7 +221,7 @@ async fn seek_after_end() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_before_start() {
-    let (_, pool, branch) = setup(0).await;
+    let (_, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let content = b"content";
@@ -242,7 +243,7 @@ async fn seek_before_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_blob() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
@@ -295,7 +296,7 @@ async fn remove_blob() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_empty() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
@@ -347,7 +348,7 @@ async fn truncate_to_empty() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_shorter() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
@@ -387,7 +388,7 @@ async fn truncate_to_shorter() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_marks_as_dirty() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
@@ -407,7 +408,7 @@ async fn truncate_marks_as_dirty() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn modify_blob() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
@@ -446,7 +447,7 @@ async fn modify_blob() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
@@ -472,7 +473,7 @@ async fn append() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn write_reopen_and_read() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let locator = random_head_locator(&mut rng);
@@ -514,7 +515,7 @@ async fn fork_case(
     src_locator_is_root: bool,
     rng_seed: u64,
 ) {
-    let (mut rng, pool, src_branch) = setup(rng_seed).await;
+    let (mut rng, _base_dir, pool, src_branch) = setup(rng_seed).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
@@ -588,7 +589,7 @@ async fn fork_case(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
-    let (mut rng, pool, branch) = setup(0).await;
+    let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut conn = pool.acquire().await.unwrap();
 
     let blob_id: BlobId = rng.gen();
@@ -612,10 +613,10 @@ async fn block_ids_test() {
     assert_eq!(actual_count, 3);
 }
 
-async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
+async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
-    let pool = db::create(&db::Store::Temporary).await.unwrap();
+    let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
     let branch = BranchData::create(
@@ -632,7 +633,7 @@ async fn setup(rng_seed: u64) -> (StdRng, db::Pool, Branch) {
         Arc::new(BlobCache::new(event_tx)),
     );
 
-    (rng, pool, branch)
+    (rng, base_dir, pool, branch)
 }
 
 fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {

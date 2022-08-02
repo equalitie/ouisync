@@ -29,6 +29,7 @@ use std::{
     sync::{Arc, Weak},
     time::Duration,
 };
+use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
     pin, select,
@@ -70,8 +71,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (b_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -118,8 +119,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (b_store, b_id) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
@@ -153,8 +154,8 @@ async fn failed_block_only_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (b_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -192,9 +193,9 @@ async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (b_store, _) = create_store(&mut rng, &write_keys).await;
-    let (c_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -252,9 +253,9 @@ async fn failed_block_other_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (b_store, b_id) = create_store(&mut rng, &write_keys).await;
-    let (c_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
+    let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
 
@@ -322,8 +323,11 @@ async fn failed_block_other_peer() {
     .await;
 }
 
-async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> (Store, PublicKey) {
-    let db = db::create(&db::Store::Temporary).await.unwrap();
+async fn create_store<R: Rng + CryptoRng>(
+    rng: &mut R,
+    write_keys: &Keypair,
+) -> (TempDir, Store, PublicKey) {
+    let (base_dir, db) = db::create_temp().await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let (event_tx, _) = broadcast::channel(1);
@@ -344,7 +348,7 @@ async fn create_store<R: Rng + CryptoRng>(rng: &mut R, write_keys: &Keypair) -> 
         local_id: LocalId::new(),
     };
 
-    (store, writer_id)
+    (base_dir, store, writer_id)
 }
 
 // Enough capacity to prevent deadlocks.

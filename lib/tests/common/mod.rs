@@ -1,5 +1,4 @@
 use ouisync::{
-    db,
     network::{Network, NetworkOptions},
     AccessSecrets, ConfigStore, MasterSecret, PeerAddr, Repository, StateMonitor,
 };
@@ -7,6 +6,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
     future::Future,
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast::error::RecvError;
@@ -32,13 +32,11 @@ impl Env {
         }
     }
 
-    pub fn next_store(&mut self) -> db::Store {
+    pub fn next_store(&mut self) -> PathBuf {
         let num = self.next_repo_num;
         self.next_repo_num += 1;
 
-        let path = self.base_dir.path().join(format!("repo-{}.db", num));
-
-        db::Store::Permanent(path)
+        self.base_dir.path().join(format!("repo-{}.db", num))
     }
 
     pub async fn create_repo(&mut self) -> Repository {

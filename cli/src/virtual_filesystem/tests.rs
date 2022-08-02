@@ -1,9 +1,9 @@
 use super::*;
-use ouisync_lib::{db, AccessSecrets, MasterSecret, Repository, StateMonitor};
+use ouisync_lib::{AccessSecrets, MasterSecret, Repository, StateMonitor};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
-use tempfile::{tempdir, TempDir};
+use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -12,13 +12,13 @@ use tokio::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_repository() {
-    let (_guard, mount_dir) = setup().await;
-    assert!(read_dir(mount_dir.path()).await.is_empty());
+    let (base_dir, _guard) = setup().await;
+    assert!(read_dir(base_dir.path().join("mnt")).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_directory() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
     let name_small = OsStr::new("small.txt");
     let len_small = 10;
@@ -33,7 +33,7 @@ async fn read_directory() {
         .sample_iter(Standard)
         .take(len_small)
         .collect();
-    fs::write(mount_dir.path().join(name_small), &content)
+    fs::write(base_dir.path().join("mnt").join(name_small), &content)
         .await
         .unwrap();
 
@@ -42,16 +42,16 @@ async fn read_directory() {
         .sample_iter(Standard)
         .take(len_large)
         .collect();
-    fs::write(mount_dir.path().join(name_large), &content)
+    fs::write(base_dir.path().join("mnt").join(name_large), &content)
         .await
         .unwrap();
 
     // Subdirectory
-    fs::create_dir(mount_dir.path().join(name_dir))
+    fs::create_dir(base_dir.path().join("mnt").join(name_dir))
         .await
         .unwrap();
 
-    let entries = read_dir(mount_dir.path()).await;
+    let entries = read_dir(base_dir.path().join("mnt")).await;
 
     assert_eq!(entries.len(), 3);
 
@@ -66,9 +66,9 @@ async fn read_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_read_non_existing_directory() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
-    match fs::read_dir(mount_dir.path().join("missing")).await {
+    match fs::read_dir(base_dir.path().join("mnt").join("missing")).await {
         Err(error) if error.kind() == ErrorKind::NotFound => (),
         Err(error) => panic!("unexpected error {}", error),
         Ok(_) => panic!("unexpected success"),
@@ -77,29 +77,40 @@ async fn attempt_to_read_non_existing_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_remove_directory() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
-    fs::create_dir(mount_dir.path().join("dir")).await.unwrap();
+    fs::create_dir(base_dir.path().join("mnt").join("dir"))
+        .await
+        .unwrap();
 
-    let entries = read_dir(mount_dir.path()).await;
+    let entries = read_dir(base_dir.path().join("mnt")).await;
     assert_eq!(entries.len(), 1);
     assert!(entries.contains_key(OsStr::new("dir")));
 
-    fs::remove_dir(mount_dir.path().join("dir")).await.unwrap();
-    assert!(read_dir(mount_dir.path()).await.is_empty());
+    fs::remove_dir(base_dir.path().join("mnt").join("dir"))
+        .await
+        .unwrap();
+    assert!(read_dir(base_dir.path().join("mnt")).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_remove_non_empty_directory() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
-    fs::create_dir(mount_dir.path().join("dir")).await.unwrap();
-    fs::write(mount_dir.path().join("dir").join("file.txt"), &[])
+    fs::create_dir(base_dir.path().join("mnt").join("dir"))
         .await
         .unwrap();
+    fs::write(
+        base_dir.path().join("mnt").join("dir").join("file.txt"),
+        &[],
+    )
+    .await
+    .unwrap();
 
-    assert!(fs::remove_dir(mount_dir.path().join("dir")).await.is_err());
-    assert!(read_dir(mount_dir.path())
+    assert!(fs::remove_dir(base_dir.path().join("mnt").join("dir"))
+        .await
+        .is_err());
+    assert!(read_dir(base_dir.path().join("mnt"))
         .await
         .contains_key(OsStr::new("dir")));
 }
@@ -120,12 +131,12 @@ async fn write_and_read_large_file() {
 }
 
 async fn write_and_read_file_case(len: usize, rng_seed: u64) {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
 
-    let path = mount_dir.path().join("file.txt");
+    let path = base_dir.path().join("mnt").join("file.txt");
 
     let mut file = File::create(&path).await.unwrap();
     file.write_all(&orig_data).await.unwrap();
@@ -140,9 +151,9 @@ async fn write_and_read_file_case(len: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
-    let path = mount_dir.path().join("file.txt");
+    let path = base_dir.path().join("mnt").join("file.txt");
 
     fs::write(&path, b"foo").await.unwrap();
 
@@ -164,9 +175,9 @@ fn seek_and_read(
 }
 
 async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
-    let path = mount_dir.path().join("file.txt");
+    let path = base_dir.path().join("mnt").join("file.txt");
 
     let rng = StdRng::seed_from_u64(rng_seed);
     let content: Vec<_> = rng.sample_iter(Standard).take(len).collect();
@@ -184,17 +195,17 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file() {
-    let (_guard, mount_dir) = setup().await;
+    let (base_dir, _guard) = setup().await;
 
     let src_name = OsStr::new("src.txt");
-    let src_path = mount_dir.path().join(src_name);
+    let src_path = base_dir.path().join("mnt").join(src_name);
     let dst_name = OsStr::new("dst.txt");
-    let dst_path = mount_dir.path().join(dst_name);
+    let dst_path = base_dir.path().join("mnt").join(dst_name);
 
     fs::write(&src_path, b"blah").await.unwrap();
     fs::rename(&src_path, &dst_path).await.unwrap();
 
-    let entries = read_dir(mount_dir.path()).await;
+    let entries = read_dir(base_dir.path().join("mnt")).await;
     assert!(!entries.contains_key(src_name));
     assert!(entries.contains_key(dst_name));
 }
@@ -210,14 +221,16 @@ fn run<F: Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-async fn setup() -> (MountGuard, TempDir) {
+async fn setup() -> (TempDir, MountGuard) {
     // use std::sync::Once;
 
     // static LOG_INIT: Once = Once::new();
     // LOG_INIT.call_once(env_logger::init);
 
+    let base_dir = TempDir::new().unwrap();
+
     let repo = Repository::create(
-        &db::Store::Temporary,
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -226,10 +239,13 @@ async fn setup() -> (MountGuard, TempDir) {
     )
     .await
     .unwrap();
-    let mount_dir = tempdir().unwrap();
-    let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir.path()).unwrap();
 
-    (guard, mount_dir)
+    let mount_dir = base_dir.path().join("mnt");
+    fs::create_dir(&mount_dir).await.unwrap();
+
+    let guard = super::mount(tokio::runtime::Handle::current(), repo, mount_dir).unwrap();
+
+    (base_dir, guard)
 }
 
 async fn read_dir(path: impl AsRef<Path>) -> HashMap<OsString, Metadata> {

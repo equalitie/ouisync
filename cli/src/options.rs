@@ -6,7 +6,6 @@ use anyhow::{format_err, Context, Error, Result};
 use clap::Parser;
 use ouisync_lib::{
     crypto::{cipher::SecretKey, Password},
-    db,
     network::NetworkOptions,
     AccessMode, MasterSecret, ShareToken,
 };
@@ -90,12 +89,6 @@ pub(crate) struct Options {
     /// Note this flag is unstable and experimental.
     #[clap(long)]
     pub print_device_id: bool,
-
-    /// Use temporary, memory-only databases. All data will be wiped out when the program
-    /// exits. If this flag is set, the --data-dir option is ignored. Use only for experimentation
-    /// and testing.
-    #[clap(long)]
-    pub temp: bool,
 }
 
 impl Options {
@@ -128,15 +121,6 @@ impl Options {
             .join("repositories")
             .join(name)
             .with_extension("db"))
-    }
-
-    /// Store of the database of the repository with the specified name.
-    pub fn repository_store(&self, name: &str) -> Result<db::Store> {
-        if self.temp {
-            Ok(db::Store::Temporary)
-        } else {
-            Ok(db::Store::Permanent(self.repository_path(name)?))
-        }
     }
 
     pub fn secret_for_repo(&self, repo_name: &str) -> Result<MasterSecret> {

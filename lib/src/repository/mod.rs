@@ -34,7 +34,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, path::Path, sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
@@ -50,9 +50,9 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    #[instrument(level = "info", skip_all, fields(?store), err)]
+    #[instrument(level = "info", skip_all, fields(store = ?store.as_ref()), err)]
     pub async fn create(
-        store: &db::Store,
+        store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
@@ -105,7 +105,7 @@ impl Repository {
     /// * `master_secret` - A user provided secret to encrypt the access secrets. If not provided,
     ///                     the repository will be opened as a blind replica.
     pub async fn open(
-        store: &db::Store,
+        store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
@@ -124,9 +124,9 @@ impl Repository {
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
     /// access mode the repository was created with.
-    #[instrument(level = "info", skip_all, fields(?store, ?max_access_mode), err)]
+    #[instrument(level = "info", skip_all, fields(store = ?store.as_ref(), ?max_access_mode), err)]
     pub async fn open_with_mode(
-        store: &db::Store,
+        store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         max_access_mode: AccessMode,
