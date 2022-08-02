@@ -11,7 +11,7 @@ async fn root_directory_always_exists() {
     let base_dir = TempDir::new().unwrap();
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -37,7 +37,7 @@ async fn count_leaf_nodes_sanity_checks() {
     let device_id = rand::random();
 
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         device_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -90,7 +90,7 @@ async fn count_leaf_nodes_sanity_checks() {
 async fn merge() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -134,7 +134,7 @@ async fn recreate_previously_deleted_file() {
     let base_dir = TempDir::new().unwrap();
     let local_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -178,7 +178,7 @@ async fn recreate_previously_deleted_directory() {
     let base_dir = TempDir::new().unwrap();
     let local_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -211,7 +211,7 @@ async fn concurrent_read_and_create_dir() {
     let base_dir = TempDir::new().unwrap();
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -264,7 +264,7 @@ async fn concurrent_write_and_read_file() {
     let base_dir = TempDir::new().unwrap();
     let writer_id = rand::random();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -382,7 +382,7 @@ async fn interleaved_flush() {
     ) {
         let base_dir = TempDir::new().unwrap();
         let repo = Repository::create(
-            &db::Store::Permanent(base_dir.path().join("repo.db")),
+            base_dir.path().join("repo.db"),
             rand::random(),
             MasterSecret::random(),
             AccessSecrets::random_write(),
@@ -444,7 +444,7 @@ async fn interleaved_flush() {
 async fn append_to_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -693,7 +693,7 @@ async fn read_access_different_replica() {
 async fn truncate_forked_remote_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -716,7 +716,7 @@ async fn truncate_forked_remote_file() {
 async fn attempt_to_modify_remote_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -756,7 +756,7 @@ async fn attempt_to_modify_remote_file() {
 async fn version_vector_create_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -829,7 +829,7 @@ async fn version_vector_create_file() {
 async fn version_vector_deep_hierarchy() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -869,7 +869,7 @@ async fn version_vector_deep_hierarchy() {
 async fn version_vector_recreate_deleted_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -898,7 +898,7 @@ async fn version_vector_recreate_deleted_file() {
 async fn version_vector_fork_file() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -939,7 +939,7 @@ async fn version_vector_fork_file() {
 async fn version_vector_empty_directory() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -965,7 +965,7 @@ async fn version_vector_empty_directory() {
 async fn file_conflict_modify_local() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -1046,7 +1046,7 @@ async fn file_conflict_modify_local() {
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
@@ -1087,7 +1087,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 async fn remove_branch() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),

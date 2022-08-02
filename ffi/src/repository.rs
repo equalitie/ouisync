@@ -53,7 +53,7 @@ pub unsafe extern "C" fn repository_create(
 
         ctx.spawn(async move {
             let repository = Repository::create(
-                &store.into_std_path_buf().into(),
+                store.into_std_path_buf(),
                 device_id,
                 MasterSecret::Password(master_password),
                 access_secrets,
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn repository_open(
 
         ctx.spawn(async move {
             let repository = Repository::open(
-                &store.into_std_path_buf().into(),
+                store.into_std_path_buf(),
                 device_id,
                 master_password.map(MasterSecret::Password),
                 ENABLE_MERGER,

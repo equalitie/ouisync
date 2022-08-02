@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     for name in &options.create {
         let secret = options.secret_for_repo(name)?;
         let repo = Repository::create(
-            &options.repository_store(name)?,
+            options.repository_path(name)?,
             device_id,
             secret,
             AccessSecrets::random_write(),
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
             repo.secrets().with_mode(*value)
         } else {
             Repository::open(
-                &options.repository_store(name)?,
+                options.repository_path(name)?,
                 device_id,
                 options.secret_for_repo(name).ok(),
                 false,
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
             let repo = Repository::create(
-                &options.repository_store(name.as_ref())?,
+                options.repository_path(name.as_ref())?,
                 device_id,
                 master_secret,
                 access_secrets.clone(),
@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
             repo
         } else {
             Repository::open(
-                &options.repository_store(name)?,
+                options.repository_path(name)?,
                 device_id,
                 options.secret_for_repo(name).ok(),
                 !options.disable_merger,

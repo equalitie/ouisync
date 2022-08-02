@@ -57,5 +57,5 @@ pub use self::{
     network::peer_addr::PeerAddr,
     repository::Repository,
     state_monitor::StateMonitor,
-    store::Store as RepositoryStore,
+    store::Store,
 };

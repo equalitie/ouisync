@@ -6,7 +6,6 @@ use anyhow::{format_err, Context, Error, Result};
 use clap::Parser;
 use ouisync_lib::{
     crypto::{cipher::SecretKey, Password},
-    db,
     network::NetworkOptions,
     AccessMode, MasterSecret, ShareToken,
 };
@@ -122,11 +121,6 @@ impl Options {
             .join("repositories")
             .join(name)
             .with_extension("db"))
-    }
-
-    /// Store of the database of the repository with the specified name.
-    pub fn repository_store(&self, name: &str) -> Result<db::Store> {
-        Ok(db::Store::Permanent(self.repository_path(name)?))
     }
 
     pub fn secret_for_repo(&self, repo_name: &str) -> Result<MasterSecret> {

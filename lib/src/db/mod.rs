@@ -6,13 +6,10 @@ use sqlx::{
     Row, SqlitePool,
 };
 use std::{
-    borrow::Cow,
-    convert::Infallible,
     future::Future,
     io,
     ops::{Deref, DerefMut},
-    path::{Path, PathBuf},
-    str::FromStr,
+    path::Path,
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -95,67 +92,19 @@ impl DerefMut for PoolTransaction {
     }
 }
 
-// URI of a memory-only db.
-const MEMORY: &str = ":memory:";
-
-/// Database store.
-#[derive(Debug)]
-pub enum Store {
-    /// Permanent database stored in the specified file.
-    Permanent(PathBuf),
-    /// Temporary database wiped out on program termination.
-    Temporary,
-}
-
-impl<'a> From<Cow<'a, Path>> for Store {
-    fn from(path: Cow<'a, Path>) -> Self {
-        if path.as_ref().to_str() == Some(MEMORY) {
-            Self::Temporary
-        } else {
-            Self::Permanent(path.into_owned())
-        }
-    }
-}
-
-impl From<PathBuf> for Store {
-    fn from(path: PathBuf) -> Self {
-        Self::from(Cow::Owned(path))
-    }
-}
-
-impl<'a> From<&'a Path> for Store {
-    fn from(path: &'a Path) -> Self {
-        Self::from(Cow::Borrowed(path))
-    }
-}
-
-impl FromStr for Store {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::from(Path::new(s)))
-    }
-}
-
 /// Creates a new database and opens a connection to it.
-pub(crate) async fn create(store: &Store) -> Result<Pool, Error> {
-    let connect_options = match store {
-        Store::Permanent(path) => {
-            create_directory(path).await?;
+pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
+    let path = path.as_ref();
 
-            if fs::metadata(path).await.is_ok() {
-                return Err(Error::Exists);
-            }
+    if fs::metadata(path).await.is_ok() {
+        return Err(Error::Exists);
+    }
 
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(true)
-        }
-        Store::Temporary => SqliteConnectOptions::from_str(MEMORY)
-            .unwrap()
-            .shared_cache(false),
-    };
+    create_directory(path).await?;
 
+    let connect_options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true);
     let pool = create_pool(connect_options).await?;
 
     let mut conn = pool.acquire().await?;
@@ -168,20 +117,14 @@ pub(crate) async fn create(store: &Store) -> Result<Pool, Error> {
 #[cfg(test)]
 pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
     let temp_dir = TempDir::new().map_err(Error::CreateDirectory)?;
-    let pool = create(&Store::Permanent(temp_dir.path().join("temp.db"))).await?;
+    let pool = create(temp_dir.path().join("temp.db")).await?;
 
     Ok((temp_dir, pool))
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
-pub(crate) async fn open(store: &Store) -> Result<Pool, Error> {
-    let connect_options = match store {
-        Store::Permanent(path) => SqliteConnectOptions::new().filename(path),
-        Store::Temporary => SqliteConnectOptions::from_str(MEMORY)
-            .unwrap()
-            .shared_cache(false),
-    };
-
+pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
+    let connect_options = SqliteConnectOptions::new().filename(path);
     let pool = create_pool(connect_options).await?;
 
     let mut conn = pool.acquire().await?;

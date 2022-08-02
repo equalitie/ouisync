@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{db, AccessSecrets, MasterSecret, Repository, StateMonitor};
+use ouisync_lib::{AccessSecrets, MasterSecret, Repository, StateMonitor};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -230,7 +230,7 @@ async fn setup() -> (TempDir, MountGuard) {
     let base_dir = TempDir::new().unwrap();
 
     let repo = Repository::create(
-        &db::Store::Permanent(base_dir.path().join("repo.db")),
+        base_dir.path().join("repo.db"),
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
