@@ -21,6 +21,8 @@ async fn root_directory_always_exists() {
     .await
     .unwrap();
     let _ = repo.open_directory("/").await.unwrap();
+
+    repo.close().await;
 }
 
 // Count leaf nodes in the index of the local branch.
@@ -84,6 +86,7 @@ async fn count_leaf_nodes_sanity_checks() {
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 
     //------------------------------------------------------------------------
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -127,6 +130,9 @@ async fn merge() {
         .await
         .unwrap();
     assert_eq!(content, b"hello");
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -171,6 +177,8 @@ async fn recreate_previously_deleted_file() {
     // Read it back and check the content
     let content = read_file(&repo, "test.txt").await;
     assert_eq!(content, b"bar");
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -202,7 +210,9 @@ async fn recreate_previously_deleted_directory() {
     repo.create_directory("test").await.unwrap();
 
     // Check it exists
-    assert_matches!(repo.open_directory("test").await, Ok(_))
+    assert_matches!(repo.open_directory("test").await, Ok(_));
+
+    repo.close().await;
 }
 
 // This one used to deadlock
@@ -257,6 +267,8 @@ async fn concurrent_read_and_create_dir() {
     })
     .await
     .unwrap();
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -327,6 +339,8 @@ async fn concurrent_write_and_read_file() {
     })
     .await
     .unwrap();
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -394,28 +408,28 @@ async fn interleaved_flush() {
         let file_name = "test.txt";
 
         let mut file0 = repo.create_file(file_name).await.unwrap();
-        let mut conn = repo.db().acquire().await.unwrap();
-        file0.flush(&mut conn).await.unwrap();
-        drop(conn);
+        let mut tx = repo.db().begin().await.unwrap();
+        file0.flush(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
 
         let mut file1 = repo.open_file(file_name).await.unwrap();
-        let mut conn = repo.db().acquire().await.unwrap();
+        let mut tx = repo.db().begin().await.unwrap();
 
-        file0.write(&mut conn, content0).await.unwrap();
-        file1.write(&mut conn, content1).await.unwrap();
+        file0.write(&mut tx, content0).await.unwrap();
+        file1.write(&mut tx, content1).await.unwrap();
 
         match flush_order {
             FlushOrder::FirstThenSecond => {
-                file0.flush(&mut conn).await.unwrap();
-                file1.flush(&mut conn).await.unwrap();
+                file0.flush(&mut tx).await.unwrap();
+                file1.flush(&mut tx).await.unwrap();
             }
             FlushOrder::SecondThenFirst => {
-                file1.flush(&mut conn).await.unwrap();
-                file0.flush(&mut conn).await.unwrap();
+                file1.flush(&mut tx).await.unwrap();
+                file0.flush(&mut tx).await.unwrap();
             }
         }
 
-        drop(conn);
+        tx.commit().await.unwrap();
 
         assert_eq!(
             count_local_index_leaf_nodes(&repo).await,
@@ -436,7 +450,9 @@ async fn interleaved_flush() {
             actual_content == expected_content,
             "'{}': unexpected file content",
             label
-        )
+        );
+
+        repo.close().await;
     }
 }
 
@@ -471,6 +487,9 @@ async fn append_to_file() {
     let mut conn = repo.db().acquire().await.unwrap();
     let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -538,6 +557,8 @@ async fn blind_access_non_empty_repo() {
         // Reading the root directory is not allowed either.
         assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
     }
+
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -571,6 +592,8 @@ async fn blind_access_empty_repo() {
 
     // Reading the root directory is not allowed.
     assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -640,6 +663,8 @@ async fn read_access_same_replica() {
         repo.remove_entry("public.txt").await,
         Err(Error::PermissionDenied)
     );
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -687,6 +712,9 @@ async fn read_access_different_replica() {
     let mut conn = repo.db().acquire().await.unwrap();
     let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"hello world");
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -710,6 +738,9 @@ async fn truncate_forked_remote_file() {
     let mut conn = repo.db().acquire().await.unwrap();
     file.fork(&mut conn, local_branch).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -750,6 +781,9 @@ async fn attempt_to_modify_remote_file() {
     let mut conn = repo.db().acquire().await.unwrap();
     file.write(&mut conn, b"bar").await.unwrap();
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -823,6 +857,9 @@ async fn version_vector_create_file() {
     assert!(root_vv_2 > root_vv_1);
     assert!(parent_vv_2 > parent_vv_1);
     assert!(file_vv_2 > file_vv_1);
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -863,6 +900,9 @@ async fn version_vector_deep_hierarchy() {
             vv![local_id => (depth - index) as u64]
         );
     }
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -892,6 +932,9 @@ async fn version_vector_recreate_deleted_file() {
         file.version_vector(&mut conn).await.unwrap(),
         vv![local_id => 3 /* = 1*create + 1*remove + 1*create again */]
     );
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -933,6 +976,9 @@ async fn version_vector_fork_file() {
         file.version_vector(&mut conn).await.unwrap(),
         remote_file_vv
     );
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -959,6 +1005,8 @@ async fn version_vector_empty_directory() {
             .unwrap(),
         vv![local_id => 1]
     );
+
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1040,6 +1088,9 @@ async fn file_conflict_modify_local() {
         remote_file.version_vector(&mut conn).await.unwrap(),
         vv![remote_id => 2]
     );
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1081,6 +1132,9 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         remote_file.fork(&mut conn, local_branch).await,
         Err(Error::EntryExists)
     );
+
+    drop(conn);
+    repo.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1107,12 +1161,12 @@ async fn remove_branch() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Keep the root dir open until we create both files to make sure it keeps write access.
-    let mut conn = repo.db().acquire().await.unwrap();
-    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    create_file_in_directory(&mut conn, &mut remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&mut conn, &mut remote_root, "bar.txt", b"bar").await;
+    let mut tx = repo.db().begin().await.unwrap();
+    let mut remote_root = remote_branch.open_or_create_root(&mut tx).await.unwrap();
+    create_file_in_directory(&mut tx, &mut remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&mut tx, &mut remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
-    drop(conn);
+    tx.commit().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
@@ -1127,6 +1181,8 @@ async fn remove_branch() {
 
     // The remote-only file is gone
     assert_matches!(repo.open_file("bar.txt").await, Err(Error::EntryNotFound));
+
+    repo.close().await;
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {

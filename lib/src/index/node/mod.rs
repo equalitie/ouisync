@@ -33,14 +33,10 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 /// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they
 /// became complete.
 pub(super) async fn update_summaries(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     hash: Hash,
 ) -> Result<Vec<(PublicKey, bool)>> {
-    let mut tx = conn.begin().await?;
-    let statuses = update_summaries_with_stack(&mut tx, vec![hash]).await?;
-    tx.commit().await?;
-
-    Ok(statuses)
+    update_summaries_with_stack(tx, vec![hash]).await
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
@@ -116,16 +112,16 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
 }
 
 async fn update_summaries_with_stack(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     mut nodes: Vec<Hash>,
 ) -> Result<Vec<(PublicKey, bool)>> {
     let mut statuses = Vec::new();
 
     while let Some(hash) = nodes.pop() {
-        match parent_kind(conn, &hash).await? {
+        match parent_kind(tx, &hash).await? {
             Some(ParentNodeKind::Root) => {
-                let complete = RootNode::update_summaries(conn, &hash).await?;
-                RootNode::load_writer_ids(conn, &hash)
+                let complete = RootNode::update_summaries(tx, &hash).await?;
+                RootNode::load_writer_ids(tx, &hash)
                     .try_for_each(|writer_id| {
                         statuses.push((writer_id, complete));
                         future::ready(Ok(()))
@@ -133,8 +129,8 @@ async fn update_summaries_with_stack(
                     .await?;
             }
             Some(ParentNodeKind::Inner) => {
-                InnerNode::update_summaries(conn, &hash).await?;
-                InnerNode::load_parent_hashes(conn, &hash)
+                InnerNode::update_summaries(tx, &hash).await?;
+                InnerNode::load_parent_hashes(tx, &hash)
                     .try_for_each(|parent_hash| {
                         nodes.push(parent_hash);
                         future::ready(Ok(()))

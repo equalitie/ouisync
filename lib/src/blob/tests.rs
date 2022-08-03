@@ -31,6 +31,9 @@ async fn empty_blob() {
 
     let mut buffer = [0; 1];
     assert_eq!(blob.read(&mut conn, &mut buffer[..]).await.unwrap(), 0);
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[proptest]
@@ -93,6 +96,9 @@ async fn write_and_read_case(
 
     assert_eq!(read_content.len(), orig_content.len());
     assert!(read_content == orig_content);
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[proptest]
@@ -117,6 +123,9 @@ fn len(
             .await
             .unwrap();
         assert_eq!(blob.len().await, content_len as u64);
+
+        drop(conn);
+        pool.close().await;
     })
 }
 
@@ -163,6 +172,9 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     let mut read_buffer = vec![0; content.len()];
     let len = blob.read(&mut conn, &mut read_buffer[..]).await.unwrap();
     assert_eq!(read_buffer[..len], content[expected_pos..]);
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[proptest]
@@ -194,6 +206,9 @@ fn seek_from_current(
         let mut read_buffer = vec![0; content.len()];
         let len = blob.read(&mut conn, &mut read_buffer[..]).await.unwrap();
         assert_eq!(read_buffer[..len], content[prev_pos..]);
+
+        drop(conn);
+        pool.close().await;
     })
 }
 
@@ -217,6 +232,9 @@ async fn seek_after_end() {
 
         assert_eq!(blob.read(&mut conn, &mut read_buffer).await.unwrap(), 0);
     }
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -239,6 +257,9 @@ async fn seek_before_start() {
         blob.read(&mut conn, &mut read_buffer).await.unwrap();
         assert_eq!(read_buffer, content);
     }
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -292,6 +313,9 @@ async fn remove_blob() {
     for block_id in &block_ids {
         assert!(!block::exists(&mut conn, block_id).await.unwrap());
     }
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -344,6 +368,9 @@ async fn truncate_to_empty() {
     assert_ne!(new_block_id0, old_block_id0);
     assert!(!block::exists(&mut conn, &old_block_id0).await.unwrap());
     assert!(block::exists(&mut conn, &new_block_id0).await.unwrap());
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -384,6 +411,9 @@ async fn truncate_to_shorter() {
             Err(Error::EntryNotFound)
         );
     }
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -404,6 +434,9 @@ async fn truncate_marks_as_dirty() {
 
     blob.truncate(&mut conn, 0).await.unwrap();
     assert!(blob.is_dirty());
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -443,6 +476,9 @@ async fn modify_blob() {
     for block_id in &[old_block_id0, old_block_id1] {
         assert!(!block::exists(&mut conn, block_id).await.unwrap())
     }
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -469,6 +505,9 @@ async fn append() {
 
     let content = blob.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -489,6 +528,9 @@ async fn write_reopen_and_read() {
 
     let content = blob.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foo");
+
+    drop(conn);
+    pool.close().await;
 }
 
 #[proptest]
@@ -583,6 +625,9 @@ async fn fork_case(
     let len = fork.read(&mut conn, &mut buffer[..]).await.unwrap();
     assert_eq!(len, buffer.len());
     assert!(buffer == write_content);
+
+    drop(conn);
+    pool.close().await;
 }
 
 // TODO: test that fork() doesn't create new blocks
@@ -611,6 +656,9 @@ async fn block_ids_test() {
     }
 
     assert_eq!(actual_count, 3);
+
+    drop(conn);
+    pool.close().await;
 }
 
 async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
@@ -619,14 +667,22 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
+
+    // NOTE: by running this in a db transaction we ensure the write is visible to any subsequent
+    // reads. Without the transaction when using multiple db connection, sometimes (rarely) the
+    // write would not be visible. This is probably a sqlite feature (something to do with caching)
+    // and not a bug.
+    let mut tx = pool.begin().await.unwrap();
     let branch = BranchData::create(
-        &mut pool.acquire().await.unwrap(),
+        &mut tx,
         PublicKey::random(),
         &secrets.write_keys,
         event_tx.clone(),
     )
     .await
     .unwrap();
+    tx.commit().await.unwrap();
+
     let branch = Branch::new(
         Arc::new(branch),
         secrets.into(),

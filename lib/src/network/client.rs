@@ -60,6 +60,8 @@ impl Client {
 
     #[instrument(name = "client", skip_all, err)]
     pub async fn run(&mut self) -> Result<()> {
+        self.receive_filter.reset().await?;
+
         loop {
             select! {
                 block_id = self.block_tracker.accept() => {

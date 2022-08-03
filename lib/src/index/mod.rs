@@ -73,8 +73,9 @@ impl Index {
     }
 
     pub async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
-        let mut conn = self.pool.acquire().await?;
-        let root_node = RootNode::create(&mut conn, proof, Summary::FULL).await?;
+        let mut tx = self.pool.begin().await?;
+        let root_node = RootNode::create(&mut tx, proof, Summary::FULL).await?;
+        tx.commit().await?;
 
         match self
             .shared
@@ -135,10 +136,10 @@ impl Index {
             return Ok(false);
         }
 
-        let mut conn = self.pool.acquire().await?;
+        let mut tx = self.pool.begin().await?;
 
         // Load latest complete root nodes of all known branches.
-        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut conn)
+        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut tx)
             .map_ok(|node| (node.proof.writer_id, node))
             .try_collect()
             .await?;
@@ -162,11 +163,13 @@ impl Index {
         if uptodate {
             let hash = proof.hash;
 
-            match RootNode::create(&mut conn, proof, Summary::INCOMPLETE).await {
-                Ok(_) => self.update_summaries(&mut conn, hash).await?,
+            match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
+                Ok(_) => self.update_summaries(&mut tx, hash).await?,
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }
+
+            tx.commit().await?;
 
             Ok(true)
         } else {
@@ -181,20 +184,21 @@ impl Index {
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>, ReceiveError> {
-        let mut conn = self.pool.acquire().await?;
+        let mut tx = self.pool.begin().await?;
         let parent_hash = nodes.hash();
 
-        self.check_parent_node_exists(&mut conn, &parent_hash)
-            .await?;
+        self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
         let updated = self
-            .find_inner_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes, receive_filter)
+            .find_inner_nodes_with_new_blocks(&mut tx, &parent_hash, &nodes, receive_filter)
             .await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
-        nodes.inherit_summaries(&mut conn).await?;
-        nodes.save(&mut conn, &parent_hash).await?;
-        self.update_summaries(&mut conn, parent_hash).await?;
+        nodes.inherit_summaries(&mut tx).await?;
+        nodes.save(&mut tx, &parent_hash).await?;
+        self.update_summaries(&mut tx, parent_hash).await?;
+
+        tx.commit().await?;
 
         Ok(updated)
     }
@@ -205,14 +209,13 @@ impl Index {
         &self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<Vec<BlockId>, ReceiveError> {
-        let mut conn = self.pool.acquire().await?;
+        let mut tx = self.pool.begin().await?;
         let parent_hash = nodes.hash();
 
-        self.check_parent_node_exists(&mut conn, &parent_hash)
-            .await?;
+        self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
         let updated: Vec<_> = self
-            .find_leaf_nodes_with_new_blocks(&mut conn, &parent_hash, &nodes)
+            .find_leaf_nodes_with_new_blocks(&mut tx, &parent_hash, &nodes)
             .await?
             .map(|node| node.block_id)
             .collect();
@@ -220,9 +223,11 @@ impl Index {
         nodes
             .into_inner()
             .into_missing()
-            .save(&mut conn, &parent_hash)
+            .save(&mut tx, &parent_hash)
             .await?;
-        self.update_summaries(&mut conn, parent_hash).await?;
+        self.update_summaries(&mut tx, parent_hash).await?;
+
+        tx.commit().await?;
 
         Ok(updated)
     }
@@ -288,8 +293,8 @@ impl Index {
 
     // Updates summaries of the specified nodes and all their ancestors, notifies the affected
     // branches that became complete (wasn't before the update but became after it).
-    async fn update_summaries(&self, conn: &mut db::Connection, hash: Hash) -> Result<()> {
-        let statuses = node::update_summaries(conn, hash).await?;
+    async fn update_summaries(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<()> {
+        let statuses = node::update_summaries(tx, hash).await?;
 
         for (id, complete) in statuses {
             if complete {
