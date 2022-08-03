@@ -131,29 +131,9 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
 
 async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
     SqlitePoolOptions::new()
-        // HACK: using only one connection to work around various issues:
-        //
-        // - For persistent database, this avoids `SQLITE_BUSY` errors.
-        // - For memory database, this avoids having to use shared cache (which is necessary when
-        //   using multiple connections to a memory database, but it's extremely prone to deadlocks)
-        //
-        // TODO: After some experimentation, it seems that using `SqliteSynchornous::Normal` might
-        // fix those errors but it needs more testing. But even if it works, we should try to avoid
-        // making the test and the production code diverge too much. This means that in order to
-        // use multiple connections we would either have to stop using memory databases or we would
-        // have to enable shared cache also for file databases. Both approaches have their
-        // drawbacks.
+        // HACK: using only one connection to work around concurrency issues (`SQLITE_BUSY` errors)
+        // TODO: find a way to reliable use multiple connections
         .max_connections(1)
-        // Never reap connections because for memory database and without shared cache it would
-        // also destroy the whole database.
-        .max_lifetime(None)
-        .idle_timeout(None)
-        // By default, `Pool::acquire` on an in-memory database is not cancel-safe because it can
-        // drop connections which then wipes out the database. By disabling this test we make sure
-        // that when a connection is removed from the idle queue it's immediately returned to the
-        // caller which makes it cancel-safe. Note also that this test is useful for client-server
-        // dbs but not so much for embedded ones anyway.
-        .test_before_acquire(false)
         .connect_with(connect_options)
         .await
         .map(Pool::new)
