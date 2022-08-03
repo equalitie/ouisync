@@ -60,12 +60,15 @@ impl PendingRequests {
     /// This method is cancel-safe in the sense that no request is removed if the returned future
     /// is dropped before being driven to completion.
     pub async fn expired(&mut self) {
-        if let Some((&request, &RequestData { timestamp, .. })) = self
+        if let Some((&request, _)) = self
             .map
             .iter()
             .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
         {
-            time::sleep_until((timestamp + REQUEST_TIMEOUT).into()).await;
+            // Sleep REQUEST_TIMEOUT from now, as opposed to from the `timestamp`. It is because we
+            // are not keeping track of how many requests were in flight before this request was
+            // submittend and how long they took.
+            time::sleep(REQUEST_TIMEOUT).await;
             self.remove(&request);
         } else {
             future::pending().await
