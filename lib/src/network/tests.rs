@@ -101,6 +101,9 @@ async fn transfer_snapshot_between_two_replicas_case(
         }
     };
 
+    // HACK: boxing this future prevents stack overflow
+    let drive = Box::pin(drive);
+
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     // HACK: prevent "too many open files" error.
@@ -441,16 +444,13 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
-    use sqlx::Connection;
-
     let branch = index.get_branch(writer_id).unwrap();
 
     for _ in 0..size {
         create_block(rng, index, &branch, write_keys).await;
     }
 
-    let mut cx = index.pool.acquire().await.unwrap();
-    let mut tx = cx.begin().await.unwrap();
+    let mut tx = index.pool.begin().await.unwrap();
     branch
         .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
         .await

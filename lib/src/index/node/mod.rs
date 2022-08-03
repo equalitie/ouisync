@@ -22,7 +22,6 @@ use crate::{
     error::Result,
 };
 use futures_util::{future, TryStreamExt};
-use sqlx::Acquire;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
@@ -42,26 +41,20 @@ pub(super) async fn update_summaries(
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
 /// Returns the replica ids whose branches reference the received block (if any).
 pub(crate) async fn receive_block(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     id: &BlockId,
 ) -> Result<Vec<PublicKey>> {
-    let mut tx = conn.begin().await?;
-
-    if !LeafNode::set_present(&mut tx, id).await? {
+    if !LeafNode::set_present(tx, id).await? {
         return Ok(Vec::new());
     }
 
-    let nodes = LeafNode::load_parent_hashes(&mut tx, id)
-        .try_collect()
-        .await?;
+    let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
 
-    let ids = update_summaries_with_stack(&mut tx, nodes)
+    let ids = update_summaries_with_stack(tx, nodes)
         .await?
         .into_iter()
         .map(|(writer_id, _)| writer_id)
         .collect();
-
-    tx.commit().await?;
 
     Ok(ids)
 }

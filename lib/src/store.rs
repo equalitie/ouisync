@@ -8,7 +8,7 @@ use crate::{
     progress::Progress,
     repository::{LocalId, MonitoredValues},
 };
-use sqlx::{Connection, Row};
+use sqlx::Row;
 use std::sync::Weak;
 
 #[derive(Clone)]
@@ -63,8 +63,7 @@ impl Store {
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<()> {
-        let mut cx = self.db().acquire().await?;
-        let mut tx = cx.begin().await?;
+        let mut tx = self.db().begin().await?;
 
         let writer_ids = match index::receive_block(&mut tx, &data.id).await {
             Ok(writer_ids) => writer_ids,
