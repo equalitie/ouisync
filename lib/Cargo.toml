@@ -42,7 +42,7 @@ rupnp = { version = "1.1.0", default-features = false, features = [] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 slab = "0.4.6"
 socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
-sqlx = { version = "0.5.13", features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.6.1", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"
 thiserror = "1.0.31"
 rustls = { version = "0.20.3", default-features = false, features = ["quic", "dangerous_configuration"] }
