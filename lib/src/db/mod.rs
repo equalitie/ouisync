@@ -31,17 +31,9 @@ impl Pool {
         }
     }
 
-    #[cfg(not(test))]
     #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
         DeadlockGuard::try_wrap(self.inner.acquire(), self.deadlock_tracker.clone())
-    }
-
-    // HACK: disabling the deadlock detection in test mode because it's causing a stack overflow
-    // in some of the tests for mysterious reasons.
-    #[cfg(test)]
-    pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        self.inner.acquire()
     }
 
     #[track_caller]
@@ -58,13 +50,7 @@ impl Pool {
 /// Database connection.
 pub type Connection = SqliteConnection;
 
-/// Pooled database connection
-#[cfg(not(test))]
 pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
-
-/// Pooled database connection
-#[cfg(test)]
-pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
 pub(crate) type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;

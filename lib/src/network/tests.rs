@@ -507,14 +507,19 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
         recv_tx: server_recv_tx,
     };
 
-    select! {
-        biased; // deterministic poll order for repeatable tests
+    let task = async move {
+        select! {
+            biased; // deterministic poll order for repeatable tests
 
-        result = server.run() => result.unwrap(),
-        result = client.run() => result.unwrap(),
-        _ = server_conn.run() => panic!("connection closed prematurely"),
-        _ = client_conn.run() => panic!("connection closed prematurely"),
-    }
+            result = server.run() => result.unwrap(),
+            result = client.run() => result.unwrap(),
+            _ = server_conn.run() => panic!("connection closed prematurely"),
+            _ = client_conn.run() => panic!("connection closed prematurely"),
+        }
+    };
+
+    // HACK: boxing the future prevents stack overflow
+    Box::pin(task).await
 }
 
 // Runs `task` until `until` completes. Panics if `until` doesn't complete before `TIMEOUT` or if
