@@ -1,6 +1,5 @@
 mod migrations;
 
-use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
@@ -8,12 +7,7 @@ use sqlx::{
     },
     Row, SqlitePool,
 };
-use std::{
-    future::Future,
-    io,
-    ops::{Deref, DerefMut},
-    path::Path,
-};
+use std::{io, path::Path};
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
@@ -23,39 +17,27 @@ use tokio::fs;
 #[derive(Clone)]
 pub struct Pool {
     inner: SqlitePool,
-    deadlock_tracker: DeadlockTracker,
 }
 
 impl Pool {
     fn new(inner: SqlitePool) -> Self {
-        Self {
-            inner,
-            deadlock_tracker: DeadlockTracker::new(),
-        }
+        Self { inner }
     }
 
-    #[track_caller]
-    pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> {
-        DeadlockGuard::try_wrap(self.inner.acquire(), self.deadlock_tracker.clone())
+    pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
+        self.inner.acquire().await
     }
 
-    #[track_caller]
-    pub(crate) fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
-        let future = DeadlockGuard::try_wrap(self.inner.begin(), self.deadlock_tracker.clone());
-        async move { Ok(PoolTransaction(future.await?)) }
+    pub(crate) async fn begin(&self) -> Result<PoolTransaction, sqlx::Error> {
+        self.inner.begin().await
     }
 
-    #[track_caller]
-    pub(crate) fn begin_immediate(
-        &self,
-    ) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
-        let future = DeadlockGuard::try_wrap(
-            self.inner.begin_with(
+    pub(crate) async fn begin_immediate(&self) -> Result<PoolTransaction, sqlx::Error> {
+        self.inner
+            .begin_with(
                 SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),
-            ),
-            self.deadlock_tracker.clone(),
-        );
-        async move { Ok(PoolTransaction(future.await?)) }
+            )
+            .await
     }
 
     pub(crate) async fn close(&self) {
@@ -66,33 +48,13 @@ impl Pool {
 /// Database connection.
 pub type Connection = SqliteConnection;
 
-pub(crate) type PoolConnection = DeadlockGuard<sqlx::pool::PoolConnection<Sqlite>>;
+pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
 pub(crate) type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
 /// Database transaction obtained from `Pool::begin`.
-pub(crate) struct PoolTransaction(DeadlockGuard<sqlx::Transaction<'static, Sqlite>>);
-
-impl PoolTransaction {
-    pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.0.into_inner().commit().await
-    }
-}
-
-impl Deref for PoolTransaction {
-    type Target = Transaction<'static>;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-impl DerefMut for PoolTransaction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut()
-    }
-}
+pub(crate) type PoolTransaction = sqlx::Transaction<'static, Sqlite>;
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {

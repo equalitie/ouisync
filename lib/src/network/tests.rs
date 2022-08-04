@@ -101,9 +101,6 @@ async fn transfer_snapshot_between_two_replicas_case(
         }
     };
 
-    // HACK: boxing this future prevents stack overflow
-    let drive = Box::pin(drive);
-
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     // HACK: prevent "too many open files" error.
@@ -303,13 +300,13 @@ async fn failed_block_other_peer() {
             wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index),
         )
         .fuse();
-        let mut conn_ac = Box::pin(conn_ac); // HACK: boxing prevents stack overflow
+        pin!(conn_ac);
 
         let conn_bc = run_until(
             &mut conn_bc,
             wait_until_snapshots_in_sync(&b_store.index, b_id, &c_store.index),
         );
-        let conn_bc = Box::pin(conn_bc); // HACK: boxing prevents stack overflow
+        pin!(conn_bc);
 
         future::select(&mut conn_ac, conn_bc).await;
 
@@ -507,19 +504,14 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
         recv_tx: server_recv_tx,
     };
 
-    let task = async move {
-        select! {
-            biased; // deterministic poll order for repeatable tests
+    select! {
+        biased; // deterministic poll order for repeatable tests
 
-            result = server.run() => result.unwrap(),
-            result = client.run() => result.unwrap(),
-            _ = server_conn.run() => panic!("connection closed prematurely"),
-            _ = client_conn.run() => panic!("connection closed prematurely"),
-        }
-    };
-
-    // HACK: boxing this future prevents stack overflow
-    Box::pin(task).await
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = server_conn.run() => panic!("connection closed prematurely"),
+        _ = client_conn.run() => panic!("connection closed prematurely"),
+    }
 }
 
 // Runs `task` until `until` completes. Panics if `until` doesn't complete before `TIMEOUT` or if

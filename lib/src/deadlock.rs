@@ -37,38 +37,6 @@ impl<T> DeadlockGuard<T> {
             }
         }
     }
-
-    #[track_caller]
-    pub(crate) fn try_wrap<F, E>(
-        inner: F,
-        tracker: DeadlockTracker,
-    ) -> impl Future<Output = Result<Self, E>>
-    where
-        F: Future<Output = Result<T, E>>,
-    {
-        let acquire = tracker.acquire();
-
-        async move {
-            let inner = detect_deadlock(inner, &tracker).await;
-
-            Ok(Self {
-                inner: inner?,
-                _acquire: acquire,
-            })
-        }
-    }
-
-    pub(crate) fn into_inner(self) -> T {
-        self.inner
-    }
-
-    pub(crate) fn as_ref(&self) -> &T {
-        &self.inner
-    }
-
-    pub(crate) fn as_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
 }
 
 impl<T> Deref for DeadlockGuard<T>
