@@ -264,11 +264,9 @@ impl InnerNodeMap {
     }
 
     pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
         for node in self.0.values_mut() {
-            node.inherit_summary(&mut tx).await?;
+            node.inherit_summary(conn).await?;
         }
-        tx.commit().await?;
 
         Ok(())
     }

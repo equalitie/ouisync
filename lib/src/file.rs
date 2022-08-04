@@ -146,7 +146,9 @@ impl File {
             return Ok(());
         }
 
-        let tx = conn.begin().await?;
+        let tx = conn
+            .begin_with(db::TransactionBehavior::Immediate.into())
+            .await?;
         let (new_parent, new_blob) = self
             .parent
             .fork(tx, &self.blob, self.branch().clone(), dst_branch)

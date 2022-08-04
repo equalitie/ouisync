@@ -31,7 +31,9 @@ impl ReceiveFilter {
         hash: &Hash,
         new_summary: &Summary,
     ) -> Result<bool> {
-        let mut tx = conn.begin().await?;
+        let mut tx = conn
+            .begin_with(db::TransactionBehavior::Immediate.into())
+            .await?;
 
         if let Some((row_id, old_summary)) = load(&mut tx, self.id, hash).await? {
             if old_summary.is_up_to_date_with(new_summary).unwrap_or(false) {

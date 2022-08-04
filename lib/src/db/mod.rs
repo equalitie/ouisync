@@ -1,11 +1,8 @@
 mod migrations;
 
 use sqlx::{
-    sqlite::{
-        Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
-        SqliteTransactionBehavior, SqliteTransactionOptions,
-    },
-    Connection as _, Row, SqlitePool,
+    sqlite::{Sqlite, SqliteConnectOptions, SqlitePoolOptions, SqliteTransactionBehavior},
+    Row, SqlitePool,
 };
 use std::{io, path::Path};
 #[cfg(test)]
@@ -32,9 +29,7 @@ impl Pool {
         // NOTE: deferred transactions are prone to deadlock. Create immediate transaction by
         // default.
         self.inner
-            .begin_with(
-                SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),
-            )
+            .begin_with(TransactionBehavior::Immediate.into())
             .await
     }
 
@@ -43,20 +38,17 @@ impl Pool {
     }
 }
 
-/// Database connection.
-pub type Connection = SqliteConnection;
+/// Database connection
+pub type Connection = sqlx::sqlite::SqliteConnection;
 
-pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
+/// Database connection from pool
+pub type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
-pub(crate) async fn begin_immediate(conn: &mut Connection) -> Result<Transaction<'_>, sqlx::Error> {
-    conn.begin_with(
-        SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),
-    )
-    .await
-}
+/// Transaction mode (deferred / immediate)
+pub type TransactionBehavior = SqliteTransactionBehavior;
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {

@@ -1164,7 +1164,10 @@ async fn create_file_in_directory(
     content: &[u8],
 ) -> File {
     let mut file = dir.create_file(conn, name.into()).await.unwrap();
-    let mut tx = db::begin_immediate(conn).await.unwrap();
+    let mut tx = conn
+        .begin_with(db::TransactionBehavior::Immediate.into())
+        .await
+        .unwrap();
     file.write(&mut tx, content).await.unwrap();
     file.flush(&mut tx).await.unwrap();
     tx.commit().await.unwrap();

@@ -34,6 +34,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
+use sqlx::Connection;
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
@@ -464,7 +465,9 @@ impl Repository {
 
         drop(dst_joint_dir);
 
-        let mut tx = db::begin_immediate(&mut conn).await?;
+        let mut tx = conn
+            .begin_with(db::TransactionBehavior::Immediate.into())
+            .await?;
         let mut dst_dir = local_branch
             .ensure_directory_exists(&mut tx, dst_dir_path.as_ref())
             .await?;
