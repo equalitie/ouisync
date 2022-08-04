@@ -2,6 +2,7 @@ use super::*;
 use crate::{blob, block::BLOCK_SIZE, db, scoped_task};
 use assert_matches::assert_matches;
 use rand::Rng;
+use sqlx::Connection;
 use std::io::SeekFrom;
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout, Duration};

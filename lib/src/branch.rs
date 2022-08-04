@@ -66,17 +66,17 @@ impl Branch {
     /// (e.g. "C:") are not supported.
     pub(crate) async fn ensure_directory_exists(
         &self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         path: &Utf8Path,
     ) -> Result<Directory> {
-        let mut curr = self.open_or_create_root(tx).await?;
+        let mut curr = self.open_or_create_root(conn).await?;
 
         for component in path.components() {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
                     let next = match curr.lookup(name) {
-                        Ok(EntryRef::Directory(entry)) => Some(entry.open(tx).await?),
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open(conn).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                         Err(error) => return Err(error),
@@ -85,7 +85,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(tx, name.to_string()).await?
+                        curr.create_directory(conn, name.to_string()).await?
                     };
 
                     curr = next;

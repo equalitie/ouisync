@@ -34,7 +34,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::Utf8Path;
-use sqlx::Connection;
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
@@ -423,15 +422,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
-
-                // `merge` takes `Pool`, not `Connection` (to avoid holding the connection for too
-                // long) and so to avoid deadlock we need to temporarily release `conn`...
-                drop(conn);
-
-                let dir_to_move = dir_to_move.merge(self.db()).await?;
-
-                // ...and acquire it back again once `merge` is done.
-                conn = self.db().acquire().await?;
+                let dir_to_move = dir_to_move.merge(&mut conn).await?;
 
                 let src_dir = dir_to_move
                     .parent(&mut conn)
@@ -465,15 +456,12 @@ impl Repository {
 
         drop(dst_joint_dir);
 
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
         let mut dst_dir = local_branch
-            .ensure_directory_exists(&mut tx, dst_dir_path.as_ref())
+            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
             .await?;
         src_dir
             .move_entry(
-                &mut tx,
+                &mut conn,
                 &src_name,
                 src_entry,
                 &mut dst_dir,
@@ -481,7 +469,6 @@ impl Repository {
                 dst_vv,
             )
             .await?;
-        tx.commit().await?;
 
         Ok(())
     }

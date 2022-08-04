@@ -190,12 +190,11 @@ mod merge {
 
     #[instrument(level = "trace", name = "merge", skip_all, err)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
+        let mut conn = shared.store.db().acquire().await?;
         let branches = shared.collect_branches()?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let mut conn = shared.store.db().acquire().await?;
-
             match branch.open_root(&mut conn).await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
@@ -204,7 +203,7 @@ mod merge {
         }
 
         JointDirectory::new(Some(local_branch.clone()), roots)
-            .merge(shared.store.db())
+            .merge(&mut conn)
             .await?;
 
         Ok(())
