@@ -449,12 +449,14 @@ async fn set_present_on_leaf_node_with_missing_block() {
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
+    let mut tx = conn.begin().await.unwrap();
+
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
-    assert!(LeafNode::set_present(&mut conn, &block_id).await.unwrap());
+    assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert!(!nodes.get(&encoded_locator).unwrap().is_missing);
 }
 
@@ -466,10 +468,12 @@ async fn set_present_on_leaf_node_with_present_block() {
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
-    let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
-    assert!(!LeafNode::set_present(&mut conn, &block_id).await.unwrap());
+    let node = LeafNode::present(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -478,8 +482,10 @@ async fn set_present_on_leaf_node_that_does_not_exist() {
 
     let block_id = rand::random();
 
+    let mut tx = conn.begin().await.unwrap();
+
     assert_matches!(
-        LeafNode::set_present(&mut conn, &block_id).await,
+        LeafNode::set_present(&mut tx, &block_id).await,
         Err(Error::BlockNotReferenced)
     )
 }

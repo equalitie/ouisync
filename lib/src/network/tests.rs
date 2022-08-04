@@ -259,8 +259,6 @@ async fn failed_block_same_peer() {
     .await;
 }
 
-// FIXME: this test currently fails with "database is deadlocked" error.
-#[ignore]
 #[tokio::test]
 async fn failed_block_other_peer() {
     let mut rng = StdRng::seed_from_u64(0);
@@ -305,13 +303,13 @@ async fn failed_block_other_peer() {
             wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index),
         )
         .fuse();
-        pin!(conn_ac);
+        let mut conn_ac = Box::pin(conn_ac); // HACK: boxing prevents stack overflow
 
         let conn_bc = run_until(
             &mut conn_bc,
             wait_until_snapshots_in_sync(&b_store.index, b_id, &c_store.index),
         );
-        pin!(conn_bc);
+        let conn_bc = Box::pin(conn_bc); // HACK: boxing prevents stack overflow
 
         future::select(&mut conn_ac, conn_bc).await;
 

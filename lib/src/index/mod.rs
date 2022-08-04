@@ -136,7 +136,7 @@ impl Index {
             return Ok(false);
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_immediate().await?;
 
         // Load latest complete root nodes of all known branches.
         let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut tx)
@@ -184,7 +184,7 @@ impl Index {
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>, ReceiveError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_immediate().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
@@ -209,7 +209,7 @@ impl Index {
         &self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<Vec<BlockId>, ReceiveError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_immediate().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;

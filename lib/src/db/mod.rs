@@ -2,7 +2,10 @@ mod migrations;
 
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use sqlx::{
-    sqlite::{Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions},
+    sqlite::{
+        Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
+        SqliteTransactionBehavior, SqliteTransactionOptions,
+    },
     Row, SqlitePool,
 };
 use std::{
@@ -39,6 +42,19 @@ impl Pool {
     #[track_caller]
     pub(crate) fn begin(&self) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
         let future = DeadlockGuard::try_wrap(self.inner.begin(), self.deadlock_tracker.clone());
+        async move { Ok(PoolTransaction(future.await?)) }
+    }
+
+    #[track_caller]
+    pub(crate) fn begin_immediate(
+        &self,
+    ) -> impl Future<Output = Result<PoolTransaction, sqlx::Error>> + '_ {
+        let future = DeadlockGuard::try_wrap(
+            self.inner.begin_with(
+                SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),
+            ),
+            self.deadlock_tracker.clone(),
+        );
         async move { Ok(PoolTransaction(future.await?)) }
     }
 
@@ -130,7 +146,10 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
 }
 
 async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
-    let connect_options = connect_options.shared_cache(true);
+    // TODO: consider enabling shared cache to improve performance. Currently it doesn't work
+    // properly (concurrent access is triggering "table locked" errors) possibly due to buggy
+    // implementation of the unlock notify in sqlx
+    // let connect_options = connect_options.shared_cache(true);
 
     SqlitePoolOptions::new()
         .max_connections(8)

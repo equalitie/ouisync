@@ -2,3 +2,5 @@
 
 members = ["bindgen", "cli", "ffi", "lib", "util"]
 
+[patch.crates-io]
+sqlx = { path = "../../sqlx" }
