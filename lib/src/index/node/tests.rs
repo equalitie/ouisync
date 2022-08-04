@@ -14,7 +14,6 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use rand::prelude::*;
-use sqlx::Connection;
 use std::iter;
 use tempfile::TempDir;
 use test_strategy::proptest;

@@ -9,7 +9,6 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use sqlx::Connection;
 use std::sync::Weak;
 use tempfile::TempDir;
 

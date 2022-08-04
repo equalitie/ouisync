@@ -1,6 +1,6 @@
 use super::node::Summary;
 use crate::{crypto::Hash, db, error::Result};
-use sqlx::{Connection, Row};
+use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;
 
@@ -31,9 +31,7 @@ impl ReceiveFilter {
         hash: &Hash,
         new_summary: &Summary,
     ) -> Result<bool> {
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
 
         if let Some((row_id, old_summary)) = load(&mut tx, self.id, hash).await? {
             if old_summary.is_up_to_date_with(new_summary).unwrap_or(false) {

@@ -26,7 +26,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use sqlx::Connection;
 use std::{fmt, mem};
 
 /// What to do with the existing entry when inserting a new entry in its place.
@@ -107,9 +106,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -144,9 +141,7 @@ impl Directory {
         conn: &mut db::Connection,
         name: String,
     ) -> Result<Self> {
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -185,9 +180,7 @@ impl Directory {
         branch_id: &PublicKey,
         vv: VersionVector,
     ) -> Result<()> {
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
 
         let content = match self
             .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
@@ -237,9 +230,7 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
 
         let dst_content = dst_dir
             .begin_insert_entry(
@@ -315,9 +306,7 @@ impl Directory {
         conn: &mut db::Connection,
         vv: VersionVector,
     ) -> Result<()> {
-        let tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let tx = conn.begin().await?;
         self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
             .await
     }

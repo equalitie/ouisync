@@ -10,7 +10,7 @@ use crate::{
 use futures_util::{future, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sqlx::{Acquire, Row};
+use sqlx::Row;
 use std::{
     collections::{btree_map, BTreeMap},
     convert::TryInto,

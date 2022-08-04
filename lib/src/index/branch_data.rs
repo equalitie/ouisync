@@ -298,7 +298,7 @@ mod tests {
         test_utils,
     };
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use sqlx::{Connection, Row};
+    use sqlx::Row;
     use tempfile::TempDir;
     use test_strategy::proptest;
 

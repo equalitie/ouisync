@@ -1,10 +1,21 @@
 mod migrations;
 
+use futures_util::Stream;
+use ref_cast::RefCast;
 use sqlx::{
-    sqlite::{Sqlite, SqliteConnectOptions, SqlitePoolOptions, SqliteTransactionBehavior},
-    Row, SqlitePool,
+    sqlite::{
+        Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
+        SqliteTransactionBehavior,
+    },
+    Connection as _, Database, Either, Execute, Executor, Row, SqlitePool,
 };
-use std::{io, path::Path};
+use std::{
+    future::Future,
+    io,
+    ops::{Deref, DerefMut},
+    path::Path,
+    pin::Pin,
+};
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
@@ -22,15 +33,16 @@ impl Pool {
     }
 
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
-        self.inner.acquire().await
+        self.inner.acquire().await.map(PoolConnection)
     }
 
     pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
-        // NOTE: deferred transactions are prone to deadlock. Create immediate transaction by
+        // NOTE: deferred transactions are prone to deadlocks. Create immediate transaction by
         // default.
         self.inner
-            .begin_with(TransactionBehavior::Immediate.into())
+            .begin_with(SqliteTransactionBehavior::Immediate.into())
             .await
+            .map(Transaction)
     }
 
     pub(crate) async fn close(&self) {
@@ -39,16 +51,140 @@ impl Pool {
 }
 
 /// Database connection
-pub type Connection = sqlx::sqlite::SqliteConnection;
+#[derive(Debug, RefCast)]
+#[repr(transparent)]
+pub struct Connection(SqliteConnection);
+
+impl Connection {
+    pub async fn begin(&mut self) -> Result<Transaction<'_>, sqlx::Error> {
+        // NOTE: deferred transactions are prone to deadlocks. Create immediate transaction by
+        // default.
+        self.0
+            .begin_with(SqliteTransactionBehavior::Immediate.into())
+            .await
+            .map(Transaction)
+    }
+}
+
+// Delegate the `Executor` impl to the inner type (what a trait!)
+impl<'c> Executor<'c> for &'c mut Connection {
+    type Database = Sqlite;
+
+    fn fetch_many<'e, 'q: 'e, E: 'q>(
+        self,
+        query: E,
+    ) -> Pin<
+        Box<
+            dyn Stream<
+                    Item = Result<
+                        Either<
+                            <Self::Database as Database>::QueryResult,
+                            <Self::Database as Database>::Row,
+                        >,
+                        sqlx::Error,
+                    >,
+                > + Send
+                + 'e,
+        >,
+    >
+    where
+        'c: 'e,
+        E: Execute<'q, Self::Database>,
+    {
+        self.0.fetch_many(query)
+    }
+
+    fn fetch_optional<'e, 'q: 'e, E: 'q>(
+        self,
+        query: E,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Option<<Self::Database as Database>::Row>, sqlx::Error>>
+                + Send
+                + 'e,
+        >,
+    >
+    where
+        'c: 'e,
+        E: Execute<'q, Self::Database>,
+    {
+        self.0.fetch_optional(query)
+    }
+
+    fn prepare_with<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+        parameters: &'e [<Self::Database as Database>::TypeInfo],
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        <Self::Database as sqlx::database::HasStatement<'q>>::Statement,
+                        sqlx::Error,
+                    >,
+                > + Send
+                + 'e,
+        >,
+    >
+    where
+        'c: 'e,
+    {
+        self.0.prepare_with(sql, parameters)
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<sqlx::Describe<Self::Database>, sqlx::Error>> + Send + 'e>,
+    >
+    where
+        'c: 'e,
+    {
+        self.0.describe(sql)
+    }
+}
 
 /// Database connection from pool
-pub type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
+pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
+
+impl Deref for PoolConnection {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        Connection::ref_cast(self.0.deref())
+    }
+}
+
+impl DerefMut for PoolConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Connection::ref_cast_mut(self.0.deref_mut())
+    }
+}
 
 /// Database transaction
-pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
+#[derive(Debug)]
+pub struct Transaction<'a>(sqlx::Transaction<'a, Sqlite>);
 
-/// Transaction mode (deferred / immediate)
-pub type TransactionBehavior = SqliteTransactionBehavior;
+impl Transaction<'_> {
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.0.commit().await
+    }
+}
+
+impl Deref for Transaction<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        Connection::ref_cast(self.0.deref())
+    }
+}
+
+impl DerefMut for Transaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Connection::ref_cast_mut(self.0.deref_mut())
+    }
+}
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {

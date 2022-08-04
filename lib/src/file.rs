@@ -9,7 +9,6 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use sqlx::Connection;
 use std::fmt;
 use std::io::SeekFrom;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -146,9 +145,7 @@ impl File {
             return Ok(());
         }
 
-        let tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let tx = conn.begin().await?;
         let (new_parent, new_blob) = self
             .parent
             .fork(tx, &self.blob, self.branch().clone(), dst_branch)

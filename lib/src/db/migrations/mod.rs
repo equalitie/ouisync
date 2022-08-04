@@ -1,5 +1,4 @@
 use super::{get_pragma, set_pragma, Connection, Error};
-use sqlx::Connection as _;
 
 /// Apply all pending migrations.
 pub(super) async fn run(conn: &mut Connection) -> Result<(), Error> {
@@ -23,7 +22,7 @@ async fn apply(conn: &mut Connection, dst_version: u32, sql: &str) -> Result<(),
         "migrations must be applied in order"
     );
 
-    sqlx::query(sql).execute(&mut tx).await?;
+    sqlx::query(sql).execute(&mut *tx).await?;
     set_version(&mut tx, dst_version).await?;
 
     tx.commit().await?;

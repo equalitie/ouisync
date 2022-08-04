@@ -16,7 +16,6 @@ use crate::{
     locator::Locator,
     sync::MutexGuard,
 };
-use sqlx::Connection;
 use std::{convert::TryInto, io::SeekFrom};
 
 pub(crate) struct Operations<'a> {
@@ -72,9 +71,7 @@ impl<'a> Operations<'a> {
             // read could rollback the changes made in a previous iteration which would then be
             // lost. This is fine because there is going to be at most one dirty block within
             // a single `read` invocation anyway.
-            let mut tx = conn
-                .begin_with(db::TransactionBehavior::Immediate.into())
-                .await?;
+            let mut tx = conn.begin().await?;
             self.replace_current_block(&mut tx, locator, id, content)
                 .await?;
             tx.commit().await?;
@@ -101,9 +98,7 @@ impl<'a> Operations<'a> {
 
     /// Writes into the blob.
     pub async fn write(&mut self, conn: &mut db::Connection, mut buffer: &[u8]) -> Result<()> {
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
 
         loop {
             let len = self.unique.current_block.content.write(buffer);
@@ -182,9 +177,7 @@ impl<'a> Operations<'a> {
         if block_number != self.unique.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let mut tx = conn
-                .begin_with(db::TransactionBehavior::Immediate.into())
-                .await?;
+            let mut tx = conn.begin().await?;
             let (id, content) = read_block(
                 &mut tx,
                 self.unique.branch.data(),
@@ -246,9 +239,7 @@ impl<'a> Operations<'a> {
             return Ok(false);
         }
 
-        let mut tx = conn
-            .begin_with(db::TransactionBehavior::Immediate.into())
-            .await?;
+        let mut tx = conn.begin().await?;
         self.write_len(&mut tx).await?;
         self.write_current_block(&mut tx).await?;
         tx.commit().await?;
@@ -468,9 +459,7 @@ where
     let read_key = branch.keys().read();
     let write_keys = branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-    let mut tx = conn
-        .begin_with(db::TransactionBehavior::Immediate.into())
-        .await?;
+    let mut tx = conn.begin().await?;
 
     for locator in locators {
         branch

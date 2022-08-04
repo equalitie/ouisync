@@ -2,7 +2,6 @@ use super::*;
 use crate::{blob, block::BLOCK_SIZE, db, scoped_task};
 use assert_matches::assert_matches;
 use rand::Rng;
-use sqlx::Connection;
 use std::io::SeekFrom;
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout, Duration};
@@ -1165,10 +1164,7 @@ async fn create_file_in_directory(
     content: &[u8],
 ) -> File {
     let mut file = dir.create_file(conn, name.into()).await.unwrap();
-    let mut tx = conn
-        .begin_with(db::TransactionBehavior::Immediate.into())
-        .await
-        .unwrap();
+    let mut tx = conn.begin().await.unwrap();
     file.write(&mut tx, content).await.unwrap();
     file.flush(&mut tx).await.unwrap();
     tx.commit().await.unwrap();

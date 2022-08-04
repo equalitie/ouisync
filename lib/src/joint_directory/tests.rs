@@ -6,7 +6,6 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
-use sqlx::Connection;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -1082,10 +1081,7 @@ async fn create_file(
     local_branch: &Branch,
 ) -> File {
     let mut file = parent.create_file(conn, name.to_owned()).await.unwrap();
-    let mut tx = conn
-        .begin_with(db::TransactionBehavior::Immediate.into())
-        .await
-        .unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     if !content.is_empty() {
         file.fork(&mut tx, local_branch.clone()).await.unwrap();
@@ -1109,10 +1105,7 @@ async fn update_file(
 
     file.fork(conn, local_branch.clone()).await.unwrap();
 
-    let mut tx = conn
-        .begin_with(db::TransactionBehavior::Immediate.into())
-        .await
-        .unwrap();
+    let mut tx = conn.begin().await.unwrap();
     file.truncate(&mut tx, 0).await.unwrap();
     file.write(&mut tx, content).await.unwrap();
     file.flush(&mut tx).await.unwrap();

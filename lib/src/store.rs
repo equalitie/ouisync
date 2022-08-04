@@ -119,7 +119,6 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use sqlx::Connection;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;
