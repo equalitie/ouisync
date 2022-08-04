@@ -5,7 +5,7 @@ use sqlx::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
         SqliteTransactionBehavior, SqliteTransactionOptions,
     },
-    Row, SqlitePool,
+    Connection as _, Row, SqlitePool,
 };
 use std::{io, path::Path};
 #[cfg(test)]
@@ -28,7 +28,7 @@ impl Pool {
         self.inner.acquire().await
     }
 
-    pub(crate) async fn begin(&self) -> Result<PoolTransaction, sqlx::Error> {
+    pub async fn begin(&self) -> Result<PoolTransaction, sqlx::Error> {
         self.inner.begin().await
     }
 
@@ -51,10 +51,17 @@ pub type Connection = SqliteConnection;
 pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
-pub(crate) type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
+pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
 
 /// Database transaction obtained from `Pool::begin`.
 pub(crate) type PoolTransaction = sqlx::Transaction<'static, Sqlite>;
+
+pub(crate) async fn begin_immediate(conn: &mut Connection) -> Result<Transaction<'_>, sqlx::Error> {
+    conn.begin_with(
+        SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),
+    )
+    .await
+}
 
 /// Creates a new database and opens a connection to it.
 pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {

@@ -97,7 +97,7 @@ impl<'a> Operations<'a> {
         Ok(buffer)
     }
 
-    /// Writes into the blob in db transaction.
+    /// Writes into the blob.
     pub async fn write(&mut self, conn: &mut db::Connection, mut buffer: &[u8]) -> Result<()> {
         let mut tx = conn.begin().await?;
 
@@ -227,7 +227,9 @@ impl<'a> Operations<'a> {
                 .skip(new_block_count as usize)
                 .take((old_block_count - new_block_count) as usize),
         )
-        .await
+        .await?;
+
+        Ok(())
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the

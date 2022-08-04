@@ -27,10 +27,10 @@ async fn relink_repository() {
 
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-    let mut conn = repo_a.db().acquire().await.unwrap();
-    file_a.write(&mut conn, b"first").await.unwrap();
-    file_a.flush(&mut conn).await.unwrap();
-    drop(conn);
+    let mut tx = repo_a.db().begin().await.unwrap();
+    file_a.write(&mut tx, b"first").await.unwrap();
+    file_a.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
 
     // Wait until the file is seen by B
     time::timeout(
@@ -44,11 +44,11 @@ async fn relink_repository() {
     drop(reg_b);
 
     // Update the file while B's repo is unlinked
-    let mut conn = repo_a.db().acquire().await.unwrap();
-    file_a.truncate(&mut conn, 0).await.unwrap();
-    file_a.write(&mut conn, b"second").await.unwrap();
-    file_a.flush(&mut conn).await.unwrap();
-    drop(conn);
+    let mut tx = repo_a.db().begin().await.unwrap();
+    file_a.truncate(&mut tx, 0).await.unwrap();
+    file_a.write(&mut tx, b"second").await.unwrap();
+    file_a.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
 
     // Re-register B's repo
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -255,10 +255,10 @@ async fn sync_during_file_write() {
     // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
     // A's.
     let mut file_b = repo_b.create_file("bar.txt").await.unwrap();
-    let mut conn = repo_b.db().acquire().await.unwrap();
-    file_b.write(&mut conn, b"bar").await.unwrap();
-    file_b.flush(&mut conn).await.unwrap();
-    drop(conn);
+    let mut tx = repo_b.db().begin().await.unwrap();
+    file_b.write(&mut tx, b"bar").await.unwrap();
+    file_b.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
     drop(file_b);
 
     // A: Wait until we see the file created by B
@@ -396,18 +396,18 @@ async fn recreate_local_branch() {
     let repo_b = env.create_repo_with_secrets(access_secrets.clone()).await;
 
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
-    let mut conn = repo_a.db().acquire().await.unwrap();
-    file.write(&mut conn, b"hello from A\n").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    let mut tx = repo_a.db().begin().await.unwrap();
+    file.write(&mut tx, b"hello from A\n").await.unwrap();
+    file.flush(&mut tx).await.unwrap();
 
     let vv_a_0 = repo_a
         .local_branch()
         .unwrap()
-        .version_vector(&mut conn)
+        .version_vector(&mut tx)
         .await
         .unwrap();
 
-    drop(conn);
+    tx.commit().await.unwrap();
     drop(file);
 
     // A: Reopen the repo in read mode to disable merger
@@ -433,19 +433,19 @@ async fn recreate_local_branch() {
 
     // B: Modify the repo. This makes B's branch newer than A's
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
-    let mut conn = repo_b.db().acquire().await.unwrap();
-    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut conn, b"hello from B\n").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    let mut tx = repo_b.db().begin().await.unwrap();
+    file.seek(&mut tx, SeekFrom::End(0)).await.unwrap();
+    file.write(&mut tx, b"hello from B\n").await.unwrap();
+    file.flush(&mut tx).await.unwrap();
 
     let vv_b = repo_b
         .local_branch()
         .unwrap()
-        .version_vector(&mut conn)
+        .version_vector(&mut tx)
         .await
         .unwrap();
 
-    drop(conn);
+    tx.commit().await.unwrap();
     drop(file);
 
     assert!(vv_b > vv_a_0);
@@ -651,10 +651,11 @@ async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
 
 async fn write_in_chunks(db: &db::Pool, file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
-        let mut conn = db.acquire().await.unwrap();
-
         let end = (offset + chunk_size).min(content.len());
-        file.write(&mut conn, &content[offset..end]).await.unwrap();
+
+        let mut tx = db.begin().await.unwrap();
+        file.write(&mut tx, &content[offset..end]).await.unwrap();
+        tx.commit().await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(

@@ -107,7 +107,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
-        let mut tx = conn.begin().await?;
+        let mut tx = db::begin_immediate(conn).await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -142,7 +142,7 @@ impl Directory {
         conn: &mut db::Connection,
         name: String,
     ) -> Result<Self> {
-        let mut tx = conn.begin().await?;
+        let mut tx = db::begin_immediate(conn).await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();

@@ -66,17 +66,17 @@ impl Branch {
     /// (e.g. "C:") are not supported.
     pub(crate) async fn ensure_directory_exists(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         path: &Utf8Path,
     ) -> Result<Directory> {
-        let mut curr = self.open_or_create_root(conn).await?;
+        let mut curr = self.open_or_create_root(tx).await?;
 
         for component in path.components() {
             match component {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
                     let next = match curr.lookup(name) {
-                        Ok(EntryRef::Directory(entry)) => Some(entry.open(conn).await?),
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open(tx).await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                         Err(error) => return Err(error),
@@ -85,7 +85,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(conn, name.to_string()).await?
+                        curr.create_directory(tx, name.to_string()).await?
                     };
 
                     curr = next;
@@ -101,12 +101,12 @@ impl Branch {
 
     pub(crate) async fn ensure_file_exists(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         path: &Utf8Path,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let mut dir = self.ensure_directory_exists(conn, parent).await?;
-        dir.create_file(conn, name.to_string()).await
+        let mut dir = self.ensure_directory_exists(tx, parent).await?;
+        dir.create_file(tx, name.to_string()).await
     }
 
     pub(crate) async fn root_block_id(&self, conn: &mut db::Connection) -> Result<BlockId> {
@@ -161,9 +161,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
         let (_base_dir, pool, branch) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin_immediate().await.unwrap();
         let dir = branch
-            .ensure_directory_exists(&mut conn, "/".into())
+            .ensure_directory_exists(&mut tx, "/".into())
             .await
             .unwrap();
         assert_eq!(dir.locator(), &Locator::ROOT);
@@ -172,16 +172,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
         let (_base_dir, pool, branch) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin_immediate().await.unwrap();
 
-        let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
+        let mut root = branch.open_or_create_root(&mut tx).await.unwrap();
 
         branch
-            .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))
+            .ensure_directory_exists(&mut tx, Utf8Path::new("/dir"))
             .await
             .unwrap();
 
-        root.refresh(&mut conn).await.unwrap();
+        root.refresh(&mut tx).await.unwrap();
         let _ = root.lookup("dir").unwrap();
     }
 

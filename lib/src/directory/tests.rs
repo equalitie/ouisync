@@ -15,21 +15,21 @@ use tokio::sync::broadcast;
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
     let (_base_dir, pool, branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     // Create the root directory and put some file in it.
-    let mut dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut dir = branch.open_or_create_root(&mut tx).await.unwrap();
 
-    let mut file_dog = dir.create_file(&mut conn, "dog.txt".into()).await.unwrap();
-    file_dog.write(&mut conn, b"woof").await.unwrap();
-    file_dog.flush(&mut conn).await.unwrap();
+    let mut file_dog = dir.create_file(&mut tx, "dog.txt".into()).await.unwrap();
+    file_dog.write(&mut tx, b"woof").await.unwrap();
+    file_dog.flush(&mut tx).await.unwrap();
 
-    let mut file_cat = dir.create_file(&mut conn, "cat.txt".into()).await.unwrap();
-    file_cat.write(&mut conn, b"meow").await.unwrap();
-    file_cat.flush(&mut conn).await.unwrap();
+    let mut file_cat = dir.create_file(&mut tx, "cat.txt".into()).await.unwrap();
+    file_cat.write(&mut tx, b"meow").await.unwrap();
+    file_cat.flush(&mut tx).await.unwrap();
 
     // Reopen the dir and try to read the files.
-    let dir = branch.open_root(&mut conn).await.unwrap();
+    let dir = branch.open_root(&mut tx).await.unwrap();
 
     let expected_names: BTreeSet<_> = ["dog.txt", "cat.txt"].into_iter().collect();
     let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
@@ -41,10 +41,10 @@ async fn create_and_list_entries() {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap();
-        let actual_content = file.read_to_end(&mut conn).await.unwrap();
+        let actual_content = file.read_to_end(&mut tx).await.unwrap();
         assert_eq!(actual_content, expected_content);
     }
 }
@@ -123,34 +123,34 @@ async fn remove_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_file() {
     let (_base_dir, pool, branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let src_name = "zebra.txt";
     let dst_name = "donkey.txt";
     let content = b"hee-haw";
 
     // Create a directory with a single file.
-    let mut parent_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut parent_dir = branch.open_or_create_root(&mut tx).await.unwrap();
     let mut file = parent_dir
-        .create_file(&mut conn, src_name.into())
+        .create_file(&mut tx, src_name.into())
         .await
         .unwrap();
-    file.write(&mut conn, content).await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.write(&mut tx, content).await.unwrap();
+    file.flush(&mut tx).await.unwrap();
 
     let file_locator = *file.locator();
 
     drop(file);
 
     // Reopen and move the file
-    let mut parent_dir_src = branch.open_root(&mut conn).await.unwrap();
+    let mut parent_dir_src = branch.open_root(&mut tx).await.unwrap();
     let mut parent_dir_dst = parent_dir_src.clone();
 
     let entry_to_move = parent_dir_src.lookup(src_name).unwrap().clone_data();
 
     parent_dir_src
         .move_entry(
-            &mut conn,
+            &mut tx,
             src_name,
             entry_to_move,
             &mut parent_dir_dst,
@@ -161,21 +161,21 @@ async fn rename_file() {
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root(&mut conn).await.unwrap();
+    let parent_dir = branch.open_root(&mut tx).await.unwrap();
 
     let mut dst_file = parent_dir
         .lookup(dst_name)
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
     assert_eq!(&file_locator, dst_file.locator());
     assert_eq!(
         &content[..],
-        &dst_file.read_to_end(&mut conn).await.unwrap()[..]
+        &dst_file.read_to_end(&mut tx).await.unwrap()[..]
     );
 
     let src_entry = parent_dir.lookup(src_name).unwrap();
@@ -186,25 +186,25 @@ async fn rename_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn move_file_within_branch() {
     let (_base_dir, pool, branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let file_name = "cow.txt";
     let content = b"moo";
 
     // Create a directory with a single file.
-    let mut root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root_dir = branch.open_or_create_root(&mut tx).await.unwrap();
     let mut aux_dir = root_dir
-        .create_directory(&mut conn, "aux".into())
+        .create_directory(&mut tx, "aux".into())
         .await
         .unwrap();
 
     let mut file = root_dir
-        .create_file(&mut conn, file_name.into())
+        .create_file(&mut tx, file_name.into())
         .await
         .unwrap();
-    file.write(&mut conn, content).await.unwrap();
-    file.flush(&mut conn).await.unwrap();
-    root_dir.refresh(&mut conn).await.unwrap();
+    file.write(&mut tx, content).await.unwrap();
+    file.flush(&mut tx).await.unwrap();
+    root_dir.refresh(&mut tx).await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -218,7 +218,7 @@ async fn move_file_within_branch() {
 
     root_dir
         .move_entry(
-            &mut conn,
+            &mut tx,
             file_name,
             entry_to_move,
             &mut aux_dir,
@@ -229,29 +229,26 @@ async fn move_file_within_branch() {
         .unwrap();
 
     let mut file = branch
-        .open_root(&mut conn)
+        .open_root(&mut tx)
         .await
         .unwrap()
         .lookup("aux")
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap()
         .lookup(file_name)
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
     assert_eq!(&file_locator, file.locator());
-    assert_eq!(
-        &content[..],
-        &file.read_to_end(&mut conn).await.unwrap()[..]
-    );
+    assert_eq!(&content[..], &file.read_to_end(&mut tx).await.unwrap()[..]);
 
     drop(file);
 
@@ -265,7 +262,7 @@ async fn move_file_within_branch() {
 
     aux_dir
         .move_entry(
-            &mut conn,
+            &mut tx,
             file_name,
             entry_to_move,
             &mut root_dir,
@@ -280,14 +277,11 @@ async fn move_file_within_branch() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
-    assert_eq!(
-        &content[..],
-        &file.read_to_end(&mut conn).await.unwrap()[..]
-    );
+    assert_eq!(&content[..], &file.read_to_end(&mut tx).await.unwrap()[..]);
 }
 
 // Move directory "dir/" with content "cow.txt" to directory "dst/".
@@ -300,7 +294,7 @@ async fn move_file_within_branch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn move_non_empty_directory() {
     let (_base_dir, pool, branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let dir_name = "dir";
     let dst_dir_name = "dst";
@@ -308,23 +302,23 @@ async fn move_non_empty_directory() {
     let content = b"moo";
 
     // Create a directory with a single file.
-    let mut root_dir = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root_dir = branch.open_or_create_root(&mut tx).await.unwrap();
     let mut dir = root_dir
-        .create_directory(&mut conn, dir_name.into())
+        .create_directory(&mut tx, dir_name.into())
         .await
         .unwrap();
 
-    let mut file = dir.create_file(&mut conn, file_name.into()).await.unwrap();
-    file.write(&mut conn, content).await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    let mut file = dir.create_file(&mut tx, file_name.into()).await.unwrap();
+    file.write(&mut tx, content).await.unwrap();
+    file.flush(&mut tx).await.unwrap();
 
-    dir.refresh(&mut conn).await.unwrap();
-    root_dir.refresh(&mut conn).await.unwrap();
+    dir.refresh(&mut tx).await.unwrap();
+    root_dir.refresh(&mut tx).await.unwrap();
 
     let file_locator = *file.locator();
 
     let mut dst_dir = root_dir
-        .create_directory(&mut conn, dst_dir_name.into())
+        .create_directory(&mut tx, dst_dir_name.into())
         .await
         .unwrap();
 
@@ -332,7 +326,7 @@ async fn move_non_empty_directory() {
 
     root_dir
         .move_entry(
-            &mut conn,
+            &mut tx,
             dir_name,
             entry_to_move,
             &mut dst_dir,
@@ -343,28 +337,28 @@ async fn move_non_empty_directory() {
         .unwrap();
 
     let file = branch
-        .open_root(&mut conn)
+        .open_root(&mut tx)
         .await
         .unwrap()
         .lookup(dst_dir_name)
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap()
         .lookup(dir_name)
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap()
         .lookup(file_name)
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
@@ -410,46 +404,43 @@ async fn remove_subdirectory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn fork() {
     let (_base_dir, pool, branches) = setup_multiple::<2>().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     // Create a nested directory by branch 0
-    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    root0
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut tx).await.unwrap();
+    root0.create_directory(&mut tx, "dir".into()).await.unwrap();
 
     // Fork it by branch 1 and modify it
     let dir0 = {
         branches[0]
-            .open_root(&mut conn)
+            .open_root(&mut tx)
             .await
             .unwrap()
             .lookup("dir")
             .unwrap()
             .directory()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap()
     };
 
-    let mut dir1 = dir0.fork(&mut conn, &branches[1]).await.unwrap();
+    let mut dir1 = dir0.fork(&mut tx, &branches[1]).await.unwrap();
 
-    dir1.create_file(&mut conn, "dog.jpg".into()).await.unwrap();
+    dir1.create_file(&mut tx, "dog.jpg".into()).await.unwrap();
 
     assert_eq!(dir1.branch().id(), branches[1].id());
 
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
-        .open_root(&mut conn)
+        .open_root(&mut tx)
         .await
         .unwrap()
         .lookup("dir")
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
@@ -457,14 +448,14 @@ async fn fork() {
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
-        .open_root(&mut conn)
+        .open_root(&mut tx)
         .await
         .unwrap()
         .lookup("dir")
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
@@ -474,64 +465,58 @@ async fn fork() {
     );
 
     // Verify the root dir got forked as well
-    branches[1].open_root(&mut conn).await.unwrap();
+    branches[1].open_root(&mut tx).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_over_tombstone() {
     let (_base_dir, pool, branches) = setup_multiple::<2>().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     // Create a directory in branch 0 and delete it.
-    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    root0
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut tx).await.unwrap();
+    root0.create_directory(&mut tx, "dir".into()).await.unwrap();
     let vv = root0.lookup("dir").unwrap().version_vector().clone();
 
     root0
-        .remove_entry(&mut conn, "dir", branches[0].id(), vv)
+        .remove_entry(&mut tx, "dir", branches[0].id(), vv)
         .await
         .unwrap();
 
     // Create a directory with the same name in branch 1.
-    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
-    root1
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut tx).await.unwrap();
+    root1.create_directory(&mut tx, "dir".into()).await.unwrap();
 
     // Open it by branch 0 and fork it.
-    let root1_on_0 = branches[1].open_root(&mut conn).await.unwrap();
+    let root1_on_0 = branches[1].open_root(&mut tx).await.unwrap();
     let dir1 = root1_on_0
         .lookup("dir")
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
-    dir1.fork(&mut conn, &branches[0]).await.unwrap();
+    dir1.fork(&mut tx, &branches[0]).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
-    root0.refresh(&mut conn).await.unwrap();
+    root0.refresh(&mut tx).await.unwrap();
     assert_matches!(root0.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn modify_directory_concurrently() {
     let (_base_dir, pool, branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
-    let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut root = branch.open_or_create_root(&mut tx).await.unwrap();
 
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file also exists in the other after refresh.
 
     let mut dir0 = root
-        .create_directory(&mut conn, "dir".to_owned())
+        .create_directory(&mut tx, "dir".to_owned())
         .await
         .unwrap();
     let mut dir1 = root
@@ -539,27 +524,27 @@ async fn modify_directory_concurrently() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
     let mut file0 = dir0
-        .create_file(&mut conn, "file.txt".to_owned())
+        .create_file(&mut tx, "file.txt".to_owned())
         .await
         .unwrap();
-    file0.write(&mut conn, b"hello").await.unwrap();
-    file0.flush(&mut conn).await.unwrap();
+    file0.write(&mut tx, b"hello").await.unwrap();
+    file0.flush(&mut tx).await.unwrap();
 
-    dir1.refresh(&mut conn).await.unwrap();
+    dir1.refresh(&mut tx).await.unwrap();
     let mut file1 = dir1
         .lookup("file.txt")
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
-    assert_eq!(file1.read_to_end(&mut conn).await.unwrap(), b"hello");
+    assert_eq!(file1.read_to_end(&mut tx).await.unwrap(), b"hello");
 }
 
 #[tokio::test(flavor = "multi_thread")]

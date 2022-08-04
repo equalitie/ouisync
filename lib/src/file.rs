@@ -111,8 +111,8 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        self.blob.flush(tx).await?;
+    pub(crate) async fn save(&mut self, conn: &mut db::Connection) -> Result<()> {
+        self.blob.flush(conn).await?;
         Ok(())
     }
 
@@ -189,63 +189,63 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
         let (_base_dir, pool, branch0, branch1) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin_immediate().await.unwrap();
 
         // Create a file owned by branch 0
         let mut file0 = branch0
-            .ensure_file_exists(&mut conn, "/dog.jpg".into())
+            .ensure_file_exists(&mut tx, "/dog.jpg".into())
             .await
             .unwrap();
 
-        file0.write(&mut conn, b"small").await.unwrap();
-        file0.flush(&mut conn).await.unwrap();
+        file0.write(&mut tx, b"small").await.unwrap();
+        file0.flush(&mut tx).await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
-            .open_root(&mut conn)
+            .open_root(&mut tx)
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap();
 
-        file1.fork(&mut conn, branch1.clone()).await.unwrap();
-        file1.write(&mut conn, b"large").await.unwrap();
-        file1.flush(&mut conn).await.unwrap();
+        file1.fork(&mut tx, branch1.clone()).await.unwrap();
+        file1.write(&mut tx, b"large").await.unwrap();
+        file1.flush(&mut tx).await.unwrap();
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root(&mut conn)
+            .open_root(&mut tx)
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"small");
+        assert_eq!(file.read_to_end(&mut tx).await.unwrap(), b"small");
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root(&mut conn)
+            .open_root(&mut tx)
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"large");
+        assert_eq!(file.read_to_end(&mut tx).await.unwrap(), b"large");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -254,31 +254,31 @@ mod tests {
         // subsequent modifications work correclty.
 
         let (_base_dir, pool, branch0, branch1) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin_immediate().await.unwrap();
 
         let mut file0 = branch0
-            .ensure_file_exists(&mut conn, "/pig.jpg".into())
+            .ensure_file_exists(&mut tx, "/pig.jpg".into())
             .await
             .unwrap();
-        file0.flush(&mut conn).await.unwrap();
+        file0.flush(&mut tx).await.unwrap();
 
         let mut file1 = branch0
-            .open_root(&mut conn)
+            .open_root(&mut tx)
             .await
             .unwrap()
             .lookup("pig.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open(&mut tx)
             .await
             .unwrap();
 
-        file1.fork(&mut conn, branch1).await.unwrap();
+        file1.fork(&mut tx, branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(&mut conn, b"oink").await.unwrap();
-            file1.flush(&mut conn).await.unwrap();
+            file1.write(&mut tx, b"oink").await.unwrap();
+            file1.flush(&mut tx).await.unwrap();
         }
     }
 

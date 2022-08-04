@@ -6,6 +6,7 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
+use sqlx::Connection;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -103,24 +104,24 @@ async fn conflict_independent_files() {
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_forked_files() {
     let (_base_dir, pool, branches) = setup(2).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
-    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root0, "file.txt", b"one", &branches[0]).await;
+    let mut root0 = branches[0].open_or_create_root(&mut tx).await.unwrap();
+    create_file(&mut tx, &mut root0, "file.txt", b"one", &branches[0]).await;
 
     // Fork the file into branch 1 and then modify it.
-    let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
-    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
-    file1.write(&mut conn, b"two").await.unwrap();
-    file1.flush(&mut conn).await.unwrap();
+    let mut file1 = open_file(&mut tx, &root0, "file.txt").await;
+    file1.fork(&mut tx, branches[1].clone()).await.unwrap();
+    file1.write(&mut tx, b"two").await.unwrap();
+    file1.flush(&mut tx).await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
-    let mut file0 = open_file(&mut conn, &root0, "file.txt").await;
-    file0.write(&mut conn, b"three").await.unwrap();
-    file0.flush(&mut conn).await.unwrap();
+    let mut file0 = open_file(&mut tx, &root0, "file.txt").await;
+    file0.write(&mut tx, b"three").await.unwrap();
+    file0.flush(&mut tx).await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
-    let root1 = branches[1].open_root(&mut conn).await.unwrap();
+    let root1 = branches[1].open_root(&mut tx).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
 
@@ -323,24 +324,21 @@ async fn conflict_identical_versions() {
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_open_file() {
     let (_base_dir, pool, branches) = setup(2).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
-    let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut root0 = branches[0].open_or_create_root(&mut tx).await.unwrap();
+    let mut root1 = branches[1].open_or_create_root(&mut tx).await.unwrap();
 
-    let file0 = root0
-        .create_file(&mut conn, "file.txt".into())
-        .await
-        .unwrap();
-    let vv0 = file0.version_vector(&mut conn).await.unwrap();
+    let file0 = root0.create_file(&mut tx, "file.txt".into()).await.unwrap();
+    let vv0 = file0.version_vector(&mut tx).await.unwrap();
 
     let mut file1 = file0;
-    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
-    file1.write(&mut conn, b"foo").await.unwrap();
-    file1.flush(&mut conn).await.unwrap();
-    root1.refresh(&mut conn).await.unwrap();
+    file1.fork(&mut tx, branches[1].clone()).await.unwrap();
+    file1.write(&mut tx, b"foo").await.unwrap();
+    file1.flush(&mut tx).await.unwrap();
+    root1.refresh(&mut tx).await.unwrap();
 
-    let vv1 = file1.version_vector(&mut conn).await.unwrap();
+    let vv1 = file1.version_vector(&mut tx).await.unwrap();
     assert!(vv1 > vv0);
 
     let _file0 = root0
@@ -348,7 +346,7 @@ async fn conflict_open_file() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open(&mut tx)
         .await
         .unwrap();
 
@@ -1027,36 +1025,36 @@ async fn merge_file_and_tombstone() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_non_empty_subdirectory() {
     let (_base_dir, pool, branches) = setup(2).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
-    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut local_root = branches[0].open_or_create_root(&mut tx).await.unwrap();
     let mut local_dir = local_root
-        .create_directory(&mut conn, "dir0".into())
+        .create_directory(&mut tx, "dir0".into())
         .await
         .unwrap();
-    create_file(&mut conn, &mut local_dir, "foo.txt", &[], &branches[0]).await;
+    create_file(&mut tx, &mut local_dir, "foo.txt", &[], &branches[0]).await;
 
     local_root
-        .create_directory(&mut conn, "dir1".into())
+        .create_directory(&mut tx, "dir1".into())
         .await
         .unwrap();
 
-    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = branches[1].open_or_create_root(&mut tx).await.unwrap();
     let mut remote_dir = remote_root
-        .create_directory(&mut conn, "dir0".into())
+        .create_directory(&mut tx, "dir0".into())
         .await
         .unwrap();
-    create_file(&mut conn, &mut remote_dir, "bar.txt", &[], &branches[1]).await;
+    create_file(&mut tx, &mut remote_dir, "bar.txt", &[], &branches[1]).await;
 
     remote_root
-        .create_directory(&mut conn, "dir2".into())
+        .create_directory(&mut tx, "dir2".into())
         .await
         .unwrap();
 
     let mut root =
         JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root]);
 
-    root.remove_entry_recursively(&mut conn, "dir0")
+    root.remove_entry_recursively(&mut tx, "dir0")
         .await
         .unwrap();
 
@@ -1064,7 +1062,7 @@ async fn remove_non_empty_subdirectory() {
     assert!(root.lookup("dir1").next().is_some());
     assert!(root.lookup("dir2").next().is_some());
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh(&mut tx).await.unwrap();
     assert_matches!(local_root.lookup("dir0"), Ok(EntryRef::Tombstone(_)));
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }
@@ -1137,13 +1135,16 @@ async fn create_file(
     local_branch: &Branch,
 ) -> File {
     let mut file = parent.create_file(conn, name.to_owned()).await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
     if !content.is_empty() {
-        file.fork(conn, local_branch.clone()).await.unwrap();
-        file.write(conn, content).await.unwrap();
+        file.fork(&mut tx, local_branch.clone()).await.unwrap();
+        file.write(&mut tx, content).await.unwrap();
     }
 
-    file.flush(conn).await.unwrap();
+    file.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
     file
 }
 
@@ -1157,9 +1158,12 @@ async fn update_file(
     let mut file = open_file(conn, parent, name).await;
 
     file.fork(conn, local_branch.clone()).await.unwrap();
-    file.truncate(conn, 0).await.unwrap();
-    file.write(conn, content).await.unwrap();
-    file.flush(conn).await.unwrap();
+
+    let mut tx = conn.begin().await.unwrap();
+    file.truncate(&mut tx, 0).await.unwrap();
+    file.write(&mut tx, content).await.unwrap();
+    file.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 
 async fn open_file(conn: &mut db::Connection, parent: &Directory, name: &str) -> File {

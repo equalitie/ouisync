@@ -337,20 +337,28 @@ impl Repository {
     #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
-        let mut conn = self.db().acquire().await?;
-        local_branch
-            .ensure_file_exists(&mut conn, path.as_ref())
-            .await
+
+        let mut tx = self.db().begin_immediate().await?;
+        let file = local_branch
+            .ensure_file_exists(&mut tx, path.as_ref())
+            .await?;
+        tx.commit().await?;
+
+        Ok(file)
     }
 
     /// Creates a new directory at the given path.
     #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
-        let mut conn = self.db().acquire().await?;
-        local_branch
-            .ensure_directory_exists(&mut conn, path.as_ref())
-            .await
+
+        let mut tx = self.db().begin_immediate().await?;
+        let dir = local_branch
+            .ensure_directory_exists(&mut tx, path.as_ref())
+            .await?;
+        tx.commit().await?;
+
+        Ok(dir)
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
@@ -360,9 +368,12 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry(&mut conn, name).await
+        let mut tx = self.db().begin_immediate().await?;
+        let mut parent = self.cd(&mut tx, parent).await?;
+        parent.remove_entry(&mut tx, name).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
@@ -370,9 +381,12 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
-        let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry_recursively(&mut conn, name).await
+        let mut tx = self.db().begin_immediate().await?;
+        let mut parent = self.cd(&mut tx, parent).await?;
+        parent.remove_entry_recursively(&mut tx, name).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -450,19 +464,23 @@ impl Repository {
 
         drop(dst_joint_dir);
 
+        let mut tx = db::begin_immediate(&mut conn).await?;
         let mut dst_dir = local_branch
-            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
+            .ensure_directory_exists(&mut tx, dst_dir_path.as_ref())
             .await?;
         src_dir
             .move_entry(
-                &mut conn,
+                &mut tx,
                 &src_name,
                 src_entry,
                 &mut dst_dir,
                 dst_name,
                 dst_vv,
             )
-            .await
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Returns the local branch if it exists.
