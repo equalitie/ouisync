@@ -189,7 +189,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
         let (_base_dir, pool, branch0, branch1) = setup().await;
-        let mut tx = pool.begin_immediate().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
         // Create a file owned by branch 0
         let mut file0 = branch0
@@ -254,7 +254,7 @@ mod tests {
         // subsequent modifications work correclty.
 
         let (_base_dir, pool, branch0, branch1) = setup().await;
-        let mut tx = pool.begin_immediate().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
         let mut file0 = branch0
             .ensure_file_exists(&mut tx, "/pig.jpg".into())

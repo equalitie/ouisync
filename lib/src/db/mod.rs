@@ -29,10 +29,8 @@ impl Pool {
     }
 
     pub async fn begin(&self) -> Result<PoolTransaction, sqlx::Error> {
-        self.inner.begin().await
-    }
-
-    pub(crate) async fn begin_immediate(&self) -> Result<PoolTransaction, sqlx::Error> {
+        // NOTE: deferred transactions are prone to deadlock. Create immediate transaction by
+        // default.
         self.inner
             .begin_with(
                 SqliteTransactionOptions::default().behavior(SqliteTransactionBehavior::Immediate),

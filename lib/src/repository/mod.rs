@@ -338,7 +338,7 @@ impl Repository {
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin_immediate().await?;
+        let mut tx = self.db().begin().await?;
         let file = local_branch
             .ensure_file_exists(&mut tx, path.as_ref())
             .await?;
@@ -352,7 +352,7 @@ impl Repository {
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin_immediate().await?;
+        let mut tx = self.db().begin().await?;
         let dir = local_branch
             .ensure_directory_exists(&mut tx, path.as_ref())
             .await?;
@@ -368,7 +368,7 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin_immediate().await?;
+        let mut tx = self.db().begin().await?;
         let mut parent = self.cd(&mut tx, parent).await?;
         parent.remove_entry(&mut tx, name).await?;
         tx.commit().await?;
@@ -381,7 +381,7 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
-        let mut tx = self.db().begin_immediate().await?;
+        let mut tx = self.db().begin().await?;
         let mut parent = self.cd(&mut tx, parent).await?;
         parent.remove_entry_recursively(&mut tx, name).await?;
         tx.commit().await?;
