@@ -28,7 +28,7 @@ impl Pool {
         self.inner.acquire().await
     }
 
-    pub async fn begin(&self) -> Result<PoolTransaction, sqlx::Error> {
+    pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
         // NOTE: deferred transactions are prone to deadlock. Create immediate transaction by
         // default.
         self.inner
@@ -50,9 +50,6 @@ pub(crate) type PoolConnection = sqlx::pool::PoolConnection<Sqlite>;
 
 /// Database transaction
 pub type Transaction<'a> = sqlx::Transaction<'a, Sqlite>;
-
-/// Database transaction obtained from `Pool::begin`.
-pub(crate) type PoolTransaction = sqlx::Transaction<'static, Sqlite>;
 
 pub(crate) async fn begin_immediate(conn: &mut Connection) -> Result<Transaction<'_>, sqlx::Error> {
     conn.begin_with(
