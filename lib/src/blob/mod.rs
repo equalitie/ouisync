@@ -165,10 +165,20 @@ impl Blob {
 
             let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
 
-            dst_branch
+            let inserted = dst_branch
                 .data()
                 .insert(tx, &block_id, &encoded_locator, write_keys)
                 .await?;
+
+            if !inserted {
+                // We have attempted to insert the block to the branch but it's already there. This
+                // could be either because we've hit the 2^sizeof(BlockId) chance that we generated
+                // the same BlockId twice (unlikely), or because the remote branch has moved the
+                // file from one location to another. In the latter case the blob has already been
+                // forked.
+                assert!(locator.is_head());
+                return Err(Error::EntryExists);
+            }
         }
 
         let forked = Self {
