@@ -50,7 +50,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     fmt,
     future::Future,
     io,
@@ -234,6 +234,7 @@ impl Network {
             on_protocol_mismatch_rx,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
+            our_addresses: BlockingMutex::new(HashSet::new()),
         });
 
         let network = Self {
@@ -528,6 +529,8 @@ struct Inner {
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
     highest_seen_protocol_version: BlockingMutex<Version>,
+    // Used to prevent repeatedly connecting to self.
+    our_addresses: BlockingMutex<HashSet<PeerAddr>>,
 }
 
 struct State {
@@ -696,6 +699,11 @@ impl Inner {
             Some(addr) => *addr,
             None => return,
         };
+
+        if self.our_addresses.lock().unwrap().contains(&addr) {
+            // Don't connect to self.
+            return;
+        }
 
         let permit = if let Some(permit) = self
             .connection_deduplicator
@@ -882,6 +890,7 @@ impl Inner {
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
             tracing::debug!("connection from self, discarding");
+            self.our_addresses.lock().unwrap().insert(permit.addr());
             return;
         }
 
