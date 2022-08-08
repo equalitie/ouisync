@@ -284,6 +284,25 @@ pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
     access_mode_to_num(token.access_mode())
 }
 
+/// Return the RepositoryId of the repository corresponding to the share token in the low hex format.
+/// User is responsible for deallocating the returned string.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_repository_low_hex_id(token: *const c_char) -> *const c_char {
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    utils::str_to_ptr(&hex::encode(token.id().as_ref()))
+}
+
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
 #[no_mangle]
 pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *const c_char {
