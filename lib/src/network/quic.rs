@@ -313,10 +313,10 @@ pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor, Si
 
     let side_channel = custom_socket.create_side_channel();
 
-    let (mut endpoint, incoming) = quinn::Endpoint::new(
+    let (mut endpoint, incoming) = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
         Some(server_config),
-        Box::new(custom_socket),
+        custom_socket,
         quinn::TokioRuntime,
     )?;
 
