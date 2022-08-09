@@ -213,6 +213,9 @@ pub unsafe extern "C" fn repository_is_dht_enabled(handle: SharedHandle<Reposito
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<RepositoryHolder>) {
+    // The `enable_dht` function internally calls `task::spawn` so needs the current Tokio context
+    // (thus the `_runtime_guard`).
+    let _runtime_guard = session::get().runtime().enter();
     handle.get().registration.enable_dht()
 }
 
