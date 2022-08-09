@@ -41,8 +41,11 @@ pub unsafe extern "C" fn session_open(
         return;
     }
 
+    let root_monitor = StateMonitor::make_root();
+    let session_monitor = root_monitor.make_child("Session");
+
     // Init logger
-    let logger = match Logger::new() {
+    let logger = match Logger::new(session_monitor) {
         Ok(logger) => logger,
         Err(error) => {
             sender.send_result(port, Err(Error::InitializeLogger(error)));
@@ -80,7 +83,6 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
-        let root_monitor = StateMonitor::make_root();
         let repos_monitor = root_monitor.make_child("Repositories");
         let network_monitor = root_monitor.make_child("Network");
 

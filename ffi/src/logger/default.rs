@@ -1,10 +1,11 @@
 use std::{io, sync::Once};
 use tracing_subscriber::EnvFilter;
+use ouisync_lib::StateMonitor;
 
 pub(crate) struct Logger;
 
 impl Logger {
-    pub fn new() -> Result<Self, io::Error> {
+    pub fn new(_: StateMonitor) -> Result<Self, io::Error> {
         static LOG_INIT: Once = Once::new();
         LOG_INIT.call_once(|| {
             tracing_subscriber::fmt()

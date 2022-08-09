@@ -18,6 +18,7 @@ use std::{
     thread,
     thread::JoinHandle,
 };
+use ouisync_lib::StateMonitor;
 
 // Android log tag.
 // HACK: if the tag doesn't start with 'flutter' then the logs won't show up in the app if built in
@@ -30,8 +31,8 @@ pub(crate) struct Logger {
 }
 
 impl Logger {
-    pub fn new() -> Result<Self, io::Error> {
-        panic::set_hook(Box::new(panic_hook));
+    pub fn new(monitor: StateMonitor) -> Result<Self, io::Error> {
+        panic::set_hook(Box::new(panic_hook(monitor)));
         setup_logger();
 
         Ok(Self {
@@ -183,24 +184,30 @@ fn setup_logger() {
 }
 
 // Print panic messages to the andoid log as well.
-fn panic_hook(info: &PanicInfo) {
-    let message = match (info.payload().downcast_ref::<&str>(), info.location()) {
-        (Some(message), Some(location)) => format!(
-            "panic '{}' at {}:{}:{}",
-            message,
-            location.file(),
-            location.line(),
-            location.column(),
-        ),
-        (Some(message), None) => format!("panic '{}'", message),
-        (None, Some(location)) => format!(
-            "panic at {}:{}:{}",
-            location.file(),
-            location.line(),
-            location.column()
-        ),
-        (None, None) => "panic".to_string(),
-    };
+fn panic_hook(monitor: StateMonitor) -> impl Fn(&PanicInfo) {
+    let panic_counter = monitor.make_value::<u32>("panic_counter".into(), 0);
 
-    print(ANDROID_LOG_FATAL, message);
+    move |info: &PanicInfo| {
+        *panic_counter.get() += 1;
+
+        let message = match (info.payload().downcast_ref::<&str>(), info.location()) {
+            (Some(message), Some(location)) => format!(
+                "panic '{}' at {}:{}:{}",
+                message,
+                location.file(),
+                location.line(),
+                location.column(),
+            ),
+            (Some(message), None) => format!("panic '{}'", message),
+            (None, Some(location)) => format!(
+                "panic at {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            ),
+            (None, None) => "panic".to_string(),
+        };
+
+        print(ANDROID_LOG_FATAL, message);
+    }
 }
