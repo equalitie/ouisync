@@ -46,7 +46,7 @@ sqlx = { version = "0.5.13", features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"
 thiserror = "1.0.31"
 rustls = { version = "0.20.3", default-features = false, features = ["quic", "dangerous_configuration"] }
-tokio = "1.19.2"
+tokio = "1.20.1"
 tokio-stream = "0.1.9"
 tokio-util = "0.7.3"
 tracing = { version = "0.1.35" }
