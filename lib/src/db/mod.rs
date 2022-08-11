@@ -88,15 +88,24 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
     create_directory(path).await?;
 
-    let connect_options = SqliteConnectOptions::new()
+    run_migrations(path, true).await?;
+
+    let connect_options = SqliteConnectOptions::new().filename(path);
+    create_pool(connect_options).await
+}
+
+/// Initialize the database if it does not exist. If it does, run DB migrations on it.
+async fn run_migrations(path: &Path, create_if_missing: bool) -> Result<(), Error> {
+    use sqlx::ConnectOptions; // Trait
+
+    let mut conn = SqliteConnectOptions::new()
         .filename(path)
-        .create_if_missing(true);
-    let pool = create_pool(connect_options).await?;
+        .create_if_missing(create_if_missing)
+        .connect()
+        .await
+        .map_err(Error::Open)?;
 
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
-
-    Ok(pool)
+    migrations::run(&mut conn).await
 }
 
 /// Creates a new database in a temporary directory. Useful for tests.
@@ -110,13 +119,9 @@ pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
+    run_migrations(path.as_ref(), false).await?;
     let connect_options = SqliteConnectOptions::new().filename(path);
-    let pool = create_pool(connect_options).await?;
-
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
-
-    Ok(pool)
+    create_pool(connect_options).await
 }
 
 async fn create_directory(path: &Path) -> Result<(), Error> {
@@ -134,6 +139,11 @@ async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Erro
         // HACK: using only one connection to work around concurrency issues (`SQLITE_BUSY` errors)
         // TODO: find a way to reliable use multiple connections
         .max_connections(1)
+        .after_connect(|conn| Box::pin(async move {
+            // TODO: Can we reuse the query?
+            sqlx::query(include_str!("migrations/temp.sql")).execute(conn).await?;
+            Ok(())
+        }))
         .connect_with(connect_options)
         .await
         .map(Pool::new)
