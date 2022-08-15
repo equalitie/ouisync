@@ -17,7 +17,18 @@ use zeroize::Zeroize;
 const REPOSITORY_ID: &[u8] = b"repository_id";
 const PASSWORD_SALT: &[u8] = b"password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
-const ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
+const READ_KEY: &[u8] = b"read_key";
+const WRITE_KEY: &[u8] = b"write_key";
+// We used to have only the ACCESS_KEY which would be either the read key or the write key or a
+// dummy (random) array of bytes with the length of the writer key. But that wasn't satisfactory
+// because:
+//
+// 1. The length of the key would leak some information.
+// 2. User can't have a separate password for reading and writing, and thus can't plausibly claim
+//    they're only a reader if they also have the write access.
+// 3. If the ACCESS_KEY was a valid write key, but the repository was in the blind mode, accepting
+//    the read token would disable the write access.
+const DEPRECATED_ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
 const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
@@ -115,13 +126,13 @@ pub(crate) async fn set_access_secrets(
 
     set_public(REPOSITORY_ID, secrets.id().as_ref(), &mut tx).await?;
 
+    // Insert a dummy key for plausible deniability.
+    let dummy_write_key = sign::SecretKey::random();
+    let dummy_read_key = cipher::SecretKey::random();
+
     match secrets {
         AccessSecrets::Blind { id } => {
-            // Insert a dummy key for plausible deniability.
-            let dummy_write_key = sign::SecretKey::random();
-            let dummy_read_key = cipher::SecretKey::random();
-
-            set_secret(ACCESS_KEY, dummy_write_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(READ_KEY, dummy_read_key.as_ref(), master_key, &mut tx).await?;
             set_secret(
                 READ_KEY_VALIDATOR,
                 read_key_validator(id).as_ref(),
@@ -129,9 +140,10 @@ pub(crate) async fn set_access_secrets(
                 &mut tx,
             )
             .await?;
+            set_secret(WRITE_KEY, dummy_write_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Read { id, read_key } => {
-            set_secret(ACCESS_KEY, read_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(READ_KEY, read_key.as_ref(), master_key, &mut tx).await?;
             set_secret(
                 READ_KEY_VALIDATOR,
                 read_key_validator(id).as_ref(),
@@ -139,19 +151,21 @@ pub(crate) async fn set_access_secrets(
                 &mut tx,
             )
             .await?;
+            set_secret(WRITE_KEY, dummy_write_key.as_ref(), master_key, &mut tx).await?;
         }
         AccessSecrets::Write(secrets) => {
-            set_secret(
-                ACCESS_KEY,
-                secrets.write_keys.secret.as_ref(),
-                master_key,
-                &mut tx,
-            )
-            .await?;
+            set_secret(READ_KEY, secrets.read_key.as_ref(), master_key, &mut tx).await?;
             set_secret(
                 READ_KEY_VALIDATOR,
                 read_key_validator(&secrets.id).as_ref(),
                 &secrets.read_key,
+                &mut tx,
+            )
+            .await?;
+            set_secret(
+                WRITE_KEY,
+                secrets.write_keys.secret.as_ref(),
+                master_key,
                 &mut tx,
             )
             .await?;
@@ -169,28 +183,68 @@ pub(crate) async fn get_access_secrets(
 ) -> Result<AccessSecrets> {
     let id = get_public(REPOSITORY_ID, conn).await?;
 
+    if let Some(write_keys) = get_write_key(master_key, &id, conn).await? {
+        return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys)));
+    }
+
+    // No match. Maybe there's the read key?
+    if let Some(read_key) = get_read_key(master_key, &id, conn).await? {
+        return Ok(AccessSecrets::Read { id, read_key });
+    }
+
+    // No read key either, repository shall be open in blind mode.
+    Ok(AccessSecrets::Blind { id })
+}
+
+async fn get_write_key(
+    master_key: &cipher::SecretKey,
+    id: &RepositoryId,
+    conn: &mut db::Connection,
+) -> Result<Option<sign::Keypair>> {
     // Try to interpret it first as the write key.
-    let write_key: sign::SecretKey = get_secret(ACCESS_KEY, master_key, conn).await?;
+    let write_key: sign::SecretKey = match get_secret(WRITE_KEY, master_key, conn).await {
+        Ok(write_key) => write_key,
+        Err(Error::EntryNotFound) =>
+        // Let's be backward compatible.
+        {
+            get_secret(DEPRECATED_ACCESS_KEY, master_key, conn).await?
+        }
+        Err(error) => return Err(error),
+    };
+
     let write_keys = sign::Keypair::from(write_key);
 
     let derived_id = RepositoryId::from(write_keys.public);
 
-    if derived_id == id {
-        // Match - we have write access.
-        Ok(AccessSecrets::Write(WriteSecrets::from(write_keys)))
+    if &derived_id == id {
+        Ok(Some(write_keys))
     } else {
-        // No match. Maybe it's the read key?
-        let read_key = sign_key_to_cipher_key(&write_keys.secret);
-        let key_validator_expected = read_key_validator(&id);
-        let key_validator_actual: Hash = get_secret(READ_KEY_VALIDATOR, &read_key, conn).await?;
+        Ok(None)
+    }
+}
 
-        if key_validator_actual == key_validator_expected {
-            // Match - we have read access.
-            Ok(AccessSecrets::Read { id, read_key })
-        } else {
-            // No match. The key is just a dummy and we have only blind access.
-            Ok(AccessSecrets::Blind { id })
+async fn get_read_key(
+    master_key: &cipher::SecretKey,
+    id: &RepositoryId,
+    conn: &mut db::Connection,
+) -> Result<Option<cipher::SecretKey>> {
+    let read_key: cipher::SecretKey = match get_secret(READ_KEY, master_key, conn).await {
+        Ok(read_key) => read_key,
+        Err(Error::EntryNotFound) => {
+            // Let's be backward compatible.
+            get_secret(DEPRECATED_ACCESS_KEY, master_key, conn).await?
         }
+        Err(error) => return Err(error),
+    };
+
+    let key_validator_expected = read_key_validator(id);
+    let key_validator_actual: Hash = get_secret(READ_KEY_VALIDATOR, &read_key, conn).await?;
+
+    if key_validator_actual == key_validator_expected {
+        // Match - we have read access.
+        Ok(Some(read_key))
+    } else {
+        Ok(None)
     }
 }
 
@@ -284,12 +338,6 @@ fn make_nonce() -> Nonce {
 // String used to validate the read key
 fn read_key_validator(id: &RepositoryId) -> Hash {
     id.salted_hash(b"ouisync read key validator")
-}
-
-// Convert signing key to encryption key.
-fn sign_key_to_cipher_key(sk: &sign::SecretKey) -> cipher::SecretKey {
-    // unwrap is ok because the two key types have the same length.
-    sk.as_ref().as_slice().try_into().unwrap()
 }
 
 // -------------------------------------------------------------------
