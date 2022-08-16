@@ -1,6 +1,6 @@
+use ouisync_lib::StateMonitor;
 use std::{io, sync::Once};
 use tracing_subscriber::EnvFilter;
-use ouisync_lib::StateMonitor;
 
 pub(crate) struct Logger;
 
