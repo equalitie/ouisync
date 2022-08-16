@@ -28,7 +28,9 @@ mod upnp;
 
 pub use self::options::NetworkOptions;
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo},
+    connection::{
+        ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo, ReserveResult,
+    },
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
@@ -615,10 +617,11 @@ impl Inner {
                 }
             };
 
-            if let Some(permit) = self
-                .connection_deduplicator
-                .reserve(PeerAddr::Tcp(addr), ConnectionDirection::Incoming)
-            {
+            if let ReserveResult::Permit(permit) = self.connection_deduplicator.reserve(
+                PeerAddr::Tcp(addr),
+                PeerSource::Listener,
+                ConnectionDirection::Incoming,
+            ) {
                 self.spawn(
                     self.clone()
                         .handle_new_connection(
@@ -642,8 +645,9 @@ impl Inner {
                 }
             };
 
-            if let Some(permit) = self.connection_deduplicator.reserve(
+            if let ReserveResult::Permit(permit) = self.connection_deduplicator.reserve(
                 PeerAddr::Quic(*socket.remote_address()),
+                PeerSource::Listener,
                 ConnectionDirection::Incoming,
             ) {
                 self.spawn(
@@ -708,29 +712,37 @@ impl Inner {
                 return;
             }
 
-            let permit = if let Some(permit) = self
-                .connection_deduplicator
-                .reserve(addr, ConnectionDirection::Outgoing)
-            {
-                permit
-            } else {
-                // TODO: We should only return if this is a duplicate connection *from the same
-                // source*. If there exist a permit from another source, we should await until it's
-                // released.
-                return;
+            let permit = match self.connection_deduplicator.reserve(
+                addr,
+                source,
+                ConnectionDirection::Outgoing,
+            ) {
+                ReserveResult::Permit(permit) => permit,
+                ReserveResult::Occupied(mut on_release, their_source) => {
+                    if source == their_source {
+                        // This is a duplicate from the same source, ignore it.
+                        return;
+                    }
+
+                    // This is a duplicate from a different source, if the other source releases
+                    // it, then we may want to try to keep hold of it.
+                    on_release.changed().await.unwrap_or(());
+                    continue;
+                }
             };
 
             permit.mark_as_connecting();
 
-            if let Some(socket) = self.connect_with_retries(&peer, source).await {
-                if !self
-                    .clone()
-                    .handle_new_connection(socket, source, permit)
-                    .await
-                {
-                    break;
-                }
-            } else {
+            let socket = match self.connect_with_retries(&peer, source).await {
+                Some(socket) => socket,
+                None => break,
+            };
+
+            if !self
+                .clone()
+                .handle_new_connection(socket, source, permit)
+                .await
+            {
                 break;
             }
         }

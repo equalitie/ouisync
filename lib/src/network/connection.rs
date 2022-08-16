@@ -54,27 +54,38 @@ impl ConnectionDeduplicator {
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
-    pub fn reserve(&self, addr: PeerAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
+    pub fn reserve(
+        &self,
+        addr: PeerAddr,
+        source: PeerSource,
+        dir: ConnectionDirection,
+    ) -> ReserveResult {
         let key = ConnectionKey { addr, dir };
-        let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            entry.insert(Peer {
-                id,
-                state: PeerState::Known,
-            });
-            self.on_change_tx.send(()).unwrap_or(());
-            id
-        } else {
-            return None;
-        };
+        match self.connections.lock().unwrap().entry(key) {
+            Entry::Vacant(entry) => {
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let on_release = Arc::new(uninitialized_watch::channel().0);
 
-        Some(ConnectionPermit {
-            connections: self.connections.clone(),
-            key,
-            id,
-            on_release: Arc::new(uninitialized_watch::channel().0),
-            on_deduplicator_change: self.on_change_tx.clone(),
-        })
+                entry.insert(Peer {
+                    id,
+                    state: PeerState::Known,
+                    source,
+                    on_release: on_release.clone(),
+                });
+                self.on_change_tx.send(()).unwrap_or(());
+
+                ReserveResult::Permit(ConnectionPermit {
+                    connections: self.connections.clone(),
+                    key,
+                    id,
+                    on_release,
+                    on_deduplicator_change: self.on_change_tx.clone(),
+                })
+            }
+            Entry::Occupied(entry) => {
+                ReserveResult::Occupied(entry.get().on_release.subscribe(), entry.get().source)
+            }
+        }
     }
 
     // Sorted by the IP, so the user sees similar IPs together.
@@ -98,6 +109,12 @@ impl ConnectionDeduplicator {
     }
 }
 
+pub(super) enum ReserveResult {
+    Permit(ConnectionPermit),
+    // Use the receiver to get notified when the existing permit is destroyed.
+    Occupied(uninitialized_watch::Receiver<()>, PeerSource),
+}
+
 /// Information about a peer.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct PeerInfo {
@@ -115,10 +132,12 @@ where
     ip.to_string().serialize(s)
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone)]
 struct Peer {
     id: u64,
     state: PeerState,
+    source: PeerSource,
+    on_release: Arc<uninitialized_watch::Sender<()>>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
