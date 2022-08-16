@@ -48,6 +48,7 @@ use crate::{
 use async_trait::async_trait;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
+use futures_util::FutureExt;
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -207,6 +208,8 @@ impl Network {
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
+        let user_provided_peers = SeenPeers::new();
+
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
             quic_connector_v4,
@@ -232,6 +235,7 @@ impl Network {
             connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
             on_protocol_mismatch_rx,
+            user_provided_peers,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
             our_addresses: BlockingMutex::new(HashSet::new()),
@@ -251,11 +255,7 @@ impl Network {
             async move {
                 while let Some(seen_peer) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
-                        inner.spawn(
-                            inner
-                                .clone()
-                                .establish_connection(seen_peer, PeerSource::Dht),
-                        );
+                        inner.spawn(inner.clone().handle_peer_found(seen_peer, PeerSource::Dht));
                     }
                 }
             }
@@ -274,7 +274,9 @@ impl Network {
             .await;
 
         for peer in &options.peers {
-            inner.clone().establish_user_provided_connection(*peer);
+            if let Some(seen_peer) = inner.user_provided_peers.insert(*peer) {
+                inner.clone().establish_user_provided_connection(seen_peer);
+            }
         }
 
         Ok(network)
@@ -525,6 +527,7 @@ struct Inner {
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
+    user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
     tasks: Weak<Tasks>,
@@ -594,11 +597,9 @@ impl Inner {
         };
 
         while let Some(peer) = discovery.recv().await {
-            let tasks = self.tasks.upgrade().unwrap();
-
-            tasks.other.spawn(
+            self.spawn(
                 self.clone()
-                    .establish_connection(peer, PeerSource::LocalDiscovery),
+                    .handle_peer_found(peer, PeerSource::LocalDiscovery),
             )
         }
     }
@@ -617,11 +618,15 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(PeerAddr::Tcp(addr), ConnectionDirection::Incoming)
             {
-                self.spawn(self.clone().handle_new_connection(
-                    raw::Stream::Tcp(socket),
-                    PeerSource::Listener,
-                    permit,
-                ))
+                self.spawn(
+                    self.clone()
+                        .handle_new_connection(
+                            raw::Stream::Tcp(socket),
+                            PeerSource::Listener,
+                            permit,
+                        )
+                        .map(|_| ()),
+                )
             }
         }
     }
@@ -640,11 +645,15 @@ impl Inner {
                 PeerAddr::Quic(*socket.remote_address()),
                 ConnectionDirection::Incoming,
             ) {
-                self.spawn(self.clone().handle_new_connection(
-                    raw::Stream::Quic(socket),
-                    PeerSource::Listener,
-                    permit,
-                ))
+                self.spawn(
+                    self.clone()
+                        .handle_new_connection(
+                            raw::Stream::Quic(socket),
+                            PeerSource::Listener,
+                            permit,
+                        )
+                        .map(|_| ()),
+                )
             }
         }
     }
@@ -655,19 +664,11 @@ impl Inner {
             .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
-    fn establish_user_provided_connection(self: Arc<Self>, addr: PeerAddr) {
-        self.spawn({
-            let inner = self.clone();
-            async move {
-                let seen_peers = SeenPeers::new();
-                // Unwrap OK because this is the only `addr` inserted into `seen_peers`.
-                let peer = seen_peers.insert(addr).unwrap();
-
-                inner
-                    .establish_connection(peer, PeerSource::UserProvided)
-                    .await;
-            }
-        })
+    fn establish_user_provided_connection(self: Arc<Self>, peer: SeenPeer) {
+        self.spawn(
+            self.clone()
+                .handle_peer_found(peer, PeerSource::UserProvided),
+        )
     }
 
     async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
@@ -694,36 +695,49 @@ impl Inner {
         }
     }
 
-    async fn establish_connection(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
-        let addr = match peer.addr() {
-            Some(addr) => *addr,
-            None => return,
-        };
+    async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
+        loop {
+            let addr = match peer.addr() {
+                Some(addr) => *addr,
+                None => return,
+            };
 
-        if self.our_addresses.lock().unwrap().contains(&addr) {
-            // Don't connect to self.
-            return;
-        }
+            if self.our_addresses.lock().unwrap().contains(&addr) {
+                // Don't connect to self.
+                return;
+            }
 
-        let permit = if let Some(permit) = self
-            .connection_deduplicator
-            .reserve(addr, ConnectionDirection::Outgoing)
-        {
-            permit
-        } else {
-            return;
-        };
+            let permit = if let Some(permit) = self
+                .connection_deduplicator
+                .reserve(addr, ConnectionDirection::Outgoing)
+            {
+                permit
+            } else {
+                // TODO: We should only return if this is a duplicate connection *from the same
+                // source*. If there exist a permit from another source, we should await until it's
+                // released.
+                return;
+            };
 
-        permit.mark_as_connecting();
+            permit.mark_as_connecting();
 
-        if let Some(socket) = self.connect_with_retries(peer, source).await {
-            self.handle_new_connection(socket, source, permit).await;
+            if let Some(socket) = self.connect_with_retries(&peer, source).await {
+                if !self
+                    .clone()
+                    .handle_new_connection(socket, source, permit)
+                    .await
+                {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
     }
 
     async fn connect_with_retries(
         &self,
-        peer: SeenPeer,
+        peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
         if !Self::ok_to_connect(peer.addr()?.socket_addr(), source) {
@@ -866,13 +880,14 @@ impl Inner {
         }
     }
 
+    /// Return true iff the peer is suitable for reconnection.
     #[instrument(name = "connection", skip(self, stream, permit), fields(addr = ?permit.addr()))]
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
         peer_source: PeerSource,
         permit: ConnectionPermit,
-    ) {
+    ) -> bool {
         tracing::info!("connection established");
 
         permit.mark_as_handshaking();
@@ -882,16 +897,16 @@ impl Inner {
                 Ok(writer_id) => writer_id,
                 Err(HandshakeError::ProtocolVersionMismatch(their_version)) => {
                     self.on_protocol_mismatch(their_version);
-                    return;
+                    return false;
                 }
-                Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return,
+                Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return false,
             };
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
             tracing::debug!("connection from self, discarding");
             self.our_addresses.lock().unwrap().insert(permit.addr());
-            return;
+            return false;
         }
 
         permit.mark_as_active();
@@ -934,6 +949,8 @@ impl Inner {
                 entry.remove();
             }
         }
+
+        true
     }
 
     fn spawn<Fut>(&self, f: Fut)
