@@ -896,7 +896,7 @@ impl Inner {
 
         permit.mark_as_active();
 
-        let released = permit.released();
+        let mut released = permit.released();
 
         {
             let mut state = self.state.lock().unwrap();
@@ -924,7 +924,7 @@ impl Inner {
             };
         }
 
-        released.notified().await;
+        released.changed().await.unwrap_or(());
         tracing::info!("connection lost");
 
         // Remove the broker if it has no more connections.

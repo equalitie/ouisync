@@ -20,7 +20,6 @@ use std::{
 //
 //   https://github.com/tokio-rs/tokio/issues/3757
 use crate::sync::uninitialized_watch;
-use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub enum PeerState {
@@ -73,7 +72,7 @@ impl ConnectionDeduplicator {
             connections: self.connections.clone(),
             key,
             id,
-            on_release: Arc::new(Notify::new()),
+            on_release: Arc::new(uninitialized_watch::channel().0),
             on_deduplicator_change: self.on_change_tx.clone(),
         })
     }
@@ -134,7 +133,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     key: ConnectionKey,
     id: u64,
-    on_release: Arc<Notify>,
+    on_release: Arc<uninitialized_watch::Sender<()>>,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -182,8 +181,8 @@ impl ConnectionPermit {
     }
 
     /// Returns a `Notify` that gets notified when this permit gets released.
-    pub fn released(&self) -> Arc<Notify> {
-        self.on_release.clone()
+    pub fn released(&self) -> uninitialized_watch::Receiver<()> {
+        self.on_release.subscribe()
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -202,7 +201,7 @@ impl ConnectionPermit {
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
-            on_release: Arc::new(Notify::new()),
+            on_release: Arc::new(uninitialized_watch::channel().0),
             on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
         }
     }
@@ -216,7 +215,7 @@ impl Drop for ConnectionPermit {
             }
         }
 
-        self.on_release.notify_one();
+        self.on_release.send(()).unwrap_or(());
         self.on_deduplicator_change.send(()).unwrap_or(());
     }
 }
