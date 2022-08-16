@@ -13,6 +13,7 @@ mod message_dispatcher;
 mod message_io;
 mod options;
 pub mod peer_addr;
+mod peer_source;
 mod protocol;
 mod quic;
 mod raw;
@@ -32,6 +33,7 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
+    peer_source::PeerSource,
     protocol::{Version, MAGIC, VERSION},
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     seen_peers::{SeenPeer, SeenPeers},
@@ -52,7 +54,6 @@ use futures_util::FutureExt;
 use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    fmt,
     future::Future,
     io,
     net::SocketAddr,
@@ -1028,25 +1029,6 @@ enum HandshakeError {
     BadMagic,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PeerSource {
-    UserProvided,
-    Listener,
-    LocalDiscovery,
-    Dht,
-}
-
-impl fmt::Display for PeerSource {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            PeerSource::Listener => write!(f, "incoming"),
-            PeerSource::UserProvided => write!(f, "outgoing (user provided)"),
-            PeerSource::LocalDiscovery => write!(f, "outgoing (locally discovered)"),
-            PeerSource::Dht => write!(f, "outgoing (found via DHT)"),
-        }
-    }
 }
 
 #[derive(Debug, Error)]

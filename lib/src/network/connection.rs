@@ -1,4 +1,4 @@
-use super::peer_addr::PeerAddr;
+use super::{peer_addr::PeerAddr, peer_source::PeerSource};
 use serde::{Serialize, Serializer};
 use std::{
     collections::{hash_map::Entry, HashMap},
