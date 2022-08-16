@@ -208,7 +208,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()), err)]
+    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
@@ -226,7 +226,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?data.id), err)]
+    #[instrument(level = "trace", skip_all, fields(id = ?data.id), err(Debug))]
     async fn handle_block(
         &mut self,
         data: BlockData,

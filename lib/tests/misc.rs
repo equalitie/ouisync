@@ -301,11 +301,6 @@ async fn sync_during_file_write() {
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
 
-    // tracing_subscriber::fmt()
-    //     .pretty()
-    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-    //     .init();
-
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
@@ -378,6 +373,11 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;

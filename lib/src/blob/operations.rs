@@ -66,15 +66,7 @@ impl<'a> Operations<'a> {
             )
             .await?;
 
-            // NOTE: unlike in `write` we create a separate transaction for each iteration. This is
-            // because if we created a single transaction for the whole `read` call, then a failed
-            // read could rollback the changes made in a previous iteration which would then be
-            // lost. This is fine because there is going to be at most one dirty block within
-            // a single `read` invocation anyway.
-            let mut tx = conn.begin().await?;
-            self.replace_current_block(&mut tx, locator, id, content)
-                .await?;
-            tx.commit().await?;
+            self.replace_current_block(locator, id, content)?;
         }
 
         Ok(total_len)
@@ -97,13 +89,11 @@ impl<'a> Operations<'a> {
     }
 
     /// Writes into the blob.
-    pub async fn write(&mut self, conn: &mut db::Connection, mut buffer: &[u8]) -> Result<()> {
-        let mut tx = conn.begin().await?;
-
+    pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
         loop {
             let len = self.unique.current_block.content.write(buffer);
 
-            // TODO: only set the dirty flag if the content actually changed. Otherwise overwirting
+            // TODO: only set the dirty flag if the content actually changed. Otherwise overwriting
             // a block with the same content it already had would result in a new block with a new
             // version being unnecessarily created.
             if len > 0 {
@@ -124,7 +114,7 @@ impl<'a> Operations<'a> {
             let locator = self.unique.current_block.locator.next();
             let (id, content) = if locator.number() < self.shared.block_count() {
                 read_block(
-                    &mut tx,
+                    tx,
                     self.unique.branch.data(),
                     self.unique.branch.keys().read(),
                     &locator,
@@ -134,11 +124,9 @@ impl<'a> Operations<'a> {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
-            self.replace_current_block(&mut tx, locator, id, content)
-                .await?;
+            self.write_current_block(tx).await?;
+            self.replace_current_block(locator, id, content)?;
         }
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -177,17 +165,15 @@ impl<'a> Operations<'a> {
         if block_number != self.unique.current_block.locator.number() {
             let locator = self.locator_at(block_number);
 
-            let mut tx = conn.begin().await?;
             let (id, content) = read_block(
-                &mut tx,
+                conn,
                 self.unique.branch.data(),
                 self.unique.branch.keys().read(),
                 &locator,
             )
             .await?;
-            self.replace_current_block(&mut tx, locator, id, content)
-                .await?;
-            tx.commit().await?;
+
+            self.replace_current_block(locator, id, content)?;
         }
 
         self.unique.current_block.content.pos = block_offset;
@@ -196,7 +182,7 @@ impl<'a> Operations<'a> {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
+    pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
         if len == self.shared.len {
             return Ok(());
         }
@@ -208,17 +194,20 @@ impl<'a> Operations<'a> {
 
         let old_block_count = self.shared.block_count();
 
+        // FIXME: this is not cancel-safe. We should update `self` only after the transaction is
+        // committed.
+
         self.shared.len = len;
         self.unique.len_dirty = true;
 
         let new_block_count = self.shared.block_count();
 
         if self.seek_position() > self.shared.len {
-            self.seek(conn, SeekFrom::End(0)).await?;
+            self.seek(tx, SeekFrom::End(0)).await?;
         }
 
         remove_blocks(
-            conn,
+            tx,
             &self.unique.branch,
             self.unique
                 .head_locator
@@ -234,27 +223,29 @@ impl<'a> Operations<'a> {
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     /// Return true if was dirty and the flush actually took place
-    pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
 
-        let mut tx = conn.begin().await?;
-        self.write_len(&mut tx).await?;
-        self.write_current_block(&mut tx).await?;
-        tx.commit().await?;
+        self.write_len(tx).await?;
+        self.write_current_block(tx).await?;
 
         Ok(true)
     }
 
-    async fn replace_current_block(
+    // Precondition: the current block is not dirty (panics if it is).
+    fn replace_current_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
         locator: Locator,
         id: BlockId,
         content: Buffer,
     ) -> Result<()> {
-        self.write_current_block(tx).await?;
+        // Prevent data loss
+        // TODO: Find a way to write the current dirty block to the db in a deadlock-free way.
+        if self.unique.current_block.dirty {
+            return Err(Error::OperationNotSupported);
+        }
 
         let mut content = Cursor::new(content);
 
@@ -449,7 +440,7 @@ pub(super) fn encrypt_block(
 }
 
 pub(super) async fn remove_blocks<T>(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     branch: &Branch,
     locators: T,
 ) -> Result<()>
@@ -459,16 +450,12 @@ where
     let read_key = branch.keys().read();
     let write_keys = branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-    let mut tx = conn.begin().await?;
-
     for locator in locators {
         branch
             .data()
-            .remove(&mut tx, &locator.encode(read_key), write_keys)
+            .remove(tx, &locator.encode(read_key), write_keys)
             .await?;
     }
-
-    tx.commit().await?;
 
     Ok(())
 }
