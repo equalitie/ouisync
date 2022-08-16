@@ -14,7 +14,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
-    // env_logger::init();
     let mut env = Env::with_seed(0);
 
     // Create two peers and connect them together.
@@ -301,6 +300,11 @@ async fn sync_during_file_write() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
+
+    // tracing_subscriber::fmt()
+    //     .pretty()
+    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    //     .init();
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -651,11 +655,9 @@ async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
 
 async fn write_in_chunks(db: &db::Pool, file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
+        let mut conn = db.acquire().await.unwrap();
         let end = (offset + chunk_size).min(content.len());
-
-        let mut tx = db.begin().await.unwrap();
-        file.write(&mut tx, &content[offset..end]).await.unwrap();
-        tx.commit().await.unwrap();
+        file.write(&mut conn, &content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(

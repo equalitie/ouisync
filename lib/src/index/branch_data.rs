@@ -61,10 +61,13 @@ impl BranchData {
 
     /// Destroy this branch
     pub async fn destroy(&self, conn: &mut db::Connection) -> Result<()> {
-        let root = self.load_root(conn).await?;
+        let mut tx = conn.begin().await?;
 
-        root.remove_recursively_all_older(conn).await?;
-        root.remove_recursively(conn).await?;
+        let root = self.load_root(&mut tx).await?;
+        root.remove_recursively_all_older(&mut tx).await?;
+        root.remove_recursively(&mut tx).await?;
+
+        tx.commit().await?;
 
         self.notify();
 
@@ -73,8 +76,13 @@ impl BranchData {
 
     /// Remove all snapshots of this branch except the latest one.
     pub async fn remove_old_snapshots(&self, conn: &mut db::Connection) -> Result<()> {
-        let root = self.load_root(conn).await?;
-        root.remove_recursively_all_older(conn).await?;
+        let mut tx = conn.begin().await?;
+
+        let root = self.load_root(&mut tx).await?;
+        root.remove_recursively_all_older(&mut tx).await?;
+
+        tx.commit().await?;
+
         Ok(())
     }
 
