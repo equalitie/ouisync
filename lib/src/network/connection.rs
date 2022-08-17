@@ -1,11 +1,11 @@
-use super::peer_addr::PeerAddr;
+use super::{peer_addr::PeerAddr, peer_source::PeerSource};
 use serde::{Serialize, Serializer};
 use std::{
     collections::{hash_map::Entry, HashMap},
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex as SyncMutex,
+        Arc, Mutex as SyncMutex, Weak
     },
 };
 
@@ -19,8 +19,7 @@ use std::{
 // The issue is described in more detail here:
 //
 //   https://github.com/tokio-rs/tokio/issues/3757
-use crate::sync::uninitialized_watch;
-use tokio::sync::Notify;
+use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub enum PeerState {
@@ -55,27 +54,39 @@ impl ConnectionDeduplicator {
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
-    pub fn reserve(&self, addr: PeerAddr, dir: ConnectionDirection) -> Option<ConnectionPermit> {
+    pub fn reserve(
+        &self,
+        addr: PeerAddr,
+        source: PeerSource,
+        dir: ConnectionDirection,
+    ) -> ReserveResult {
         let key = ConnectionKey { addr, dir };
-        let id = if let Entry::Vacant(entry) = self.connections.lock().unwrap().entry(key) {
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            entry.insert(Peer {
-                id,
-                state: PeerState::Known,
-            });
-            self.on_change_tx.send(()).unwrap_or(());
-            id
-        } else {
-            return None;
-        };
+        match self.connections.lock().unwrap().entry(key) {
+            Entry::Vacant(entry) => {
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let on_release = Arc::new(DropAwaitable::new());
+                let on_release_weak = Arc::downgrade(&on_release);
 
-        Some(ConnectionPermit {
-            connections: self.connections.clone(),
-            key,
-            id,
-            on_release: Arc::new(Notify::new()),
-            on_deduplicator_change: self.on_change_tx.clone(),
-        })
+                entry.insert(Peer {
+                    id,
+                    state: PeerState::Known,
+                    source,
+                    on_release,
+                });
+                self.on_change_tx.send(()).unwrap_or(());
+
+                ReserveResult::Permit(ConnectionPermit {
+                    connections: self.connections.clone(),
+                    key,
+                    id,
+                    on_release: on_release_weak,
+                    on_deduplicator_change: self.on_change_tx.clone(),
+                })
+            }
+            Entry::Occupied(entry) => {
+                ReserveResult::Occupied(entry.get().on_release.subscribe(), entry.get().source)
+            }
+        }
     }
 
     // Sorted by the IP, so the user sees similar IPs together.
@@ -99,6 +110,12 @@ impl ConnectionDeduplicator {
     }
 }
 
+pub(super) enum ReserveResult {
+    Permit(ConnectionPermit),
+    // Use the receiver to get notified when the existing permit is destroyed.
+    Occupied(AwaitDrop, PeerSource),
+}
+
 /// Information about a peer.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct PeerInfo {
@@ -116,10 +133,12 @@ where
     ip.to_string().serialize(s)
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone)]
 struct Peer {
     id: u64,
     state: PeerState,
+    source: PeerSource,
+    on_release: Arc<DropAwaitable>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
@@ -134,7 +153,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     key: ConnectionKey,
     id: u64,
-    on_release: Arc<Notify>,
+    on_release: Weak<DropAwaitable>,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -182,8 +201,11 @@ impl ConnectionPermit {
     }
 
     /// Returns a `Notify` that gets notified when this permit gets released.
-    pub fn released(&self) -> Arc<Notify> {
-        self.on_release.clone()
+    pub fn released(&self) -> AwaitDrop {
+        // Unwrap is OK because the entry still exists in the map until Self is dropped.
+        // (With one edge case when `self` is a `ConnectionPermit` inside `ConnectionPermitHalf`,
+        // but `ConnectionPermitHalf` does not expose this `released` fn, so we should be good).
+        self.on_release.upgrade().unwrap().subscribe()
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -194,6 +216,7 @@ impl ConnectionPermit {
     #[cfg(test)]
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
+        let on_release = Arc::new(DropAwaitable::new());
 
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
@@ -202,7 +225,7 @@ impl ConnectionPermit {
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
-            on_release: Arc::new(Notify::new()),
+            on_release: Arc::downgrade(&on_release),
             on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
         }
     }
@@ -216,7 +239,6 @@ impl Drop for ConnectionPermit {
             }
         }
 
-        self.on_release.notify_one();
         self.on_deduplicator_change.send(()).unwrap_or(());
     }
 }

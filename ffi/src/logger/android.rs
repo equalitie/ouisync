@@ -6,6 +6,7 @@ use ndk_sys::{
 };
 use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
+use ouisync_lib::StateMonitor;
 use std::{
     ffi::{CStr, CString},
     io::{self, BufRead, BufReader, Write},
@@ -18,7 +19,6 @@ use std::{
     thread,
     thread::JoinHandle,
 };
-use ouisync_lib::StateMonitor;
 
 // Android log tag.
 // HACK: if the tag doesn't start with 'flutter' then the logs won't show up in the app if built in

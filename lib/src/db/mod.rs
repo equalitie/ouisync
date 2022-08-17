@@ -139,11 +139,15 @@ async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Erro
         // HACK: using only one connection to work around concurrency issues (`SQLITE_BUSY` errors)
         // TODO: find a way to reliable use multiple connections
         .max_connections(1)
-        .after_connect(|conn| Box::pin(async move {
-            // TODO: Can we reuse the query?
-            sqlx::query(include_str!("migrations/temp.sql")).execute(conn).await?;
-            Ok(())
-        }))
+        .after_connect(|conn| {
+            Box::pin(async move {
+                // TODO: Can we reuse the query?
+                sqlx::query(include_str!("migrations/temp.sql"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect_with(connect_options)
         .await
         .map(Pool::new)
