@@ -718,7 +718,7 @@ impl Inner {
                 ConnectionDirection::Outgoing,
             ) {
                 ReserveResult::Permit(permit) => permit,
-                ReserveResult::Occupied(mut on_release, their_source) => {
+                ReserveResult::Occupied(on_release, their_source) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
                         return;
@@ -726,7 +726,7 @@ impl Inner {
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
-                    on_release.changed().await.unwrap_or(());
+                    on_release.await;
                     continue;
                 }
             };
@@ -924,7 +924,7 @@ impl Inner {
 
         permit.mark_as_active();
 
-        let mut released = permit.released();
+        let released = permit.released();
 
         {
             let mut state = self.state.lock().unwrap();
@@ -952,7 +952,7 @@ impl Inner {
             };
         }
 
-        released.changed().await.unwrap_or(());
+        released.await;
         tracing::info!("connection lost");
 
         // Remove the broker if it has no more connections.
