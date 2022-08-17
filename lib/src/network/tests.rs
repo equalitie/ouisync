@@ -45,7 +45,10 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
 // change.
-#[proptest]
+//
+// NOTE: Reducing the number of cases otherwise this test is too slow.
+// TODO: Make it faster and increase the cases.
+#[proptest(cases = 8)]
 fn transfer_snapshot_between_two_replicas(
     #[strategy(0usize..32)] leaf_count: usize,
     #[strategy(0usize..2)] changeset_count: usize,
@@ -108,7 +111,9 @@ async fn transfer_snapshot_between_two_replicas_case(
     b_store.db().close().await;
 }
 
-#[proptest]
+// NOTE: Reducing the number of cases otherwise this test is too slow.
+// TODO: Make it faster and increase the cases.
+#[proptest(cases = 8)]
 fn transfer_blocks_between_two_replicas(
     #[strategy(1usize..32)] block_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,

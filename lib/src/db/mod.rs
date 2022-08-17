@@ -242,11 +242,6 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
 }
 
 async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
-    // TODO: consider enabling shared cache to improve performance. Currently it doesn't work
-    // properly (concurrent access is triggering "table locked" errors) possibly due to buggy
-    // implementation of the unlock notify in sqlx
-    // let connect_options = connect_options.shared_cache(true);
-
     let connect_options = connect_options.pragma("recursive_triggers", "ON");
 
     SqlitePoolOptions::new()
