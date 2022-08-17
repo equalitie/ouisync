@@ -1,7 +1,11 @@
 //! Synchronization utilities
 
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
-use std::future::Future;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// MPMC broadcast channel
 pub mod broadcast {
@@ -125,5 +129,70 @@ pub(crate) mod uninitialized_watch {
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         let (tx, rx) = w::channel(None);
         (Sender(tx), Receiver(rx))
+    }
+}
+
+/// Use this class to `await` until something is `Drop`ped.
+///
+/// Example:
+///
+///     let drop_awaitable = DropAwaitable::new();
+///     let on_dropped = drop_awaitable.subscribe();
+///
+///     task::spawn(async move {
+///       let _drop_awaitable = drop_awaitable; // Move it to this task.
+///       // Do some async tasks.
+///     });
+///
+///     on_dropped.await;
+///
+pub struct DropAwaitable {
+    sender: uninitialized_watch::Sender<()>,
+}
+
+impl DropAwaitable {
+    pub fn new() -> Self {
+        Self {
+            sender: uninitialized_watch::channel().0,
+        }
+    }
+
+    pub fn subscribe(&self) -> AwaitDrop {
+        AwaitDrop {
+            dropped: false,
+            changed: Box::pin({
+                let mut receiver = self.sender.subscribe();
+                async move { receiver.changed().await.unwrap_or(()) }
+            }),
+        }
+    }
+}
+
+impl Drop for DropAwaitable {
+    fn drop(&mut self) {
+        self.sender.send(()).unwrap_or(());
+    }
+}
+
+pub struct AwaitDrop {
+    dropped: bool,
+    changed: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+}
+
+impl Future for AwaitDrop {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.dropped {
+            return Poll::Ready(());
+        }
+        let this = self.get_mut();
+        match Pin::new(&mut this.changed).poll(cx) {
+            Poll::Ready(_) => {
+                this.dropped = true;
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
