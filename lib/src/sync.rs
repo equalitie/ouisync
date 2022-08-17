@@ -133,19 +133,19 @@ pub(crate) mod uninitialized_watch {
 }
 
 /// Use this class to `await` until something is `Drop`ped.
-///
-/// Example:
-///
-///     let drop_awaitable = DropAwaitable::new();
-///     let on_dropped = drop_awaitable.subscribe();
-///
-///     task::spawn(async move {
-///       let _drop_awaitable = drop_awaitable; // Move it to this task.
-///       // Do some async tasks.
-///     });
-///
-///     on_dropped.await;
-///
+//
+// Example:
+//
+//     let drop_awaitable = DropAwaitable::new();
+//     let on_dropped = drop_awaitable.subscribe();
+//
+//     tokio::spawn(async move {
+//       let _drop_awaitable = drop_awaitable; // Move it to this task.
+//       // Do some async tasks.
+//     });
+//
+//     on_dropped.await;
+//
 pub struct DropAwaitable {
     sender: uninitialized_watch::Sender<()>,
 }
