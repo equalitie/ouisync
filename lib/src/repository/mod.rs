@@ -338,11 +338,10 @@ impl Repository {
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin().await?;
+        let mut conn = self.db().acquire().await?;
         let file = local_branch
-            .ensure_file_exists(&mut tx, path.as_ref())
+            .ensure_file_exists(&mut conn, path.as_ref())
             .await?;
-        tx.commit().await?;
 
         Ok(file)
     }
@@ -352,11 +351,10 @@ impl Repository {
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin().await?;
+        let mut conn = self.db().acquire().await?;
         let dir = local_branch
-            .ensure_directory_exists(&mut tx, path.as_ref())
+            .ensure_directory_exists(&mut conn, path.as_ref())
             .await?;
-        tx.commit().await?;
 
         Ok(dir)
     }
@@ -368,10 +366,9 @@ impl Repository {
 
         self.get_or_create_local_branch().await?;
 
-        let mut tx = self.db().begin().await?;
-        let mut parent = self.cd(&mut tx, parent).await?;
-        parent.remove_entry(&mut tx, name).await?;
-        tx.commit().await?;
+        let mut conn = self.db().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry(&mut conn, name).await?;
 
         Ok(())
     }
@@ -381,10 +378,9 @@ impl Repository {
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
-        let mut tx = self.db().begin().await?;
-        let mut parent = self.cd(&mut tx, parent).await?;
-        parent.remove_entry_recursively(&mut tx, name).await?;
-        tx.commit().await?;
+        let mut conn = self.db().acquire().await?;
+        let mut parent = self.cd(&mut conn, parent).await?;
+        parent.remove_entry_recursively(&mut conn, name).await?;
 
         Ok(())
     }
@@ -624,6 +620,10 @@ impl Repository {
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
         self.shared.store.count_blocks().await
+    }
+
+    pub fn local_id(&self) -> LocalId {
+        self.shared.store.local_id
     }
 
     // Create remote branch in this repository and returns it.

@@ -26,10 +26,9 @@ async fn relink_repository() {
 
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-    let mut tx = repo_a.db().begin().await.unwrap();
-    file_a.write(&mut tx, b"first").await.unwrap();
-    file_a.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file_a.write(&mut conn, b"first").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
 
     // Wait until the file is seen by B
     time::timeout(
@@ -43,11 +42,10 @@ async fn relink_repository() {
     drop(reg_b);
 
     // Update the file while B's repo is unlinked
-    let mut tx = repo_a.db().begin().await.unwrap();
-    file_a.truncate(&mut tx, 0).await.unwrap();
-    file_a.write(&mut tx, b"second").await.unwrap();
-    file_a.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file_a.truncate(&mut conn, 0).await.unwrap();
+    file_a.write(&mut conn, b"second").await.unwrap();
+    file_a.flush(&mut conn).await.unwrap();
 
     // Re-register B's repo
     let _reg_b = network_b.handle().register(repo_b.store().clone());
@@ -92,7 +90,6 @@ async fn remove_remote_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn relay() {
     // Simulate two peers that can't connect to each other but both can connect to a third peer.
-    // env_logger::init();
 
     // There used to be a deadlock that got triggered only when transferring a sufficiently large
     // file.
@@ -132,11 +129,9 @@ async fn relay() {
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    // file.write(&content).await.unwrap();
-    write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
-    file.flush(&mut *repo_a.db().acquire().await.unwrap())
-        .await
-        .unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    write_in_chunks(&mut conn, &mut file, &content, 4096).await;
+    file.flush(&mut conn).await.unwrap();
     drop(file);
 
     time::timeout(
@@ -163,10 +158,9 @@ async fn transfer_large_file() {
 
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    write_in_chunks(repo_a.db(), &mut file, &content, 4096).await;
-    file.flush(&mut *repo_a.db().acquire().await.unwrap())
-        .await
-        .unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    write_in_chunks(&mut conn, &mut file, &content, 4096).await;
+    file.flush(&mut conn).await.unwrap();
     drop(file);
 
     time::timeout(
@@ -200,10 +194,9 @@ async fn transfer_multiple_files_sequentially() {
     for (index, content) in contents.iter().enumerate() {
         let name = format!("file-{}.dat", index);
         let mut file = repo_a.create_file(&name).await.unwrap();
-        write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
-        file.flush(&mut *repo_a.db().acquire().await.unwrap())
-            .await
-            .unwrap();
+        let mut conn = repo_a.db().acquire().await.unwrap();
+        write_in_chunks(&mut conn, &mut file, content, 4096).await;
+        file.flush(&mut conn).await.unwrap();
         drop(file);
 
         // Wait until we see all the already transfered files
@@ -244,7 +237,7 @@ async fn sync_during_file_write() {
 
     // A: Write half of the file content but don't flush yet.
     write_in_chunks(
-        repo_a.db(),
+        &mut repo_a.db().acquire().await.unwrap(),
         &mut file_a,
         &content[..content.len() / 2],
         4096,
@@ -254,10 +247,9 @@ async fn sync_during_file_write() {
     // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
     // A's.
     let mut file_b = repo_b.create_file("bar.txt").await.unwrap();
-    let mut tx = repo_b.db().begin().await.unwrap();
-    file_b.write(&mut tx, b"bar").await.unwrap();
-    file_b.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    file_b.write(&mut conn, b"bar").await.unwrap();
+    file_b.flush(&mut conn).await.unwrap();
     drop(file_b);
 
     // A: Wait until we see the file created by B
@@ -269,24 +261,14 @@ async fn sync_during_file_write() {
     .unwrap();
 
     // A: Write the second half of the content and flush.
-    write_in_chunks(
-        repo_a.db(),
-        &mut file_a,
-        &content[content.len() / 2..],
-        4096,
-    )
-    .await;
-    file_a
-        .flush(&mut repo_a.db().acquire().await.unwrap())
-        .await
-        .unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    write_in_chunks(&mut conn, &mut file_a, &content[content.len() / 2..], 4096).await;
+    file_a.flush(&mut conn).await.unwrap();
 
     // A: Reopen the file and verify it has the expected full content
     let mut file_a = repo_a.open_file("foo.txt").await.unwrap();
-    let mut conn = repo_a.db().acquire().await.unwrap();
     let actual_content = file_a.read_to_end(&mut conn).await.unwrap();
     assert_eq!(actual_content, content);
-    drop(conn);
 
     // B: Wait until we see the file as well
     time::timeout(
@@ -320,13 +302,18 @@ async fn concurrent_modify_open_file() {
         .unwrap();
 
     // A: Write to file but don't flush yet
-    write_in_chunks(repo_a.db(), &mut file_a, &content_a, 4096).await;
+    write_in_chunks(
+        &mut repo_a.db().acquire().await.unwrap(),
+        &mut file_a,
+        &content_a,
+        4096,
+    )
+    .await;
 
     // B: Write to the same file and flush
     let mut file_b = repo_b.open_file("file.txt").await.unwrap();
-    write_in_chunks(repo_b.db(), &mut file_b, &content_b, 4096).await;
-
     let mut conn = repo_b.db().acquire().await.unwrap();
+    write_in_chunks(&mut conn, &mut file_b, &content_b, 4096).await;
     file_b.flush(&mut conn).await.unwrap();
     drop(conn);
 
@@ -373,11 +360,6 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
-    tracing_subscriber::fmt()
-        .pretty()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -400,18 +382,17 @@ async fn recreate_local_branch() {
     let repo_b = env.create_repo_with_secrets(access_secrets.clone()).await;
 
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
-    let mut tx = repo_a.db().begin().await.unwrap();
-    file.write(&mut tx, b"hello from A\n").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
+    let mut conn = repo_a.db().acquire().await.unwrap();
+    file.write(&mut conn, b"hello from A\n").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     let vv_a_0 = repo_a
         .local_branch()
         .unwrap()
-        .version_vector(&mut tx)
+        .version_vector(&mut conn)
         .await
         .unwrap();
 
-    tx.commit().await.unwrap();
     drop(file);
 
     // A: Reopen the repo in read mode to disable merger
@@ -437,19 +418,18 @@ async fn recreate_local_branch() {
 
     // B: Modify the repo. This makes B's branch newer than A's
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
-    let mut tx = repo_b.db().begin().await.unwrap();
-    file.seek(&mut tx, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut tx, b"hello from B\n").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    file.write(&mut conn, b"hello from B\n").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     let vv_b = repo_b
         .local_branch()
         .unwrap()
-        .version_vector(&mut tx)
+        .version_vector(&mut conn)
         .await
         .unwrap();
 
-    tx.commit().await.unwrap();
     drop(file);
 
     assert!(vv_b > vv_a_0);
@@ -527,9 +507,8 @@ async fn transfer_many_files() {
                     .await
                     .unwrap();
 
-                write_in_chunks(repo_a.db(), &mut file, content, 4096).await;
-
                 let mut conn = repo_a.db().acquire().await.unwrap();
+                write_in_chunks(&mut conn, &mut file, content, 4096).await;
                 file.flush(&mut conn).await.unwrap();
 
                 // println!("put {}/{}", index + 1, contents.len());
@@ -653,11 +632,15 @@ async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
     .await
 }
 
-async fn write_in_chunks(db: &db::Pool, file: &mut File, content: &[u8], chunk_size: usize) {
+async fn write_in_chunks(
+    conn: &mut db::Connection,
+    file: &mut File,
+    content: &[u8],
+    chunk_size: usize,
+) {
     for offset in (0..content.len()).step_by(chunk_size) {
-        let mut conn = db.acquire().await.unwrap();
         let end = (offset + chunk_size).min(content.len());
-        file.write(&mut conn, &content[offset..end]).await.unwrap();
+        file.write(conn, &content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(

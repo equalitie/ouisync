@@ -101,12 +101,12 @@ impl Branch {
 
     pub(crate) async fn ensure_file_exists(
         &self,
-        tx: &mut db::Transaction<'_>,
+        conn: &mut db::Connection,
         path: &Utf8Path,
     ) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let mut dir = self.ensure_directory_exists(tx, parent).await?;
-        dir.create_file(tx, name.to_string()).await
+        let mut dir = self.ensure_directory_exists(conn, parent).await?;
+        dir.create_file(conn, name.to_string()).await
     }
 
     pub(crate) async fn root_block_id(&self, conn: &mut db::Connection) -> Result<BlockId> {

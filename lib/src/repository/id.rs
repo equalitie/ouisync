@@ -76,9 +76,12 @@ impl Hashable for RepositoryId {
 
 /// Simple numeric id that is unique only locally. Useful mostly for debugging.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub(crate) struct LocalId(u32);
+pub struct LocalId(u32);
 
 impl LocalId {
+    // `Default` would be misleading here, because each invocation of `default` would create
+    // a different value.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
