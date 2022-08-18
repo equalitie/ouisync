@@ -457,22 +457,28 @@ async fn recreate_local_branch() {
     repo_a.create_file("bar.txt").await.unwrap();
 
     // A: Make sure the local version changed monotonically.
-    common::eventually(&repo_a, || async {
-        let mut conn = repo_a.db().acquire().await.unwrap();
-        let vv_a_1 = repo_a
-            .local_branch()
-            .unwrap()
-            .version_vector(&mut conn)
-            .await
-            .unwrap();
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        common::eventually(&repo_a, || async {
+            let mut conn = repo_a.db().acquire().await.unwrap();
+            let vv_a_1 = repo_a
+                .local_branch()
+                .unwrap()
+                .version_vector(&mut conn)
+                .await
+                .unwrap();
 
-        match vv_a_1.partial_cmp(&vv_b) {
-            Some(Ordering::Greater) => true,
-            Some(Ordering::Equal | Ordering::Less) => panic!("non-monotonic version progression"),
-            None => false,
-        }
-    })
+            match vv_a_1.partial_cmp(&vv_b) {
+                Some(Ordering::Greater) => true,
+                Some(Ordering::Equal | Ordering::Less) => {
+                    panic!("non-monotonic version progression")
+                }
+                None => false,
+            }
+        }),
+    )
     .await
+    .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]

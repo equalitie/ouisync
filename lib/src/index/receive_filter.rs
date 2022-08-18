@@ -133,10 +133,12 @@ async fn remove_all(pool: db::Pool, client_id: u64) {
 }
 
 async fn try_remove_all(pool: &db::Pool, client_id: u64) -> Result<()> {
-    let mut conn = pool.acquire().await?;
+    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM received_inner_nodes WHERE client_id = ?")
         .bind(db::encode_u64(client_id))
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+
     Ok(())
 }

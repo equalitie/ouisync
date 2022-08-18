@@ -60,7 +60,10 @@ impl Client {
 
     #[instrument(name = "client", skip_all, err(Debug))]
     pub async fn run(&mut self) -> Result<()> {
-        self.receive_filter.reset().await?;
+        self.receive_filter.reset().await.map_err(|e| {
+            tracing::error!(?e);
+            e
+        })?;
 
         loop {
             select! {
@@ -168,7 +171,6 @@ impl Client {
             hash = ?proof.hash,
             missing_blocks = summary.missing_blocks_count(),
         ),
-        err(Debug)
     )]
     async fn handle_root_node(
         &mut self,
@@ -186,7 +188,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
+    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()))]
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
@@ -208,7 +210,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
+    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()))]
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
@@ -226,7 +228,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?data.id), err(Debug))]
+    #[instrument(level = "trace", skip_all, fields(id = ?data.id))]
     async fn handle_block(
         &mut self,
         data: BlockData,

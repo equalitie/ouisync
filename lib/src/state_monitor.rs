@@ -263,7 +263,7 @@ impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        &*(self.guard.as_ref().unwrap())
+        self.guard.as_ref().unwrap()
     }
 }
 

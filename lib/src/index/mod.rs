@@ -136,10 +136,10 @@ impl Index {
             return Ok(false);
         }
 
-        let mut tx = self.pool.begin().await?;
+        let mut conn = self.pool.acquire().await?;
 
         // Load latest complete root nodes of all known branches.
-        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut tx)
+        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut conn)
             .map_ok(|node| (node.proof.writer_id, node))
             .try_collect()
             .await?;
@@ -161,6 +161,7 @@ impl Index {
         });
 
         if uptodate {
+            let mut tx = conn.begin().await?;
             let hash = proof.hash;
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
