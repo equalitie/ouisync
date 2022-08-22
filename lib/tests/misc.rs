@@ -360,6 +360,8 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
+    // common::init_log();
+
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -393,9 +395,11 @@ async fn recreate_local_branch() {
         .await
         .unwrap();
 
+    drop(conn);
     drop(file);
 
     // A: Reopen the repo in read mode to disable merger
+    drop(repo_a);
     let repo_a = Repository::open_with_mode(
         &store_a,
         device_id_a,
@@ -430,6 +434,7 @@ async fn recreate_local_branch() {
         .await
         .unwrap();
 
+    drop(conn);
     drop(file);
 
     assert!(vv_b > vv_a_0);
@@ -443,6 +448,7 @@ async fn recreate_local_branch() {
     .unwrap();
 
     // A: Reopen in write mode
+    drop(repo_a);
     let repo_a = Repository::open(
         &store_a,
         device_id_a,

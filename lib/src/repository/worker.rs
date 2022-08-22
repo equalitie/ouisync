@@ -70,6 +70,15 @@ impl WorkerHandle {
         self.oneshot(Command::Collect).await
     }
 
+    pub async fn shutdown(&self) {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::Shutdown(result_tx))
+            .await
+            .unwrap_or(());
+        result_rx.await.unwrap_or(())
+    }
+
     async fn oneshot<F>(&self, command_fn: F) -> Result<()>
     where
         F: FnOnce(oneshot::Sender<Result<()>>) -> Command,
@@ -89,6 +98,7 @@ impl WorkerHandle {
 enum Command {
     Merge(oneshot::Sender<Result<()>>),
     Collect(oneshot::Sender<Result<()>>),
+    Shutdown(oneshot::Sender<()>),
 }
 
 struct Inner {
@@ -115,8 +125,11 @@ impl Inner {
                     }
                     command = command_rx.recv() => {
                         if let Some(command) = command {
-                            self.handle_command(command).await;
-                            continue;
+                            if self.handle_command(command).await {
+                                continue;
+                            } else {
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -146,10 +159,20 @@ impl Inner {
         }
     }
 
-    async fn handle_command(&self, command: Command) {
+    async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::Merge(result_tx) => result_tx.send(self.merge().await).unwrap_or(()),
-            Command::Collect(result_tx) => result_tx.send(self.collect().await).unwrap_or(()),
+            Command::Merge(result_tx) => {
+                result_tx.send(self.merge().await).unwrap_or(());
+                true
+            }
+            Command::Collect(result_tx) => {
+                result_tx.send(self.collect().await).unwrap_or(());
+                true
+            }
+            Command::Shutdown(result_tx) => {
+                result_tx.send(()).unwrap_or(());
+                false
+            }
         }
     }
 

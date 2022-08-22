@@ -559,6 +559,7 @@ impl Repository {
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) {
+        self.worker_handle.shutdown().await;
         self.shared.store.db().close().await;
     }
 
@@ -749,7 +750,11 @@ async fn report_sync_progress(store: Store) {
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
-                tracing::error!("failed to retrieve sync progress: {:?}", error);
+                tracing::error!(
+                    local_id = %store.local_id,
+                    "failed to retrieve sync progress: {:?}",
+                    error
+                );
                 continue;
             }
         };

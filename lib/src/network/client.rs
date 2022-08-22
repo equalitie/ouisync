@@ -60,10 +60,7 @@ impl Client {
 
     #[instrument(name = "client", skip_all, err(Debug))]
     pub async fn run(&mut self) -> Result<()> {
-        self.receive_filter.reset().await.map_err(|e| {
-            tracing::error!(?e);
-            e
-        })?;
+        self.receive_filter.reset().await?;
 
         loop {
             select! {

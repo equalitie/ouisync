@@ -115,10 +115,12 @@ pub(crate) async fn mark_all_unreachable(conn: &mut db::Connection) -> Result<()
 
 /// Mark the given block as reachable.
 pub(crate) async fn mark_reachable(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
+    let mut tx = conn.begin().await?;
     sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
         .bind(id)
-        .execute(conn)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(())
 }
