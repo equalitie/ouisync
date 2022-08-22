@@ -160,15 +160,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
 // Receive a `LeafNode` with non-missing block, then drop the connection before the block itself is
 // received, then re-establish the connection and make sure the block gets received then.
-// FIXME: this test sometimes fails with "database is locked".
-#[ignore]
 #[tokio::test]
 async fn failed_block_only_peer() {
-    // tracing_subscriber::fmt()
-    //     .pretty()
-    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-    //     .init();
-
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
@@ -182,16 +175,12 @@ async fn failed_block_only_peer() {
     let mut server = create_server(a_store.index.clone());
     let mut client = create_client(b_store.clone());
 
-    tracing::info!("STEP 0");
-
     simulate_connection_until(
         &mut server,
         &mut client,
         wait_until_snapshots_in_sync(&a_store.index, a_id, &b_store.index),
     )
     .await;
-
-    tracing::info!("STEP 1");
 
     // Simulate peer disconnecting and reconnecting.
     drop(server);
@@ -206,8 +195,6 @@ async fn failed_block_only_peer() {
         }
     })
     .await;
-
-    tracing::info!("STEP 3");
 }
 
 // Same as `failed_block_only_peer` test but this time there is a second peer who remains connected
