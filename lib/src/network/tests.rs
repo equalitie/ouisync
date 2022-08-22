@@ -264,8 +264,6 @@ async fn failed_block_same_peer() {
 
 // This test verifies that when there are two peers that have a particular block, even when one of
 // them drops, we can still succeed in retrieving the block from the remaining peer.
-// FIXME: this test sometimes fails with "database is locked".
-#[ignore]
 #[tokio::test]
 async fn failed_block_other_peer() {
     // This test has a delicate setup phase which might not always succeed (it's not
@@ -314,7 +312,7 @@ async fn failed_block_other_peer() {
         // Run the two connections in parallel until C syncs its index with both A and B.
         let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
         let conn_bc = conn_bc.instrument(tracing::info_span!("BC"));
-        pin!(conn_bc);
+        let mut conn_bc = Box::pin(conn_bc);
 
         let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
         let conn_ac = conn_ac.instrument(tracing::info_span!("AC"));
@@ -337,18 +335,11 @@ async fn failed_block_other_peer() {
             if block::exists(&mut conn, id).await.unwrap() {
                 tracing::warn!("test preconditions not met, trying again");
 
-                drop(conn);
+                drop(conn_bc);
 
                 a_store.db().close().await;
-
-                // The B-C connection might hold a transaction on B's or C's databases, so we need
-                // to keep it running so it has a chance to commit/rollback them. Not doing it
-                // could block the `close` calls.
-                run_until(conn_bc, async {
-                    b_store.db().close().await;
-                    c_store.db().close().await;
-                })
-                .await;
+                b_store.db().close().await;
+                c_store.db().close().await;
 
                 continue 'main;
             }
