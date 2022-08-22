@@ -5,7 +5,7 @@ use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex as SyncMutex, Weak
+        Arc, Mutex as SyncMutex, Weak,
     },
 };
 

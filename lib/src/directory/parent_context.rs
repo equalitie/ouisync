@@ -1,7 +1,14 @@
-use super::OverwriteStrategy;
+use super::{Error, OverwriteStrategy};
 use crate::{
-    blob::Blob, blob_id::BlobId, branch::Branch, db, directory::Directory, error::Result,
-    index::VersionVectorOp, locator::Locator, version_vector::VersionVector,
+    blob::{self, Blob},
+    blob_id::BlobId,
+    branch::Branch,
+    db,
+    directory::{content::EntryExists, Directory},
+    error::Result,
+    index::VersionVectorOp,
+    locator::Locator,
+    version_vector::VersionVector,
 };
 
 /// Info about an entry in the context of its parent directory.
@@ -51,23 +58,64 @@ impl ParentContext {
     ///
     pub async fn fork(
         &self,
-        mut tx: db::Transaction<'_>,
+        conn: &mut db::Connection,
         entry_blob: &Blob,
         src_branch: Branch,
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let directory = self.directory(&mut tx, src_branch).await?;
-        let entry_data = directory.lookup(&self.entry_name)?.clone_data();
+        let mut tx = conn.begin().await?;
 
-        assert_eq!(entry_data.blob_id(), Some(entry_blob.locator().blob_id()));
+        let directory = self.directory(&mut tx, src_branch).await?;
+        let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
+
+        assert_eq!(
+            src_entry_data.blob_id(),
+            Some(entry_blob.locator().blob_id())
+        );
 
         let mut directory = directory.fork(&mut tx, &dst_branch).await?;
         let mut content = directory.entries.clone();
-        content.insert(directory.branch(), self.entry_name.clone(), entry_data)?;
+
+        match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
+            Ok(()) => (),
+            Err(EntryExists { new, old }) => {
+                // It's possible that another task has already forked this entry. If that's the
+                // case then we return success.
+                let blob_id = *entry_blob.locator().blob_id();
+
+                if Some(&blob_id) != old.blob_id() {
+                    return Err(Error::EntryExists);
+                }
+
+                if !(new.version_vector() <= old.version_vector()) {
+                    return Err(Error::EntryExists);
+                }
+
+                drop(tx);
+                let blob = Blob::open(
+                    conn,
+                    dst_branch,
+                    Locator::head(blob_id),
+                    blob::Shared::uninit(),
+                )
+                .await?;
+
+                let new_context = Self {
+                    directory_id: *directory.locator().blob_id(),
+                    entry_name: self.entry_name.clone(),
+                    parent: directory.parent.clone().map(Box::new),
+                };
+
+                return Ok((new_context, blob));
+            }
+        }
+
         directory
             .save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
+
         let new_blob = entry_blob.try_fork(&mut tx, dst_branch).await?;
+
         directory
             .commit(tx, content, &VersionVectorOp::IncrementLocal)
             .await?;

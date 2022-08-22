@@ -9,9 +9,12 @@ use crate::{
     index::VersionVectorOp,
     version_vector::VersionVector,
 };
-use std::collections::{
-    btree_map::{self, Entry},
-    BTreeMap,
+use std::{
+    collections::{
+        btree_map::{self, Entry},
+        BTreeMap,
+    },
+    result::Result as StdResult,
 };
 
 /// Version of the Directory serialization format.
@@ -67,7 +70,12 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
-    pub fn insert(&mut self, branch: &Branch, name: String, new_data: EntryData) -> Result<()> {
+    pub fn insert<'a>(
+        &'a mut self,
+        branch: &Branch,
+        name: String,
+        new_data: EntryData,
+    ) -> StdResult<(), EntryExists<'a>> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
@@ -91,7 +99,10 @@ impl Content {
                     EntryData::Tombstone(old_data)
                         if new_data.version_vector() > &old_data.version_vector => {}
                     EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_) => {
-                        return Err(Error::EntryExists)
+                        return Err(EntryExists {
+                            new: new_data,
+                            old: entry.into_mut(),
+                        });
                     }
                 }
 
@@ -130,6 +141,17 @@ impl Content {
         } else {
             VersionVector::new()
         }
+    }
+}
+
+pub(crate) struct EntryExists<'a> {
+    pub(crate) new: EntryData,
+    pub(crate) old: &'a EntryData,
+}
+
+impl<'a> From<EntryExists<'a>> for Error {
+    fn from(_error: EntryExists<'a>) -> Self {
+        Error::EntryExists
     }
 }
 

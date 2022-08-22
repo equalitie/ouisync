@@ -145,10 +145,9 @@ impl File {
             return Ok(());
         }
 
-        let tx = conn.begin().await?;
         let (new_parent, new_blob) = self
             .parent
-            .fork(tx, &self.blob, self.branch().clone(), dst_branch)
+            .fork(conn, &self.blob, self.branch().clone(), dst_branch)
             .await?;
 
         self.blob = new_blob;
