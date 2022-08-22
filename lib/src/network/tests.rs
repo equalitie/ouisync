@@ -199,8 +199,6 @@ async fn failed_block_only_peer() {
 
 // Same as `failed_block_only_peer` test but this time there is a second peer who remains connected
 // for the whole duration of the test. This is to uncover any potential request caching issues.
-// FIXME: this test sometimes fails with "database is locked".
-#[ignore]
 #[tokio::test]
 async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
@@ -238,14 +236,11 @@ async fn failed_block_same_peer() {
     let conn_bc = conn_bc.instrument(tracing::info_span!("BC"));
     pin!(conn_bc);
 
-    tracing::info!("STEP 0");
-
     run_until(
         future::join(conn_ac, &mut conn_bc),
         wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index),
     )
     .await;
-    tracing::info!("STEP 1");
 
     // Drop and recreate the A-C connection but keep the B-C connection up.
     drop(server_ac);
@@ -259,15 +254,12 @@ async fn failed_block_same_peer() {
     let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
     let conn_ac = conn_ac.instrument(tracing::info_span!("AC2"));
 
-    tracing::info!("STEP 2");
-
     run_until(future::join(conn_ac, conn_bc), async {
         for id in snapshot.blocks().keys() {
             wait_until_block_exists(&c_store.index, id).await
         }
     })
     .await;
-    tracing::info!("STEP 3");
 }
 
 // This test verifies that when there are two peers that have a particular block, even when one of
