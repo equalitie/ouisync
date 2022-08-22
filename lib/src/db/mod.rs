@@ -7,7 +7,7 @@ use sqlx::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
         SqliteTransactionBehavior,
     },
-    Connection as _, Database, Either, Execute, Executor, Row, SqlitePool,
+    Acquire, Database, Either, Execute, Executor, Row, SqlitePool,
 };
 use std::{
     future::Future,
@@ -37,12 +37,7 @@ impl Pool {
     }
 
     pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
-        // NOTE: deferred transactions are prone to deadlocks. Create immediate transaction by
-        // default.
-        self.inner
-            .begin_with(SqliteTransactionBehavior::Immediate.into())
-            .await
-            .map(Transaction)
+        Transaction::begin(&self.inner).await
     }
 
     pub(crate) async fn close(&self) {
@@ -57,12 +52,7 @@ pub struct Connection(SqliteConnection);
 
 impl Connection {
     pub async fn begin(&mut self) -> Result<Transaction<'_>, sqlx::Error> {
-        // NOTE: deferred transactions are prone to deadlocks. Create immediate transaction by
-        // default.
-        self.0
-            .begin_with(SqliteTransactionBehavior::Immediate.into())
-            .await
-            .map(Transaction)
+        Transaction::begin(&mut self.0).await
     }
 }
 
@@ -166,7 +156,31 @@ impl DerefMut for PoolConnection {
 #[derive(Debug)]
 pub struct Transaction<'a>(sqlx::Transaction<'a, Sqlite>);
 
-impl Transaction<'_> {
+impl<'a> Transaction<'a> {
+    async fn begin<A>(db: A) -> Result<Transaction<'a>, sqlx::Error>
+    where
+        A: Acquire<'a, Database = Sqlite>,
+    {
+        // Use immediate transactions by default for simplicity. This is to avoid the following
+        // problem that could occur with deferred transactions:
+        //
+        // - Connection A begins a read transaction
+        // - Connection B begins a write transaction
+        // - Connection A trying to upgrade to a write transaction, but the previous reads it did
+        //   were invalidated by the writes by connection B which means connection A now returns
+        //   `SQLITE_BUSY`. The only way to resolve that is to retry the whole transaction.
+        //
+        // To keep things simpler, if we know we are going to write at some point, we start the
+        // transaction as a write transaction (this is what immediate does) which means the
+        // `SQLITE_BUSY` can now happen only in `begin` and in most cases would be automatically
+        // retried by sqlite itself. In case we still get `SQLITE_BUSY` from `begin`, all we need
+        // to do is to retry the `begin` call itself which is simpler than retrying the whole
+        // transaction.
+        db.begin_with(SqliteTransactionBehavior::Immediate.into())
+            .await
+            .map(Transaction)
+    }
+
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.commit().await
     }
