@@ -169,7 +169,7 @@ impl Blob {
         // accidentally forking into remote branch (remote branches don't have write access).
         let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        let shared = self.shared.lock().await;
+        let shared = self.shared.lock().await.deep_clone();
 
         let locators = self
             .unique
@@ -199,7 +199,7 @@ impl Blob {
         }
 
         let forked = Self {
-            shared: shared.deep_clone(),
+            shared: shared.into_locked(),
             unique: Unique {
                 branch: dst_branch,
                 head_locator: self.unique.head_locator,

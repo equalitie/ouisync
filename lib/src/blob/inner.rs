@@ -37,17 +37,21 @@ impl Shared {
 
     pub fn uninit_with_close_notify(tx: broadcast::Sender<Event>) -> MaybeInitShared {
         MaybeInitShared {
-            shared: Self::new(0, tx),
+            shared: Self::new(0, tx).into_locked(),
             init: false,
         }
     }
 
-    pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
+    pub fn deep_clone(&self) -> Self {
         Self::new(self.len, self.event_tx.clone())
     }
 
-    fn new(len: u64, event_tx: broadcast::Sender<Event>) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self { len, event_tx }))
+    pub fn into_locked(self) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(self))
+    }
+
+    fn new(len: u64, event_tx: broadcast::Sender<Event>) -> Self {
+        Self { len, event_tx }
     }
 
     // Total number of blocks in this blob including the possibly partially filled final block.
