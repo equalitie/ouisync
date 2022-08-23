@@ -1,5 +1,6 @@
 mod migrations;
 
+use crate::debug;
 use futures_util::Stream;
 use ref_cast::RefCast;
 use sqlx::{
@@ -15,6 +16,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     pin::Pin,
+    time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -152,6 +154,8 @@ impl DerefMut for PoolConnection {
     }
 }
 
+const BUSY_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Database transaction
 #[derive(Debug)]
 pub struct Transaction<'a>(sqlx::Transaction<'a, Sqlite>);
@@ -176,9 +180,13 @@ impl<'a> Transaction<'a> {
         // retried by sqlite itself. In case we still get `SQLITE_BUSY` from `begin`, all we need
         // to do is to retry the `begin` call itself which is simpler than retrying the whole
         // transaction.
-        db.begin_with(SqliteTransactionBehavior::Immediate.into())
-            .await
-            .map(Transaction)
+        debug::warn_slow(
+            BUSY_WARNING_TIMEOUT,
+            "database is busy",
+            db.begin_with(SqliteTransactionBehavior::Immediate.into()),
+        )
+        .await
+        .map(Transaction)
     }
 
     pub async fn commit(self) -> Result<(), sqlx::Error> {
@@ -256,7 +264,15 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
 }
 
 async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
-    let connect_options = connect_options.pragma("recursive_triggers", "ON");
+    let connect_options = connect_options
+        .pragma("recursive_triggers", "ON")
+        // We assume that every transaction completes in a reasonable time (i.e., there are no
+        // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
+        // that so setting this excessively large timeout is the next best thing.
+        //
+        // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html) would
+        //    be one such way.
+        .busy_timeout(Duration::from_secs(24 * 60 * 60));
 
     SqlitePoolOptions::new()
         .max_connections(8)
