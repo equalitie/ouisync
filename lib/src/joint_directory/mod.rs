@@ -247,31 +247,20 @@ impl JointDirectory {
     /// In the presence of conflicts (multiple concurrent versions of the same file) this function
     /// still proceeds as far as it can, but the conflicting files remain unmerged.
     ///
-    /// Note: unlikely all the other methods in `JointDirectory`, this one takes `db::Pool`, not
-    /// `db::Connection`. The reason is that for large repositories, this function can take long
-    /// time to complete and this allows it to periodically release (and re-acquire) the connection
-    /// to prevent starving other tasks.
-    ///
     /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
-    pub async fn merge(&mut self, db: &db::Pool) -> Result<Directory> {
-        let mut conn = db.acquire().await?;
-
-        let local_version = self.fork(&mut conn).await?;
+    pub async fn merge(&mut self, conn: &mut db::Connection) -> Result<Directory> {
+        let local_version = self.fork(conn).await?;
         let local_branch = local_version.branch().clone();
 
-        let old_version_vector = local_version.version_vector(&mut conn).await?;
-        let new_version_vector = self.merge_version_vectors(&mut conn).await?;
+        let old_version_vector = local_version.version_vector(conn).await?;
+        let new_version_vector = self.merge_version_vectors(conn).await?;
 
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             // unwrap is ok because we ensured the local version exists by calling `fork` above.
             return Ok(self.local_version().unwrap().clone());
         }
-
-        // Drop the connection now and re-acquire it for each file/subdirectory separately, to give
-        // other tasks chance to acquire it too.
-        drop(conn);
 
         let mut bump = true;
         let mut check_for_removal = Vec::new();
@@ -282,10 +271,9 @@ impl JointDirectory {
                     for entry in existing {
                         match entry {
                             JointEntryRef::File(entry) => {
-                                let mut conn = db.acquire().await?;
-                                let mut file = entry.open(&mut conn).await?;
+                                let mut file = entry.open(conn).await?;
 
-                                match file.fork(&mut conn, local_branch.clone()).await {
+                                match file.fork(conn, local_branch.clone()).await {
                                     Ok(()) => (),
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
@@ -298,12 +286,9 @@ impl JointDirectory {
                                 }
                             }
                             JointEntryRef::Directory(entry) => {
-                                let mut conn = db.acquire().await?;
                                 let mut dir =
-                                    entry.open(&mut conn, MissingVersionStrategy::Fail).await?;
-                                drop(conn);
-
-                                dir.merge(db).await?;
+                                    entry.open(conn, MissingVersionStrategy::Fail).await?;
+                                dir.merge(conn).await?;
                             }
                         }
                     }
@@ -314,22 +299,20 @@ impl JointDirectory {
             }
         }
 
-        let mut conn = db.acquire().await?;
-
         // unwrap is ok because we ensured the local version exists by calling `fork` at the
         // beginning of this function.
         let local_version = self.local_version_mut().unwrap();
-        local_version.refresh(&mut conn).await?;
+        local_version.refresh(conn).await?;
 
         for (name, vv) in check_for_removal {
             local_version
-                .remove_entry(&mut conn, &name, local_branch.id(), vv)
+                .remove_entry(conn, &name, local_branch.id(), vv)
                 .await?;
         }
 
         if bump {
             local_version
-                .merge_version_vector(&mut conn, new_version_vector)
+                .merge_version_vector(conn, new_version_vector)
                 .await?;
         }
 

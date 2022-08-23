@@ -85,6 +85,7 @@ impl<'a> Responder<'a> {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self), err(Debug))]
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
@@ -92,7 +93,7 @@ impl<'a> Responder<'a> {
         }
     }
 
-    #[instrument(level = "trace", skip(self), err)]
+    #[instrument(level = "trace", skip(self))]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
         self.stats.node();
 
@@ -122,7 +123,7 @@ impl<'a> Responder<'a> {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip(self), err)]
+    #[instrument(level = "trace", skip(self))]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
         self.stats.block();
 

@@ -10,7 +10,7 @@ use crate::{
     repository::RepositoryId,
 };
 use rand::{rngs::OsRng, Rng};
-use sqlx::{Acquire, Row};
+use sqlx::Row;
 use zeroize::Zeroize;
 
 // Metadata keys

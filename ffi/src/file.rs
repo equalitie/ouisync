@@ -147,15 +147,15 @@ pub unsafe extern "C" fn file_write(
 
         ctx.spawn(async move {
             let buffer = slice::from_raw_parts(buffer.into_inner(), len);
-
             let mut g = ffi_file.lock().await;
 
             let local_branch = g.repo.get_or_create_local_branch().await?;
-            let mut conn = g.repo.db().acquire().await?;
 
-            g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
-            g.file.fork(&mut conn, local_branch).await?;
-            g.file.write(&mut conn, buffer).await?;
+            let mut tx = g.repo.db().begin().await?;
+            g.file.seek(&mut tx, SeekFrom::Start(offset)).await?;
+            g.file.fork(&mut tx, local_branch).await?;
+            g.file.write(&mut tx, buffer).await?;
+            tx.commit().await?;
 
             Ok(())
         })
@@ -175,10 +175,13 @@ pub unsafe extern "C" fn file_truncate(
             let mut g = ffi_file.lock().await;
 
             let local_branch = g.repo.get_or_create_local_branch().await?;
-            let mut conn = g.repo.db().acquire().await?;
 
-            g.file.fork(&mut conn, local_branch).await?;
-            g.file.truncate(&mut conn, len).await
+            let mut tx = g.repo.db().begin().await?;
+            g.file.fork(&mut tx, local_branch).await?;
+            g.file.truncate(&mut tx, len).await?;
+            tx.commit().await?;
+
+            Ok(())
         })
     })
 }

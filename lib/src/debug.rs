@@ -1,3 +1,6 @@
+use std::{fmt, future::Future, time::Duration};
+use tokio::{pin, time};
+
 #[derive(Clone)]
 pub struct DebugPrinter {
     // Used for indentation
@@ -50,5 +53,23 @@ impl DebugPrinter {
 impl Default for DebugPrinter {
     fn default() -> Self {
         DebugPrinter::new()
+    }
+}
+
+/// Run `fut` into completion but if it takes more than `timeout`, log the given warning
+/// message.
+pub(crate) async fn warn_slow<F, M>(timeout: Duration, message: M, fut: F) -> F::Output
+where
+    F: Future,
+    M: fmt::Display,
+{
+    pin!(fut);
+
+    match time::timeout(timeout, &mut fut).await {
+        Ok(output) => output,
+        Err(_) => {
+            tracing::warn!("{}", message);
+            fut.await
+        }
     }
 }

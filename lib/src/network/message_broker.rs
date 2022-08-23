@@ -328,7 +328,7 @@ async fn run_server(
 }
 
 async fn forever() -> ! {
-    let () = future::pending().await;
+    future::pending::<()>().await;
     unreachable!()
 }
 

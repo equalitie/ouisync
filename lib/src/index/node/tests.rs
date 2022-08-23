@@ -448,12 +448,14 @@ async fn set_present_on_leaf_node_with_missing_block() {
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
+    let mut tx = conn.begin().await.unwrap();
+
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
-    assert!(LeafNode::set_present(&mut conn, &block_id).await.unwrap());
+    assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert!(!nodes.get(&encoded_locator).unwrap().is_missing);
 }
 
@@ -465,10 +467,12 @@ async fn set_present_on_leaf_node_with_present_block() {
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
-    let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    let mut tx = conn.begin().await.unwrap();
 
-    assert!(!LeafNode::set_present(&mut conn, &block_id).await.unwrap());
+    let node = LeafNode::present(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -477,8 +481,10 @@ async fn set_present_on_leaf_node_that_does_not_exist() {
 
     let block_id = rand::random();
 
+    let mut tx = conn.begin().await.unwrap();
+
     assert_matches!(
-        LeafNode::set_present(&mut conn, &block_id).await,
+        LeafNode::set_present(&mut tx, &block_id).await,
         Err(Error::BlockNotReferenced)
     )
 }
@@ -495,14 +501,14 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
     let write_keys = Keypair::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
     let mut root_node = RootNode::create(
-        &mut conn,
+        &mut tx,
         Proof::new(
             writer_id,
             VersionVector::new(),
@@ -514,10 +520,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     .await
     .unwrap();
 
-    super::update_summaries(&mut conn, root_node.proof.hash)
+    super::update_summaries(&mut tx, root_node.proof.hash)
         .await
         .unwrap();
-    root_node.reload(&mut conn).await.unwrap();
+    root_node.reload(&mut tx).await.unwrap();
     assert_eq!(root_node.summary.is_complete(), leaf_count == 0);
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
@@ -525,11 +531,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
-            nodes.save(&mut conn, parent_hash).await.unwrap();
-            super::update_summaries(&mut conn, *parent_hash)
+            nodes.save(&mut tx, parent_hash).await.unwrap();
+            super::update_summaries(&mut tx, *parent_hash)
                 .await
                 .unwrap();
-            root_node.reload(&mut conn).await.unwrap();
+            root_node.reload(&mut tx).await.unwrap();
             assert!(!root_node.summary.is_complete());
         }
     }
@@ -537,13 +543,13 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut unsaved_leaves = snapshot.leaf_count();
 
     for (parent_hash, nodes) in snapshot.leaf_sets() {
-        nodes.save(&mut conn, parent_hash).await.unwrap();
+        nodes.save(&mut tx, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&mut conn, *parent_hash)
+        super::update_summaries(&mut tx, *parent_hash)
             .await
             .unwrap();
-        root_node.reload(&mut conn).await.unwrap();
+        root_node.reload(&mut tx).await.unwrap();
 
         if unsaved_leaves > 0 {
             assert!(!root_node.summary.is_complete());
@@ -553,7 +559,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     assert!(root_node.summary.is_complete());
 
     // HACK: prevent "too many open files" error.
-    drop(conn);
+    drop(tx);
     pool.close().await;
 }
 
@@ -568,7 +574,7 @@ fn summary(
 async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
     let write_keys = Keypair::generate(&mut rng);
@@ -576,7 +582,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
-        &mut conn,
+        &mut tx,
         Proof::new(
             writer_id,
             VersionVector::new(),
@@ -589,7 +595,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut conn, root_node.proof.hash)
+        super::update_summaries(&mut tx, root_node.proof.hash)
             .await
             .unwrap();
     }
@@ -599,7 +605,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             nodes
                 .clone()
                 .into_incomplete()
-                .save(&mut conn, parent_hash)
+                .save(&mut tx, parent_hash)
                 .await
                 .unwrap();
         }
@@ -609,11 +615,11 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
         nodes
             .clone()
             .into_missing()
-            .save(&mut conn, parent_hash)
+            .save(&mut tx, parent_hash)
             .await
             .unwrap();
 
-        super::update_summaries(&mut conn, *parent_hash)
+        super::update_summaries(&mut tx, *parent_hash)
             .await
             .unwrap();
     }
@@ -621,7 +627,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut expected_missing_blocks_count = snapshot.leaf_count() as u64;
 
     // Check that initially all blocks are missing
-    root_node.reload(&mut conn).await.unwrap();
+    root_node.reload(&mut tx).await.unwrap();
 
     assert_eq!(
         root_node.summary.missing_blocks_count,
@@ -631,11 +637,11 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
     // accordingly.
     for block_id in snapshot.blocks().keys() {
-        super::receive_block(&mut conn, block_id).await.unwrap();
+        super::receive_block(&mut tx, block_id).await.unwrap();
 
         expected_missing_blocks_count -= 1;
 
-        root_node.reload(&mut conn).await.unwrap();
+        root_node.reload(&mut tx).await.unwrap();
         assert_eq!(
             root_node.summary.missing_blocks_count,
             expected_missing_blocks_count
@@ -645,7 +651,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     }
 
     // HACK: prevent "too many open files" error.
-    drop(conn);
+    drop(tx);
     pool.close().await;
 }
 

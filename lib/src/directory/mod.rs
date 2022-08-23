@@ -26,7 +26,6 @@ use crate::{
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
-use sqlx::Connection;
 use std::{fmt, mem};
 
 /// What to do with the existing entry when inserting a new entry in its place.

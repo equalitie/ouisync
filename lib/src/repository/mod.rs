@@ -337,20 +337,26 @@ impl Repository {
     #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let local_branch = self.get_or_create_local_branch().await?;
+
         let mut conn = self.db().acquire().await?;
-        local_branch
+        let file = local_branch
             .ensure_file_exists(&mut conn, path.as_ref())
-            .await
+            .await?;
+
+        Ok(file)
     }
 
     /// Creates a new directory at the given path.
     #[instrument(level = "info", skip(path), fields(path = %path.as_ref()), err)]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let local_branch = self.get_or_create_local_branch().await?;
+
         let mut conn = self.db().acquire().await?;
-        local_branch
+        let dir = local_branch
             .ensure_directory_exists(&mut conn, path.as_ref())
-            .await
+            .await?;
+
+        Ok(dir)
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
@@ -362,7 +368,9 @@ impl Repository {
 
         let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry(&mut conn, name).await
+        parent.remove_entry(&mut conn, name).await?;
+
+        Ok(())
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
@@ -372,7 +380,9 @@ impl Repository {
 
         let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry_recursively(&mut conn, name).await
+        parent.remove_entry_recursively(&mut conn, name).await?;
+
+        Ok(())
     }
 
     /// Moves (renames) an entry from the source path to the destination path.
@@ -408,15 +418,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
-
-                // `merge` takes `Pool`, not `Connection` (to avoid holding the connection for too
-                // long) and so to avoid deadlock we need to temporarily release `conn`...
-                drop(conn);
-
-                let dir_to_move = dir_to_move.merge(self.db()).await?;
-
-                // ...and acquire it back again once `merge` is done.
-                conn = self.db().acquire().await?;
+                let dir_to_move = dir_to_move.merge(&mut conn).await?;
 
                 let src_dir = dir_to_move
                     .parent(&mut conn)
@@ -462,7 +464,9 @@ impl Repository {
                 dst_name,
                 dst_vv,
             )
-            .await
+            .await?;
+
+        Ok(())
     }
 
     /// Returns the local branch if it exists.
@@ -555,6 +559,7 @@ impl Repository {
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) {
+        self.worker_handle.shutdown().await;
         self.shared.store.db().close().await;
     }
 
@@ -616,6 +621,10 @@ impl Repository {
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
         self.shared.store.count_blocks().await
+    }
+
+    pub fn local_id(&self) -> LocalId {
+        self.shared.store.local_id
     }
 
     // Create remote branch in this repository and returns it.
@@ -741,7 +750,11 @@ async fn report_sync_progress(store: Store) {
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
-                tracing::error!("failed to retrieve sync progress: {:?}", error);
+                tracing::error!(
+                    local_id = %store.local_id,
+                    "failed to retrieve sync progress: {:?}",
+                    error
+                );
                 continue;
             }
         };

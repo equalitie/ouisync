@@ -97,7 +97,7 @@ macro_rules! derive_sqlx_traits_for_byte_array_wrapper {
                 &self,
                 args: &mut Vec<sqlx::sqlite::SqliteArgumentValue<'q>>,
             ) -> sqlx::encode::IsNull {
-                (*self).as_ref().encode_by_ref(args)
+                sqlx::Encode::<sqlx::sqlite::Sqlite>::encode_by_ref(&(*self).as_ref(), args)
             }
         }
 
@@ -106,7 +106,7 @@ macro_rules! derive_sqlx_traits_for_byte_array_wrapper {
                 value: sqlx::sqlite::SqliteValueRef<'r>,
             ) -> Result<Self, sqlx::error::BoxDynError> {
                 use std::convert::TryInto;
-                let slice = <&[u8]>::decode(value)?;
+                let slice = <&[u8] as sqlx::Decode<sqlx::sqlite::Sqlite>>::decode(value)?;
                 Ok(slice.try_into()?)
             }
         }

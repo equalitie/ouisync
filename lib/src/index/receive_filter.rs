@@ -1,6 +1,6 @@
 use super::node::Summary;
 use crate::{crypto::Hash, db, error::Result};
-use sqlx::{Connection, Row};
+use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;
 
@@ -19,6 +19,10 @@ impl ReceiveFilter {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             db,
         }
+    }
+
+    pub async fn reset(&self) -> Result<()> {
+        try_remove_all(&self.db, self.id).await
     }
 
     pub async fn check(
@@ -119,7 +123,7 @@ async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Re
 }
 
 async fn remove_all(pool: db::Pool, client_id: u64) {
-    if let Err(error) = try_remove_all(pool, client_id).await {
+    if let Err(error) = try_remove_all(&pool, client_id).await {
         tracing::error!(
             "Failed to cleanup ReceiveFilter(client_id: {}): {:?}",
             client_id,
@@ -128,11 +132,13 @@ async fn remove_all(pool: db::Pool, client_id: u64) {
     }
 }
 
-async fn try_remove_all(pool: db::Pool, client_id: u64) -> Result<()> {
-    let mut conn = pool.acquire().await?;
+async fn try_remove_all(pool: &db::Pool, client_id: u64) -> Result<()> {
+    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM received_inner_nodes WHERE client_id = ?")
         .bind(db::encode_u64(client_id))
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+
     Ok(())
 }

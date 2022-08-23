@@ -77,12 +77,14 @@ impl Blob {
         let len = current_block.content.read_u64();
         let block_count = inner::block_count(len);
 
+        let mut tx = conn.begin().await?;
         operations::remove_blocks(
-            conn,
+            &mut tx,
             branch,
             head_locator.sequence().take(block_count as usize),
         )
         .await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -115,7 +117,12 @@ impl Blob {
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
-        self.lock().await.write(conn, buffer).await
+        // Always begin transactions before acquiring the lock, to avoid deadlocks.
+        let mut tx = conn.begin().await?;
+        self.lock().await.write(&mut tx, buffer).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Seek to an offset in the blob.
@@ -130,13 +137,23 @@ impl Blob {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
-        self.lock().await.truncate(conn, len).await
+        // Always begin transactions before acquiring the lock, to avoid deadlocks.
+        let mut tx = conn.begin().await?;
+        self.lock().await.truncate(&mut tx, len).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
     pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<bool> {
-        self.lock().await.flush(conn).await
+        // Always begin transactions before acquiring the lock, to avoid deadlocks.
+        let mut tx = conn.begin().await?;
+        let was_dirty = self.lock().await.flush(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(was_dirty)
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the

@@ -8,7 +8,7 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sqlx::{Acquire, Row};
+use sqlx::Row;
 use std::{iter::FromIterator, mem, slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -95,11 +95,11 @@ impl LeafNode {
 
     /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
     /// whether at least one node was modified.
-    pub async fn set_present(conn: &mut db::Connection, block_id: &BlockId) -> Result<bool> {
+    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<bool> {
         // Check whether there is at least one node that references the given block.
         if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
             .bind(block_id)
-            .fetch_optional(&mut *conn)
+            .fetch_optional(&mut **tx)
             .await?
             .is_none()
         {
@@ -111,7 +111,7 @@ impl LeafNode {
             "UPDATE snapshot_leaf_nodes SET is_missing = 0 WHERE block_id = ? AND is_missing = 1",
         )
         .bind(block_id)
-        .execute(conn)
+        .execute(&mut **tx)
         .await?;
 
         Ok(result.rows_affected() > 0)

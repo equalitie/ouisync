@@ -18,10 +18,7 @@ use crate::{
     test_utils,
     version_vector::VersionVector,
 };
-use futures_util::{
-    future::{self, FusedFuture},
-    FutureExt,
-};
+use futures_util::future;
 use rand::prelude::*;
 use std::{
     fmt,
@@ -39,13 +36,17 @@ use tokio::{
     },
     time,
 };
+use tracing::Instrument;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
 // change.
-#[proptest]
+//
+// NOTE: Reducing the number of cases otherwise this test is too slow.
+// TODO: Make it faster and increase the cases.
+#[proptest(cases = 8)]
 fn transfer_snapshot_between_two_replicas(
     #[strategy(0usize..32)] leaf_count: usize,
     #[strategy(0usize..2)] changeset_count: usize,
@@ -108,7 +109,9 @@ async fn transfer_snapshot_between_two_replicas_case(
     b_store.db().close().await;
 }
 
-#[proptest]
+// NOTE: Reducing the number of cases otherwise this test is too slow.
+// TODO: Make it faster and increase the cases.
+#[proptest(cases = 8)]
 fn transfer_blocks_between_two_replicas(
     #[strategy(1usize..32)] block_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
@@ -225,10 +228,12 @@ async fn failed_block_same_peer() {
     let mut server_bc = create_server(b_store.index.clone());
     let mut client_cb = create_client(c_store.clone());
 
-    // Run both connections in parallel until C syncs its index (but not blocks) with B
+    // Run both connections in parallel until C syncs its index (but not blocks) with A
     let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
+    let conn_ac = conn_ac.instrument(tracing::info_span!("AC1"));
 
     let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
+    let conn_bc = conn_bc.instrument(tracing::info_span!("BC"));
     pin!(conn_bc);
 
     run_until(
@@ -237,16 +242,17 @@ async fn failed_block_same_peer() {
     )
     .await;
 
-    // Drop and recreate the B-C connection but keep the A-C connection up.
+    // Drop and recreate the A-C connection but keep the B-C connection up.
     drop(server_ac);
     drop(client_ca);
 
     let mut server_ac = create_server(a_store.index.clone());
     let mut client_ca = create_client(c_store.clone());
 
-    // Run the new B-C connection in parallel with the existing A-C connection until all blocks are
+    // Run the new A-C connection in parallel with the existing B-C connection until all blocks are
     // received.
     let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
+    let conn_ac = conn_ac.instrument(tracing::info_span!("AC2"));
 
     run_until(future::join(conn_ac, conn_bc), async {
         for id in snapshot.blocks().keys() {
@@ -256,79 +262,101 @@ async fn failed_block_same_peer() {
     .await;
 }
 
+// This test verifies that when there are two peers that have a particular block, even when one of
+// them drops, we can still succeed in retrieving the block from the remaining peer.
 #[tokio::test]
 async fn failed_block_other_peer() {
-    let mut rng = StdRng::seed_from_u64(0);
+    // This test has a delicate setup phase which might not always succeed (it's not
+    // deterministic) so the setup might need to be repeated multiple times.
+    'main: loop {
+        let mut rng = StdRng::seed_from_u64(0);
 
-    let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
-    let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
+        let write_keys = Keypair::generate(&mut rng);
+        let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
+        let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
+        let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
 
-    let snapshot = Snapshot::generate(&mut rng, 1);
+        // Create the snapshot by A
+        let snapshot = Snapshot::generate(&mut rng, 1);
+        save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
+        receive_blocks(&a_store, &snapshot).await;
 
-    save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store, &snapshot).await;
+        // Sync B with A
+        let mut server_ab = create_server(a_store.index.clone());
+        let mut client_ba = create_client(b_store.clone());
+        simulate_connection_until(&mut server_ab, &mut client_ba, async {
+            for id in snapshot.blocks().keys() {
+                wait_until_block_exists(&b_store.index, id).await;
+            }
+        })
+        .await;
+        drop(server_ab);
+        drop(client_ba);
 
-    save_snapshot(&b_store.index, b_id, &write_keys, &snapshot).await;
-    receive_blocks(&b_store, &snapshot).await;
+        // [A]-(server_ac)---+
+        //                   |
+        //               (client_ca)
+        //                   |
+        //                  [C]
+        //                   |
+        //               (client_cb)
+        //                   |
+        // [B]-(server_bc)---+
 
-    // [A]-(server_ac)---+
-    //                   |
-    //               (client_ca)
-    //                   |
-    //                  [C]
-    //                   |
-    //               (client_cb)
-    //                   |
-    // [B]-(server_bc)---+
+        let mut server_ac = create_server(a_store.index.clone());
+        let mut client_ca = create_client(c_store.clone());
 
-    let mut server_ac = create_server(a_store.index.clone());
-    let mut client_ca = create_client(c_store.clone());
+        let mut server_bc = create_server(b_store.index.clone());
+        let mut client_cb = create_client(c_store.clone());
 
-    let mut server_bc = create_server(b_store.index.clone());
-    let mut client_cb = create_client(c_store.clone());
+        // Run the two connections in parallel until C syncs its index with both A and B.
+        let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
+        let conn_bc = conn_bc.instrument(tracing::info_span!("BC"));
+        let mut conn_bc = Box::pin(conn_bc);
 
-    let conn_bc = simulate_connection(&mut server_bc, &mut client_cb);
-    pin!(conn_bc);
-
-    {
-        // Run the two connections in parallel until C syncs its index with either A or B.
         let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
-        let conn_ac = run_until(
-            conn_ac,
-            wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index),
-        )
-        .fuse();
-        pin!(conn_ac);
+        let conn_ac = conn_ac.instrument(tracing::info_span!("AC"));
 
-        let conn_bc = run_until(
-            &mut conn_bc,
-            wait_until_snapshots_in_sync(&b_store.index, b_id, &c_store.index),
-        );
-        pin!(conn_bc);
+        run_until(future::join(conn_ac, &mut conn_bc), async {
+            wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index).await;
+            wait_until_snapshots_in_sync(&b_store.index, b_id, &c_store.index).await;
+        })
+        .await;
 
-        future::select(&mut conn_ac, conn_bc).await;
+        // Drop the A-C connection so C can't receive any blocks from A anymore.
+        drop(server_ac);
+        drop(client_ca);
 
-        // Make sure C's index is synced with A but don't advance the B-C connection yet so C
-        // doesn't receive any blocks from neither A nor B yet.
-        if !conn_ac.is_terminated() {
-            conn_ac.await;
-        }
-    }
-
-    // Drop the A-C connection so C can't receive any blocks from A anymore.
-    drop(server_ac);
-    drop(client_ca);
-
-    // Continue running the B-C connection and verify C receives the missing blocks from B who is
-    // the only remaining peer at this point.
-    run_until(conn_bc, async {
+        // It might sometimes happen that the block were already received in the previous step
+        // In that case the situation this test is trying to exercise does not occur and we need
+        // to try again.
+        let mut conn = c_store.db().acquire().await.unwrap();
         for id in snapshot.blocks().keys() {
-            wait_until_block_exists(&c_store.index, id).await;
+            if block::exists(&mut conn, id).await.unwrap() {
+                tracing::warn!("test preconditions not met, trying again");
+
+                drop(conn_bc);
+
+                a_store.db().close().await;
+                b_store.db().close().await;
+                c_store.db().close().await;
+
+                continue 'main;
+            }
         }
-    })
-    .await;
+        drop(conn);
+
+        // Continue running the B-C connection and verify C receives the missing blocks from B who is
+        // the only remaining peer at this point.
+        run_until(conn_bc, async {
+            for id in snapshot.blocks().keys() {
+                wait_until_block_exists(&c_store.index, id).await;
+            }
+        })
+        .await;
+
+        break;
+    }
 }
 
 async fn create_store<R: Rng + CryptoRng>(
@@ -439,16 +467,13 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
-    use sqlx::Connection;
-
     let branch = index.get_branch(writer_id).unwrap();
 
     for _ in 0..size {
         create_block(rng, index, &branch, write_keys).await;
     }
 
-    let mut cx = index.pool.acquire().await.unwrap();
-    let mut tx = cx.begin().await.unwrap();
+    let mut tx = index.pool.begin().await.unwrap();
     branch
         .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
         .await
@@ -507,19 +532,14 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
         recv_tx: server_recv_tx,
     };
 
-    let task = async move {
-        select! {
-            biased; // deterministic poll order for repeatable tests
+    select! {
+        biased; // deterministic poll order for repeatable tests
 
-            result = server.run() => result.unwrap(),
-            result = client.run() => result.unwrap(),
-            _ = server_conn.run() => panic!("connection closed prematurely"),
-            _ = client_conn.run() => panic!("connection closed prematurely"),
-        }
-    };
-
-    // HACK: boxing the future prevents stack overflow
-    Box::pin(task).await
+        result = server.run() => result.unwrap(),
+        result = client.run() => result.unwrap(),
+        _ = server_conn.run() => panic!("connection closed prematurely"),
+        _ = client_conn.run() => panic!("connection closed prematurely"),
+    }
 }
 
 // Runs `task` until `until` completes. Panics if `until` doesn't complete before `TIMEOUT` or if

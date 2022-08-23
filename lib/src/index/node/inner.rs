@@ -10,7 +10,7 @@ use crate::{
 use futures_util::{future, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sqlx::{Acquire, Row};
+use sqlx::Row;
 use std::{
     collections::{btree_map, BTreeMap},
     convert::TryInto,
@@ -264,11 +264,9 @@ impl InnerNodeMap {
     }
 
     pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
         for node in self.0.values_mut() {
-            node.inherit_summary(&mut tx).await?;
+            node.inherit_summary(conn).await?;
         }
-        tx.commit().await?;
 
         Ok(())
     }

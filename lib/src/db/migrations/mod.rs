@@ -1,12 +1,9 @@
 use super::{get_pragma, set_pragma, Connection, Error};
-use sqlx::Connection as _;
 
 /// Apply all pending migrations.
 pub(super) async fn run(conn: &mut Connection) -> Result<(), Error> {
     apply(conn, 1, include_str!("v1.sql")).await?;
-
-    // Temporary tables are created last, regardless of the version
-    sqlx::query(include_str!("temp.sql")).execute(conn).await?;
+    apply(conn, 2, include_str!("v2.sql")).await?;
 
     Ok(())
 }
@@ -25,7 +22,7 @@ async fn apply(conn: &mut Connection, dst_version: u32, sql: &str) -> Result<(),
         "migrations must be applied in order"
     );
 
-    sqlx::query(sql).execute(&mut tx).await?;
+    sqlx::query(sql).execute(&mut *tx).await?;
     set_version(&mut tx, dst_version).await?;
 
     tx.commit().await?;

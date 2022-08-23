@@ -132,21 +132,22 @@ impl Eq for VersionVector {}
 
 impl Type<Sqlite> for VersionVector {
     fn type_info() -> SqliteTypeInfo {
-        Vec::<u8>::type_info()
+        <Vec<u8> as Type<Sqlite>>::type_info()
     }
 }
 
 impl<'q> Encode<'q, Sqlite> for VersionVector {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        bincode::serialize(self)
-            .expect("failed to serialize VersionVector for db")
-            .encode_by_ref(args)
+        Encode::<Sqlite>::encode_by_ref(
+            &bincode::serialize(self).expect("failed to serialize VersionVector for db"),
+            args,
+        )
     }
 }
 
 impl<'r> Decode<'r, Sqlite> for VersionVector {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let slice = <&[u8]>::decode(value)?;
+        let slice = <&[u8] as Decode<Sqlite>>::decode(value)?;
         Ok(bincode::deserialize(slice)?)
     }
 }

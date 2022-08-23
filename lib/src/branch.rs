@@ -161,9 +161,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
         let (_base_dir, pool, branch) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
         let dir = branch
-            .ensure_directory_exists(&mut conn, "/".into())
+            .ensure_directory_exists(&mut tx, "/".into())
             .await
             .unwrap();
         assert_eq!(dir.locator(), &Locator::ROOT);
@@ -172,16 +172,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
         let (_base_dir, pool, branch) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
-        let mut root = branch.open_or_create_root(&mut conn).await.unwrap();
+        let mut root = branch.open_or_create_root(&mut tx).await.unwrap();
 
         branch
-            .ensure_directory_exists(&mut conn, Utf8Path::new("/dir"))
+            .ensure_directory_exists(&mut tx, Utf8Path::new("/dir"))
             .await
             .unwrap();
 
-        root.refresh(&mut conn).await.unwrap();
+        root.refresh(&mut tx).await.unwrap();
         let _ = root.lookup("dir").unwrap();
     }
 

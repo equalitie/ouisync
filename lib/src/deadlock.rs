@@ -1,5 +1,6 @@
 //! Utilities for deadlock detection
 
+use crate::debug;
 use backtrace::Backtrace;
 use slab::Slab;
 use std::{
@@ -10,7 +11,6 @@ use std::{
     sync::{Arc, Mutex as BlockingMutex},
     time::Duration,
 };
-use tokio::time;
 
 const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -36,38 +36,6 @@ impl<T> DeadlockGuard<T> {
                 _acquire: acquire,
             }
         }
-    }
-
-    #[track_caller]
-    pub(crate) fn try_wrap<F, E>(
-        inner: F,
-        tracker: DeadlockTracker,
-    ) -> impl Future<Output = Result<Self, E>>
-    where
-        F: Future<Output = Result<T, E>>,
-    {
-        let acquire = tracker.acquire();
-
-        async move {
-            let inner = detect_deadlock(inner, &tracker).await;
-
-            Ok(Self {
-                inner: inner?,
-                _acquire: acquire,
-            })
-        }
-    }
-
-    pub(crate) fn into_inner(self) -> T {
-        self.inner
-    }
-
-    pub(crate) fn as_ref(&self) -> &T {
-        &self.inner
-    }
-
-    pub(crate) fn as_mut(&mut self) -> &mut T {
-        &mut self.inner
     }
 }
 
@@ -165,23 +133,5 @@ async fn detect_deadlock<F>(inner: F, tracker: &DeadlockTracker) -> F::Output
 where
     F: Future,
 {
-    warn_slow(DeadlockMessage(tracker), inner).await
-}
-
-/// Run `fut` into completion but if it takes more than `WARNING_TIMEOUT`, log the given warning
-/// message.
-pub(crate) async fn warn_slow<F, M>(message: M, fut: F) -> F::Output
-where
-    F: Future,
-    M: fmt::Display,
-{
-    tokio::pin!(fut);
-
-    match time::timeout(WARNING_TIMEOUT, &mut fut).await {
-        Ok(output) => output,
-        Err(_) => {
-            tracing::warn!("{}", message);
-            fut.await
-        }
-    }
+    debug::warn_slow(WARNING_TIMEOUT, DeadlockMessage(tracker), inner).await
 }

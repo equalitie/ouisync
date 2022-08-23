@@ -967,7 +967,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::OffsetOutOfRange => libc::EINVAL,
         Error::PermissionDenied => libc::EACCES,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
-        Error::OperationNotSupported => libc::ENOSYS,
+        Error::OperationNotSupported => libc::ENOTSUP,
         Error::RequestTimeout => libc::ETIMEDOUT,
     }
 }

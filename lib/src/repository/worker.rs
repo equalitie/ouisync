@@ -70,6 +70,15 @@ impl WorkerHandle {
         self.oneshot(Command::Collect).await
     }
 
+    pub async fn shutdown(&self) {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::Shutdown(result_tx))
+            .await
+            .unwrap_or(());
+        result_rx.await.unwrap_or(())
+    }
+
     async fn oneshot<F>(&self, command_fn: F) -> Result<()>
     where
         F: FnOnce(oneshot::Sender<Result<()>>) -> Command,
@@ -89,6 +98,7 @@ impl WorkerHandle {
 enum Command {
     Merge(oneshot::Sender<Result<()>>),
     Collect(oneshot::Sender<Result<()>>),
+    Shutdown(oneshot::Sender<()>),
 }
 
 struct Inner {
@@ -115,8 +125,11 @@ impl Inner {
                     }
                     command = command_rx.recv() => {
                         if let Some(command) = command {
-                            self.handle_command(command).await;
-                            continue;
+                            if self.handle_command(command).await {
+                                continue;
+                            } else {
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -146,10 +159,20 @@ impl Inner {
         }
     }
 
-    async fn handle_command(&self, command: Command) {
+    async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::Merge(result_tx) => result_tx.send(self.merge().await).unwrap_or(()),
-            Command::Collect(result_tx) => result_tx.send(self.collect().await).unwrap_or(()),
+            Command::Merge(result_tx) => {
+                result_tx.send(self.merge().await).unwrap_or(());
+                true
+            }
+            Command::Collect(result_tx) => {
+                result_tx.send(self.collect().await).unwrap_or(());
+                true
+            }
+            Command::Shutdown(result_tx) => {
+                result_tx.send(()).unwrap_or(());
+                false
+            }
         }
     }
 
@@ -188,14 +211,13 @@ impl Inner {
 mod merge {
     use super::*;
 
-    #[instrument(level = "trace", name = "merge", skip_all, err)]
+    #[instrument(level = "trace", name = "merge", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
+        let mut conn = shared.store.db().acquire().await?;
         let branches = shared.collect_branches()?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let mut conn = shared.store.db().acquire().await?;
-
             match branch.open_root(&mut conn).await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
@@ -204,7 +226,7 @@ mod merge {
         }
 
         JointDirectory::new(Some(local_branch.clone()), roots)
-            .merge(shared.store.db())
+            .merge(&mut conn)
             .await?;
 
         Ok(())
@@ -215,7 +237,7 @@ mod merge {
 mod prune {
     use super::*;
 
-    #[instrument(level = "trace", name = "prune", skip_all, err)]
+    #[instrument(level = "trace", name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
 
@@ -289,7 +311,7 @@ mod scan {
         }
     }
 
-    #[instrument(level = "trace", name = "scan", skip(shared), err)]
+    #[instrument(level = "trace", name = "scan", skip(shared), err(Debug))]
     pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
         prepare_unreachable_blocks(shared).await?;
         let mode = traverse_root(shared, mode).await?;
@@ -386,7 +408,7 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
+        let mut conn = shared.store.db().begin().await?;
         block::mark_all_unreachable(&mut conn).await
     }
 
