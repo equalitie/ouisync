@@ -168,6 +168,12 @@ impl DropAwaitable {
     }
 }
 
+impl Default for DropAwaitable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for DropAwaitable {
     fn drop(&mut self) {
         self.sender.send(()).unwrap_or(());

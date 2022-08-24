@@ -195,11 +195,19 @@ pub unsafe extern "C" fn repository_subscribe(
     let session = session::get();
     let sender = session.sender();
     let holder = handle.get();
+
     let mut rx = holder.repository.subscribe();
+    let local_branch_id = holder.repository.local_branch().map(|branch| *branch.id());
 
     let handle = session.runtime().spawn(async move {
-        while let Ok(_) | Err(RecvError::Lagged(_)) = rx.recv().await {
-            sender.send(port, ());
+        loop {
+            match rx.recv().await {
+                // Only notify about events from remote branches because any local branch event
+                // must have been triggered by the frontend and so it already knows about it.
+                Ok(branch_id) if Some(branch_id) == local_branch_id => continue,
+                Ok(_) | Err(RecvError::Lagged(_)) => sender.send(port, ()),
+                Err(RecvError::Closed) => break,
+            }
         }
     });
 
