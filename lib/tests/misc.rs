@@ -2,9 +2,10 @@ mod common;
 
 use self::common::{Env, Proto};
 use assert_matches::assert_matches;
+use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore, Error,
-    File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore,
+    EntryType, Error, File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
@@ -558,6 +559,78 @@ async fn transfer_many_files() {
     .unwrap()
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_rename_file() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    repo_b.create_file("foo.txt").await.unwrap();
+
+    // Wait until the file is synced and merged over to the local branch.
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "foo.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    repo_b
+        .move_entry("/", "foo.txt", "/", "bar.txt")
+        .await
+        .unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "bar.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo.txt"))
+        .await
+        .unwrap();
+}
+
+// FIXME: this fails because forked directory version vector are not correctly assigned.
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_rename_directory() {
+    // common::init_log();
+
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    repo_b.create_directory("foo").await.unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "foo", EntryType::Directory),
+    )
+    .await
+    .unwrap();
+
+    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "bar", EntryType::Directory),
+    )
+    .await
+    .unwrap();
+
+    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo"))
+        .await
+        .unwrap();
+}
+
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
@@ -640,6 +713,35 @@ async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
         }
 
         vv_a >= vv_b
+    })
+    .await
+}
+
+async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
+    common::eventually(repo, || async {
+        let result = match entry_type {
+            EntryType::File => repo.open_file(path).await.map(|_| ()),
+            EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
+        };
+
+        match result {
+            Ok(()) => true,
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        }
+    })
+    .await
+}
+
+async fn expect_entry_not_found(repo: &Repository, path: &str) {
+    let path = Utf8Path::new(path);
+    let name = path.file_name().unwrap();
+    let parent = path.parent().unwrap();
+
+    let parent = repo.open_directory(parent).await.unwrap();
+
+    common::eventually(repo, || async {
+        matches!(parent.lookup_unique(name), Err(Error::EntryNotFound))
     })
     .await
 }
