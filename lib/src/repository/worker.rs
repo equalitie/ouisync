@@ -211,7 +211,7 @@ impl Inner {
 mod merge {
     use super::*;
 
-    #[instrument(level = "trace", name = "merge", skip_all, err(Debug))]
+    #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
         let branches = shared.collect_branches()?;
@@ -237,7 +237,7 @@ mod merge {
 mod prune {
     use super::*;
 
-    #[instrument(level = "trace", name = "prune", skip_all, err(Debug))]
+    #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
 
@@ -311,7 +311,7 @@ mod scan {
         }
     }
 
-    #[instrument(level = "trace", name = "scan", skip(shared), err(Debug))]
+    #[instrument(skip(shared), err(Debug))]
     pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
         prepare_unreachable_blocks(shared).await?;
         let mode = traverse_root(shared, mode).await?;

@@ -556,8 +556,9 @@ impl<'a> JointDirectoryRef<'a> {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "failed to open directory '{}' on a remote branch: {:?}",
+                        "failed to open directory '{}' on a remote branch {:?}: {:?}",
                         self.name(),
+                        version.branch().id(),
                         e
                     );
                     return Err(e);

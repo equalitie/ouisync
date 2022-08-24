@@ -919,20 +919,23 @@ async fn version_vector_fork_file() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut tx = repo.db().begin().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
 
-    let mut remote_root = remote_branch.open_or_create_root(&mut tx).await.unwrap();
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
     let mut remote_parent = remote_root
-        .create_directory(&mut tx, "parent".into())
+        .create_directory(&mut conn, "parent".into())
         .await
         .unwrap();
-    let mut file = create_file_in_directory(&mut tx, &mut remote_parent, "foo.txt", &[]).await;
+    let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
 
-    let remote_file_vv = file.version_vector(&mut tx).await.unwrap();
+    let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
-    file.fork(&mut tx, local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
 
-    assert_eq!(file.version_vector(&mut tx).await.unwrap(), remote_file_vv);
+    assert_eq!(
+        file.version_vector(&mut conn).await.unwrap(),
+        remote_file_vv
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

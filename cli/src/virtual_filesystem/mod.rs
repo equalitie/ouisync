@@ -423,7 +423,7 @@ struct Inner {
 }
 
 impl Inner {
-    #[instrument(level = "debug", skip_all, fields(path), err)]
+    #[instrument(skip_all, fields(path), err)]
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
@@ -455,13 +455,13 @@ impl Inner {
         Ok(make_file_attr(inode, entry.entry_type(), len))
     }
 
-    #[instrument(level = "debug", skip(self, inode), fields(path))]
+    #[instrument(skip(self, inode), fields(path))]
     fn forget(&mut self, inode: Inode, lookups: u64) {
         self.record_path(inode, None);
         self.inodes.forget(inode, lookups)
     }
 
-    #[instrument(level = "debug", skip_all, fields(path), err)]
+    #[instrument(skip_all, fields(path), err)]
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         self.record_path(inode, None);
 
@@ -471,7 +471,7 @@ impl Inner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(path), err)]
+    #[instrument(skip_all, fields(path), err)]
     async fn setattr(
         &mut self,
         inode: Inode,
@@ -548,7 +548,7 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::File, file.len().await))
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, %flags), err)]
+    #[instrument(skip_all, fields(path, %flags), err)]
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
         self.record_path(inode, None);
 
@@ -558,7 +558,7 @@ impl Inner {
         Ok(handle)
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, handle, %flags), err)]
+    #[instrument(skip_all, fields(path, handle, %flags), err)]
     fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
         self.record_path(inode, None);
 
@@ -570,7 +570,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, handle, offset), err)]
+    #[instrument(skip_all, fields(path, handle, offset), err)]
     async fn readdir(
         &mut self,
         inode: Inode,
@@ -634,7 +634,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, mode, umask), err)]
+    #[instrument(skip_all, fields(path, mode, umask), err)]
     async fn mkdir(
         &mut self,
         parent: Inode,
@@ -659,7 +659,7 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }
 
-    #[instrument(level = "debug", skip_all, fields(path), err)]
+    #[instrument(skip_all, fields(path), err)]
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
         self.record_path(parent, Some(name));
@@ -668,7 +668,7 @@ impl Inner {
         self.repository.remove_entry(parent_path.join(name)).await
     }
 
-    #[instrument(level = "debug", skip(self, inode), fields(path), err)]
+    #[instrument(skip(self, inode), fields(path), err)]
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
         self.record_path(inode, None);
 
@@ -677,7 +677,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, mode, umask, %flags), err)]
+    #[instrument(skip_all, fields(path, mode, umask, %flags), err)]
     async fn create(
         &mut self,
         parent: Inode,
@@ -708,7 +708,7 @@ impl Inner {
         Ok((attr, handle, 0))
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, %flags), err)]
+    #[instrument(skip_all, fields(path, %flags), err)]
     async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
         self.record_path(inode, None);
 
@@ -732,7 +732,7 @@ impl Inner {
         Ok((handle, 0))
     }
 
-    #[instrument(level = "debug", skip_all, fields(path, handle, %flags, flush), err)]
+    #[instrument(skip_all, fields(path, handle, %flags, flush), err)]
     async fn release(
         &mut self,
         inode: Inode,
@@ -755,7 +755,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, inode, flags), fields(path, %flags), err)]
+    #[instrument(skip(self, inode, flags), fields(path, %flags), err)]
     async fn read(
         &mut self,
         inode: Inode,
@@ -811,7 +811,7 @@ impl Inner {
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 
-    #[instrument(level = "debug", skip(self, inode), fields(path), err)]
+    #[instrument(skip(self, inode), fields(path), err)]
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
         self.record_path(inode, None);
 
@@ -819,7 +819,7 @@ impl Inner {
         self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
-    #[instrument(level = "debug", skip(self, inode), fields(path), err)]
+    #[instrument(skip(self, inode), fields(path), err)]
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
         self.record_path(inode, None);
 
@@ -828,7 +828,7 @@ impl Inner {
         self.entries.get_file_mut(handle)?.flush(&mut conn).await
     }
 
-    #[instrument(level = "debug", skip_all, fields(path), err)]
+    #[instrument(skip_all, fields(path), err)]
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
         self.record_path(parent, Some(name));
@@ -838,7 +838,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip_all, fields(src_path, dst_path, flags), err)]
+    #[instrument(skip_all, fields(src_path, dst_path, flags), err)]
     async fn rename(
         &mut self,
         src_parent: Inode,

@@ -312,7 +312,10 @@ impl Index {
             .lock()
             .unwrap()
             .entry(writer_id)
-            .or_insert_with(|| Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone())))
+            .or_insert_with(|| {
+                tracing::trace!("creating branch {:?}", writer_id);
+                Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
+            })
             .notify();
     }
 

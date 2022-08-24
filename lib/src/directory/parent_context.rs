@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::{Error, OverwriteStrategy};
 use crate::{
     blob::{self, Blob},
@@ -87,8 +89,9 @@ impl ParentContext {
                     return Err(Error::EntryExists);
                 }
 
-                if !(new.version_vector() <= old.version_vector()) {
-                    return Err(Error::EntryExists);
+                match new.version_vector().partial_cmp(old.version_vector()) {
+                    Some(Ordering::Less | Ordering::Equal) => (),
+                    Some(Ordering::Greater) | None => return Err(Error::EntryExists),
                 }
 
                 drop(tx);
