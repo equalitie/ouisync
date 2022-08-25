@@ -160,7 +160,6 @@ impl Client {
     }
 
     #[instrument(
-        level = "trace",
         skip_all,
         fields(
             writer_id = ?proof.writer_id,
@@ -185,7 +184,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()))]
+    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()))]
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
@@ -207,7 +206,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(nodes.hash = ?nodes.hash()))]
+    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()))]
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
@@ -225,7 +224,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(level = "trace", skip_all, fields(id = ?data.id))]
+    #[instrument(skip_all, fields(id = ?data.id))]
     async fn handle_block(
         &mut self,
         data: BlockData,
