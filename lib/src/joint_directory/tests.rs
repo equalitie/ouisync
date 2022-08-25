@@ -896,12 +896,18 @@ async fn merge_concurrent_directories() {
         .unwrap();
     create_file(&mut conn, &mut local_dir, "dog.jpg", &[], &branches[0]).await;
 
+    local_dir.refresh(&mut conn).await.unwrap();
+    let local_dir_vv = local_dir.version_vector(&mut conn).await.unwrap();
+
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_dir = remote_root
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
     create_file(&mut conn, &mut remote_dir, "cat.jpg", &[], &branches[1]).await;
+
+    remote_dir.refresh(&mut conn).await.unwrap();
+    let remote_dir_vv = remote_dir.version_vector(&mut conn).await.unwrap();
 
     JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
         .merge(&mut conn)
@@ -916,11 +922,8 @@ async fn merge_concurrent_directories() {
     assert_eq!(entry.name(), "dir");
     assert_matches!(entry, EntryRef::Directory(_));
 
-    // +(2, 0) for creating local "dir" and "dog.jpg"
-    // +(0, 2) for creating remote "dir" and "cat.jpg"
-    // +(1, 0) for modifying local "dir" when the remote "cat.jpg" is merged into it
-    let expected_vv = vv![*branches[0].id() => 3, *branches[1].id() => 2];
-    assert_eq!(entry.version_vector(), &expected_vv);
+    // version vectors are merged
+    assert_eq!(entry.version_vector(), &local_dir_vv.merged(&remote_dir_vv));
 
     let dir = entry.directory().unwrap().open(&mut conn).await.unwrap();
     assert_eq!(dir.entries().count(), 2);

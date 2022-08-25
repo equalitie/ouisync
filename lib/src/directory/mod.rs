@@ -141,13 +141,24 @@ impl Directory {
         conn: &mut db::Connection,
         name: String,
     ) -> Result<Self> {
+        self.create_directory_with_version_vector_op(conn, name, &VersionVectorOp::IncrementLocal)
+            .await
+    }
+
+    async fn create_directory_with_version_vector_op(
+        &mut self,
+        conn: &mut db::Connection,
+        name: String,
+        op: &VersionVectorOp,
+    ) -> Result<Self> {
         let mut tx = conn.begin().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
-        let version_vector = content
-            .initial_version_vector(&name)
-            .incremented(*self.branch().id());
+
+        let mut version_vector = content.initial_version_vector(&name);
+        op.apply(self.branch().id(), &mut version_vector);
+
         let data = EntryData::directory(blob_id, version_vector);
         let parent =
             ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
@@ -160,8 +171,7 @@ impl Directory {
             .await?;
         self.save(&mut tx, &content, OverwriteStrategy::Remove)
             .await?;
-        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
-            .await?;
+        self.commit(tx, content, op).await?;
 
         Ok(dir)
     }
@@ -283,15 +293,25 @@ impl Directory {
 
         if let Some((parent_dir, entry_name)) = parent {
             let mut parent_dir = parent_dir.fork(conn, local_branch).await?;
+            let vv = self.version_vector(conn).await?;
 
             match parent_dir.lookup(&entry_name) {
-                Ok(EntryRef::Directory(entry)) => entry.open(conn).await,
+                Ok(EntryRef::Directory(entry)) => {
+                    // TODO: bump
+                    entry.open(conn).await
+                }
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
                     Err(Error::EntryIsFile)
                 }
                 Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    parent_dir.create_directory(conn, entry_name).await
+                    parent_dir
+                        .create_directory_with_version_vector_op(
+                            conn,
+                            entry_name,
+                            &VersionVectorOp::Merge(vv),
+                        )
+                        .await
                 }
                 Err(error) => Err(error),
             }

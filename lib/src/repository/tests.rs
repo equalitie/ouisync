@@ -898,7 +898,7 @@ async fn version_vector_recreate_deleted_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn version_vector_fork_file() {
+async fn version_vector_fork() {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
@@ -928,14 +928,29 @@ async fn version_vector_fork_file() {
         .unwrap();
     let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
 
+    remote_parent.refresh(&mut conn).await.unwrap();
+    let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
-    file.fork(&mut conn, local_branch).await.unwrap();
+    file.fork(&mut conn, local_branch.clone()).await.unwrap();
 
     assert_eq!(
         file.version_vector(&mut conn).await.unwrap(),
         remote_file_vv
     );
+
+    let local_parent_vv = local_branch
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("parent")
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    assert_eq!(local_parent_vv, remote_parent_vv,);
+
+    // TODO: modify the file by remote then fork again
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -55,8 +55,7 @@ impl VersionVector {
         *version += 1;
     }
 
-    /// Returns a version vector that is a copy of self but with the version corresponding to
-    /// `writer_id` incremented.
+    /// Returns `self` with the version corresponding to `writer_id` incremented.
     pub fn incremented(mut self, writer_id: PublicKey) -> Self {
         self.increment(writer_id);
         self
@@ -78,6 +77,12 @@ impl VersionVector {
         }
 
         modified
+    }
+
+    /// Returns `self` merged with `other`.
+    pub fn merged(mut self, other: &Self) -> Self {
+        self.merge(other);
+        self
     }
 
     pub fn is_empty(&self) -> bool {
