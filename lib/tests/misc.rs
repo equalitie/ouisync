@@ -595,12 +595,8 @@ async fn remote_rename_file() {
         .unwrap();
 }
 
-// FIXME: this fails because forked directory version vector are not correctly assigned.
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_directory() {
-    // common::init_log();
-
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
