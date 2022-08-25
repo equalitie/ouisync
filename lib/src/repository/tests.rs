@@ -934,12 +934,10 @@ async fn version_vector_fork() {
 
     file.fork(&mut conn, local_branch.clone()).await.unwrap();
 
-    assert_eq!(
-        file.version_vector(&mut conn).await.unwrap(),
-        remote_file_vv
-    );
+    let local_file_vv_0 = file.version_vector(&mut conn).await.unwrap();
+    assert_eq!(local_file_vv_0, remote_file_vv);
 
-    let local_parent_vv = local_branch
+    let local_parent_vv_0 = local_branch
         .open_root(&mut conn)
         .await
         .unwrap()
@@ -948,9 +946,41 @@ async fn version_vector_fork() {
         .version_vector()
         .clone();
 
-    assert_eq!(local_parent_vv, remote_parent_vv,);
+    assert_eq!(local_parent_vv_0, remote_parent_vv);
 
-    // TODO: modify the file by remote then fork again
+    // modify the file and fork again
+    let mut file = remote_parent
+        .lookup("foo.txt")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
+    file.write(&mut conn, b"hello").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    remote_parent.refresh(&mut conn).await.unwrap();
+    let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
+    let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
+
+    file.fork(&mut conn, local_branch.clone()).await.unwrap();
+
+    let local_file_vv_1 = file.version_vector(&mut conn).await.unwrap();
+    assert_eq!(local_file_vv_1, remote_file_vv);
+    assert!(local_file_vv_1 > local_file_vv_0);
+
+    let local_parent_vv_1 = local_branch
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("parent")
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    assert_eq!(local_parent_vv_1, remote_parent_vv);
+    assert!(local_parent_vv_1 > local_parent_vv_0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

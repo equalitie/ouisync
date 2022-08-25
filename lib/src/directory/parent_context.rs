@@ -105,7 +105,7 @@ impl ParentContext {
                         Some(Ordering::Greater) | None => return Err(Error::EntryExists),
                     }
 
-                    tx.rollback().await?;
+                    tx.commit().await?;
 
                     Blob::open(
                         conn,

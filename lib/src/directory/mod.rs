@@ -284,7 +284,7 @@ impl Directory {
 
         let parent = if let Some(parent) = &self.parent {
             let dir = parent.directory(conn, self.branch().clone()).await?;
-            let entry_name = parent.entry_name().to_owned();
+            let entry_name = parent.entry_name();
 
             Some((dir, entry_name))
         } else {
@@ -292,13 +292,14 @@ impl Directory {
         };
 
         if let Some((parent_dir, entry_name)) = parent {
+            let vv = parent_dir.lookup(entry_name)?.version_vector();
             let mut parent_dir = parent_dir.fork(conn, local_branch).await?;
-            let vv = self.version_vector(conn).await?;
 
-            match parent_dir.lookup(&entry_name) {
+            match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    // TODO: bump
-                    entry.open(conn).await
+                    let mut dir = entry.open(conn).await?;
+                    dir.merge_version_vector(conn, vv.clone()).await?;
+                    Ok(dir)
                 }
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
@@ -308,8 +309,8 @@ impl Directory {
                     parent_dir
                         .create_directory_with_version_vector_op(
                             conn,
-                            entry_name,
-                            &VersionVectorOp::Merge(vv),
+                            entry_name.to_owned(),
+                            &VersionVectorOp::Merge(vv.clone()),
                         )
                         .await
                 }
