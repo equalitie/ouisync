@@ -270,8 +270,10 @@ impl Directory {
         Ok(())
     }
 
-    // Forks this directory into the local branch.
-    // TODO: change this method to modify self instead of returning a new instance.
+    // Transfer this directory (but not its content) into the local branch. This effectively
+    // creates an empty directory in the loca branch at the same path as `self`. If the local
+    // directory already exists, it only updates it's version vector and otherwise does nothing.
+    // Note this implicitly forks all the ancestor directories first.
     #[async_recursion]
     pub(crate) async fn fork(
         &self,
@@ -292,13 +294,16 @@ impl Directory {
         };
 
         if let Some((parent_dir, entry_name)) = parent {
-            let vv = parent_dir.lookup(entry_name)?.version_vector();
+            // Because we are transferring only the directory but not its content, we reflect that
+            // by setting its version vector to what the version vector of the source directory was
+            // at the time it was initially created.
+            let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(conn, local_branch).await?;
 
             match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
                     let mut dir = entry.open(conn).await?;
-                    dir.merge_version_vector(conn, vv.clone()).await?;
+                    dir.merge_version_vector(conn, vv).await?;
                     Ok(dir)
                 }
                 Ok(EntryRef::File(_)) => {
@@ -310,7 +315,7 @@ impl Directory {
                         .create_directory_with_version_vector_op(
                             conn,
                             entry_name.to_owned(),
-                            &VersionVectorOp::Merge(vv.clone()),
+                            &VersionVectorOp::Merge(vv),
                         )
                         .await
                 }

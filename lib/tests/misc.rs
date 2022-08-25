@@ -560,6 +560,54 @@ async fn transfer_many_files() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn transfer_directory_with_file() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let mut conn = repo_a.db().acquire().await.unwrap();
+
+    let mut dir = repo_a.create_directory("food").await.unwrap();
+    dir.create_file(&mut conn, "pizza.jpg".into())
+        .await
+        .unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transfer_directory_with_subdirectory() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let mut conn = repo_a.db().acquire().await.unwrap();
+
+    let mut dir0 = repo_a.create_directory("food").await.unwrap();
+    dir0.create_directory(&mut conn, "mediterranean".into())
+        .await
+        .unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_file() {
     let mut env = Env::with_seed(0);
 

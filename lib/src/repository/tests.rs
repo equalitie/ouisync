@@ -946,7 +946,7 @@ async fn version_vector_fork() {
         .version_vector()
         .clone();
 
-    assert_eq!(local_parent_vv_0, remote_parent_vv);
+    assert!(local_parent_vv_0 <= remote_parent_vv);
 
     // modify the file and fork again
     let mut file = remote_parent
@@ -979,7 +979,7 @@ async fn version_vector_fork() {
         .version_vector()
         .clone();
 
-    assert_eq!(local_parent_vv_1, remote_parent_vv);
+    assert!(local_parent_vv_1 <= remote_parent_vv);
     assert!(local_parent_vv_1 > local_parent_vv_0);
 }
 
