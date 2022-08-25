@@ -32,16 +32,10 @@ impl VersionVector {
     }
 
     /// Inserts an entry into this version vector. If the entry already exists, it's overwritten
-    /// only if the new version is higher than the existing version. Returns whether the existing
-    /// version was modified. This operation is idempotent.
-    pub fn insert(&mut self, writer_id: PublicKey, version: u64) -> bool {
+    /// only if the new version is higher than the existing version. This operation is idempotent.
+    pub fn insert(&mut self, writer_id: PublicKey, version: u64) {
         let old = self.0.entry(writer_id).or_insert(0);
-        if version > *old {
-            *old = version;
-            true
-        } else {
-            false
-        }
+        *old = (*old).max(version);
     }
 
     /// Retrieves the version corresponding to the given replica id.
@@ -62,21 +56,13 @@ impl VersionVector {
     }
 
     /// Merge two version vectors into one. The version of each entry in the resulting vector is
-    /// the maximum of the corresponding entries of the input vectors. Returns whether `self` was
-    /// modified.
+    /// the maximum of the corresponding entries of the input vectors.
     ///
-    /// This operation is commutative, associative and idempotent with respect to the "returned"
-    /// `self`. But it is not commutative with respect to the returned value.
-    pub fn merge(&mut self, other: &Self) -> bool {
-        let mut modified = false;
-
+    /// This operation is commutative, associative and idempotent.
+    pub fn merge(&mut self, other: &Self) {
         for (writer_id, version) in &other.0 {
-            if self.insert(*writer_id, *version) {
-                modified = true;
-            }
+            self.insert(*writer_id, *version);
         }
-
-        modified
     }
 
     /// Returns `self` merged with `other`.
