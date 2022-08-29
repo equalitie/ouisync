@@ -174,6 +174,8 @@ async fn transfer_large_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
+    // common::init_log();
+
     let file_sizes = [512 * 1024, 1024];
 
     let mut env = Env::with_seed(0);
@@ -872,10 +874,14 @@ async fn expect_entry_not_found(repo: &Repository, path: &str) {
     let name = path.file_name().unwrap();
     let parent = path.parent().unwrap();
 
-    let parent = repo.open_directory(parent).await.unwrap();
-
     common::eventually(repo, || async {
-        matches!(parent.lookup_unique(name), Err(Error::EntryNotFound))
+        let parent = repo.open_directory(parent).await.unwrap();
+
+        match parent.lookup_unique(name) {
+            Ok(_) => false,
+            Err(Error::EntryNotFound) => true,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        }
     })
     .await
 }
