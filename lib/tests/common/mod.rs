@@ -161,5 +161,7 @@ pub(crate) fn init_log() {
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+        .try_init()
+        // error here most likely means the logger is already initialized. We can ignore that.
+        .ok();
 }

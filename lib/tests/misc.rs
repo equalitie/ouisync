@@ -561,6 +561,8 @@ async fn transfer_many_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_directory_with_file() {
+    // common::init_log();
+
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -644,7 +646,7 @@ async fn remote_rename_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_directory() {
+async fn remote_rename_empty_directory() {
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -671,6 +673,94 @@ async fn remote_rename_directory() {
     .unwrap();
 
     time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_rename_non_empty_directory() {
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let mut dir = repo_b.create_directory("foo").await.unwrap();
+    let mut conn = repo_b.db().acquire().await.unwrap();
+    dir.create_file(&mut conn, "data.txt".into()).await.unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_move_file_to_directory_then_rename_that_directory() {
+    // common::init_log();
+
+    let mut env = Env::with_seed(0);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    repo_b.create_file("data.txt").await.unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "data.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    repo_b.create_directory("archive").await.unwrap();
+    repo_b
+        .move_entry("/", "data.txt", "archive", "data.txt")
+        .await
+        .unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    repo_b
+        .move_entry("/", "archive", "/", "trash")
+        .await
+        .unwrap();
+
+    time::timeout(
+        DEFAULT_TIMEOUT,
+        expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File),
+    )
+    .await
+    .unwrap();
+
+    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "data.txt"))
+        .await
+        .unwrap();
+
+    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "archive"))
         .await
         .unwrap();
 }

@@ -445,17 +445,7 @@ async fn interleaved_flush() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
     let mut tx = repo.db().begin().await.unwrap();
@@ -694,17 +684,7 @@ async fn read_access_different_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
@@ -717,17 +697,7 @@ async fn truncate_forked_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_modify_remote_file() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
@@ -757,17 +727,7 @@ async fn attempt_to_modify_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_create_file() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
 
     let root_vv_0 = {
@@ -830,17 +790,7 @@ async fn version_vector_create_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_deep_hierarchy() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let local_id = *local_branch.id();
 
@@ -870,17 +820,7 @@ async fn version_vector_deep_hierarchy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_recreate_deleted_file() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
 
@@ -899,17 +839,7 @@ async fn version_vector_recreate_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_fork() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
 
@@ -985,17 +915,7 @@ async fn version_vector_fork() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_empty_directory() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let local_id = *local_branch.id();
@@ -1010,18 +930,43 @@ async fn version_vector_empty_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn version_vector_moved_non_empty_directory() {
+    let (_base_dir, repo) = setup().await;
+
+    repo.create_directory("foo").await.unwrap();
+    repo.create_file("foo/stuff.txt").await.unwrap();
+
+    let mut conn = repo.db().acquire().await.unwrap();
+    let vv_0 = repo
+        .local_branch()
+        .unwrap()
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("foo")
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+
+    let vv_1 = repo
+        .local_branch()
+        .unwrap()
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("bar")
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    assert_eq!(vv_1, vv_0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_modify_local() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
     let local_id = *local_branch.id();
@@ -1092,17 +1037,7 @@ async fn file_conflict_modify_local() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
 
@@ -1133,17 +1068,7 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_branch() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        MasterSecret::random(),
-        AccessSecrets::random_write(),
-        false,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.get_or_create_local_branch().await.unwrap();
 
@@ -1175,6 +1100,22 @@ async fn remove_branch() {
 
     // The remote-only file is gone
     assert_matches!(repo.open_file("bar.txt").await, Err(Error::EntryNotFound));
+}
+
+async fn setup() -> (TempDir, Repository) {
+    let base_dir = TempDir::new().unwrap();
+    let repo = Repository::create(
+        base_dir.path().join("repo.db"),
+        rand::random(),
+        MasterSecret::random(),
+        AccessSecrets::random_write(),
+        false,
+        &StateMonitor::make_root(),
+    )
+    .await
+    .unwrap();
+
+    (base_dir, repo)
 }
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {

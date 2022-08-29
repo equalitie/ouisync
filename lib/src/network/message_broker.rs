@@ -49,7 +49,7 @@ impl MessageBroker {
         stream: raw::Stream,
         permit: ConnectionPermit,
     ) -> Self {
-        let span = tracing::debug_span!(
+        let span = tracing::info_span!(
             "message_broker",
             this_runtime_id = ?this_runtime_id.as_public_key(),
             that_runtime_id = ?that_runtime_id.as_public_key()
@@ -84,7 +84,7 @@ impl MessageBroker {
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
     pub fn create_link(&mut self, store: Store) {
-        let span = tracing::debug_span!(parent: &self.span, "link", local_id = %store.local_id);
+        let span = tracing::info_span!(parent: &self.span, "link", local_id = %store.local_id);
         let span_enter = span.enter();
 
         let channel = MessageChannel::from(store.index.repository_id());

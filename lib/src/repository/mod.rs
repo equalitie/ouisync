@@ -443,7 +443,7 @@ impl Repository {
                 // destination version vector must be "happened after" those.
                 dst_joint_dir
                     .merge_entry_version_vectors(dst_name)
-                    .incremented(*local_branch.id())
+                    .merged(src_entry.version_vector())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
