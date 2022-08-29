@@ -241,33 +241,42 @@ mod prune {
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
 
-        let local_id = shared.local_branch().map(|branch| *branch.id());
+        let local_id = &shared.this_writer_id;
         let (uptodate, outdated) =
-            utils::partition_branches(&mut conn, shared.collect_branches()?, local_id.as_ref())
+            utils::partition_branches(&mut conn, shared.store.index.collect_branches(), local_id)
                 .await?;
 
         // Remove outdated branches
         for branch in outdated {
             // Never remove local branch
-            if Some(branch.id()) == local_id.as_ref() {
+            if branch.id() == local_id {
                 continue;
             }
 
-            // Don't remove branches that are in use. We get notified when they stop being used
-            // so we can try again.
-            if branch.is_any_blob_open() {
-                tracing::trace!("not removing outdated branch {:?} - in use", branch.id());
-                continue;
+            match shared.inflate(branch.clone()) {
+                Ok(branch) => {
+                    // Don't remove branches that are in use. We get notified when they stop being
+                    // used so we can try again.
+                    if branch.is_any_blob_open() {
+                        tracing::trace!("not removing outdated branch {:?} - in use", branch.id());
+                        continue;
+                    }
+                }
+                Err(Error::PermissionDenied) => {
+                    // This means we don't have read access. In that case no blobs can be open
+                    // anyway so it's safe to ignore this.
+                }
+                Err(error) => return Err(error),
             }
 
             tracing::trace!("removing outdated branch {:?}", branch.id());
             shared.store.index.remove_branch(branch.id());
-            branch.data().destroy(&mut conn).await?;
+            branch.destroy(&mut conn).await?;
         }
 
         // Remove outdated snapshots
         for branch in uptodate {
-            branch.data().remove_old_snapshots(&mut conn).await?;
+            branch.remove_old_snapshots(&mut conn).await?;
         }
 
         Ok(())
