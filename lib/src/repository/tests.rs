@@ -961,7 +961,44 @@ async fn version_vector_moved_non_empty_directory() {
         .version_vector()
         .clone();
 
-    assert_eq!(vv_1, vv_0);
+    assert!(vv_1 > vv_0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn version_vector_file_moved_over_tombstone() {
+    let (_base_dir, repo) = setup().await;
+    let mut conn = repo.db().acquire().await.unwrap();
+
+    let mut file = repo.create_file("old.txt").await.unwrap();
+    file.write(&mut conn, b"a").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    let vv_0 = file.version_vector(&mut conn).await.unwrap();
+
+    drop(file);
+    repo.remove_entry("old.txt").await.unwrap();
+
+    // The tombstone's vv is the original vv incremented by 1.
+    let branch_id = *repo.local_branch().unwrap().id();
+    let vv_1 = vv_0.incremented(branch_id);
+
+    repo.create_file("new.txt").await.unwrap();
+    repo.move_entry("/", "new.txt", "/", "old.txt")
+        .await
+        .unwrap();
+
+    let vv_2 = repo
+        .local_branch()
+        .unwrap()
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("old.txt")
+        .unwrap()
+        .version_vector()
+        .clone();
+
+    assert!(vv_2 > vv_1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

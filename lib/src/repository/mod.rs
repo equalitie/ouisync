@@ -444,6 +444,7 @@ impl Repository {
                 dst_joint_dir
                     .merge_entry_version_vectors(dst_name)
                     .merged(src_entry.version_vector())
+                    .incremented(*local_branch.id())
             }
             Ok(_) => return Err(Error::EntryExists),
             Err(e) => return Err(e),
