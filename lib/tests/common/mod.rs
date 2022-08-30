@@ -1,6 +1,7 @@
 use ouisync::{
     network::{Network, NetworkOptions},
-    AccessSecrets, ConfigStore, MasterSecret, PeerAddr, Repository, StateMonitor,
+    AccessSecrets, BranchChangedReceiver, ConfigStore, MasterSecret, PeerAddr, Repository,
+    StateMonitor,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -148,10 +149,14 @@ where
             break;
         }
 
-        match rx.recv().await {
-            Ok(_) | Err(RecvError::Lagged(_)) => (),
-            Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
-        }
+        wait(&mut rx).await;
+    }
+}
+
+pub(crate) async fn wait(rx: &mut BranchChangedReceiver) {
+    match rx.recv().await {
+        Ok(_) | Err(RecvError::Lagged(_)) => (),
+        Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
     }
 }
 
