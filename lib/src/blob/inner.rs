@@ -23,6 +23,12 @@ pub(super) struct Unique {
     pub len_dirty: bool,
 }
 
+impl Unique {
+    pub fn locator_at(&self, number: u32) -> Locator {
+        self.head_locator.nth(number)
+    }
+}
+
 // State shared among multiple instances of the same blob.
 pub(crate) struct Shared {
     pub(super) len: u64,
@@ -42,8 +48,8 @@ impl Shared {
         }
     }
 
-    pub fn deep_clone(&self) -> Self {
-        Self::new(self.len, self.event_tx.clone())
+    pub fn deep_clone(&self, len: u64) -> Self {
+        Self::new(len, self.event_tx.clone())
     }
 
     pub fn into_locked(self) -> Arc<Mutex<Self>> {

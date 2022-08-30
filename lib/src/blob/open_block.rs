@@ -66,6 +66,24 @@ impl Buffer {
     pub fn new() -> Self {
         Self(vec![0; BLOCK_SIZE].into_boxed_slice())
     }
+
+    // Read data from `offset` of the buffer into a fixed-length array.
+    //
+    // # Panics
+    //
+    // Panics if the remaining length after `offset` is less than `N`.
+    pub fn read_array<const N: usize>(&self, offset: usize) -> [u8; N] {
+        self[offset..offset + N].try_into().unwrap()
+    }
+
+    // Read data from `offset` of the buffer into a `u64`.
+    //
+    // # Panics
+    //
+    // Panics if the remaining length after `offset` is less than `size_of::<u64>()`
+    pub fn read_u64(&self, offset: usize) -> u64 {
+        u64::from_le_bytes(self.read_array(offset))
+    }
 }
 
 // Scramble the buffer on drop to prevent leaving decrypted data in memory past the buffer
@@ -118,7 +136,7 @@ impl Cursor {
     //
     // Panics if the remaining length is less than `N`.
     fn read_array<const N: usize>(&mut self) -> [u8; N] {
-        let array = self.buffer[self.pos..self.pos + N].try_into().unwrap();
+        let array = self.buffer.read_array(self.pos);
         self.pos += N;
         array
     }

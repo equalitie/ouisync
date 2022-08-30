@@ -282,6 +282,108 @@ async fn sync_during_file_write() {
     .unwrap();
 }
 
+// Test that merge is not affected by files from remote branches being open while it's ongoing.
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_during_file_read() {
+    // common::init_log();
+
+    let mut env = Env::with_seed(0);
+
+    let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
+    env.rng.fill(&mut content_a[..]);
+
+    let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
+
+    loop {
+        let (repo_a, repo_b) = env.create_linked_repos().await;
+
+        // A: create an initially empty file
+        let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
+        let branch_id_a = *file_a.branch().id();
+
+        // B: Establish the link and wait until the file gets synced but not merged.
+        let reg_a = network_a.handle().register(repo_a.store().clone());
+        let reg_b = network_b.handle().register(repo_b.store().clone());
+
+        let mut file_b = None;
+        let mut tx = repo_b.subscribe();
+
+        time::timeout(DEFAULT_TIMEOUT, async {
+            loop {
+                match repo_b.open_file("foo.txt").await {
+                    Ok(file) => {
+                        // Only use the file if it's still in the remote branch, otherwise the test
+                        // preconditions are not met and we need to restart the test.
+                        if file.branch().id() == &branch_id_a {
+                            file_b = Some(file);
+                        }
+
+                        break;
+                    }
+                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                        common::wait(&mut tx).await
+                    }
+                    Err(error) => panic!("unexpected error: {:?}", error),
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        let file_b = if let Some(file) = file_b {
+            file
+        } else {
+            // File was already forked which breaks the preconditions of this test. Need to try
+            // again.
+            // TODO: a better way would be to initially somehow pause B's merger and resume it
+            // after the file is opened.
+
+            tracing::warn!("precondition failed, trying again");
+
+            drop(reg_a);
+            drop(reg_b);
+
+            repo_a.close().await;
+            repo_b.close().await;
+
+            continue;
+        };
+
+        // B: Keep the file open
+
+        // A: write at least two blocks worth of data to the file
+        let mut conn = repo_a.db().acquire().await.unwrap();
+        write_in_chunks(&mut conn, &mut file_a, &content_a, 4096).await;
+        file_a.flush(&mut conn).await.unwrap();
+
+        // B: Wait until we are synced with A, still keeping the file open
+        time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
+            .await
+            .unwrap();
+
+        // B: Drop and reopen the file and verify that the fact we held the file open did not
+        // interfere with the merging and that the file is now identical to A's file.
+        drop(file_b);
+
+        let branch_id_b = *repo_b.local_branch().unwrap().id();
+        let mut file_b = repo_b
+            .open_file_version("foo.txt", &branch_id_b)
+            .await
+            .unwrap();
+
+        assert_eq!(file_b.len().await, content_a.len() as u64);
+
+        let content_b = file_b
+            .read_to_end(&mut repo_b.db().acquire().await.unwrap())
+            .await
+            .unwrap();
+
+        assert!(content_b == content_a);
+
+        break;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
@@ -791,6 +893,8 @@ async fn check_file_version_content(
     branch_id: Option<&PublicKey>,
     expected_content: &[u8],
 ) -> bool {
+    tracing::debug!(path, "opening");
+
     let result = if let Some(branch_id) = branch_id {
         repo.open_file_version(path, branch_id).await
     } else {
@@ -803,9 +907,14 @@ async fn check_file_version_content(
         // and so the file entry is not in it yet.
         //
         // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::debug!(path, ?error, "open failed");
+            return false;
+        }
         Err(error) => panic!("unexpected error: {:?}", error),
     };
+
+    tracing::debug!(path, "opened");
 
     let actual_content = match read_in_chunks(repo.db(), &mut file, 4096).await {
         Ok(content) => content,
@@ -819,11 +928,20 @@ async fn check_file_version_content(
         // block gets downloaded). This should probably be considered a bug.
         //
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::debug!(path, ?error, "read failed");
+            return false;
+        }
         Err(error) => panic!("unexpected error: {:?}", error),
     };
 
-    actual_content == expected_content
+    if actual_content == expected_content {
+        tracing::debug!(path, "content matches");
+        true
+    } else {
+        tracing::debug!(path, "content does not match");
+        false
+    }
 }
 
 // Wait until A is in sync with B, that is: both repos have local branches, they have non-empty

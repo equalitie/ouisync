@@ -163,7 +163,7 @@ impl<'a> Operations<'a> {
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
         if block_number != self.unique.current_block.locator.number() {
-            let locator = self.locator_at(block_number);
+            let locator = self.unique.locator_at(block_number);
 
             let (id, content) = read_block(
                 conn,
@@ -296,52 +296,7 @@ impl<'a> Operations<'a> {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.unique.len_dirty {
-            return Ok(());
-        }
-
-        let read_key = self.unique.branch.keys().read();
-        let write_keys = self
-            .unique
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
-
-        if self.unique.current_block.locator.number() == 0 {
-            let old_pos = self.unique.current_block.content.pos;
-            self.unique.current_block.content.pos = 0;
-            self.unique.current_block.content.write_u64(self.shared.len);
-            self.unique.current_block.content.pos = old_pos;
-            self.unique.current_block.dirty = true;
-        } else {
-            let locator = self.locator_at(0);
-            let (_, buffer) = read_block(
-                tx,
-                self.unique.branch.data(),
-                self.unique.branch.keys().read(),
-                &locator,
-            )
-            .await?;
-
-            let mut cursor = Cursor::new(buffer);
-            cursor.pos = 0;
-            cursor.write_u64(self.shared.len);
-
-            write_block(
-                tx,
-                self.unique.branch.data(),
-                read_key,
-                write_keys,
-                &locator,
-                cursor.buffer,
-            )
-            .await?;
-        }
-
-        self.unique.len_dirty = false;
-
-        Ok(())
+        write_len(tx, self.unique, self.shared.len).await
     }
 
     // Returns the current seek position from the start of the blob.
@@ -350,10 +305,71 @@ impl<'a> Operations<'a> {
             + self.unique.current_block.content.pos as u64
             - HEADER_SIZE as u64
     }
+}
 
-    fn locator_at(&self, number: u32) -> Locator {
-        self.unique.head_locator.nth(number)
+pub(super) async fn read_len(conn: &mut db::Connection, unique: &Unique) -> Result<u64> {
+    if unique.current_block.locator.number() == 0 {
+        Ok(unique.current_block.content.buffer.read_u64(0))
+    } else {
+        let locator = unique.locator_at(0);
+        let (_, buffer) = read_block(
+            conn,
+            unique.branch.data(),
+            unique.branch.keys().read(),
+            &locator,
+        )
+        .await?;
+
+        Ok(buffer.read_u64(0))
     }
+}
+
+async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique, len: u64) -> Result<()> {
+    if !unique.len_dirty {
+        return Ok(());
+    }
+
+    let read_key = unique.branch.keys().read();
+    let write_keys = unique
+        .branch
+        .keys()
+        .write()
+        .ok_or(Error::PermissionDenied)?;
+
+    if unique.current_block.locator.number() == 0 {
+        let old_pos = unique.current_block.content.pos;
+        unique.current_block.content.pos = 0;
+        unique.current_block.content.write_u64(len);
+        unique.current_block.content.pos = old_pos;
+        unique.current_block.dirty = true;
+    } else {
+        let locator = unique.locator_at(0);
+        let (_, buffer) = read_block(
+            tx,
+            unique.branch.data(),
+            unique.branch.keys().read(),
+            &locator,
+        )
+        .await?;
+
+        let mut cursor = Cursor::new(buffer);
+        cursor.pos = 0;
+        cursor.write_u64(len);
+
+        write_block(
+            tx,
+            unique.branch.data(),
+            read_key,
+            write_keys,
+            &locator,
+            cursor.buffer,
+        )
+        .await?;
+    }
+
+    unique.len_dirty = false;
+
+    Ok(())
 }
 
 async fn read_block(
