@@ -282,9 +282,6 @@ async fn sync_during_file_write() {
     .unwrap();
 }
 
-// FIXME: this fails because `Blob::try_fork` uses the cached blob length from the `Shared` state
-// which is not properly invalidated when the file is updated by the remote replica and then synced.
-#[ignore]
 // Test that merge is not affected by files from remote branches being open while it's ongoing.
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_read() {
@@ -896,6 +893,8 @@ async fn check_file_version_content(
     branch_id: Option<&PublicKey>,
     expected_content: &[u8],
 ) -> bool {
+    tracing::debug!(path, "opening");
+
     let result = if let Some(branch_id) = branch_id {
         repo.open_file_version(path, branch_id).await
     } else {
@@ -908,9 +907,14 @@ async fn check_file_version_content(
         // and so the file entry is not in it yet.
         //
         // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::debug!(path, ?error, "open failed");
+            return false;
+        }
         Err(error) => panic!("unexpected error: {:?}", error),
     };
+
+    tracing::debug!(path, "opened");
 
     let actual_content = match read_in_chunks(repo.db(), &mut file, 4096).await {
         Ok(content) => content,
@@ -924,11 +928,20 @@ async fn check_file_version_content(
         // block gets downloaded). This should probably be considered a bug.
         //
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => return false,
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::debug!(path, ?error, "read failed");
+            return false;
+        }
         Err(error) => panic!("unexpected error: {:?}", error),
     };
 
-    actual_content == expected_content
+    if actual_content == expected_content {
+        tracing::debug!(path, "content matches");
+        true
+    } else {
+        tracing::debug!(path, "content does not match");
+        false
+    }
 }
 
 // Wait until A is in sync with B, that is: both repos have local branches, they have non-empty
