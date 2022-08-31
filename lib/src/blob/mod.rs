@@ -72,18 +72,14 @@ impl Blob {
         branch: &Branch,
         head_locator: Locator,
     ) -> Result<()> {
-        // TODO: we only need the first 8 bytes of the block, no need to read it all.
-        let mut current_block = OpenBlock::open_head(conn, branch, head_locator).await?;
-        let len = current_block.content.read_u64();
-        let block_count = inner::block_count(len);
-
         let mut tx = conn.begin().await?;
-        operations::remove_blocks(
-            &mut tx,
-            branch,
-            head_locator.sequence().take(block_count as usize),
-        )
-        .await?;
+        match operations::remove_blocks(&mut tx, branch, head_locator.sequence()).await {
+            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
+            // we should never get `Ok` because the locator sequence we are passing to
+            // `remove_blocks` is unbounded).
+            Ok(()) | Err(Error::EntryNotFound) => (),
+            Err(error) => return Err(error),
+        }
         tx.commit().await?;
 
         Ok(())

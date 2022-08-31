@@ -201,7 +201,8 @@ fn concurrent_read_and_delete_file() {
             Ok(_) => Err(format_err!("file should not exist: '{}'", file_name)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
-        })
+        });
+        b
     });
 
     let _a = a_handle.join().unwrap();
