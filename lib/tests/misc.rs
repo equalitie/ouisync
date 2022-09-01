@@ -366,19 +366,12 @@ async fn sync_during_file_read() {
         drop(file_b);
 
         let branch_id_b = *repo_b.local_branch().unwrap().id();
-        let mut file_b = repo_b
-            .open_file_version("foo.txt", &branch_id_b)
-            .await
-            .unwrap();
-
-        assert_eq!(file_b.len().await, content_a.len() as u64);
-
-        let content_b = file_b
-            .read_to_end(&mut repo_b.db().acquire().await.unwrap())
-            .await
-            .unwrap();
-
-        assert!(content_b == content_a);
+        time::timeout(
+            DEFAULT_TIMEOUT,
+            expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a),
+        )
+        .await
+        .unwrap();
 
         break;
     }
