@@ -171,9 +171,16 @@ pub(crate) async fn wait(rx: &mut BranchChangedReceiver) {
 }
 
 fn init_log() {
+    use tracing::metadata::LevelFilter;
+
     tracing_subscriber::fmt()
         .pretty()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        )
         .try_init()
         // error here most likely means the logger is already initialized. We can ignore that.
         .ok();
