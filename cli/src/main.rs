@@ -12,6 +12,7 @@ use std::{
     io,
 };
 use tokio::{fs::File, io::AsyncWriteExt};
+use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 pub(crate) const APP_NAME: &str = "ouisync";
@@ -204,9 +205,12 @@ async fn terminated() -> io::Result<()> {
 fn init_log() {
     tracing_subscriber::fmt()
         .pretty() // enable pretty log output (more readable but also more verbose)
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        )
         .with_file(true)
         .with_line_number(true)
-        .with_target(false)
         .init();
 }

@@ -69,8 +69,6 @@ impl BranchData {
 
         tx.commit().await?;
 
-        self.notify();
-
         Ok(())
     }
 
