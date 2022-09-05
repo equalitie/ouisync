@@ -9,9 +9,12 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
     thread,
+    time::Duration,
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast::error::RecvError;
+
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Test environment
 pub(crate) struct Env {

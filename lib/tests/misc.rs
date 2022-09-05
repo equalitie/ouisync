@@ -1,6 +1,6 @@
 mod common;
 
-use self::common::{Env, Proto};
+use self::common::{Env, Proto, DEFAULT_TIMEOUT};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
@@ -11,8 +11,6 @@ use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{task, time};
 use tracing::{Instrument, Span};
-
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
