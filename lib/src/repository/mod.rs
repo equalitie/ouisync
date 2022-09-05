@@ -50,7 +50,7 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    #[instrument(level = "info", skip_all, fields(store = ?store.as_ref()), err)]
+    #[instrument(skip_all, fields(store = ?store.as_ref()), err)]
     pub async fn create(
         store: impl AsRef<Path>,
         device_id: DeviceId,
@@ -124,7 +124,7 @@ impl Repository {
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
     /// access mode the repository was created with.
-    #[instrument(level = "info", skip_all, fields(store = ?store.as_ref(), ?max_access_mode), err)]
+    #[instrument(skip_all, fields(store = ?store.as_ref(), ?max_access_mode), err)]
     pub async fn open_with_mode(
         store: impl AsRef<Path>,
         device_id: DeviceId,
@@ -229,7 +229,7 @@ impl Repository {
         });
 
         let local_id = LocalId::new();
-        tracing::info!(%local_id);
+        tracing::debug!(%local_id);
 
         let store = Store {
             monitored: Arc::downgrade(&monitored),
@@ -256,12 +256,11 @@ impl Repository {
             None
         };
 
-        let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        let worker_span =
-            tracing::debug_span!(parent: None, "worker", local_id = %shared.store.local_id);
-        task::spawn(worker.run().instrument(worker_span));
+        let background_span = tracing::debug_span!("background", local_id = %shared.store.local_id);
 
-        task::spawn(report_sync_progress(shared.store.clone()));
+        let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
+        task::spawn(worker.run().instrument(background_span.clone()));
+        task::spawn(report_sync_progress(shared.store.clone()).instrument(background_span));
 
         Ok(Self {
             shared,
@@ -750,11 +749,7 @@ async fn report_sync_progress(store: Store) {
         let next_progress = match store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
-                tracing::error!(
-                    local_id = %store.local_id,
-                    "failed to retrieve sync progress: {:?}",
-                    error
-                );
+                tracing::error!("failed to retrieve sync progress: {:?}", error);
                 continue;
             }
         };
@@ -762,7 +757,6 @@ async fn report_sync_progress(store: Store) {
         if next_progress != prev_progress {
             prev_progress = next_progress;
             tracing::debug!(
-                repo = %store.local_id,
                 "sync progress: {} bytes ({:.1})",
                 prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()

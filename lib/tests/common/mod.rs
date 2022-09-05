@@ -8,6 +8,7 @@ use std::{
     future::Future,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
+    thread,
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast::error::RecvError;
@@ -17,6 +18,7 @@ pub(crate) struct Env {
     pub rng: StdRng,
     base_dir: TempDir,
     next_repo_num: u64,
+    _span: tracing::span::EnteredSpan,
 }
 
 impl Env {
@@ -25,11 +27,16 @@ impl Env {
     }
 
     pub fn with_rng(rng: StdRng) -> Self {
+        init_log();
+
+        let span = tracing::info_span!("test", name = thread::current().name()).entered();
         let base_dir = TempDir::new().unwrap();
+
         Self {
             rng,
             base_dir,
             next_repo_num: 0,
+            _span: span,
         }
     }
 
@@ -160,9 +167,7 @@ pub(crate) async fn wait(rx: &mut BranchChangedReceiver) {
     }
 }
 
-// For debugging
-#[allow(unused)]
-pub(crate) fn init_log() {
+fn init_log() {
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
