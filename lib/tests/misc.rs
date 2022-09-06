@@ -1,6 +1,6 @@
 mod common;
 
-use self::common::{Env, Proto};
+use self::common::{Env, Proto, DEFAULT_TIMEOUT};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
@@ -10,8 +10,7 @@ use ouisync::{
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{task, time};
-
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+use tracing::{Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
@@ -174,11 +173,8 @@ async fn transfer_large_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
-    // common::init_log();
-
-    let file_sizes = [512 * 1024, 1024];
-
     let mut env = Env::with_seed(0);
+    let file_sizes = [512 * 1024, 1024];
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -285,8 +281,6 @@ async fn sync_during_file_write() {
 // Test that merge is not affected by files from remote branches being open while it's ongoing.
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_read() {
-    // common::init_log();
-
     let mut env = Env::with_seed(0);
 
     let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
@@ -458,8 +452,6 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
-    // common::init_log();
-
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -624,29 +616,33 @@ async fn transfer_many_files() {
                 // println!("put {}/{}", index + 1, contents.len());
             }
         }
+        .instrument(Span::current())
     });
 
-    let task_b = task::spawn(async move {
-        common::eventually(&repo_b, || async {
-            for (index, content) in contents.iter().enumerate() {
-                if !check_file_version_content(
-                    &repo_b,
-                    &format!("file-{}.dat", index),
-                    None,
-                    content,
-                )
-                .await
-                {
-                    return false;
+    let task_b = task::spawn(
+        async move {
+            common::eventually(&repo_b, || async {
+                for (index, content) in contents.iter().enumerate() {
+                    if !check_file_version_content(
+                        &repo_b,
+                        &format!("file-{}.dat", index),
+                        None,
+                        content,
+                    )
+                    .await
+                    {
+                        return false;
+                    }
+
+                    // println!("get {}/{}", index + 1, contents.len());
                 }
 
-                // println!("get {}/{}", index + 1, contents.len());
-            }
-
-            true
-        })
-        .await
-    });
+                true
+            })
+            .await
+        }
+        .instrument(Span::current()),
+    );
 
     time::timeout(Duration::from_secs(30), async move {
         task_a.await.unwrap();
@@ -658,8 +654,6 @@ async fn transfer_many_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_directory_with_file() {
-    // common::init_log();
-
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -810,8 +804,6 @@ async fn remote_rename_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
-    // common::init_log();
-
     let mut env = Env::with_seed(0);
 
     let (network_a, network_b) = common::create_connected_peers(Proto::Tcp).await;
@@ -876,6 +868,7 @@ async fn expect_file_version_content(
 ) {
     common::eventually(repo, || {
         check_file_version_content(repo, path, branch_id, expected_content)
+            .instrument(Span::current())
     })
     .await
 }

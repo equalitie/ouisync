@@ -239,17 +239,23 @@ mod prune {
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
+        // To prevent race conditions, the partitioning and the subsequent removal need to run in
+        // the same db transaction.
+        let mut tx = shared.store.db().begin().await?;
 
-        let local_id = &shared.this_writer_id;
-        let (uptodate, outdated) =
-            utils::partition_branches(&mut conn, shared.store.index.collect_branches(), local_id)
-                .await?;
+        let (uptodate, outdated) = utils::partition_branches(
+            &mut tx,
+            shared.store.index.collect_branches(),
+            &shared.this_writer_id,
+        )
+        .await?;
+
+        let mut removed = Vec::new();
 
         // Remove outdated branches
         for branch in outdated {
             // Never remove local branch
-            if branch.id() == local_id {
+            if branch.id() == &shared.this_writer_id {
                 continue;
             }
 
@@ -271,12 +277,22 @@ mod prune {
 
             tracing::trace!("removing outdated branch {:?}", branch.id());
             shared.store.index.remove_branch(branch.id());
-            branch.destroy(&mut conn).await?;
+            branch.destroy(&mut tx).await?;
+            removed.push(branch);
         }
 
         // Remove outdated snapshots
         for branch in uptodate {
-            branch.remove_old_snapshots(&mut conn).await?;
+            branch.remove_old_snapshots(&mut tx).await?;
+        }
+
+        tx.commit().await?;
+
+        // TODO: is this notification necessary? There are currently some tests which rely on it
+        // but it doesn't seem to serve any purpose in the production code. We should probably
+        // rewrite those tests so they don't need this.
+        for branch in removed {
+            branch.notify()
         }
 
         Ok(())

@@ -165,12 +165,10 @@ impl Index {
             let hash = proof.hash;
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
-                Ok(_) => self.update_summaries(&mut tx, hash).await?,
+                Ok(_) => self.update_summaries(tx, hash).await?,
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }
-
-            tx.commit().await?;
 
             Ok(true)
         } else {
@@ -197,9 +195,7 @@ impl Index {
         let mut nodes = nodes.into_inner().into_incomplete();
         nodes.inherit_summaries(&mut tx).await?;
         nodes.save(&mut tx, &parent_hash).await?;
-        self.update_summaries(&mut tx, parent_hash).await?;
-
-        tx.commit().await?;
+        self.update_summaries(tx, parent_hash).await?;
 
         Ok(updated)
     }
@@ -226,9 +222,7 @@ impl Index {
             .into_missing()
             .save(&mut tx, &parent_hash)
             .await?;
-        self.update_summaries(&mut tx, parent_hash).await?;
-
-        tx.commit().await?;
+        self.update_summaries(tx, parent_hash).await?;
 
         Ok(updated)
     }
@@ -292,21 +286,27 @@ impl Index {
             .filter(move |node| local_nodes.is_missing(node.locator())))
     }
 
-    // Updates summaries of the specified nodes and all their ancestors, notifies the affected
-    // branches that became complete (wasn't before the update but became after it).
-    async fn update_summaries(&self, tx: &mut db::Transaction<'_>, hash: Hash) -> Result<()> {
-        let statuses = node::update_summaries(tx, hash).await?;
+    // Updates summaries of the specified nodes and all their ancestors, commits the transaction
+    // and notifies the affected branches that became complete (wasn't before the update but became
+    // after it).
+    async fn update_summaries(&self, mut tx: db::Transaction<'_>, hash: Hash) -> Result<()> {
+        let statuses = node::update_summaries(&mut tx, hash).await?;
+        let completed: Vec<_> = statuses
+            .into_iter()
+            .filter(|(_, complete)| *complete)
+            .map(|(writer_id, _)| self.ensure_branch_exists(writer_id))
+            .collect();
 
-        for (id, complete) in statuses {
-            if complete {
-                self.update_root_node(id);
-            }
+        tx.commit().await?;
+
+        for branch in completed {
+            branch.notify();
         }
 
         Ok(())
     }
 
-    fn update_root_node(&self, writer_id: PublicKey) {
+    fn ensure_branch_exists(&self, writer_id: PublicKey) -> Arc<BranchData> {
         self.shared
             .branches
             .lock()
@@ -316,7 +316,7 @@ impl Index {
                 tracing::trace!("creating branch {:?}", writer_id);
                 Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
             })
-            .notify();
+            .clone()
     }
 
     async fn check_parent_node_exists(

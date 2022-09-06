@@ -69,7 +69,7 @@ use tokio::{
     sync::mpsc,
     task, time,
 };
-use tracing::{field, instrument, Span};
+use tracing::{field, instrument, Instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -255,13 +255,13 @@ impl Network {
         // The spawned task gets destroyed once dht_peer_found_tx is destroyed.
         task::spawn({
             let weak = Arc::downgrade(&inner);
-            async move {
+            instrument_task(async move {
                 while let Some(seen_peer) = dht_peer_found_rx.recv().await {
                     if let Some(inner) = weak.upgrade() {
                         inner.spawn(inner.clone().handle_peer_found(seen_peer, PeerSource::Dht));
                     }
                 }
-            }
+            })
         });
 
         for listener in [tcp_listener_v4, tcp_listener_v6].into_iter().flatten() {
@@ -274,6 +274,7 @@ impl Network {
 
         inner
             .enable_local_discovery(!options.disable_local_discovery)
+            .instrument(Span::current())
             .await;
 
         for peer in &options.peers {
@@ -580,7 +581,9 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            *local_discovery = Some(scoped_task::spawn(self.clone().run_local_discovery(port)));
+            *local_discovery = Some(scoped_task::spawn(instrument_task(
+                self.clone().run_local_discovery(port),
+            )));
         } else {
             tracing::error!(
                 "Failed to enable local discovery because we don't have an IPv4 listener"
@@ -972,7 +975,11 @@ impl Inner {
     {
         // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
         // upgraded?
-        self.tasks.upgrade().unwrap().other.spawn(f)
+        self.tasks
+            .upgrade()
+            .unwrap()
+            .other
+            .spawn(instrument_task(f))
     }
 }
 
@@ -1074,4 +1081,11 @@ impl btdht::SocketTrait for quic::SideChannel {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         self.local_addr()
     }
+}
+
+fn instrument_task<F>(task: F) -> tracing::instrument::Instrumented<F>
+where
+    F: Future,
+{
+    task.instrument(tracing::info_span!("spawn"))
 }
