@@ -64,11 +64,8 @@ impl Index {
         &self.shared.repository_id
     }
 
-    pub fn get_branch(&self, writer_id: &PublicKey) -> Option<Arc<BranchData>> {
-        Some(Arc::new(BranchData::new(
-            *writer_id,
-            self.shared.notify_tx.clone(),
-        )))
+    pub fn get_branch(&self, writer_id: PublicKey) -> Arc<BranchData> {
+        Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
     }
 
     #[cfg(test)]
@@ -318,7 +315,7 @@ impl Index {
         let completed: Vec<_> = statuses
             .into_iter()
             .filter(|(_, complete)| *complete)
-            .filter_map(|(writer_id, _)| self.get_branch(&writer_id))
+            .map(|(writer_id, _)| self.get_branch(writer_id))
             .collect();
 
         for branch in completed {

@@ -461,7 +461,7 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
-    let branch = index.get_branch(writer_id).unwrap();
+    let branch = index.get_branch(*writer_id);
 
     for _ in 0..size {
         create_block(rng, index, &branch, write_keys).await;

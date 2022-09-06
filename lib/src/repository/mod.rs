@@ -681,10 +681,8 @@ struct Shared {
 
 impl Shared {
     pub fn local_branch(&self) -> Option<Branch> {
-        self.store
-            .index
-            .get_branch(&self.this_writer_id)
-            .and_then(|data| self.inflate(data).ok())
+        let data = self.store.index.get_branch(self.this_writer_id);
+        self.inflate(data).ok()
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {

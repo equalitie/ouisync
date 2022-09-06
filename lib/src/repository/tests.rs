@@ -1127,8 +1127,7 @@ async fn remove_branch() {
     repo.shared
         .store
         .index
-        .get_branch(&remote_id)
-        .unwrap()
+        .get_branch(remote_id)
         .destroy(&mut conn)
         .await
         .unwrap();
