@@ -233,7 +233,11 @@ async fn receive_root_node_with_existing_hash() {
     tx.commit().await.unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = local_branch.load_root(&mut conn).await.unwrap();
+    let root = local_branch
+        .load_snapshot(&mut conn)
+        .await
+        .unwrap()
+        .root_node;
     drop(conn);
 
     assert!(root.summary.is_complete());
@@ -250,9 +254,10 @@ async fn receive_root_node_with_existing_hash() {
 
     let mut conn = index.pool.acquire().await.unwrap();
     assert!(local_branch
-        .load_root(&mut conn)
+        .load_snapshot(&mut conn)
         .await
         .unwrap()
+        .root_node
         .summary
         .is_complete());
 }

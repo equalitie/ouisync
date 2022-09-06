@@ -52,7 +52,11 @@ impl Index {
         repository_id: RepositoryId,
         notify_tx: broadcast::Sender<Event>,
     ) -> Result<Self> {
-        let branches = load_branches(&mut *pool.acquire().await?, notify_tx.clone()).await?;
+        let mut conn = pool.acquire().await?;
+        let branches = BranchData::load_all(&mut conn, notify_tx.clone())
+            .map_ok(|data| (*data.id(), data))
+            .try_collect()
+            .await?;
 
         Ok(Self {
             pool,
@@ -334,26 +338,8 @@ impl Index {
 
 struct Shared {
     repository_id: RepositoryId,
-    branches: Mutex<Branches>,
+    branches: Mutex<HashMap<PublicKey, Arc<BranchData>>>,
     notify_tx: broadcast::Sender<Event>,
-}
-
-/// Container for all known branches (local and remote)
-pub(crate) type Branches = HashMap<PublicKey, Arc<BranchData>>;
-
-async fn load_branches(
-    conn: &mut db::Connection,
-    notify_tx: broadcast::Sender<Event>,
-) -> Result<HashMap<PublicKey, Arc<BranchData>>> {
-    RootNode::load_all_latest_complete(conn)
-        .map_ok(|node| {
-            let writer_id = node.proof.writer_id;
-            let branch = Arc::new(BranchData::new(writer_id, notify_tx.clone()));
-
-            (writer_id, branch)
-        })
-        .try_collect()
-        .await
 }
 
 #[derive(Debug, Error)]

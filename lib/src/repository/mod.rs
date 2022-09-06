@@ -707,8 +707,7 @@ impl Shared {
             .collect()
     }
 
-    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
-    // and putting it into the cache if it does not.
+    // Create `Branch` wrapping the given `data`.
     fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
