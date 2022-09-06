@@ -38,7 +38,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-const TIMEOUT: Duration = Duration::from_secs(10);
+const TIMEOUT: Duration = Duration::from_secs(20);
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch

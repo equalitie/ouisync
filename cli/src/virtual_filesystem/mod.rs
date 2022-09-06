@@ -784,10 +784,9 @@ impl Inner {
     }
 
     #[instrument(
-        level = "debug",
         skip(self, inode, data, flags),
         fields(path, data.len = data.len(), %flags),
-        ret
+        err
     )]
     async fn write(
         &mut self,
