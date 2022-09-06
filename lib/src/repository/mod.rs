@@ -209,7 +209,7 @@ impl Repository {
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
+        let index = Index::new(pool, *secrets.id(), event_tx.clone());
 
         // Lazy block downloading requires at least read access because it needs to be able to
         // traverse the repository in order to enumarate reachable blocks.
@@ -519,7 +519,7 @@ impl Repository {
         }
 
         let local_branch = self.local_branch();
-        let branches = self.shared.collect_branches()?;
+        let branches = self.shared.load_branches(conn).await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -579,10 +579,10 @@ impl Repository {
             }
         };
 
-        let branches = match self.shared.collect_branches() {
+        let branches = match self.shared.load_branches(&mut conn).await {
             Ok(branches) => branches,
             Err(error) => {
-                print.display(&format_args!("failed to collect branches: {:?}", error));
+                print.display(&format_args!("failed to load branches: {:?}", error));
                 return;
             }
         };
@@ -688,24 +688,21 @@ impl Shared {
     }
 
     pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
-            data
-        } else if let Some(write_keys) = self.secrets.write_keys() {
-            self.store
-                .index
-                .create_branch(self.this_writer_id, write_keys)
-                .await?
-        } else {
-            return Err(Error::PermissionDenied);
-        };
+        let keys = self.secrets.write_keys().ok_or(Error::PermissionDenied)?;
+        let data = self
+            .store
+            .index
+            .get_or_create_branch(&self.this_writer_id, keys)
+            .await?;
 
         self.inflate(data)
     }
 
-    pub fn collect_branches(&self) -> Result<Vec<Branch>> {
+    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Branch>> {
         self.store
             .index
-            .collect_branches()
+            .load_branches(conn)
+            .await?
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()

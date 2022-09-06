@@ -368,7 +368,7 @@ async fn create_store<R: Rng + CryptoRng>(
     let repository_id = RepositoryId::from(write_keys.public);
     let (event_tx, _) = broadcast::channel(1);
 
-    let index = Index::load(db, repository_id, event_tx).await.unwrap();
+    let index = Index::new(db, repository_id, event_tx);
     index.create_branch(writer_id, write_keys).await.unwrap();
 
     let store = Store {

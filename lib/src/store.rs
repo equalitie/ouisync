@@ -248,7 +248,7 @@ mod tests {
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+        let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             monitored: Weak::new(),
             index,
@@ -286,7 +286,7 @@ mod tests {
 
         let repository_id = RepositoryId::random();
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+        let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             monitored: Weak::new(),
             index,
@@ -325,9 +325,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool.clone(), repository_id, event_tx)
-            .await
-            .unwrap();
+        let index = Index::new(pool.clone(), repository_id, event_tx);
         let store = Store {
             monitored: std::sync::Weak::new(),
             index,

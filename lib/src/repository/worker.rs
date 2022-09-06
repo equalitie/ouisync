@@ -214,7 +214,7 @@ mod merge {
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
-        let branches = shared.collect_branches()?;
+        let branches = shared.load_branches(&mut conn).await?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -243,13 +243,9 @@ mod prune {
         // the same db transaction.
         let mut tx = shared.store.db().begin().await?;
 
-        let (uptodate, outdated) = utils::partition_branches(
-            &mut tx,
-            shared.store.index.collect_branches(),
-            &shared.this_writer_id,
-        )
-        .await?;
-
+        let all = shared.store.index.load_branches(&mut tx).await?;
+        let (uptodate, outdated) =
+            utils::partition_branches(&mut tx, all, &shared.this_writer_id).await?;
         let mut removed = Vec::new();
 
         // Remove outdated branches
@@ -276,7 +272,6 @@ mod prune {
             }
 
             tracing::trace!("removing outdated branch {:?}", branch.id());
-            shared.store.index.remove_branch(branch.id());
             branch.destroy(&mut tx).await?;
             removed.push(branch);
         }
@@ -349,15 +344,14 @@ mod scan {
     }
 
     async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
-        let branches = shared.collect_branches()?;
+        let mut conn = shared.store.db().acquire().await?;
+        let branches = shared.load_branches(&mut conn).await?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
 
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
-
-            let mut conn = shared.store.db().acquire().await?;
 
             match branch.open_root(&mut conn).await {
                 Ok(dir) => versions.push(dir),

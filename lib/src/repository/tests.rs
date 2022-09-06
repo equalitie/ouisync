@@ -653,10 +653,9 @@ async fn read_access_different_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.write(&mut tx, b"hello world").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    file.write(&mut conn, b"hello world").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
 
     drop(file);
     drop(repo);
@@ -672,9 +671,6 @@ async fn read_access_different_replica() {
     )
     .await
     .unwrap();
-
-    // The second replica doesn't have its own local branch in the repo.
-    assert_matches!(repo.local_branch().map(|_| ()), None);
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
@@ -1116,21 +1112,26 @@ async fn remove_branch() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
+    let mut conn = repo.db().acquire().await.unwrap();
+
     // Keep the root dir open until we create both files to make sure it keeps write access.
-    let mut tx = repo.db().begin().await.unwrap();
-    let mut remote_root = remote_branch.open_or_create_root(&mut tx).await.unwrap();
-    create_file_in_directory(&mut tx, &mut remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&mut tx, &mut remote_root, "bar.txt", b"bar").await;
+    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    create_file_in_directory(&mut conn, &mut remote_root, "foo.txt", b"foo").await;
+    create_file_in_directory(&mut conn, &mut remote_root, "bar.txt", b"bar").await;
     drop(remote_root);
-    tx.commit().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.fork(&mut tx, local_branch).await.unwrap();
-    tx.commit().await.unwrap();
+    file.fork(&mut conn, local_branch).await.unwrap();
     drop(file);
 
-    repo.shared.store.index.remove_branch(&remote_id);
+    repo.shared
+        .store
+        .index
+        .get_branch(&remote_id)
+        .unwrap()
+        .destroy(&mut conn)
+        .await
+        .unwrap();
 
     // The forked file still exists
     assert_eq!(read_file(&repo, "foo.txt").await, b"foo");

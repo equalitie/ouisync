@@ -33,11 +33,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
-use std::{
-    cmp::Ordering,
-    collections::{hash_map::Entry, HashMap},
-    sync::{Arc, Mutex},
-};
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -50,35 +46,32 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub async fn load(
+    pub fn new(
         pool: db::Pool,
         repository_id: RepositoryId,
         notify_tx: broadcast::Sender<Event>,
-    ) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
-        let branches = BranchData::load_all(&mut conn, notify_tx.clone())
-            .map_ok(|data| (*data.id(), data))
-            .try_collect()
-            .await?;
-
-        Ok(Self {
+    ) -> Self {
+        Self {
             pool,
             shared: Arc::new(Shared {
                 repository_id,
-                branches: Mutex::new(branches),
                 notify_tx,
             }),
-        })
+        }
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
         &self.shared.repository_id
     }
 
-    pub fn get_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
-        self.shared.branches.lock().unwrap().get(id).cloned()
+    pub fn get_branch(&self, writer_id: &PublicKey) -> Option<Arc<BranchData>> {
+        Some(Arc::new(BranchData::new(
+            *writer_id,
+            self.shared.notify_tx.clone(),
+        )))
     }
 
+    #[cfg(test)]
     pub async fn create_branch(
         &self,
         writer_id: PublicKey,
@@ -95,41 +88,50 @@ impl Index {
         let root_node = RootNode::create(&mut tx, proof, Summary::FULL).await?;
         tx.commit().await?;
 
-        match self
-            .shared
-            .branches
-            .lock()
-            .unwrap()
-            .entry(root_node.proof.writer_id)
-        {
-            Entry::Occupied(_) => Err(Error::EntryExists),
-            Entry::Vacant(entry) => {
-                let branch =
-                    BranchData::new(root_node.proof.writer_id, self.shared.notify_tx.clone());
-                let branch = Arc::new(branch);
-
-                entry.insert(branch.clone());
-
-                Ok(branch)
-            }
-        }
+        Ok(Arc::new(BranchData::new(
+            root_node.proof.writer_id,
+            self.shared.notify_tx.clone(),
+        )))
     }
 
-    // pub async fn get_or_create_branch(&self, )
+    pub async fn get_or_create_branch(
+        &self,
+        writer_id: &PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<Arc<BranchData>> {
+        let mut tx = self.pool.begin().await?;
 
-    pub fn collect_branches(&self) -> Vec<Arc<BranchData>> {
-        self.shared
-            .branches
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect()
+        let root_node = match RootNode::load_latest_complete_by_writer(&mut tx, *writer_id).await {
+            Ok(root_node) => Some(root_node),
+            Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
+
+        let root_node = if let Some(root_node) = root_node {
+            root_node
+        } else {
+            let proof = Proof::new(
+                *writer_id,
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                write_keys,
+            );
+
+            RootNode::create(&mut tx, proof, Summary::FULL).await?
+        };
+
+        tx.commit().await?;
+
+        Ok(Arc::new(BranchData::new(
+            root_node.proof.writer_id,
+            self.shared.notify_tx.clone(),
+        )))
     }
 
-    /// Removes the branch.
-    pub fn remove_branch(&self, id: &PublicKey) -> Option<Arc<BranchData>> {
-        self.shared.branches.lock().unwrap().remove(id)
+    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Arc<BranchData>>> {
+        BranchData::load_all(conn, self.shared.notify_tx.clone())
+            .try_collect()
+            .await
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -311,32 +313,19 @@ impl Index {
     // after it).
     async fn update_summaries(&self, mut tx: db::Transaction<'_>, hash: Hash) -> Result<()> {
         let statuses = node::update_summaries(&mut tx, hash).await?;
+        tx.commit().await?;
+
         let completed: Vec<_> = statuses
             .into_iter()
             .filter(|(_, complete)| *complete)
-            .map(|(writer_id, _)| self.ensure_branch_exists(writer_id))
+            .filter_map(|(writer_id, _)| self.get_branch(&writer_id))
             .collect();
-
-        tx.commit().await?;
 
         for branch in completed {
             branch.notify();
         }
 
         Ok(())
-    }
-
-    fn ensure_branch_exists(&self, writer_id: PublicKey) -> Arc<BranchData> {
-        self.shared
-            .branches
-            .lock()
-            .unwrap()
-            .entry(writer_id)
-            .or_insert_with(|| {
-                tracing::trace!("creating branch {:?}", writer_id);
-                Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
-            })
-            .clone()
     }
 
     async fn check_parent_node_exists(
@@ -354,7 +343,6 @@ impl Index {
 
 struct Shared {
     repository_id: RepositoryId,
-    branches: Mutex<HashMap<PublicKey, Arc<BranchData>>>,
     notify_tx: broadcast::Sender<Event>,
 }
 

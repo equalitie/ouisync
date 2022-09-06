@@ -188,9 +188,7 @@ mod tests {
         let repository_id = secrets.id;
         let (event_tx, _) = broadcast::channel(1);
 
-        let index = Index::load(pool.clone(), repository_id, event_tx.clone())
-            .await
-            .unwrap();
+        let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
         let branch = index
             .create_branch(writer_id, &secrets.write_keys)
