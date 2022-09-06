@@ -684,7 +684,7 @@ async fn truncate_forked_remote_file() {
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     let mut tx = repo.db().begin().await.unwrap();
     file.fork(&mut tx, local_branch).await.unwrap();
@@ -724,7 +724,7 @@ async fn attempt_to_modify_remote_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_create_file() {
     let (_base_dir, repo) = setup().await;
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
 
     let root_vv_0 = {
         let mut conn = repo.db().acquire().await.unwrap();
@@ -787,7 +787,7 @@ async fn version_vector_create_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_deep_hierarchy() {
     let (_base_dir, repo) = setup().await;
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
     let local_id = *local_branch.id();
 
     let depth = 10;
@@ -818,7 +818,7 @@ async fn version_vector_deep_hierarchy() {
 async fn version_vector_recreate_deleted_file() {
     let (_base_dir, repo) = setup().await;
 
-    let local_id = *repo.get_or_create_local_branch().await.unwrap().id();
+    let local_id = *repo.local_branch().unwrap().id();
 
     let file = repo.create_file("test.txt").await.unwrap();
     drop(file);
@@ -837,11 +837,10 @@ async fn version_vector_recreate_deleted_file() {
 async fn version_vector_fork() {
     let (_base_dir, repo) = setup().await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
 
     let remote_branch = repo
-        .create_remote_branch(PublicKey::random())
-        .await
+        .get_branch(PublicKey::random())
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
@@ -913,7 +912,7 @@ async fn version_vector_fork() {
 async fn version_vector_empty_directory() {
     let (_base_dir, repo) = setup().await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
     let local_id = *local_branch.id();
 
     let dir = repo.create_directory("stuff").await.unwrap();
@@ -1001,13 +1000,12 @@ async fn version_vector_file_moved_over_tombstone() {
 async fn file_conflict_modify_local() {
     let (_base_dir, repo) = setup().await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
     let local_id = *local_branch.id();
 
     let remote_id = PublicKey::random();
     let remote_branch = repo
-        .create_remote_branch(remote_id)
-        .await
+        .get_branch(remote_id)
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
@@ -1072,12 +1070,11 @@ async fn file_conflict_modify_local() {
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
     let (_base_dir, repo) = setup().await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
 
     let remote_id = PublicKey::random();
     let remote_branch = repo
-        .create_remote_branch(remote_id)
-        .await
+        .get_branch(remote_id)
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
@@ -1103,12 +1100,11 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 async fn remove_branch() {
     let (_base_dir, repo) = setup().await;
 
-    let local_branch = repo.get_or_create_local_branch().await.unwrap();
+    let local_branch = repo.local_branch().unwrap();
 
     let remote_id = PublicKey::random();
     let remote_branch = repo
-        .create_remote_branch(remote_id)
-        .await
+        .get_branch(remote_id)
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
@@ -1163,8 +1159,7 @@ async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
 
 async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str, content: &[u8]) {
     let remote_branch = repo
-        .create_remote_branch(remote_id)
-        .await
+        .get_branch(remote_id)
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 

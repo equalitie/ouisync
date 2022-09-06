@@ -1,8 +1,8 @@
 use super::{
-    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
+    node::{InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    VersionVectorOp,
+    VersionVectorOp, EMPTY_INNER_HASH,
 };
 use crate::{
     block::BlockId,
@@ -35,32 +35,6 @@ impl BranchData {
         }
     }
 
-    /// Create branch data with the initial root node. Convenience function for tests only.
-    #[cfg(test)]
-    pub async fn create(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-        write_keys: &Keypair,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> Result<Self> {
-        use super::node::Summary;
-        use crate::index::EMPTY_INNER_HASH;
-
-        RootNode::create(
-            conn,
-            Proof::new(
-                writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            ),
-            Summary::FULL,
-        )
-        .await?;
-
-        Ok(Self::new(writer_id, notify_tx))
-    }
-
     /// Load all branches
     pub fn load_all(
         conn: &mut db::Connection,
@@ -72,6 +46,38 @@ impl BranchData {
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
+
+        Ok(SnapshotData { root_node })
+    }
+
+    pub async fn load_or_create_snapshot(
+        &self,
+        conn: &mut db::Connection,
+        write_keys: &Keypair,
+    ) -> Result<SnapshotData> {
+        let mut tx = conn.begin().await?;
+
+        let root_node =
+            match RootNode::load_latest_complete_by_writer(&mut tx, self.writer_id).await {
+                Ok(root_node) => Some(root_node),
+                Err(Error::EntryNotFound) => None,
+                Err(error) => return Err(error),
+            };
+
+        let root_node = if let Some(root_node) = root_node {
+            root_node
+        } else {
+            let proof = Proof::new(
+                self.writer_id,
+                VersionVector::new(),
+                *EMPTY_INNER_HASH,
+                write_keys,
+            );
+
+            RootNode::create(&mut tx, proof, Summary::FULL).await?
+        };
+
+        tx.commit().await?;
 
         Ok(SnapshotData { root_node })
     }
@@ -108,12 +114,11 @@ impl BranchData {
 
     /// Loads the version vector of this branch.
     pub async fn load_version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        Ok(self
-            .load_snapshot(conn)
-            .await?
-            .root_node
-            .proof
-            .into_version_vector())
+        match self.load_snapshot(conn).await {
+            Ok(snapshot) => Ok(snapshot.root_node.proof.into_version_vector()),
+            Err(Error::EntryNotFound) => Ok(VersionVector::new()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Inserts a new block into the index.
@@ -129,7 +134,7 @@ impl BranchData {
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<bool> {
-        self.load_snapshot(tx)
+        self.load_or_create_snapshot(tx, write_keys)
             .await?
             .insert(tx, block_id, encoded_locator, write_keys)
             .await
@@ -147,7 +152,7 @@ impl BranchData {
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        self.load_snapshot(tx)
+        self.load_or_create_snapshot(tx, write_keys)
             .await?
             .remove(tx, encoded_locator, write_keys)
             .await
@@ -186,7 +191,10 @@ impl BranchData {
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
-        self.load_snapshot(tx).await?.bump(tx, op, write_keys).await
+        self.load_or_create_snapshot(tx, write_keys)
+            .await?
+            .bump(tx, op, write_keys)
+            .await
     }
 }
 
@@ -568,17 +576,10 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::PoolConnection, BranchData) {
-        let (base_dir, mut conn) = init_db().await;
+        let (base_dir, conn) = init_db().await;
 
         let (notify_tx, _) = broadcast::channel(1);
-        let branch = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &Keypair::random(),
-            notify_tx,
-        )
-        .await
-        .unwrap();
+        let branch = BranchData::new(PublicKey::random(), notify_tx);
 
         (base_dir, conn, branch)
     }

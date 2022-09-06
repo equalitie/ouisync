@@ -1,5 +1,5 @@
 use super::{
-    super::{Index, Proof},
+    super::{proof::Proof, Index},
     get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, Summary, INNER_LAYER_COUNT,
 };
 use crate::{

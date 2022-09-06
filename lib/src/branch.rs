@@ -190,10 +190,7 @@ mod tests {
 
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
-        let branch = index
-            .create_branch(writer_id, &secrets.write_keys)
-            .await
-            .unwrap();
+        let branch = index.get_branch(writer_id);
         let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
         (base_dir, pool, branch)

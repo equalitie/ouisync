@@ -934,18 +934,16 @@ async fn check_file_version_content(
 // version vectors and A's version vector is greater or equal to B's.
 async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
     common::eventually(repo_a, || async {
-        let vv_a = if let Some(branch) = repo_a.local_branch() {
+        let vv_a = {
+            let branch = repo_a.local_branch().unwrap();
             let mut conn = repo_a.db().acquire().await.unwrap();
             branch.version_vector(&mut conn).await.unwrap()
-        } else {
-            return false;
         };
 
-        let vv_b = if let Some(branch) = repo_b.local_branch() {
+        let vv_b = {
+            let branch = repo_b.local_branch().unwrap();
             let mut conn = repo_b.db().acquire().await.unwrap();
             branch.version_vector(&mut conn).await.unwrap()
-        } else {
-            return false;
         };
 
         if vv_a.is_empty() || vv_b.is_empty() {

@@ -369,7 +369,7 @@ async fn create_store<R: Rng + CryptoRng>(
     let (event_tx, _) = broadcast::channel(1);
 
     let index = Index::new(db, repository_id, event_tx);
-    index.create_branch(writer_id, write_keys).await.unwrap();
+    // index.create_branch(writer_id, write_keys).await.unwrap();
 
     let store = Store {
         monitored: Weak::new(),
@@ -410,9 +410,12 @@ async fn wait_until_snapshots_in_sync(
 ) {
     let mut rx = client_index.subscribe();
 
-    let server_root = load_latest_root_node(server_index, server_id)
-        .await
-        .unwrap();
+    let server_root = load_latest_root_node(server_index, server_id).await;
+    let server_root = if let Some(server_root) = server_root {
+        server_root
+    } else {
+        return;
+    };
 
     if server_root.proof.version_vector.is_empty() {
         return;

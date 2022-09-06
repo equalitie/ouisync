@@ -490,7 +490,7 @@ impl Inner {
     ) -> Result<FileAttr> {
         self.record_path(inode, None);
 
-        let local_branch = self.repository.get_or_create_local_branch().await?;
+        let local_branch = self.repository.local_branch()?;
 
         let mut scope = FormatOptionScope::new(", ");
 
@@ -715,7 +715,7 @@ impl Inner {
         let mut file = self.open_file_by_inode(inode).await?;
 
         if flags.contains(libc::O_TRUNC) {
-            let local_branch = self.repository.get_or_create_local_branch().await?;
+            let local_branch = self.repository.local_branch()?;
             let mut conn = self.repository.db().acquire().await?;
 
             file.fork(&mut conn, local_branch).await?;
@@ -799,7 +799,7 @@ impl Inner {
         self.record_path(inode, None);
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        let local_branch = self.repository.get_or_create_local_branch().await?;
+        let local_branch = self.repository.local_branch()?;
         let mut conn = self.repository.db().acquire().await?;
 
         let file = self.entries.get_file_mut(handle)?;

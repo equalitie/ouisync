@@ -14,17 +14,14 @@ pub(crate) use self::{
         receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
         EMPTY_INNER_HASH,
     },
-    proof::{Proof, UntrustedProof},
+    proof::UntrustedProof,
     receive_filter::ReceiveFilter,
 };
 
 use self::proof::ProofError;
 use crate::{
     block::BlockId,
-    crypto::{
-        sign::{Keypair, PublicKey},
-        CacheHash, Hash, Hashable,
-    },
+    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug::DebugPrinter,
     error::{Error, Result},
@@ -66,63 +63,6 @@ impl Index {
 
     pub fn get_branch(&self, writer_id: PublicKey) -> Arc<BranchData> {
         Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
-    }
-
-    #[cfg(test)]
-    pub async fn create_branch(
-        &self,
-        writer_id: PublicKey,
-        write_keys: &Keypair,
-    ) -> Result<Arc<BranchData>> {
-        let proof = Proof::new(
-            writer_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            write_keys,
-        );
-
-        let mut tx = self.pool.begin().await?;
-        let root_node = RootNode::create(&mut tx, proof, Summary::FULL).await?;
-        tx.commit().await?;
-
-        Ok(Arc::new(BranchData::new(
-            root_node.proof.writer_id,
-            self.shared.notify_tx.clone(),
-        )))
-    }
-
-    pub async fn get_or_create_branch(
-        &self,
-        writer_id: &PublicKey,
-        write_keys: &Keypair,
-    ) -> Result<Arc<BranchData>> {
-        let mut tx = self.pool.begin().await?;
-
-        let root_node = match RootNode::load_latest_complete_by_writer(&mut tx, *writer_id).await {
-            Ok(root_node) => Some(root_node),
-            Err(Error::EntryNotFound) => None,
-            Err(error) => return Err(error),
-        };
-
-        let root_node = if let Some(root_node) = root_node {
-            root_node
-        } else {
-            let proof = Proof::new(
-                *writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            );
-
-            RootNode::create(&mut tx, proof, Summary::FULL).await?
-        };
-
-        tx.commit().await?;
-
-        Ok(Arc::new(BranchData::new(
-            root_node.proof.writer_id,
-            self.shared.notify_tx.clone(),
-        )))
     }
 
     pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Arc<BranchData>>> {

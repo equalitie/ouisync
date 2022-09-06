@@ -373,7 +373,7 @@ mod scan {
             process_blocks(shared, mode, entry).await?;
         }
 
-        let local_branch = shared.local_branch();
+        let local_branch = shared.local_branch().ok();
         traverse(shared, mode, JointDirectory::new(local_branch, versions)).await
     }
 

@@ -140,13 +140,6 @@ impl AccessSecrets {
             }),
         }
     }
-
-    pub(crate) fn write_keys(&self) -> Option<&sign::Keypair> {
-        match self {
-            Self::Write(secrets) => Some(&secrets.write_keys),
-            Self::Blind { .. } | Self::Read { .. } => None,
-        }
-    }
 }
 
 impl fmt::Debug for AccessSecrets {

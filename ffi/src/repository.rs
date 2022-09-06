@@ -197,7 +197,11 @@ pub unsafe extern "C" fn repository_subscribe(
     let holder = handle.get();
 
     let mut rx = holder.repository.subscribe();
-    let local_branch_id = holder.repository.local_branch().map(|branch| *branch.id());
+    let local_branch_id = holder
+        .repository
+        .local_branch()
+        .ok()
+        .map(|branch| *branch.id());
 
     let handle = session.runtime().spawn(async move {
         loop {

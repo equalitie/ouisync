@@ -130,17 +130,8 @@ mod tests {
         let write_keys = Keypair::random();
         let (notify_tx, _) = broadcast::channel(1);
 
-        let branch0 = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &write_keys,
-            notify_tx.clone(),
-        )
-        .await
-        .unwrap();
-        let branch1 = BranchData::create(&mut conn, PublicKey::random(), &write_keys, notify_tx)
-            .await
-            .unwrap();
+        let branch0 = BranchData::new(PublicKey::random(), notify_tx.clone());
+        let branch1 = BranchData::new(PublicKey::random(), notify_tx);
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
@@ -190,14 +181,7 @@ mod tests {
         let write_keys = Keypair::random();
         let (notify_tx, _) = broadcast::channel(1);
 
-        let branch = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &write_keys,
-            notify_tx.clone(),
-        )
-        .await
-        .unwrap();
+        let branch = BranchData::new(PublicKey::random(), notify_tx.clone());
 
         let locator = Locator::head(rng.gen());
         let locator = locator.encode(&read_key);
