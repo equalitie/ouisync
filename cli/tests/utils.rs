@@ -255,7 +255,7 @@ pub fn eventually<F>(f: F)
 where
     F: FnMut() -> Result<(), Error>,
 {
-    eventually_with_timeout(Duration::from_secs(30), f)
+    eventually_with_timeout(Duration::from_secs(120), f)
 }
 
 #[track_caller]

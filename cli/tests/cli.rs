@@ -1,6 +1,6 @@
 mod utils;
 
-use self::utils::{check_eq, eventually, eventually_with_timeout, Bin, CountWrite, RngRead};
+use self::utils::{check_eq, eventually, Bin, CountWrite, RngRead};
 use anyhow::{format_err, Result};
 use rand::{distributions::Standard, Rng};
 use std::{
@@ -10,7 +10,6 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     thread,
-    time::Duration,
 };
 
 #[test]
@@ -236,7 +235,7 @@ fn relay() {
     }
 
     // Wait until it's fully received by B
-    eventually_with_timeout(Duration::from_secs(2 * 60), || {
+    eventually(|| {
         let mut src = File::open(b.root().join(file_name))?;
         let mut dst = CountWrite(0);
         io::copy(&mut src, &mut dst)?;
