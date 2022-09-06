@@ -11,7 +11,7 @@ use crate::{
     event::Event,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, Proof, RootNode, VersionVectorOp, EMPTY_INNER_HASH,
+        BranchData, Index, RootNode, VersionVectorOp,
     },
     repository::{LocalId, RepositoryId},
     store::Store,
@@ -369,13 +369,7 @@ async fn create_store<R: Rng + CryptoRng>(
     let (event_tx, _) = broadcast::channel(1);
 
     let index = Index::load(db, repository_id, event_tx).await.unwrap();
-    let proof = Proof::new(
-        writer_id,
-        VersionVector::new(),
-        *EMPTY_INNER_HASH,
-        write_keys,
-    );
-    index.create_branch(proof).await.unwrap();
+    index.create_branch(writer_id, write_keys).await.unwrap();
 
     let store = Store {
         monitored: Weak::new(),

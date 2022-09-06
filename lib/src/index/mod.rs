@@ -21,7 +21,10 @@ pub(crate) use self::{
 use self::proof::ProofError;
 use crate::{
     block::BlockId,
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        CacheHash, Hash, Hashable,
+    },
     db,
     debug::DebugPrinter,
     error::{Error, Result},
@@ -76,7 +79,18 @@ impl Index {
         self.shared.branches.lock().unwrap().get(id).cloned()
     }
 
-    pub async fn create_branch(&self, proof: Proof) -> Result<Arc<BranchData>> {
+    pub async fn create_branch(
+        &self,
+        writer_id: PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<Arc<BranchData>> {
+        let proof = Proof::new(
+            writer_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            write_keys,
+        );
+
         let mut tx = self.pool.begin().await?;
         let root_node = RootNode::create(&mut tx, proof, Summary::FULL).await?;
         tx.commit().await?;
@@ -100,6 +114,8 @@ impl Index {
             }
         }
     }
+
+    // pub async fn get_or_create_branch(&self, )
 
     pub fn collect_branches(&self) -> Vec<Arc<BranchData>> {
         self.shared

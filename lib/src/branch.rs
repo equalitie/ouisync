@@ -149,12 +149,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        access_control::WriteSecrets,
-        db,
-        index::{Index, Proof, EMPTY_INNER_HASH},
-        locator::Locator,
-    };
+    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator};
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -197,13 +192,10 @@ mod tests {
             .await
             .unwrap();
 
-        let proof = Proof::new(
-            writer_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &secrets.write_keys,
-        );
-        let branch = index.create_branch(proof).await.unwrap();
+        let branch = index
+            .create_branch(writer_id, &secrets.write_keys)
+            .await
+            .unwrap();
         let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
         (base_dir, pool, branch)

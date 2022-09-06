@@ -24,14 +24,13 @@ use crate::{
     error::{Error, Result},
     event::BranchChangedReceiver,
     file::File,
-    index::{BranchData, Index, Proof, EMPTY_INNER_HASH},
+    index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
     state_monitor::{MonitoredValue, StateMonitor},
     store::Store,
     sync::broadcast::ThrottleReceiver,
-    version_vector::VersionVector,
 };
 use camino::Utf8Path;
 use std::{fmt, path::Path, sync::Arc, time::Duration};
@@ -630,18 +629,26 @@ impl Repository {
     // FOR TESTS ONLY!
     #[cfg(test)]
     pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
+        use crate::index::VersionVectorOp;
+
         let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
-        let proof = Proof::new(
-            remote_id,
-            // Unlike the local one, remote branches start at v1 to prevent them from being
-            // immediately pruned. This is also consistent with the production, where remote
-            // branches are only created by receiving them from other replicas and we only accept
-            // them if their vv is non-empty.
-            VersionVector::first(remote_id),
-            *EMPTY_INNER_HASH,
-            write_keys,
-        );
-        let branch = self.shared.store.index.create_branch(proof).await?;
+
+        let branch = self
+            .shared
+            .store
+            .index
+            .create_branch(remote_id, write_keys)
+            .await?;
+
+        // Unlike the local one, remote branches start at v1 to prevent them from being
+        // immediately pruned. This is also consistent with the production, where remote branches
+        // are only created by receiving them from other replicas and we only accept them if their
+        // vv is non-empty.
+        let mut tx = self.shared.store.db().begin().await?;
+        branch
+            .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
+            .await?;
+        tx.commit().await?;
 
         self.shared.inflate(branch)
     }
@@ -684,13 +691,10 @@ impl Shared {
         let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
             data
         } else if let Some(write_keys) = self.secrets.write_keys() {
-            let proof = Proof::new(
-                self.this_writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            );
-            self.store.index.create_branch(proof).await?
+            self.store
+                .index
+                .create_branch(self.this_writer_id, write_keys)
+                .await?
         } else {
             return Err(Error::PermissionDenied);
         };

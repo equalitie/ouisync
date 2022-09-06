@@ -19,15 +19,7 @@ async fn receive_valid_root_node() {
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     // Initially only the local branch exists
     let mut conn = index.pool.acquire().await.unwrap();
@@ -75,15 +67,7 @@ async fn receive_root_node_with_invalid_proof() {
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     // Receive invalid root node from the remote replica.
     let invalid_write_keys = Keypair::random();
@@ -116,15 +100,7 @@ async fn receive_root_node_with_empty_version_vector() {
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     index
         .receive_root_node(
@@ -154,15 +130,7 @@ async fn receive_duplicate_root_node() {
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
     let proof = Proof::new(
@@ -201,15 +169,7 @@ async fn receive_root_node_with_existing_hash() {
     let local_id = PublicKey::generate(&mut rng);
     let remote_id = PublicKey::generate(&mut rng);
 
-    let local_branch = index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    let local_branch = index.create_branch(local_id, &write_keys).await.unwrap();
 
     // Create one block locally
     let mut content = vec![0; BLOCK_SIZE];
@@ -269,15 +229,7 @@ async fn receive_valid_child_nodes() {
     let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
@@ -334,15 +286,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
     let local_id = PublicKey::random();
 
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    index.create_branch(local_id, &write_keys).await.unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
     let mut receive_filter = ReceiveFilter::new(index.pool.clone());
@@ -387,12 +331,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let local_id = PublicKey::generate(&mut rng);
     store
         .index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
+        .create_branch(local_id, &write_keys)
         .await
         .unwrap();
 
