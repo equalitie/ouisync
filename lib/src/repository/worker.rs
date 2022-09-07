@@ -1,4 +1,4 @@
-use super::{utils, Shared};
+use super::Shared;
 use crate::{
     branch::Branch,
     error::{Error, Result},
@@ -236,26 +236,25 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
+    use crate::joint_directory::versioned;
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
-        // To prevent race conditions, the partitioning and the subsequent removal need to run in
-        // the same db transaction.
-        let mut tx = shared.store.db().begin().await?;
+        let mut conn = shared.store.db().acquire().await?;
 
-        let all = shared.store.index.load_branches(&mut tx).await?;
-        let (uptodate, outdated) =
-            utils::partition_branches(&mut tx, all, &shared.this_writer_id).await?;
+        let all = shared.store.index.load_snapshots(&mut conn).await?;
+        let (uptodate, outdated): (_, Vec<_>) =
+            versioned::partition(all, Some(&shared.this_writer_id));
         let mut removed = Vec::new();
 
         // Remove outdated branches
-        for branch in outdated {
+        for snapshot in outdated {
             // Never remove local branch
-            if branch.id() == &shared.this_writer_id {
+            if snapshot.id() == &shared.this_writer_id {
                 continue;
             }
 
-            match shared.inflate(branch.clone()) {
+            match shared.inflate(Arc::new(snapshot.to_branch_data())) {
                 Ok(branch) => {
                     // Don't remove branches that are in use. We get notified when they stop being
                     // used so we can try again.
@@ -271,23 +270,26 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!("removing outdated branch {:?}", branch.id());
-            branch.destroy(&mut tx).await?;
-            removed.push(branch);
+            tracing::trace!("removing outdated branch {:?}", snapshot.id());
+
+            let mut tx = conn.begin().await?;
+            snapshot.remove_all_older(&mut tx).await?;
+            snapshot.remove(&mut tx).await?;
+            tx.commit().await?;
+
+            removed.push(snapshot);
         }
 
         // Remove outdated snapshots
-        for branch in uptodate {
-            branch.remove_old_snapshots(&mut tx).await?;
+        for snapshot in uptodate {
+            snapshot.remove_all_older(&mut conn).await?;
         }
-
-        tx.commit().await?;
 
         // TODO: is this notification necessary? There are currently some tests which rely on it
         // but it doesn't seem to serve any purpose in the production code. We should probably
         // rewrite those tests so they don't need this.
-        for branch in removed {
-            branch.notify()
+        for snapshot in removed {
+            snapshot.notify()
         }
 
         Ok(())

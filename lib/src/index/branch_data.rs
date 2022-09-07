@@ -13,6 +13,7 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
+    joint_directory::versioned::Versioned,
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -40,14 +41,17 @@ impl BranchData {
         conn: &mut db::Connection,
         notify_tx: broadcast::Sender<Event>,
     ) -> impl Stream<Item = Result<Arc<Self>>> + '_ {
-        RootNode::load_all_latest_complete(conn)
-            .map_ok(move |node| Arc::new(Self::new(node.proof.writer_id, notify_tx.clone())))
+        SnapshotData::load_all(conn, notify_tx)
+            .map_ok(move |snapshot| Arc::new(snapshot.to_branch_data()))
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
-        Ok(SnapshotData { root_node })
+        Ok(SnapshotData {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
     }
 
     pub async fn load_or_create_snapshot(
@@ -67,32 +71,10 @@ impl BranchData {
             RootNode::empty(self.writer_id, write_keys)
         };
 
-        Ok(SnapshotData { root_node })
-    }
-
-    /// Destroy this branch
-    pub async fn destroy(&self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
-
-        let root = self.load_snapshot(&mut tx).await?.root_node;
-        root.remove_recursively_all_older(&mut tx).await?;
-        root.remove_recursively(&mut tx).await?;
-
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    /// Remove all snapshots of this branch except the latest one.
-    pub async fn remove_old_snapshots(&self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
-
-        let root = self.load_snapshot(&mut tx).await?.root_node;
-        root.remove_recursively_all_older(&mut tx).await?;
-
-        tx.commit().await?;
-
-        Ok(())
+        Ok(SnapshotData {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -124,7 +106,7 @@ impl BranchData {
     ) -> Result<bool> {
         self.load_or_create_snapshot(tx, write_keys)
             .await?
-            .insert(tx, block_id, encoded_locator, write_keys)
+            .insert_block(tx, block_id, encoded_locator, write_keys)
             .await
     }
 
@@ -142,7 +124,7 @@ impl BranchData {
     ) -> Result<()> {
         self.load_or_create_snapshot(tx, write_keys)
             .await?
-            .remove(tx, encoded_locator, write_keys)
+            .remove_block(tx, encoded_locator, write_keys)
             .await
     }
 
@@ -150,7 +132,7 @@ impl BranchData {
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
         self.load_snapshot(conn)
             .await?
-            .get(conn, encoded_locator)
+            .get_block(conn, encoded_locator)
             .await
     }
 
@@ -188,18 +170,37 @@ impl BranchData {
 
 pub(crate) struct SnapshotData {
     pub(super) root_node: RootNode,
+    notify_tx: broadcast::Sender<Event>,
 }
 
 impl SnapshotData {
+    /// Load all latest snapshots
+    pub fn load_all(
+        conn: &mut db::Connection,
+        notify_tx: broadcast::Sender<Event>,
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self {
+            root_node,
+            notify_tx: notify_tx.clone(),
+        })
+    }
+
     /// Returns the id of the replica that owns this branch.
     pub fn id(&self) -> &PublicKey {
         &self.root_node.proof.writer_id
     }
 
-    // /// Gets the version vector of this snapshot.
-    // pub fn version_vector(&self) -> &VersionVector {
-    //     &self.root_node.proof.version_vector
-    // }
+    pub fn to_branch_data(&self) -> BranchData {
+        BranchData {
+            writer_id: self.root_node.proof.writer_id,
+            notify_tx: self.notify_tx.clone(),
+        }
+    }
+
+    /// Gets the version vector of this snapshot.
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.root_node.proof.version_vector
+    }
 
     /// Inserts a new block into the index.
     ///
@@ -207,7 +208,7 @@ impl SnapshotData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
-    pub async fn insert(
+    pub async fn insert_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
         block_id: &BlockId,
@@ -233,7 +234,7 @@ impl SnapshotData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
-    pub async fn remove(
+    pub async fn remove_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
@@ -249,7 +250,11 @@ impl SnapshotData {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
+    pub async fn get_block(
+        &self,
+        conn: &mut db::Connection,
+        encoded_locator: &Hash,
+    ) -> Result<BlockId> {
         let path = self.load_path(conn, encoded_locator).await?;
 
         match path.get_leaf() {
@@ -283,6 +288,25 @@ impl SnapshotData {
         self.root_node.update_proof(tx, new_proof).await?;
 
         Ok(())
+    }
+
+    /// Remove this snapshot
+    pub async fn remove(&self, conn: &mut db::Connection) -> Result<()> {
+        self.root_node.remove_recursively(conn).await
+    }
+
+    /// Remove all snapshots of this branch older than this one.
+    pub async fn remove_all_older(&self, conn: &mut db::Connection) -> Result<()> {
+        self.root_node.remove_recursively_all_older(conn).await
+    }
+
+    /// Trigger a notification event from the branch of this snapshot.
+    pub fn notify(&self) {
+        self.notify_tx
+            .send(Event::new(Payload::BranchChanged(
+                self.root_node.proof.writer_id,
+            )))
+            .unwrap_or(0);
     }
 
     async fn load_path(
@@ -356,6 +380,16 @@ impl SnapshotData {
         self.root_node = new_root_node;
 
         Ok(())
+    }
+}
+
+impl Versioned for SnapshotData {
+    fn compare_versions(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.version_vector().partial_cmp(other.version_vector())
+    }
+
+    fn branch_id(&self) -> &PublicKey {
+        self.id()
     }
 }
 

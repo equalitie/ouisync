@@ -1,7 +1,6 @@
 mod id;
 #[cfg(test)]
 mod tests;
-mod utils;
 mod worker;
 
 pub(crate) use self::id::LocalId;

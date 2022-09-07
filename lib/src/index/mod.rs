@@ -15,7 +15,7 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::proof::ProofError;
+use self::{branch_data::SnapshotData, proof::ProofError};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -64,6 +64,13 @@ impl Index {
 
     pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Arc<BranchData>>> {
         BranchData::load_all(conn, self.shared.notify_tx.clone())
+            .try_collect()
+            .await
+    }
+
+    /// Load latest snapshots of all branches.
+    pub async fn load_snapshots(&self, conn: &mut db::Connection) -> Result<Vec<SnapshotData>> {
+        SnapshotData::load_all(conn, self.shared.notify_tx.clone())
             .try_collect()
             .await
     }

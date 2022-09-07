@@ -1124,7 +1124,10 @@ async fn remove_branch() {
         .store
         .index
         .get_branch(remote_id)
-        .destroy(&mut conn)
+        .load_snapshot(&mut conn)
+        .await
+        .unwrap()
+        .remove(&mut conn)
         .await
         .unwrap();
 
