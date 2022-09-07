@@ -2,12 +2,17 @@ use super::{
     super::{proof::Proof, SnapshotId},
     inner::InnerNode,
     summary::Summary,
+    EMPTY_INNER_HASH,
 };
 use crate::{
-    crypto::{sign::PublicKey, Hash},
+    crypto::{
+        sign::{Keypair, PublicKey},
+        Hash,
+    },
     db,
     debug::DebugPrinter,
     error::{Error, Result},
+    version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
@@ -20,6 +25,22 @@ pub(crate) struct RootNode {
 }
 
 impl RootNode {
+    /// Creates a root node with no children without storing it in the database.
+    pub fn empty(writer_id: PublicKey, write_keys: &Keypair) -> Self {
+        let proof = Proof::new(
+            writer_id,
+            VersionVector::new(),
+            *EMPTY_INNER_HASH,
+            write_keys,
+        );
+
+        Self {
+            snapshot_id: 0,
+            proof,
+            summary: Summary::FULL,
+        }
+    }
+
     /// Creates a root node with the specified proof unless it already exists.
     pub async fn create(conn: &mut db::Connection, proof: Proof, summary: Summary) -> Result<Self> {
         let snapshot_id = sqlx::query(

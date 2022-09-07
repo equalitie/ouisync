@@ -611,16 +611,7 @@ async fn fork_case(
     let mut tx = pool.begin().await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
-    let dst_branch = Arc::new(
-        BranchData::create(
-            &mut tx,
-            PublicKey::random(),
-            src_branch.keys().write().unwrap(),
-            event_tx.clone(),
-        )
-        .await
-        .unwrap(),
-    );
+    let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
         dst_branch,
         src_branch.keys().clone(),
@@ -716,21 +707,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
 
     let (event_tx, _) = broadcast::channel(1);
 
-    // NOTE: by running this in a db transaction we ensure the write is visible to any subsequent
-    // reads. Without the transaction when using multiple db connection, sometimes (rarely) the
-    // write would not be visible. This is probably a sqlite feature (something to do with caching)
-    // and not a bug.
-    let mut tx = pool.begin().await.unwrap();
-    let branch = BranchData::create(
-        &mut tx,
-        PublicKey::random(),
-        &secrets.write_keys,
-        event_tx.clone(),
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-
+    let branch = BranchData::new(PublicKey::random(), event_tx.clone());
     let branch = Branch::new(
         Arc::new(branch),
         secrets.into(),

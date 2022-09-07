@@ -4,7 +4,6 @@ use crate::{
     index::BranchData, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
-use futures_util::future;
 use rand::{rngs::StdRng, SeedableRng};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -1027,28 +1026,17 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, db::P
     let secrets = WriteSecrets::generate(&mut rng);
     let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
 
-    let branches = {
-        let pool = &pool;
-        future::join_all((0..branch_count).map(|_| {
+    let branches = (0..branch_count)
+        .map(|_| {
             let id = PublicKey::generate(&mut rng);
             let event_tx = event_tx.clone();
             let secrets = secrets.clone();
             let blob_cache = blob_cache.clone();
 
-            async move {
-                let data = BranchData::create(
-                    &mut pool.acquire().await.unwrap(),
-                    id,
-                    &secrets.write_keys,
-                    event_tx,
-                )
-                .await
-                .unwrap();
-                Branch::new(Arc::new(data), secrets.into(), blob_cache)
-            }
-        }))
-        .await
-    };
+            let data = BranchData::new(id, event_tx);
+            Branch::new(Arc::new(data), secrets.into(), blob_cache)
+        })
+        .collect();
 
     (base_dir, pool, branches)
 }

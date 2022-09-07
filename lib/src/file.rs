@@ -286,27 +286,18 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
 
-        let branch0 =
-            create_branch(&pool, event_tx.clone(), keys.clone(), blob_cache.clone()).await;
-        let branch1 = create_branch(&pool, event_tx, keys.clone(), blob_cache).await;
+        let branch0 = create_branch(event_tx.clone(), keys.clone(), blob_cache.clone());
+        let branch1 = create_branch(event_tx, keys, blob_cache);
 
         (base_dir, pool, branch0, branch1)
     }
 
-    async fn create_branch(
-        pool: &db::Pool,
+    fn create_branch(
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
         blob_cache: Arc<BlobCache>,
     ) -> Branch {
-        let branch_data = BranchData::create(
-            &mut pool.acquire().await.unwrap(),
-            PublicKey::random(),
-            keys.write().unwrap(),
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let branch_data = BranchData::new(PublicKey::random(), event_tx);
         Branch::new(Arc::new(branch_data), keys, blob_cache)
     }
 }

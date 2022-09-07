@@ -1,4 +1,4 @@
-use super::{node::RootNode, node_test_utils::Snapshot, *};
+use super::{node::RootNode, node_test_utils::Snapshot, proof::Proof, *};
 use crate::{
     block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
@@ -15,31 +15,14 @@ use tempfile::TempDir;
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
     let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
-
-    // Initially only the local branch exists
     let mut conn = index.pool.acquire().await.unwrap();
-    assert!(RootNode::load_latest_by_writer(&mut conn, local_id)
-        .await
-        .unwrap()
-        .is_some());
+
+    // Initially the remote branch doesn't exist
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
         .is_none());
-    drop(conn);
 
     // Receive root node from the remote replica.
     index
@@ -56,12 +39,7 @@ async fn receive_valid_root_node() {
         .await
         .unwrap();
 
-    // Both the local and the remote branch now exist.
-    let mut conn = index.pool.acquire().await.unwrap();
-    assert!(RootNode::load_latest_by_writer(&mut conn, local_id)
-        .await
-        .unwrap()
-        .is_some());
+    // The remote branch now exist.
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
@@ -70,20 +48,8 @@ async fn receive_valid_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_invalid_proof() {
-    let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
+    let (_base_dir, index, _) = setup().await;
     let remote_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
 
     // Receive invalid root node from the remote replica.
     let invalid_write_keys = Keypair::random();
@@ -112,19 +78,7 @@ async fn receive_root_node_with_invalid_proof() {
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_empty_version_vector() {
     let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
 
     index
         .receive_root_node(
@@ -150,19 +104,7 @@ async fn receive_root_node_with_empty_version_vector() {
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_duplicate_root_node() {
     let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
     let proof = Proof::new(
@@ -201,15 +143,7 @@ async fn receive_root_node_with_existing_hash() {
     let local_id = PublicKey::generate(&mut rng);
     let remote_id = PublicKey::generate(&mut rng);
 
-    let local_branch = index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    let local_branch = index.get_branch(local_id);
 
     // Create one block locally
     let mut content = vec![0; BLOCK_SIZE];
@@ -233,7 +167,11 @@ async fn receive_root_node_with_existing_hash() {
     tx.commit().await.unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = local_branch.load_root(&mut conn).await.unwrap();
+    let root = local_branch
+        .load_snapshot(&mut conn)
+        .await
+        .unwrap()
+        .root_node;
     drop(conn);
 
     assert!(root.summary.is_complete());
@@ -250,9 +188,10 @@ async fn receive_root_node_with_existing_hash() {
 
     let mut conn = index.pool.acquire().await.unwrap();
     assert!(local_branch
-        .load_root(&mut conn)
+        .load_snapshot(&mut conn)
         .await
         .unwrap()
+        .root_node
         .summary
         .is_complete());
 }
@@ -260,19 +199,7 @@ async fn receive_root_node_with_existing_hash() {
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_child_nodes() {
     let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
     let remote_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
@@ -325,19 +252,7 @@ async fn receive_valid_child_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_child_nodes_with_missing_root_parent() {
-    let (_base_dir, index, write_keys) = setup().await;
-
-    let local_id = PublicKey::random();
-
-    index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
+    let (_base_dir, index, _write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
     let mut receive_filter = ReceiveFilter::new(index.pool.clone());
@@ -378,18 +293,6 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     };
 
     let mut rng = rand::thread_rng();
-
-    let local_id = PublicKey::generate(&mut rng);
-    store
-        .index
-        .create_branch(Proof::new(
-            local_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &write_keys,
-        ))
-        .await
-        .unwrap();
 
     let remote_id = PublicKey::generate(&mut rng);
 
@@ -434,7 +337,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
             .unwrap();
     }
 
-    let remote_branch = store.index.get_branch(&remote_id).unwrap();
+    let remote_branch = store.index.get_branch(remote_id);
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
@@ -477,7 +380,7 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let (event_tx, _) = broadcast::channel(1);
-    let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+    let index = Index::new(pool, repository_id, event_tx);
 
     (base_dir, index, write_keys)
 }

@@ -13,8 +13,11 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
+    joint_directory::versioned::Versioned,
     version_vector::VersionVector,
 };
+use futures_util::{Stream, TryStreamExt};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
@@ -33,55 +36,45 @@ impl BranchData {
         }
     }
 
-    /// Create branch data with the initial root node. Convenience function for tests only.
-    #[cfg(test)]
-    pub async fn create(
+    /// Load all branches
+    pub fn load_all(
         conn: &mut db::Connection,
-        writer_id: PublicKey,
-        write_keys: &Keypair,
         notify_tx: broadcast::Sender<Event>,
-    ) -> Result<Self> {
-        use super::node::Summary;
-        use crate::index::EMPTY_INNER_HASH;
-
-        RootNode::create(
-            conn,
-            Proof::new(
-                writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            ),
-            Summary::FULL,
-        )
-        .await?;
-
-        Ok(Self::new(writer_id, notify_tx))
+    ) -> impl Stream<Item = Result<Arc<Self>>> + '_ {
+        SnapshotData::load_all(conn, notify_tx)
+            .map_ok(move |snapshot| Arc::new(snapshot.to_branch_data()))
     }
 
-    /// Destroy this branch
-    pub async fn destroy(&self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
+    pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
+        let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
-        let root = self.load_root(&mut tx).await?;
-        root.remove_recursively_all_older(&mut tx).await?;
-        root.remove_recursively(&mut tx).await?;
-
-        tx.commit().await?;
-
-        Ok(())
+        Ok(SnapshotData {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
     }
 
-    /// Remove all snapshots of this branch except the latest one.
-    pub async fn remove_old_snapshots(&self, conn: &mut db::Connection) -> Result<()> {
-        let mut tx = conn.begin().await?;
+    pub async fn load_or_create_snapshot(
+        &self,
+        conn: &mut db::Connection,
+        write_keys: &Keypair,
+    ) -> Result<SnapshotData> {
+        let root_node = match RootNode::load_latest_complete_by_writer(conn, self.writer_id).await {
+            Ok(root_node) => Some(root_node),
+            Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
 
-        let root = self.load_root(&mut tx).await?;
-        root.remove_recursively_all_older(&mut tx).await?;
+        let root_node = if let Some(root_node) = root_node {
+            root_node
+        } else {
+            RootNode::empty(self.writer_id, write_keys)
+        };
 
-        tx.commit().await?;
-
-        Ok(())
+        Ok(SnapshotData {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -89,16 +82,13 @@ impl BranchData {
         &self.writer_id
     }
 
-    /// Loads the current root node of this branch
-    pub async fn load_root(&self, conn: &mut db::Connection) -> Result<RootNode> {
-        RootNode::load_latest_complete_by_writer(conn, self.writer_id).await
-    }
-
     /// Loads the version vector of this branch.
     pub async fn load_version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        // TODO: use a separate `RootNode::load_version_vector` function to avoid loading
-        // unnecessary data.
-        Ok(self.load_root(conn).await?.proof.into_version_vector())
+        match self.load_snapshot(conn).await {
+            Ok(snapshot) => Ok(snapshot.root_node.proof.into_version_vector()),
+            Err(Error::EntryNotFound) => Ok(VersionVector::new()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Inserts a new block into the index.
@@ -114,17 +104,10 @@ impl BranchData {
         encoded_locator: &LocatorHash,
         write_keys: &Keypair,
     ) -> Result<bool> {
-        let root = self.load_root(tx).await?;
-        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
-
-        if path.has_leaf(block_id) {
-            return Ok(false);
-        }
-
-        path.set_leaf(block_id);
-        save_path(tx, &root, &path, write_keys).await?;
-
-        Ok(true)
+        self.load_or_create_snapshot(tx, write_keys)
+            .await?
+            .insert_block(tx, block_id, encoded_locator, write_keys)
+            .await
     }
 
     /// Removes the block identified by encoded_locator from the index.
@@ -139,30 +122,23 @@ impl BranchData {
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let root = self.load_root(tx).await?;
-        let mut path = load_path(tx, &root.proof.hash, encoded_locator).await?;
-
-        path.remove_leaf(encoded_locator)
-            .ok_or(Error::EntryNotFound)?;
-        save_path(tx, &root, &path, write_keys).await?;
-
-        Ok(())
+        self.load_or_create_snapshot(tx, write_keys)
+            .await?
+            .remove_block(tx, encoded_locator, write_keys)
+            .await
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
-        let root_hash = self.load_root(conn).await?.proof.hash;
-        let path = load_path(conn, &root_hash, encoded_locator).await?;
-
-        match path.get_leaf() {
-            Some(block_id) => Ok(block_id),
-            None => Err(Error::EntryNotFound),
-        }
+        self.load_snapshot(conn)
+            .await?
+            .get_block(conn, encoded_locator)
+            .await
     }
 
     #[cfg(test)]
     pub async fn count_leaf_nodes(&self, conn: &mut db::Connection) -> Result<usize> {
-        let root_hash = self.load_root(conn).await?.proof.hash;
+        let root_hash = self.load_snapshot(conn).await?.root_node.proof.hash;
         count_leaf_nodes(conn, 0, &root_hash).await
     }
 
@@ -185,88 +161,236 @@ impl BranchData {
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
-        let root_node = self.load_root(tx).await?;
+        self.load_or_create_snapshot(tx, write_keys)
+            .await?
+            .bump(tx, op, write_keys)
+            .await
+    }
+}
 
-        let mut new_vv = root_node.proof.version_vector.clone();
+pub(crate) struct SnapshotData {
+    pub(super) root_node: RootNode,
+    notify_tx: broadcast::Sender<Event>,
+}
+
+impl SnapshotData {
+    /// Load all latest snapshots
+    pub fn load_all(
+        conn: &mut db::Connection,
+        notify_tx: broadcast::Sender<Event>,
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self {
+            root_node,
+            notify_tx: notify_tx.clone(),
+        })
+    }
+
+    /// Returns the id of the replica that owns this branch.
+    pub fn id(&self) -> &PublicKey {
+        &self.root_node.proof.writer_id
+    }
+
+    pub fn to_branch_data(&self) -> BranchData {
+        BranchData {
+            writer_id: self.root_node.proof.writer_id,
+            notify_tx: self.notify_tx.clone(),
+        }
+    }
+
+    /// Gets the version vector of this snapshot.
+    pub fn version_vector(&self) -> &VersionVector {
+        &self.root_node.proof.version_vector
+    }
+
+    /// Inserts a new block into the index.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is executed inside a db transaction which makes it atomic even in the
+    /// presence of cancellation.
+    pub async fn insert_block(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        block_id: &BlockId,
+        encoded_locator: &LocatorHash,
+        write_keys: &Keypair,
+    ) -> Result<bool> {
+        let mut path = self.load_path(tx, encoded_locator).await?;
+
+        if path.has_leaf(block_id) {
+            return Ok(false);
+        }
+
+        path.set_leaf(block_id);
+
+        self.save_path(tx, &path, write_keys).await?;
+
+        Ok(true)
+    }
+
+    /// Removes the block identified by encoded_locator from the index.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is executed inside a db transaction which makes it atomic even in the
+    /// presence of cancellation.
+    pub async fn remove_block(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        encoded_locator: &Hash,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        let mut path = self.load_path(tx, encoded_locator).await?;
+
+        path.remove_leaf(encoded_locator)
+            .ok_or(Error::EntryNotFound)?;
+        self.save_path(tx, &path, write_keys).await?;
+
+        Ok(())
+    }
+
+    /// Retrieve `BlockId` of a block with the given encoded `Locator`.
+    pub async fn get_block(
+        &self,
+        conn: &mut db::Connection,
+        encoded_locator: &Hash,
+    ) -> Result<BlockId> {
+        let path = self.load_path(conn, encoded_locator).await?;
+
+        match path.get_leaf() {
+            Some(block_id) => Ok(block_id),
+            None => Err(Error::EntryNotFound),
+        }
+    }
+
+    /// Update the root version vector of this branch.
+    ///
+    /// # Cancel safety
+    ///
+    /// This operation is atomic even in the presence of cancellation - it either executes fully or
+    /// it doesn't execute at all.
+    pub async fn bump(
+        self,
+        tx: &mut db::Transaction<'_>,
+        op: &VersionVectorOp,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        let mut new_vv = self.root_node.proof.version_vector.clone();
         op.apply(self.id(), &mut new_vv);
 
         let new_proof = Proof::new(
-            root_node.proof.writer_id,
+            self.root_node.proof.writer_id,
             new_vv,
-            root_node.proof.hash,
+            self.root_node.proof.hash,
             write_keys,
         );
 
-        root_node.update_proof(tx, new_proof).await?;
+        self.root_node.update_proof(tx, new_proof).await?;
+
+        Ok(())
+    }
+
+    /// Remove this snapshot
+    pub async fn remove(&self, conn: &mut db::Connection) -> Result<()> {
+        self.root_node.remove_recursively(conn).await
+    }
+
+    /// Remove all snapshots of this branch older than this one.
+    pub async fn remove_all_older(&self, conn: &mut db::Connection) -> Result<()> {
+        self.root_node.remove_recursively_all_older(conn).await
+    }
+
+    /// Trigger a notification event from the branch of this snapshot.
+    pub fn notify(&self) {
+        self.notify_tx
+            .send(Event::new(Payload::BranchChanged(
+                self.root_node.proof.writer_id,
+            )))
+            .unwrap_or(0);
+    }
+
+    async fn load_path(
+        &self,
+        conn: &mut db::Connection,
+        encoded_locator: &LocatorHash,
+    ) -> Result<Path> {
+        let mut path = Path::new(self.root_node.proof.hash, *encoded_locator);
+
+        path.layers_found += 1;
+
+        let mut parent = path.root_hash;
+
+        for level in 0..INNER_LAYER_COUNT {
+            path.inner[level] = InnerNode::load_children(conn, &parent).await?;
+
+            if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
+                parent = node.hash
+            } else {
+                return Ok(path);
+            };
+
+            path.layers_found += 1;
+        }
+
+        path.leaves = LeafNode::load_children(conn, &parent).await?;
+
+        if path.leaves.get(encoded_locator).is_some() {
+            path.layers_found += 1;
+        }
+
+        Ok(path)
+    }
+
+    async fn save_path(
+        &mut self,
+        conn: &mut db::Connection,
+        path: &Path,
+        write_keys: &Keypair,
+    ) -> Result<()> {
+        for (i, inner_layer) in path.inner.iter().enumerate() {
+            if let Some(parent_hash) = path.hash_at_layer(i) {
+                for (bucket, node) in inner_layer {
+                    node.save(conn, &parent_hash, bucket).await?;
+                }
+            }
+        }
+
+        let layer = Path::total_layer_count() - 1;
+        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+            for leaf in &path.leaves {
+                leaf.save(conn, &parent_hash).await?;
+            }
+        }
+
+        let writer_id = self.root_node.proof.writer_id;
+        let new_version_vector = self
+            .root_node
+            .proof
+            .version_vector
+            .clone()
+            .incremented(writer_id);
+        let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
+        let new_root_node = RootNode::create(conn, new_proof, self.root_node.summary).await?;
+
+        // NOTE: It is not enough to remove only the old_root because there may be a non zero
+        // number of incomplete roots that have been downloaded prior to new_root becoming
+        // complete.
+        new_root_node.remove_recursively_all_older(conn).await?;
+
+        self.root_node = new_root_node;
 
         Ok(())
     }
 }
 
-async fn load_path(
-    conn: &mut db::Connection,
-    root_hash: &Hash,
-    encoded_locator: &LocatorHash,
-) -> Result<Path> {
-    let mut path = Path::new(*root_hash, *encoded_locator);
-
-    path.layers_found += 1;
-
-    let mut parent = path.root_hash;
-
-    for level in 0..INNER_LAYER_COUNT {
-        path.inner[level] = InnerNode::load_children(conn, &parent).await?;
-
-        if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
-            parent = node.hash
-        } else {
-            return Ok(path);
-        };
-
-        path.layers_found += 1;
+impl Versioned for SnapshotData {
+    fn compare_versions(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.version_vector().partial_cmp(other.version_vector())
     }
 
-    path.leaves = LeafNode::load_children(conn, &parent).await?;
-
-    if path.leaves.get(encoded_locator).is_some() {
-        path.layers_found += 1;
+    fn branch_id(&self) -> &PublicKey {
+        self.id()
     }
-
-    Ok(path)
-}
-
-async fn save_path(
-    conn: &mut db::Connection,
-    old_root: &RootNode,
-    path: &Path,
-    write_keys: &Keypair,
-) -> Result<()> {
-    for (i, inner_layer) in path.inner.iter().enumerate() {
-        if let Some(parent_hash) = path.hash_at_layer(i) {
-            for (bucket, node) in inner_layer {
-                node.save(conn, &parent_hash, bucket).await?;
-            }
-        }
-    }
-
-    let layer = Path::total_layer_count() - 1;
-    if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
-        for leaf in &path.leaves {
-            leaf.save(conn, &parent_hash).await?;
-        }
-    }
-
-    let writer_id = old_root.proof.writer_id;
-    let new_version_vector = old_root.proof.version_vector.clone().incremented(writer_id);
-    let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
-    let new_root = RootNode::create(conn, new_proof, old_root.summary).await?;
-
-    // NOTE: It is not enough to remove only the old_root because there may be a non zero
-    // number of incomplete roots that have been downloaded prior to new_root becoming
-    // complete.
-    new_root.remove_recursively_all_older(conn).await?;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -474,17 +598,10 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::PoolConnection, BranchData) {
-        let (base_dir, mut conn) = init_db().await;
+        let (base_dir, conn) = init_db().await;
 
         let (notify_tx, _) = broadcast::channel(1);
-        let branch = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &Keypair::random(),
-            notify_tx,
-        )
-        .await
-        .unwrap();
+        let branch = BranchData::new(PublicKey::random(), notify_tx);
 
         (base_dir, conn, branch)
     }

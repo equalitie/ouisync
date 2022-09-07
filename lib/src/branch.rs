@@ -149,12 +149,7 @@ impl Branch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        access_control::WriteSecrets,
-        db,
-        index::{Index, Proof, EMPTY_INNER_HASH},
-        locator::Locator,
-    };
+    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator};
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -193,17 +188,9 @@ mod tests {
         let repository_id = secrets.id;
         let (event_tx, _) = broadcast::channel(1);
 
-        let index = Index::load(pool.clone(), repository_id, event_tx.clone())
-            .await
-            .unwrap();
+        let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
-        let proof = Proof::new(
-            writer_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            &secrets.write_keys,
-        );
-        let branch = index.create_branch(proof).await.unwrap();
+        let branch = index.get_branch(writer_id);
         let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
 
         (base_dir, pool, branch)

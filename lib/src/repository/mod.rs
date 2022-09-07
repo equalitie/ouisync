@@ -1,7 +1,6 @@
 mod id;
 #[cfg(test)]
 mod tests;
-mod utils;
 mod worker;
 
 pub(crate) use self::id::LocalId;
@@ -24,14 +23,13 @@ use crate::{
     error::{Error, Result},
     event::BranchChangedReceiver,
     file::File,
-    index::{BranchData, Index, Proof, EMPTY_INNER_HASH},
+    index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
     state_monitor::{MonitoredValue, StateMonitor},
     store::Store,
     sync::broadcast::ThrottleReceiver,
-    version_vector::VersionVector,
 };
 use camino::Utf8Path;
 use std::{fmt, path::Path, sync::Arc, time::Duration};
@@ -210,7 +208,7 @@ impl Repository {
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        let index = Index::load(pool, *secrets.id(), event_tx.clone()).await?;
+        let index = Index::new(pool, *secrets.id(), event_tx.clone());
 
         // Lazy block downloading requires at least read access because it needs to be able to
         // traverse the repository in order to enumarate reachable blocks.
@@ -247,11 +245,7 @@ impl Repository {
         });
 
         let local_branch = if shared.secrets.can_write() && enable_merger {
-            match shared.get_or_create_local_branch().await {
-                Ok(branch) => Some(branch),
-                Err(Error::PermissionDenied) => None,
-                Err(error) => return Err(error),
-            }
+            shared.local_branch().ok()
         } else {
             None
         };
@@ -335,10 +329,9 @@ impl Repository {
     /// Creates a new file at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let local_branch = self.get_or_create_local_branch().await?;
-
         let mut conn = self.db().acquire().await?;
-        let file = local_branch
+        let file = self
+            .local_branch()?
             .ensure_file_exists(&mut conn, path.as_ref())
             .await?;
 
@@ -348,10 +341,9 @@ impl Repository {
     /// Creates a new directory at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let local_branch = self.get_or_create_local_branch().await?;
-
         let mut conn = self.db().acquire().await?;
-        let dir = local_branch
+        let dir = self
+            .local_branch()?
             .ensure_directory_exists(&mut conn, path.as_ref())
             .await?;
 
@@ -362,8 +354,6 @@ impl Repository {
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-
-        self.get_or_create_local_branch().await?;
 
         let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(&mut conn, parent).await?;
@@ -400,7 +390,7 @@ impl Repository {
     ) -> Result<()> {
         use std::borrow::Cow;
 
-        let local_branch = self.get_or_create_local_branch().await?;
+        let local_branch = self.local_branch()?;
         let mut conn = self.db().acquire().await?;
 
         let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
@@ -468,15 +458,18 @@ impl Repository {
         Ok(())
     }
 
-    /// Returns the local branch if it exists.
-    pub fn local_branch(&self) -> Option<Branch> {
+    /// Returns the local branch or `Error::PermissionDenied` if this repo doesn't have at least
+    /// read access.
+    pub fn local_branch(&self) -> Result<Branch> {
         self.shared.local_branch()
     }
 
-    /// Returns the local branch if it exists or create it otherwise. The repository must have
-    /// write access, otherwise returns PermissionDenied error.
-    pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        self.shared.get_or_create_local_branch().await
+    // Returns the branch corresponding to the given id.
+    // Currently test only.
+    #[cfg(test)]
+    pub(crate) fn get_branch(&self, remote_id: PublicKey) -> Result<Branch> {
+        self.shared
+            .inflate(self.shared.store.index.get_branch(remote_id))
     }
 
     /// Subscribe to change notification from all current and future branches.
@@ -513,14 +506,8 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
-        // If we have only blind access we can cut this short. Also this check is necessary to
-        // distinguish *empty* repository with blind access from one with read access.
-        if !self.shared.secrets.can_read() {
-            return Err(Error::PermissionDenied);
-        }
-
-        let local_branch = self.local_branch();
-        let branches = self.shared.collect_branches()?;
+        let local_branch = self.local_branch()?;
+        let branches = self.shared.load_branches(conn).await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -544,7 +531,7 @@ impl Repository {
             dirs.push(dir);
         }
 
-        Ok(JointDirectory::new(local_branch, dirs))
+        Ok(JointDirectory::new(Some(local_branch), dirs))
     }
 
     async fn cd<P: AsRef<Utf8Path>>(
@@ -580,10 +567,10 @@ impl Repository {
             }
         };
 
-        let branches = match self.shared.collect_branches() {
+        let branches = match self.shared.load_branches(&mut conn).await {
             Ok(branches) => branches,
             Err(error) => {
-                print.display(&format_args!("failed to collect branches: {:?}", error));
+                print.display(&format_args!("failed to load branches: {:?}", error));
                 return;
             }
         };
@@ -625,26 +612,6 @@ impl Repository {
     pub fn local_id(&self) -> LocalId {
         self.shared.store.local_id
     }
-
-    // Create remote branch in this repository and returns it.
-    // FOR TESTS ONLY!
-    #[cfg(test)]
-    pub(crate) async fn create_remote_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        let write_keys = self.secrets().write_keys().ok_or(Error::PermissionDenied)?;
-        let proof = Proof::new(
-            remote_id,
-            // Unlike the local one, remote branches start at v1 to prevent them from being
-            // immediately pruned. This is also consistent with the production, where remote
-            // branches are only created by receiving them from other replicas and we only accept
-            // them if their vv is non-empty.
-            VersionVector::first(remote_id),
-            *EMPTY_INNER_HASH,
-            write_keys,
-        );
-        let branch = self.shared.store.index.create_branch(proof).await?;
-
-        self.shared.inflate(branch)
-    }
 }
 
 impl fmt::Debug for Repository {
@@ -673,42 +640,21 @@ struct Shared {
 }
 
 impl Shared {
-    pub fn local_branch(&self) -> Option<Branch> {
-        self.store
-            .index
-            .get_branch(&self.this_writer_id)
-            .and_then(|data| self.inflate(data).ok())
+    pub fn local_branch(&self) -> Result<Branch> {
+        self.inflate(self.store.index.get_branch(self.this_writer_id))
     }
 
-    pub async fn get_or_create_local_branch(&self) -> Result<Branch> {
-        let data = if let Some(data) = self.store.index.get_branch(&self.this_writer_id) {
-            data
-        } else if let Some(write_keys) = self.secrets.write_keys() {
-            let proof = Proof::new(
-                self.this_writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            );
-            self.store.index.create_branch(proof).await?
-        } else {
-            return Err(Error::PermissionDenied);
-        };
-
-        self.inflate(data)
-    }
-
-    pub fn collect_branches(&self) -> Result<Vec<Branch>> {
+    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Branch>> {
         self.store
             .index
-            .collect_branches()
+            .load_branches(conn)
+            .await?
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()
     }
 
-    // Create `Branch` wrapping the given `data`, reusing a previously cached one if it exists,
-    // and putting it into the cache if it does not.
+    // Create `Branch` wrapping the given `data`.
     fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 

@@ -149,7 +149,7 @@ pub unsafe extern "C" fn file_write(
             let buffer = slice::from_raw_parts(buffer.into_inner(), len);
             let mut g = ffi_file.lock().await;
 
-            let local_branch = g.repo.get_or_create_local_branch().await?;
+            let local_branch = g.repo.local_branch()?;
 
             let mut tx = g.repo.db().begin().await?;
             g.file.seek(&mut tx, SeekFrom::Start(offset)).await?;
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn file_truncate(
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
 
-            let local_branch = g.repo.get_or_create_local_branch().await?;
+            let local_branch = g.repo.local_branch()?;
 
             let mut tx = g.repo.db().begin().await?;
             g.file.fork(&mut tx, local_branch).await?;

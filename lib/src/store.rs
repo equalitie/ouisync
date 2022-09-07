@@ -84,10 +84,8 @@ impl Store {
         self.block_tracker.complete(&data.id);
 
         // Notify affected branches.
-        for writer_id in &writer_ids {
-            if let Some(branch) = self.index.get_branch(writer_id) {
-                branch.notify();
-            }
+        for writer_id in writer_ids {
+            self.index.get_branch(writer_id).notify()
         }
 
         Ok(())
@@ -132,17 +130,8 @@ mod tests {
         let write_keys = Keypair::random();
         let (notify_tx, _) = broadcast::channel(1);
 
-        let branch0 = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &write_keys,
-            notify_tx.clone(),
-        )
-        .await
-        .unwrap();
-        let branch1 = BranchData::create(&mut conn, PublicKey::random(), &write_keys, notify_tx)
-            .await
-            .unwrap();
+        let branch0 = BranchData::new(PublicKey::random(), notify_tx.clone());
+        let branch1 = BranchData::new(PublicKey::random(), notify_tx);
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
@@ -192,14 +181,7 @@ mod tests {
         let write_keys = Keypair::random();
         let (notify_tx, _) = broadcast::channel(1);
 
-        let branch = BranchData::create(
-            &mut conn,
-            PublicKey::random(),
-            &write_keys,
-            notify_tx.clone(),
-        )
-        .await
-        .unwrap();
+        let branch = BranchData::new(PublicKey::random(), notify_tx.clone());
 
         let locator = Locator::head(rng.gen());
         let locator = locator.encode(&read_key);
@@ -248,7 +230,7 @@ mod tests {
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+        let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             monitored: Weak::new(),
             index,
@@ -286,7 +268,7 @@ mod tests {
 
         let repository_id = RepositoryId::random();
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool, repository_id, event_tx).await.unwrap();
+        let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             monitored: Weak::new(),
             index,
@@ -325,9 +307,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let (event_tx, _) = broadcast::channel(1);
-        let index = Index::load(pool.clone(), repository_id, event_tx)
-            .await
-            .unwrap();
+        let index = Index::new(pool.clone(), repository_id, event_tx);
         let store = Store {
             monitored: std::sync::Weak::new(),
             index,

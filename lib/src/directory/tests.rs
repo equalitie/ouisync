@@ -2,12 +2,10 @@ use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
     blob::{Blob, BlobCache},
-    crypto::sign::Keypair,
     db,
     index::BranchData,
 };
 use assert_matches::assert_matches;
-use futures_util::future;
 use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -604,7 +602,7 @@ async fn remove_concurrent_remote_file() {
 async fn setup() -> (TempDir, db::Pool, Branch) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = WriteSecrets::random().into();
-    let branch = create_branch(&pool, keys).await;
+    let branch = create_branch(keys);
 
     (base_dir, pool, branch)
 }
@@ -612,24 +610,15 @@ async fn setup() -> (TempDir, db::Pool, Branch) {
 async fn setup_multiple<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
-    let branches: Vec<_> =
-        future::join_all((0..N).map(|_| create_branch(&pool, keys.clone()))).await;
+    let branches: Vec<_> = (0..N).map(|_| create_branch(keys.clone())).collect();
     let branches = branches.try_into().ok().unwrap();
 
     (base_dir, pool, branches)
 }
 
-async fn create_branch(pool: &db::Pool, keys: AccessKeys) -> Branch {
+fn create_branch(keys: AccessKeys) -> Branch {
     let (event_tx, _) = broadcast::channel(1);
-    let write_keys = Keypair::random();
-    let branch_data = BranchData::create(
-        &mut pool.acquire().await.unwrap(),
-        PublicKey::random(),
-        &write_keys,
-        event_tx.clone(),
-    )
-    .await
-    .unwrap();
+    let branch_data = BranchData::new(PublicKey::random(), event_tx.clone());
     Branch::new(
         Arc::new(branch_data),
         keys,
