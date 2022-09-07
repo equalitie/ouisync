@@ -41,13 +41,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore,
-    error::Error,
-    repository::RepositoryId,
-    scoped_task::{self, ScopedJoinHandle, ScopedTaskSet},
-    state_monitor::StateMonitor,
-    store::Store,
-    sync::uninitialized_watch,
+    config::ConfigStore, error::Error, repository::RepositoryId, scoped_task,
+    state_monitor::StateMonitor, store::Store, sync::uninitialized_watch,
 };
 use async_trait::async_trait;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -67,7 +62,8 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
-    task, time,
+    task::{self, AbortHandle, JoinSet},
+    time,
 };
 use tracing::{field, instrument, Instrument, Span};
 
@@ -76,7 +72,7 @@ pub struct Network {
     pub monitor: StateMonitor,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
-    _tasks: Arc<Tasks>,
+    _tasks: Arc<BlockingMutex<Tasks>>,
     _port_forwarder: Option<upnp::PortForwarder>,
 }
 
@@ -205,7 +201,7 @@ impl Network {
             (None, None, None, None)
         };
 
-        let tasks = Arc::new(Tasks::default());
+        let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
 
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
 
@@ -505,8 +501,8 @@ struct RegistrationHolder {
 
 #[derive(Default)]
 struct Tasks {
-    local_discovery: BlockingMutex<Option<ScopedJoinHandle<()>>>,
-    other: ScopedTaskSet,
+    local_discovery: Option<AbortHandle>,
+    other: JoinSet<()>,
 }
 
 struct Inner {
@@ -534,7 +530,7 @@ struct Inner {
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
-    tasks: Weak<Tasks>,
+    tasks: Weak<BlockingMutex<Tasks>>,
     highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
@@ -556,14 +552,17 @@ impl State {
 impl Inner {
     async fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
         let tasks = self.tasks.upgrade().unwrap();
-        let mut local_discovery = tasks.local_discovery.lock().unwrap();
+        let mut tasks = tasks.lock().unwrap();
 
         if !enable {
-            *local_discovery = None;
+            if let Some(handle) = tasks.local_discovery.take() {
+                handle.abort();
+            }
+
             return;
         }
 
-        if local_discovery.is_some() {
+        if tasks.local_discovery.is_some() {
             return;
         }
 
@@ -581,9 +580,11 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            *local_discovery = Some(scoped_task::spawn(instrument_task(
-                self.clone().run_local_discovery(port),
-            )));
+            tasks.local_discovery = Some(
+                tasks
+                    .other
+                    .spawn(instrument_task(self.clone().run_local_discovery(port))),
+            );
         } else {
             tracing::error!(
                 "Failed to enable local discovery because we don't have an IPv4 listener"
@@ -973,13 +974,15 @@ impl Inner {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
-        // upgraded?
         self.tasks
             .upgrade()
+            // TODO: this `unwrap` is sketchy. Maybe we should simply not spawn if `tasks` can't be
+            // upgraded?
+            .unwrap()
+            .lock()
             .unwrap()
             .other
-            .spawn(instrument_task(f))
+            .spawn(instrument_task(f));
     }
 }
 
