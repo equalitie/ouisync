@@ -153,6 +153,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
 
     simulate_connection_until(&mut server, &mut client, drive).await;
 
+    drop(client);
+
     // HACK: prevent "too many open files" error.
     a_store.db().close().await;
     b_store.db().close().await;

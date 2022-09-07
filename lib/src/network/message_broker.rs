@@ -10,7 +10,7 @@ use super::{
     runtime_id::PublicRuntimeId,
     server::Server,
 };
-use crate::{index::Index, repository::RepositoryId, store::Store};
+use crate::{index::Index, repository::LocalId, store::Store};
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -37,7 +37,7 @@ pub(super) struct MessageBroker {
     this_runtime_id: PublicRuntimeId,
     that_runtime_id: PublicRuntimeId,
     dispatcher: MessageDispatcher,
-    links: HashMap<MessageChannel, oneshot::Sender<()>>,
+    links: HashMap<LocalId, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
     span: Span,
 }
@@ -90,7 +90,7 @@ impl MessageBroker {
         let channel = MessageChannel::from(store.index.repository_id());
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(channel) {
+        match self.links.entry(store.local_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
@@ -133,8 +133,8 @@ impl MessageBroker {
 
     /// Destroy the link between a local repository with the specified id hash and its remote
     /// counterpart (if one exists).
-    pub fn destroy_link(&mut self, id: &RepositoryId) {
-        self.links.remove(&MessageChannel::from(id));
+    pub fn destroy_link(&mut self, id: LocalId) {
+        self.links.remove(&id);
     }
 }
 

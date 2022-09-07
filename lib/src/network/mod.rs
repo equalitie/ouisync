@@ -495,7 +495,7 @@ impl Drop for Registration {
 
         if let Some(holder) = state.registry.try_remove(self.key) {
             for broker in state.message_brokers.values_mut() {
-                broker.destroy_link(holder.store.index.repository_id());
+                broker.destroy_link(holder.store.local_id);
             }
         }
     }
