@@ -68,7 +68,7 @@ impl ConnectionDeduplicator {
                     id,
                     state: PeerState::Known,
                     source,
-                    on_release: Arc::new(on_release_tx),
+                    on_release: on_release_tx,
                 });
                 self.on_change_tx.send(()).unwrap_or(());
 
@@ -130,12 +130,11 @@ where
     ip.to_string().serialize(s)
 }
 
-#[derive(Clone)]
 struct Peer {
     id: u64,
     state: PeerState,
     source: PeerSource,
-    on_release: Arc<DropAwaitable>,
+    on_release: DropAwaitable,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
