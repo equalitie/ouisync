@@ -18,7 +18,7 @@ hex = "0.4.3"
 tracing = { version = "0.1.35" }
 ouisync-lib = { package = "ouisync", version = "0.2", path = "../lib" }
 rmp-serde = "1.1.0"
-tokio = "1.19.2"
+tokio = "1.21.0"
 tracing-subscriber = { version = "0.3.15" }
 
 [target.'cfg(target_os = "android")'.dependencies]

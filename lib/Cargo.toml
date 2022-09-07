@@ -47,7 +47,7 @@ ssdp-client = "1.0"
 thiserror = "1.0.31"
 ref-cast = "1.0.9"
 rustls = { version = "0.20.3", default-features = false, features = ["quic", "dangerous_configuration"] }
-tokio = "1.20.1"
+tokio = "1.21.0"
 tokio-stream = "0.1.9"
 tokio-util = "0.7.3"
 tracing = { version = "0.1.35" }
