@@ -37,6 +37,10 @@ impl SeenPeers {
         self.inner.write().unwrap().insert(peer, &self.inner)
     }
 
+    pub(crate) fn remove(&self, peer: &PeerAddr) {
+        self.inner.write().unwrap().remove(peer)
+    }
+
     pub(crate) fn collect(&self) -> Vec<SeenPeer> {
         self.inner.write().unwrap().collect(&self.inner)
     }
@@ -121,6 +125,15 @@ impl SeenPeersInner {
         })
     }
 
+    fn remove(&mut self, addr: &PeerAddr) {
+        self.rounds.retain(|_round_id, peers| {
+            peers.remove(addr);
+            !peers.is_empty()
+        });
+
+        self.peers.remove(addr);
+    }
+
     fn collect(&mut self, ext: &Arc<RwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
         self.peers
             .iter_mut()
@@ -177,7 +190,8 @@ impl Drop for SeenPeer {
 
         let mut peers_entry = match seen_peers.peers.entry(self.addr) {
             Entry::Occupied(entry) => entry,
-            Entry::Vacant(_) => unreachable!(),
+            // Removed by the `SeenPeers::remove` function
+            Entry::Vacant(_) => return,
         };
 
         let (rc, _rounds) = peers_entry.get_mut();

@@ -2,7 +2,8 @@ use super::{
     session,
     utils::{self, Bytes, Port, UniqueHandle},
 };
-use std::{os::raw::c_char, ptr};
+use ouisync_lib::network::peer_addr::PeerAddr;
+use std::{net::SocketAddr, os::raw::c_char, ptr, str::FromStr};
 use tokio::{select, task::JoinHandle};
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
@@ -107,6 +108,69 @@ pub unsafe extern "C" fn network_quic_listener_local_addr_v6() -> *mut c_char {
         .quic_listener_local_addr_v6()
         .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
         .unwrap_or(ptr::null_mut())
+}
+
+/// Add a QUIC endpoint to which which OuiSync shall attempt to connect. Upon failure or success
+/// but then disconnection, the endpoint be retried until the below
+/// `network_remove_user_provided_quic_peer` function with the same endpoint is called.
+///
+/// The endpoint provided to this function may be an IPv4 endpoint in the format
+/// "192.168.0.1:1234", or an IPv6 address in the format "[2001:db8:1]:1234".
+///
+/// If the format is not parsed correctly, this function returns `false`, in all other cases it
+/// returns `true`. The latter includes the case when the peer has already been added.
+#[no_mangle]
+pub unsafe extern "C" fn network_add_user_provided_quic_peer(addr: *const c_char) -> bool {
+    let addr = match utils::ptr_to_str(addr) {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    let addr = match SocketAddr::from_str(addr) {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    // The `Network::add_user_provided_peer` function internally calls `task::spawn` so needs the
+    // current Tokio context (thus the `_runtime_guard`).
+    let _runtime_guard = session::get().runtime().enter();
+
+    session::get()
+        .network()
+        .add_user_provided_peer(&PeerAddr::Quic(addr));
+
+    true
+}
+
+/// Remove a QUIC endpoint from the list of user provided QUIC peers (added by the above
+/// `network_add_user_provided_quic_peer` function). Note that users added by other discovery
+/// mechanisms are not affected by this function. Also, removing a peer will not cause
+/// disconnection if the connection has already been established. But if the peers disconnected due
+/// to other reasons, the connection to this `addr` shall not be reattempted after the call to this
+/// function.
+///
+/// The endpoint provided to this function may be an IPv4 endpoint in the format
+/// "192.168.0.1:1234", or an IPv6 address in the format "[2001:db8:1]:1234".
+///
+/// If the format is not parsed correctly, this function returns `false`, in all other cases it
+/// returns `true`. The latter includes the case when the peer has not been previously added.
+#[no_mangle]
+pub unsafe extern "C" fn network_remove_user_provided_quic_peer(addr: *const c_char) -> bool {
+    let addr = match utils::ptr_to_str(addr) {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    let addr = match SocketAddr::from_str(addr) {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    session::get()
+        .network()
+        .remove_user_provided_peer(&PeerAddr::Quic(addr));
+
+    true
 }
 
 /// Return the list of peers with which we're connected, serialized with msgpack.

@@ -274,9 +274,7 @@ impl Network {
             .await;
 
         for peer in &options.peers {
-            if let Some(seen_peer) = inner.user_provided_peers.insert(*peer) {
-                inner.clone().establish_user_provided_connection(seen_peer);
-            }
+            inner.clone().establish_user_provided_connection(peer);
         }
 
         Ok(network)
@@ -304,6 +302,14 @@ impl Network {
 
     pub fn dht_local_addr_v6(&self) -> Option<&SocketAddr> {
         self.inner.dht_local_addr_v6.as_ref()
+    }
+
+    pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
+        self.inner.clone().establish_user_provided_connection(peer);
+    }
+
+    pub fn remove_user_provided_peer(&self, peer: &PeerAddr) {
+        self.inner.user_provided_peers.remove(peer)
     }
 
     pub fn handle(&self) -> Handle {
@@ -673,7 +679,13 @@ impl Inner {
             .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
-    fn establish_user_provided_connection(self: Arc<Self>, peer: SeenPeer) {
+    fn establish_user_provided_connection(self: Arc<Self>, peer: &PeerAddr) {
+        let peer = match self.user_provided_peers.insert(*peer) {
+            Some(peer) => peer,
+            // Already in `user_provided_peers`.
+            None => return,
+        };
+
         self.spawn(
             self.clone()
                 .handle_peer_found(peer, PeerSource::UserProvided),

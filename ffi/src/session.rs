@@ -194,7 +194,7 @@ pub unsafe extern "C" fn session_state_monitor_unsubscribe(
 pub unsafe extern "C" fn session_close() {
     let session = mem::replace(&mut SESSION, ptr::null_mut());
     if !session.is_null() {
-        Box::from_raw(session);
+        let _ = Box::from_raw(session);
     }
 }
 
