@@ -1,8 +1,8 @@
 use super::{
-    node::{InnerNode, LeafNode, RootNode, Summary, INNER_LAYER_COUNT},
+    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    VersionVectorOp, EMPTY_INNER_HASH,
+    VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -55,29 +55,17 @@ impl BranchData {
         conn: &mut db::Connection,
         write_keys: &Keypair,
     ) -> Result<SnapshotData> {
-        let mut tx = conn.begin().await?;
-
-        let root_node =
-            match RootNode::load_latest_complete_by_writer(&mut tx, self.writer_id).await {
-                Ok(root_node) => Some(root_node),
-                Err(Error::EntryNotFound) => None,
-                Err(error) => return Err(error),
-            };
+        let root_node = match RootNode::load_latest_complete_by_writer(conn, self.writer_id).await {
+            Ok(root_node) => Some(root_node),
+            Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
 
         let root_node = if let Some(root_node) = root_node {
             root_node
         } else {
-            let proof = Proof::new(
-                self.writer_id,
-                VersionVector::new(),
-                *EMPTY_INNER_HASH,
-                write_keys,
-            );
-
-            RootNode::create(&mut tx, proof, Summary::FULL).await?
+            RootNode::empty(self.writer_id, write_keys)
         };
-
-        tx.commit().await?;
 
         Ok(SnapshotData { root_node })
     }

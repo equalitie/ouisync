@@ -7,13 +7,10 @@ mod receive_filter;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use self::node::test_utils as node_test_utils;
+pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::BranchData,
-    node::{
-        receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary,
-        EMPTY_INNER_HASH,
-    },
+    node::{receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary},
     proof::UntrustedProof,
     receive_filter::ReceiveFilter,
 };
