@@ -5,7 +5,7 @@ use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex as SyncMutex, Weak,
+        Arc, Mutex as SyncMutex,
     },
 };
 
@@ -64,14 +64,14 @@ impl ConnectionDeduplicator {
         match self.connections.lock().unwrap().entry(key) {
             Entry::Vacant(entry) => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let on_release = Arc::new(DropAwaitable::new());
-                let on_release_weak = Arc::downgrade(&on_release);
+                let on_release_tx = DropAwaitable::new();
+                let on_release_rx = on_release_tx.subscribe();
 
                 entry.insert(Peer {
                     id,
                     state: PeerState::Known,
                     source,
-                    on_release,
+                    on_release: Arc::new(on_release_tx),
                 });
                 self.on_change_tx.send(()).unwrap_or(());
 
@@ -79,7 +79,7 @@ impl ConnectionDeduplicator {
                     connections: self.connections.clone(),
                     key,
                     id,
-                    on_release: on_release_weak,
+                    on_release: on_release_rx,
                     on_deduplicator_change: self.on_change_tx.clone(),
                 })
             }
@@ -153,7 +153,7 @@ pub(super) struct ConnectionPermit {
     connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     key: ConnectionKey,
     id: u64,
-    on_release: Weak<DropAwaitable>,
+    on_release: AwaitDrop,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -200,12 +200,9 @@ impl ConnectionPermit {
         }
     }
 
-    /// Returns a `Notify` that gets notified when this permit gets released.
+    /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
-        // Unwrap is OK because the entry still exists in the map until Self is dropped.
-        // (With one edge case when `self` is a `ConnectionPermit` inside `ConnectionPermitHalf`,
-        // but `ConnectionPermitHalf` does not expose this `released` fn, so we should be good).
-        self.on_release.upgrade().unwrap().subscribe()
+        self.on_release.clone()
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -216,7 +213,7 @@ impl ConnectionPermit {
     #[cfg(test)]
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
-        let on_release = Arc::new(DropAwaitable::new());
+        let on_release = DropAwaitable::new().subscribe();
 
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
@@ -225,7 +222,7 @@ impl ConnectionPermit {
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
-            on_release: Arc::downgrade(&on_release),
+            on_release,
             on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
         }
     }

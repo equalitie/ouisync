@@ -729,7 +729,7 @@ impl Inner {
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
-                    on_release.await;
+                    on_release.recv().await;
                     continue;
                 }
             };
@@ -955,7 +955,7 @@ impl Inner {
             };
         }
 
-        released.await;
+        released.recv().await;
         tracing::info!("connection lost");
 
         // Remove the broker if it has no more connections.

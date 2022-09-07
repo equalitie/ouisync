@@ -1,11 +1,7 @@
 //! Synchronization utilities
 
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::future::Future;
 
 /// MPMC broadcast channel
 pub mod broadcast {
@@ -144,26 +140,22 @@ pub(crate) mod uninitialized_watch {
 //       // Do some async tasks.
 //     });
 //
-//     on_dropped.await;
+//     on_dropped.recv().await;
 //
 pub struct DropAwaitable {
-    sender: uninitialized_watch::Sender<()>,
+    tx: tokio::sync::watch::Sender<()>,
 }
 
 impl DropAwaitable {
     pub fn new() -> Self {
         Self {
-            sender: uninitialized_watch::channel().0,
+            tx: tokio::sync::watch::channel(()).0,
         }
     }
 
     pub fn subscribe(&self) -> AwaitDrop {
         AwaitDrop {
-            dropped: false,
-            changed: Box::pin({
-                let mut receiver = self.sender.subscribe();
-                async move { receiver.changed().await.unwrap_or(()) }
-            }),
+            rx: self.tx.subscribe(),
         }
     }
 }
@@ -174,31 +166,13 @@ impl Default for DropAwaitable {
     }
 }
 
-impl Drop for DropAwaitable {
-    fn drop(&mut self) {
-        self.sender.send(()).unwrap_or(());
-    }
-}
-
+#[derive(Clone)]
 pub struct AwaitDrop {
-    dropped: bool,
-    changed: Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+    rx: tokio::sync::watch::Receiver<()>,
 }
 
-impl Future for AwaitDrop {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.dropped {
-            return Poll::Ready(());
-        }
-        let this = self.get_mut();
-        match Pin::new(&mut this.changed).poll(cx) {
-            Poll::Ready(_) => {
-                this.dropped = true;
-                Poll::Ready(())
-            }
-            Poll::Pending => Poll::Pending,
-        }
+impl AwaitDrop {
+    pub async fn recv(mut self) {
+        while self.rx.changed().await.is_ok() {}
     }
 }
