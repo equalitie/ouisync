@@ -222,13 +222,14 @@ fn run<F: Future>(future: F) -> F::Output {
 }
 
 async fn setup() -> (TempDir, MountGuard) {
-    // use std::sync::Once;
+    use std::thread;
+    use tracing::Instrument;
 
-    // static LOG_INIT: Once = Once::new();
-    // LOG_INIT.call_once(env_logger::init);
+    init_log();
 
     let base_dir = TempDir::new().unwrap();
 
+    let span = tracing::info_span!("test", name = thread::current().name());
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         rand::random(),
@@ -237,6 +238,7 @@ async fn setup() -> (TempDir, MountGuard) {
         true,
         &StateMonitor::make_root(),
     )
+    .instrument(span)
     .await
     .unwrap();
 
@@ -257,4 +259,19 @@ async fn read_dir(path: impl AsRef<Path>) -> HashMap<OsString, Metadata> {
     }
 
     entries
+}
+
+fn init_log() {
+    use tracing::metadata::LevelFilter;
+    use tracing_subscriber::EnvFilter;
+
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        )
+        .try_init()
+        .ok();
 }
