@@ -34,19 +34,16 @@ pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
     connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
     on_change_tx: Arc<uninitialized_watch::Sender<()>>,
-    // We need to keep this to prevent the Sender from closing.
-    on_change_rx: uninitialized_watch::Receiver<()>,
 }
 
 impl ConnectionDeduplicator {
     pub fn new() -> Self {
-        let (tx, rx) = uninitialized_watch::channel();
+        let (tx, _) = uninitialized_watch::channel();
 
         Self {
             next_id: AtomicU64::new(0),
             connections: Arc::new(SyncMutex::new(HashMap::new())),
             on_change_tx: Arc::new(tx),
-            on_change_rx: rx,
         }
     }
 
@@ -106,7 +103,7 @@ impl ConnectionDeduplicator {
     }
 
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.on_change_rx.clone()
+        self.on_change_tx.subscribe()
     }
 }
 
