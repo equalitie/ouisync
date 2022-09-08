@@ -2,6 +2,7 @@
 //! other in order to discover new peers.
 
 use super::{
+    ip,
     message::Content,
     message_dispatcher::PeerAddrLiveSet,
     peer_addr::PeerAddr,
@@ -17,7 +18,6 @@ use std::{
 use tokio::{select, sync::mpsc, time};
 
 // TODO: add ability to enable/disable the PEX
-// TODO: don't announce LAN addresses
 // TODO: don't announce recently announced addresses
 // TODO: announce only random subset of the addresses
 // TODO: figure out when to start new round on the `SeenPeers`.
@@ -100,6 +100,9 @@ impl PexAnnouncer {
             }
 
             let contacts = self.contacts.lock().unwrap().collect_for(&self.peer_id);
+            if contacts.is_empty() {
+                continue;
+            }
 
             tracing::trace!(?contacts, "announce");
 
@@ -132,10 +135,27 @@ impl ContactSet {
     }
 
     fn collect_for(&self, recipient_id: &PublicRuntimeId) -> HashSet<PeerAddr> {
+        // If the recipient is local, we send them all known contacts - global and local. If they
+        // are global, we send them only global contacts. A peer is considered local for this
+        // purpose if at least one of their addresses is local.
+        let is_local = if let Some(peer_addrs) = self.0.get(recipient_id) {
+            peer_addrs
+                .collect()
+                .iter()
+                .any(|addr| !ip::is_global(&addr.ip()))
+        } else {
+            return HashSet::new();
+        };
+
         self.0
             .iter()
             .filter(|(peer_id, _)| *peer_id != recipient_id)
-            .flat_map(|(_, peer_addrs)| peer_addrs.collect())
+            .flat_map(|(_, peer_addrs)| {
+                peer_addrs
+                    .collect()
+                    .into_iter()
+                    .filter(|addr| is_local || ip::is_global(&addr.ip()))
+            })
             .collect()
     }
 }
