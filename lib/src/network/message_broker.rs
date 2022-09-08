@@ -5,6 +5,7 @@ use super::{
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
+    peer_exchange::{PexAnnouncer, PexAnnouncerGroup, PexPayload},
     raw,
     request::MAX_PENDING_REQUESTS,
     runtime_id::PublicRuntimeId,
@@ -83,7 +84,12 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(&mut self, store: Store) {
+    pub fn create_link(
+        &mut self,
+        store: Store,
+        pex_tx: mpsc::Sender<PexPayload>,
+        pex_announcer: &PexAnnouncerGroup,
+    ) {
         let span = tracing::info_span!(parent: &self.span, "link", local_id = %store.local_id);
         let span_enter = span.enter();
 
@@ -116,11 +122,21 @@ impl MessageBroker {
         let sink = self.dispatcher.open_send(channel);
         let request_limiter = self.request_limiter.clone();
 
+        let pex_announcer = pex_announcer.bind(self.that_runtime_id, self.dispatcher.peer_addrs());
+
         drop(span_enter);
 
         let task = async move {
             select! {
-                _ = maintain_link(role, stream, sink.clone(), store, request_limiter) => (),
+                _ = maintain_link(
+                    role,
+                    stream,
+                    sink.clone(),
+                    store,
+                    request_limiter,
+                    pex_tx,
+                    pex_announcer,
+                ) => (),
                 _ = abort_rx => (),
             }
 
@@ -151,6 +167,8 @@ async fn maintain_link(
     mut sink: ContentSink,
     store: Store,
     request_limiter: Arc<Semaphore>,
+    pex_tx: mpsc::Sender<PexPayload>,
+    pex_announcer: PexAnnouncer,
 ) {
     let mut backoff = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
@@ -180,7 +198,16 @@ async fn maintain_link(
                 Err(EstablishError::Closed) => break,
             };
 
-        match run_link(crypto_stream, crypto_sink, &store, request_limiter.clone()).await {
+        match run_link(
+            crypto_stream,
+            crypto_sink,
+            &store,
+            request_limiter.clone(),
+            pex_tx.clone(),
+            &pex_announcer,
+        )
+        .await
+        {
             ControlFlow::Continue => continue,
             ControlFlow::Break => break,
         }
@@ -216,6 +243,8 @@ async fn run_link(
     sink: EncryptingSink<'_>,
     store: &Store,
     request_limiter: Arc<Semaphore>,
+    pex_tx: mpsc::Sender<PexPayload>,
+    pex_announcer: &PexAnnouncer,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
@@ -224,9 +253,10 @@ async fn run_link(
     // Run everything in parallel:
     select! {
         flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
-        flow = run_server(store.index.clone(), content_tx, request_rx ) => flow,
-        flow = recv_messages(stream, request_tx, response_tx) => flow,
+        flow = run_server(store.index.clone(), content_tx.clone(), request_rx ) => flow,
+        flow = recv_messages(stream, request_tx, response_tx, pex_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
+        _ = pex_announcer.run(content_tx) => ControlFlow::Continue,
     }
 }
 
@@ -235,6 +265,7 @@ async fn recv_messages(
     mut stream: DecryptingStream<'_>,
     request_tx: mpsc::Sender<Request>,
     response_tx: mpsc::Sender<Response>,
+    pex_tx: mpsc::Sender<PexPayload>,
 ) -> ControlFlow {
     loop {
         let content = match stream.recv().await {
@@ -264,6 +295,7 @@ async fn recv_messages(
         match content {
             Content::Request(request) => request_tx.send(request).await.unwrap_or(()),
             Content::Response(response) => response_tx.send(response).await.unwrap_or(()),
+            Content::Pex(payload) => pex_tx.send(payload).await.unwrap_or(()),
         }
     }
 }

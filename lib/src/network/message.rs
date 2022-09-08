@@ -1,3 +1,4 @@
+use super::peer_exchange::PexPayload;
 use crate::{
     block::{BlockId, BlockNonce},
     crypto::Hash,
@@ -73,6 +74,8 @@ pub(crate) struct Message {
 pub(crate) enum Content {
     Request(Request),
     Response(Response),
+    // Peer exchange
+    Pex(PexPayload),
 }
 
 define_byte_array_wrapper! {
@@ -105,7 +108,7 @@ impl From<Content> for Request {
     fn from(content: Content) -> Self {
         match content {
             Content::Request(request) => request,
-            Content::Response(_) => {
+            Content::Response(_) | Content::Pex(_) => {
                 panic!("not a request: {:?}", content)
             }
         }
@@ -116,10 +119,10 @@ impl From<Content> for Request {
 impl From<Content> for Response {
     fn from(content: Content) -> Self {
         match content {
-            Content::Request(_) => {
+            Content::Response(response) => response,
+            Content::Request(_) | Content::Pex(_) => {
                 panic!("not a response: {:?}", content)
             }
-            Content::Response(response) => response,
         }
     }
 }

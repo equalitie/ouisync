@@ -5,11 +5,12 @@ use super::{
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
+    peer_addr::PeerAddr,
     raw,
 };
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -67,6 +68,14 @@ impl MessageDispatcher {
         ContentSink {
             channel,
             state: self.send.clone(),
+        }
+    }
+
+    /// Returns the remote addresses this dispatcher is connected to.
+    pub fn peer_addrs(&self) -> PeerAddrLiveSet {
+        PeerAddrLiveSet {
+            recv: self.recv.clone(),
+            send: self.send.clone(),
         }
     }
 
@@ -165,6 +174,26 @@ impl ContentSink {
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
 
+/// Live* collection of remote addresses a `MessageDispatcher` is connected to.
+///
+/// *) It means it gets automatically updated as connections are added/removed to/from the
+/// dispatcher.
+#[derive(Clone)]
+pub(super) struct PeerAddrLiveSet {
+    recv: Arc<RecvState>,
+    send: Arc<MultiSink>,
+}
+
+impl PeerAddrLiveSet {
+    /// Collects the current addresses and returns them in a set.
+    pub fn collect(&self) -> HashSet<PeerAddr> {
+        let recv = self.recv.reader.peer_addrs();
+        let send = self.send.peer_addrs();
+
+        recv.intersection(&send).copied().collect()
+    }
+}
+
 struct RecvState {
     reader: MultiStream,
     queues: Mutex<HashMap<MessageChannel, VecDeque<Vec<u8>>>>,
@@ -197,15 +226,19 @@ impl RecvState {
 // permit which gets released on drop.
 struct PermittedStream {
     inner: KeepAliveStream<raw::OwnedReadHalf>,
-    _permit: ConnectionPermitHalf,
+    permit: ConnectionPermitHalf,
 }
 
 impl PermittedStream {
     fn new(stream: raw::OwnedReadHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveStream::new(MessageStream::new(stream), KEEP_ALIVE_RECV_INTERVAL),
-            _permit: permit,
+            permit,
         }
+    }
+
+    fn peer_addr(&self) -> PeerAddr {
+        self.permit.peer_addr()
     }
 }
 
@@ -224,15 +257,19 @@ impl Stream for PermittedStream {
 // Contains a connection permit which gets released on drop.
 struct PermittedSink {
     inner: KeepAliveSink<raw::OwnedWriteHalf>,
-    _permit: ConnectionPermitHalf,
+    permit: ConnectionPermitHalf,
 }
 
 impl PermittedSink {
     fn new(stream: raw::OwnedWriteHalf, permit: ConnectionPermitHalf) -> Self {
         Self {
             inner: KeepAliveSink::new(MessageSink::new(stream), KEEP_ALIVE_SEND_INTERVAL),
-            _permit: permit,
+            permit,
         }
+    }
+
+    fn peer_addr(&self) -> PeerAddr {
+        self.permit.peer_addr()
     }
 }
 
@@ -297,6 +334,16 @@ impl MultiStream {
 
     fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().streams.is_empty()
+    }
+
+    fn peer_addrs(&self) -> HashSet<PeerAddr> {
+        self.inner
+            .lock()
+            .unwrap()
+            .streams
+            .iter()
+            .map(|stream| stream.peer_addr())
+            .collect()
     }
 }
 
@@ -385,6 +432,16 @@ impl MultiSink {
 
     fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().sinks.is_empty()
+    }
+
+    fn peer_addrs(&self) -> HashSet<PeerAddr> {
+        self.inner
+            .lock()
+            .unwrap()
+            .sinks
+            .iter()
+            .map(|sink| sink.peer_addr())
+            .collect()
     }
 }
 

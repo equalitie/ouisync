@@ -6,6 +6,7 @@ pub enum PeerSource {
     Listener,
     LocalDiscovery,
     Dht,
+    PeerExchange,
 }
 
 impl fmt::Display for PeerSource {
@@ -14,7 +15,8 @@ impl fmt::Display for PeerSource {
             PeerSource::Listener => write!(f, "incoming"),
             PeerSource::UserProvided => write!(f, "outgoing (user provided)"),
             PeerSource::LocalDiscovery => write!(f, "outgoing (locally discovered)"),
-            PeerSource::Dht => write!(f, "outgoing (found via DHT)"),
+            PeerSource::Dht => write!(f, "outgoing (found on DHT)"),
+            PeerSource::PeerExchange => write!(f, "outgoing (found on peer exchange)"),
         }
     }
 }

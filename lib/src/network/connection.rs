@@ -240,6 +240,12 @@ impl Drop for ConnectionPermit {
 /// See [`ConnectionPermit::split`] for more details.
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
+impl ConnectionPermitHalf {
+    pub fn peer_addr(&self) -> PeerAddr {
+        self.0.key.addr
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ConnectionKey {
     pub addr: PeerAddr,

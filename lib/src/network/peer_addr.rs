@@ -10,7 +10,7 @@ pub enum PeerPort {
     Quic(u16),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub enum PeerAddr {
     Tcp(SocketAddr),
     Quic(SocketAddr),
