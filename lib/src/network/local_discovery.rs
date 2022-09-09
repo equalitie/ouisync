@@ -163,7 +163,13 @@ impl LocalDiscovery {
     }
 }
 
-fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
+// The `_sync` version of this function calls system IO functions that may be blocking, so do it
+// all in a separate thread.
+async fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
+    tokio::task::spawn_blocking(|| create_multicast_socket_sync()).await?
+}
+
+fn create_multicast_socket_sync() -> io::Result<tokio::net::UdpSocket> {
     use socket2::{Domain, Socket, Type};
 
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
@@ -171,14 +177,14 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
     let sync_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     sync_socket.set_reuse_address(true)?;
 
-    // FIXME: this might be blocking. We should make this whole function async and use
-    // `block_in_place`.
+    // This may be blocking
     sync_socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into())?;
 
     let sync_socket: std::net::UdpSocket = sync_socket.into();
 
-    let interface = select_multicast_interface();
+    let interface = select_multicast_interface_sync();
 
+    // This may be blocking
     sync_socket.join_multicast_v4(&MULTICAST_ADDR, &interface)?;
 
     // This is not necessary if this is moved to async_std::net::UdpSocket,
@@ -190,8 +196,8 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
 
 // TODO: Support IPv6?
 // TODO: Support multiple interfaces (there may be multiple ones with private ranges)
-fn select_multicast_interface() -> Ipv4Addr {
-    // TODO: Is this blocking?
+fn select_multicast_interface_sync() -> Ipv4Addr {
+    // This may be blocking
     let addrs = match nix::ifaddrs::getifaddrs() {
         Ok(addr) => addr,
         Err(_) => return Ipv4Addr::UNSPECIFIED,
@@ -313,7 +319,7 @@ impl SocketProvider {
             Some(socket) => socket.clone(),
             None => {
                 let socket = loop {
-                    match create_multicast_socket() {
+                    match create_multicast_socket().await {
                         Ok(socket) => break Arc::new(socket),
                         Err(_) => sleep(ERROR_DELAY).await,
                     }
