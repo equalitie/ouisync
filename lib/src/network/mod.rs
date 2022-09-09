@@ -601,15 +601,11 @@ impl Inner {
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
         let monitor = self.monitor.make_child("LocalDiscovery");
 
-        let discovery = match LocalDiscovery::new(listener_port, monitor) {
-            Ok(discovery) => discovery,
-            Err(error) => {
-                tracing::error!("Failed to create LocalDiscovery: {}", error);
-                return;
-            }
-        };
+        let mut discovery = LocalDiscovery::new(listener_port, monitor);
 
-        while let Some(peer) = discovery.recv().await {
+        loop {
+            let peer = discovery.recv().await;
+
             self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),

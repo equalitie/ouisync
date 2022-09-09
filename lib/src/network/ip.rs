@@ -21,11 +21,6 @@ impl fmt::Display for Protocol {
 // TODO: Get rid of the below once `IpAddr::is_global` is in stable API.
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-// https://www.ibm.com/docs/en/networkmanager/4.2.0?topic=translation-private-address-ranges
-pub const fn is_private_class_c(ip: &Ipv4Addr) -> bool {
-    ip.octets()[0] == 192 && ip.octets()[1] == 168
-}
-
 pub const fn is_global(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_global_ipv4(ip),
