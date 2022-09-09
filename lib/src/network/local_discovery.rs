@@ -1,4 +1,5 @@
 use super::{
+    ip,
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
@@ -11,7 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
     time::Duration,
 };
@@ -164,7 +165,6 @@ impl LocalDiscovery {
 
 fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
     use socket2::{Domain, Socket, Type};
-    use std::net::SocketAddrV4;
 
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
@@ -177,13 +177,47 @@ fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
 
     let sync_socket: std::net::UdpSocket = sync_socket.into();
 
-    sync_socket.join_multicast_v4(&MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED)?;
+    let interface = select_multicast_interface();
+
+    sync_socket.join_multicast_v4(&MULTICAST_ADDR, &interface)?;
 
     // This is not necessary if this is moved to async_std::net::UdpSocket,
     // but is if moved to tokio::net::UdpSocket.
     sync_socket.set_nonblocking(true)?;
 
     tokio::net::UdpSocket::from_std(sync_socket)
+}
+
+// TODO: Support IPv6?
+// TODO: Support multiple interfaces (there may be multiple ones with private ranges)
+fn select_multicast_interface() -> Ipv4Addr {
+    // TODO: Is this blocking?
+    let addrs = match nix::ifaddrs::getifaddrs() {
+        Ok(addr) => addr,
+        Err(_) => return Ipv4Addr::UNSPECIFIED,
+    };
+
+    for ifaddr in addrs {
+        use nix::net::if_::InterfaceFlags;
+
+        if !ifaddr.flags.contains(InterfaceFlags::IFF_MULTICAST) {
+            continue;
+        }
+
+        if let Some(addr) = ifaddr.address.and_then(|addr| {
+            let addr: Option<SocketAddrV4> = match addr.as_sockaddr_in() {
+                Some(addr) => Some((*addr).into()),
+                None => None,
+            };
+            Some(*addr?.ip())
+        }) {
+            if ip::is_private_class_c(&addr) {
+                return addr;
+            }
+        }
+    }
+
+    Ipv4Addr::UNSPECIFIED
 }
 
 async fn run_beacon(
