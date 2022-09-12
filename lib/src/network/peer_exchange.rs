@@ -11,6 +11,7 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::sync::uninitialized_watch;
+use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -20,13 +21,17 @@ use std::{
 use tokio::{select, sync::mpsc, time::Instant};
 
 // TODO: add ability to enable/disable the PEX
-// TODO: announce only random subset of the addresses
 // TODO: figure out when to start new round on the `SeenPeers`.
+// TODO: throttle the number of messages sent to the same peer
 // TODO: bump the protocol version!
 
 // Time interval after a contact is announced to a peer in which the same contact won't be
 // announced again to the same peer.
 const CONTACT_EXPIRY: Duration = Duration::from_secs(10 * 60);
+
+// Maximum number of contacts sent in the same announce message. If there are more contacts than
+// this, a random subset of this size is chosen.
+const MAX_CONTACTS_PER_MESSAGE: usize = 25;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PexPayload(HashSet<PeerAddr>);
@@ -114,6 +119,7 @@ impl PexAnnouncer {
     /// channel gets closed.
     pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
         let mut recent_filter = RecentFilter::new(CONTACT_EXPIRY);
+        let mut rng = StdRng::from_entropy();
 
         loop {
             select! {
@@ -147,6 +153,16 @@ impl PexAnnouncer {
             if contacts.is_empty() {
                 continue;
             }
+
+            let contacts = if contacts.len() <= MAX_CONTACTS_PER_MESSAGE {
+                contacts
+            } else {
+                contacts
+                    .into_iter()
+                    .choose_multiple(&mut rng, MAX_CONTACTS_PER_MESSAGE)
+                    .into_iter()
+                    .collect()
+            };
 
             tracing::trace!(?contacts, "announce");
 
