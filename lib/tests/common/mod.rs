@@ -107,16 +107,20 @@ impl Proto {
     }
 }
 
-// Create two `Network` instances connected together.
-pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
-    let a = Network::new(
+// Create a single `Network` instance initially not connected to anyone.
+pub(crate) async fn create_disconnected_peer(proto: Proto) -> Network {
+    Network::new(
         &test_network_options(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
     .await
-    .unwrap();
+    .unwrap()
+}
 
+// Create two `Network` instances connected together.
+pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
+    let a = create_disconnected_peer(proto).await;
     let b = create_peer_connected_to(proto.listener_local_addr_v4(&a)).await;
 
     (a, b)

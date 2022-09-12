@@ -329,6 +329,10 @@ impl Network {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
+    pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
+        self.inner.connection_deduplicator.is_connected_to(addr)
+    }
+
     // If the user did not specify (through NetworkOptions) the preferred port, then try to use
     // the one used last time. If that fails, or if this is the first time the app is running,
     // then use a random port.
@@ -813,15 +817,16 @@ impl Inner {
             // found it is no longer seeing it.
             let addr = *peer.addr()?;
 
-            match self.connect(addr).await.ok() {
-                Some(socket) => {
+            match self.connect(addr).await {
+                Ok(socket) => {
                     return Some(socket);
                 }
-                None => {
+                Err(error) => {
                     tracing::warn!(
-                        "Failed to create {} connection to address {:?}",
+                        "Failed to create {} connection to address {:?}: {:?}",
                         source,
                         addr,
+                        error
                     );
 
                     match backoff.next_backoff() {

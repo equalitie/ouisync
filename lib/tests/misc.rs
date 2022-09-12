@@ -9,7 +9,7 @@ use ouisync::{
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
-use tokio::{task, time};
+use tokio::{select, task, time};
 use tracing::{Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -852,6 +852,50 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
     time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "archive"))
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn peer_exchange() {
+    let mut env = Env::with_seed(0);
+    let proto = Proto::Quic;
+
+    // B and C are initially connected only to A...
+    let network_a = common::create_disconnected_peer(proto).await;
+    let network_b =
+        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_a)).await;
+    let network_c =
+        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_a)).await;
+
+    let repo_a = env.create_repo().await;
+    let _reg_a = network_a.handle().register(repo_a.store().clone());
+
+    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
+    let _reg_b = network_b.handle().register(repo_b.store().clone());
+
+    let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
+    let _reg_c = network_c.handle().register(repo_c.store().clone());
+
+    let addr_b = proto.listener_local_addr_v4(&network_b);
+    let addr_c = proto.listener_local_addr_v4(&network_c);
+
+    let mut rx_b = network_b.handle().on_peer_set_change();
+    let mut rx_c = network_c.handle().on_peer_set_change();
+
+    // ...eventually B and C connect to each other via peer exchange.
+    let connected = async {
+        loop {
+            if network_b.is_connected_to(addr_c) && network_c.is_connected_to(addr_b) {
+                break;
+            }
+
+            select! {
+                result = rx_b.changed() => result.unwrap(),
+                result = rx_c.changed() => result.unwrap(),
+            }
+        }
+    };
+
+    time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the

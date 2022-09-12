@@ -105,6 +105,20 @@ impl ConnectionDeduplicator {
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
         self.on_change_tx.subscribe()
     }
+
+    pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
+        let connections = self.connections.lock().unwrap();
+        let incoming = ConnectionKey {
+            addr,
+            dir: ConnectionDirection::Incoming,
+        };
+        let outgoing = ConnectionKey {
+            addr,
+            dir: ConnectionDirection::Outgoing,
+        };
+
+        connections.contains_key(&incoming) || connections.contains_key(&outgoing)
+    }
 }
 
 pub(super) enum ReserveResult {

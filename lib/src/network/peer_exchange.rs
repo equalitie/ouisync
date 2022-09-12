@@ -22,8 +22,10 @@ use tokio::{select, sync::mpsc, time};
 // TODO: announce only random subset of the addresses
 // TODO: figure out when to start new round on the `SeenPeers`.
 // TODO: bump the protocol version!
+// TODO: don't use ANNOUNCE_INTERVAL, announce immediately when a new connection is established/lost
 
-const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(60);
+// const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(60);
+const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PexPayload(HashSet<PeerAddr>);
