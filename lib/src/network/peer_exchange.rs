@@ -106,7 +106,12 @@ impl PexAnnouncer {
                 _ = content_tx.closed() => break,
             }
 
-            let contacts = self.contacts.lock().unwrap().collect_for(&self.peer_id);
+            let contacts: HashSet<_> = self
+                .contacts
+                .lock()
+                .unwrap()
+                .iter_for(&self.peer_id)
+                .collect();
             if contacts.is_empty() {
                 continue;
             }
@@ -141,32 +146,32 @@ impl ContactSet {
         self.0.remove(peer_id);
     }
 
-    fn collect_for(&self, recipient_id: &PublicRuntimeId) -> HashSet<PeerAddr> {
+    fn iter_for<'a>(
+        &'a self,
+        recipient_id: &'a PublicRuntimeId,
+    ) -> impl Iterator<Item = PeerAddr> + 'a {
         // If the recipient is local, we send them all known contacts - global and local. If they
         // are global, we send them only global contacts. A peer is considered local for this
         // purpose if at least one of their addresses is local.
         let is_local = if let Some(connections) = self.0.get(recipient_id) {
             connections
-                .collect()
                 .iter()
                 .any(|info| !ip::is_global(&info.addr.ip()))
         } else {
-            return HashSet::new();
+            false
         };
 
         self.0
             .iter()
-            .filter(|(peer_id, _)| *peer_id != recipient_id)
-            .flat_map(|(_, connections)| {
+            .filter(move |(peer_id, _)| *peer_id != recipient_id)
+            .flat_map(move |(_, connections)| {
                 connections
-                    .collect()
-                    .into_iter()
-                    .filter(|info| is_local || ip::is_global(&info.addr.ip()))
+                    .iter()
+                    .filter(move |info| is_local || ip::is_global(&info.addr.ip()))
                     // Filter out incoming TCP contacts because they can't be used to establish
                     // outgoing connection.
                     .filter(|info| !info.addr.is_tcp() || info.dir == ConnectionDirection::Incoming)
             })
             .map(|info| info.addr)
-            .collect()
     }
 }

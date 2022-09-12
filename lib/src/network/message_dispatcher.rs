@@ -1,5 +1,7 @@
 //! Utilities for sending and receiving messages across the network.
 
+use crate::iterator::IntoIntersection;
+
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
@@ -184,12 +186,12 @@ pub(super) struct LiveConnectionInfoSet {
 }
 
 impl LiveConnectionInfoSet {
-    /// Collects the current infos and returns them in a set.
-    pub fn collect(&self) -> HashSet<ConnectionInfo> {
+    /// Returns the current infos.
+    pub fn iter(&self) -> impl Iterator<Item = ConnectionInfo> {
         let recv = self.recv.reader.connection_infos();
         let send = self.send.connection_infos();
 
-        recv.intersection(&send).copied().collect()
+        IntoIntersection::new(recv, send)
     }
 }
 
