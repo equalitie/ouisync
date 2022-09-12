@@ -84,6 +84,7 @@ pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
 pub(crate) mod uninitialized_watch {
+    use futures_util::{stream, Stream};
     use tokio::sync::watch as w;
 
     pub struct Sender<T>(w::Sender<Option<T>>);
@@ -119,6 +120,13 @@ pub(crate) mod uninitialized_watch {
                     Some(v) => return Ok(v.clone()),
                 }
             }
+        }
+
+        /// Returns a `Stream` that calls `changed` repeatedly and yields the returned values.
+        pub fn as_stream(&mut self) -> impl Stream<Item = T> + '_ {
+            stream::unfold(self, |rx| async {
+                rx.changed().await.ok().map(|value| (value, rx))
+            })
         }
     }
 

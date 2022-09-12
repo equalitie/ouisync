@@ -11,6 +11,7 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::sync::uninitialized_watch;
+use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,11 +19,11 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::{select, sync::mpsc, time::Instant};
+use tokio::{pin, select, sync::mpsc, time::Instant};
+use tokio_stream::StreamExt;
 
 // TODO: add ability to enable/disable the PEX
 // TODO: figure out when to start new round on the `SeenPeers`.
-// TODO: throttle the number of messages sent to the same peer
 // TODO: bump the protocol version!
 
 // Time interval after a contact is announced to a peer in which the same contact won't be
@@ -32,6 +33,9 @@ const CONTACT_EXPIRY: Duration = Duration::from_secs(10 * 60);
 // Maximum number of contacts sent in the same announce message. If there are more contacts than
 // this, a random subset of this size is chosen.
 const MAX_CONTACTS_PER_MESSAGE: usize = 25;
+
+// Minimal delay between two consecutive messages sent to the same peer.
+const MESSAGE_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PexPayload(HashSet<PeerAddr>);
@@ -121,23 +125,18 @@ impl PexAnnouncer {
         let mut recent_filter = RecentFilter::new(CONTACT_EXPIRY);
         let mut rng = StdRng::from_entropy();
 
+        let rx = stream::select(self.peer_rx.as_stream(), self.link_rx.as_stream())
+            .throttle(MESSAGE_DELAY);
+        pin!(rx);
+
         loop {
             select! {
-                result = self.peer_rx.changed() => {
-                    if result.is_err() {
-                        // The `ConnectionDeduplicator` has been destroyed which means everything is
-                        // shutting down.
-                        break;
-                    }
-                }
-                result = self.link_rx.changed() => {
-                    if result.is_err() {
-                        // The repository has been unregistered.
+                result = rx.next() => {
+                    if result.is_none() {
                         break;
                     }
                 }
                 _ = content_tx.closed() => {
-                    // The connection to the current peer has been terminated.
                     break;
                 }
             }
