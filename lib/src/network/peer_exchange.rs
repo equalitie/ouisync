@@ -183,8 +183,11 @@ impl PexAnnouncer {
         loop {
             // If PEX is disabled, wait until it becomes enabled again.
             if !*self.enabled_rx.borrow() {
-                self.enabled_rx.changed().await.ok();
-                continue;
+                if self.enabled_rx.changed().await.is_ok() {
+                    continue;
+                } else {
+                    break;
+                }
             }
 
             select! {
@@ -193,7 +196,13 @@ impl PexAnnouncer {
                         break;
                     }
                 }
-                _ = self.enabled_rx.changed() => continue,
+                result = self.enabled_rx.changed() => {
+                    if result.is_ok() {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
                 _ = content_tx.closed() => break,
             }
 
