@@ -37,7 +37,7 @@ use self::{
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
-    peer_exchange::{PexAnnouncerGroup, PexDiscovery, PexPayload},
+    peer_exchange::{PexController, PexDiscovery, PexPayload},
     peer_source::PeerSource,
     protocol::{Version, MAGIC, VERSION},
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
@@ -206,8 +206,10 @@ impl Network {
 
         let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
 
+        let connection_deduplicator = ConnectionDeduplicator::new();
+
         let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
-        let (pex_tx, pex_rx) = mpsc::channel(1);
+        let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
 
@@ -235,8 +237,8 @@ impl Network {
             dht_local_addr_v6,
             dht_discovery,
             dht_peer_found_tx,
-            pex_tx,
-            connection_deduplicator: ConnectionDeduplicator::new(),
+            pex_discovery_tx,
+            connection_deduplicator,
             on_protocol_mismatch_tx,
             on_protocol_mismatch_rx,
             user_provided_peers,
@@ -278,7 +280,7 @@ impl Network {
             .instrument(Span::current())
             .await;
 
-        inner.spawn(inner.clone().run_peer_exchange(pex_rx));
+        inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
         for peer in &options.peers {
             inner.clone().establish_user_provided_connection(peer);
@@ -448,18 +450,18 @@ impl Handle {
             .inner
             .start_dht_lookup(repository_info_hash(store.index.repository_id()));
 
-        let pex_tx = self.inner.pex_tx.clone();
-        let pex_announcer = PexAnnouncerGroup::new(self.inner.connection_deduplicator.on_change());
+        let pex = PexController::new(
+            self.inner.connection_deduplicator.on_change(),
+            self.inner.pex_discovery_tx.clone(),
+        );
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(store.clone(), pex_tx, &pex_announcer);
+        network_state.create_link(store.clone(), &pex);
 
-        let key = network_state.registry.insert(RegistrationHolder {
-            store,
-            dht,
-            pex: pex_announcer,
-        });
+        let key = network_state
+            .registry
+            .insert(RegistrationHolder { store, dht, pex });
 
         Registration {
             inner: self.inner.clone(),
@@ -501,6 +503,24 @@ impl Registration {
         let state = self.inner.state.lock().unwrap();
         state.registry[self.key].dht.is_some()
     }
+
+    pub fn enable_pex(&self) {
+        let state = self.inner.state.lock().unwrap();
+        let holder = &state.registry[self.key];
+        holder.pex.set_enabled(true);
+    }
+
+    pub fn disable_pex(&self) {
+        let state = self.inner.state.lock().unwrap();
+        let holder = &state.registry[self.key];
+        holder.pex.set_enabled(false);
+    }
+
+    pub fn is_pex_enabled(&self) -> bool {
+        let state = self.inner.state.lock().unwrap();
+        let holder = &state.registry[self.key];
+        holder.pex.is_enabled()
+    }
 }
 
 impl Drop for Registration {
@@ -518,7 +538,7 @@ impl Drop for Registration {
 struct RegistrationHolder {
     store: Store,
     dht: Option<dht_discovery::LookupRequest>,
-    pex: PexAnnouncerGroup,
+    pex: PexController,
 }
 
 #[derive(Default)]
@@ -546,7 +566,7 @@ struct Inner {
     dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
     dht_peer_found_tx: mpsc::UnboundedSender<SeenPeer>,
-    pex_tx: mpsc::Sender<PexPayload>,
+    pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
@@ -565,14 +585,9 @@ struct State {
 }
 
 impl State {
-    fn create_link(
-        &mut self,
-        store: Store,
-        pex_tx: mpsc::Sender<PexPayload>,
-        pex_announcer: &PexAnnouncerGroup,
-    ) {
+    fn create_link(&mut self, store: Store, pex: &PexController) {
         for broker in self.message_brokers.values_mut() {
-            broker.create_link(store.clone(), pex_tx.clone(), pex_announcer)
+            broker.create_link(store.clone(), pex)
         }
     }
 }
@@ -697,8 +712,8 @@ impl Inner {
             .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
     }
 
-    async fn run_peer_exchange(self: Arc<Self>, rx: mpsc::Receiver<PexPayload>) {
-        let mut discovery = PexDiscovery::new(rx);
+    async fn run_peer_exchange(self: Arc<Self>, discovery_rx: mpsc::Receiver<PexPayload>) {
+        let mut discovery = PexDiscovery::new(discovery_rx);
 
         while let Some(peer) = discovery.recv().await {
             self.spawn(
@@ -990,7 +1005,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.store.clone(), self.pex_tx.clone(), &holder.pex);
+                        broker.create_link(holder.store.clone(), &holder.pex);
                     }
 
                     entry.insert(broker);

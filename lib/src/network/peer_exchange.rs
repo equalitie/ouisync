@@ -19,10 +19,13 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::{pin, select, sync::mpsc, time::Instant};
+use tokio::{
+    pin, select,
+    sync::{mpsc, watch},
+    time::Instant,
+};
 use tokio_stream::StreamExt;
 
-// TODO: add ability to enable/disable the PEX
 // TODO: figure out when to start new round on the `SeenPeers`.
 // TODO: bump the protocol version!
 
@@ -61,7 +64,7 @@ impl PexDiscovery {
             let addr = if let Some(addr) = addrs.pop() {
                 addr
             } else {
-                addrs = self.rx.recv().await?.0.into_iter().collect();
+                addrs.extend(self.rx.recv().await?.0.into_iter());
                 continue;
             };
 
@@ -72,28 +75,56 @@ impl PexDiscovery {
     }
 }
 
-/// Group of `PexAnnouncer`s associated with a single repository. Use [`Self::bind`] to obtain an
-/// individual `PexAnnouncer` for announcing only to a specific peer.
-pub(super) struct PexAnnouncerGroup {
+#[derive(Clone)]
+pub(super) struct PexDiscoverySender {
+    inner_tx: mpsc::Sender<PexPayload>,
+    enabled_rx: watch::Receiver<bool>,
+}
+
+impl PexDiscoverySender {
+    pub async fn send(
+        &self,
+        payload: PexPayload,
+    ) -> Result<(), mpsc::error::SendError<PexPayload>> {
+        if *self.enabled_rx.borrow() {
+            self.inner_tx.send(payload).await
+        } else {
+            Err(mpsc::error::SendError(payload))
+        }
+    }
+}
+
+/// Peer exchange controller associated with a single repository.
+pub(super) struct PexController {
     contacts: Arc<Mutex<ContactSet>>,
+    enabled_tx: watch::Sender<bool>,
+    discovery_tx: mpsc::Sender<PexPayload>,
     // Notified when the global peer set changes.
     peer_rx: uninitialized_watch::Receiver<()>,
     // Notified when a new link is created in this group.
     link_tx: uninitialized_watch::Sender<()>,
 }
 
-impl PexAnnouncerGroup {
-    pub fn new(peer_rx: uninitialized_watch::Receiver<()>) -> Self {
+impl PexController {
+    pub fn new(
+        peer_rx: uninitialized_watch::Receiver<()>,
+        discovery_tx: mpsc::Sender<PexPayload>,
+    ) -> Self {
+        // TODO: PEX should be disabled by default
+        let (enabled_tx, _) = watch::channel(true);
         let (link_tx, _) = uninitialized_watch::channel();
 
         Self {
             contacts: Arc::new(Mutex::new(ContactSet::new())),
+            enabled_tx,
+            discovery_tx,
             peer_rx,
             link_tx,
         }
     }
 
-    pub fn bind(
+    /// Create an announcer.
+    pub fn announcer(
         &self,
         peer_id: PublicRuntimeId,
         connections: LiveConnectionInfoSet,
@@ -104,9 +135,28 @@ impl PexAnnouncerGroup {
         PexAnnouncer {
             peer_id,
             contacts: self.contacts.clone(),
+            enabled_rx: self.enabled_tx.subscribe(),
             peer_rx: self.peer_rx.clone(),
             link_rx: self.link_tx.subscribe(),
         }
+    }
+
+    /// Create a sender to forward received `PexPayload` messages to `PexDiscovery`.
+    pub fn discovery_sender(&self) -> PexDiscoverySender {
+        PexDiscoverySender {
+            inner_tx: self.discovery_tx.clone(),
+            enabled_rx: self.enabled_tx.subscribe(),
+        }
+    }
+
+    /// Check whether PEX is enabled for the current repository.
+    pub fn is_enabled(&self) -> bool {
+        *self.enabled_tx.borrow()
+    }
+
+    /// Enable/Disable PEX for the current repository.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled_tx.send(enabled).ok();
     }
 }
 
@@ -114,6 +164,7 @@ impl PexAnnouncerGroup {
 pub(super) struct PexAnnouncer {
     peer_id: PublicRuntimeId,
     contacts: Arc<Mutex<ContactSet>>,
+    enabled_rx: watch::Receiver<bool>,
     peer_rx: uninitialized_watch::Receiver<()>,
     link_rx: uninitialized_watch::Receiver<()>,
 }
@@ -130,15 +181,20 @@ impl PexAnnouncer {
         pin!(rx);
 
         loop {
+            // If PEX is disabled, wait until it becomes enabled again.
+            if !*self.enabled_rx.borrow() {
+                self.enabled_rx.changed().await.ok();
+                continue;
+            }
+
             select! {
                 result = rx.next() => {
                     if result.is_none() {
                         break;
                     }
                 }
-                _ = content_tx.closed() => {
-                    break;
-                }
+                _ = self.enabled_rx.changed() => continue,
+                _ = content_tx.closed() => break,
             }
 
             let contacts: HashSet<_> = self
