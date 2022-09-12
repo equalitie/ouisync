@@ -1,21 +1,27 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
+    interface::{self, InterfaceChange},
 };
 use crate::{
-    scoped_task::ScopedJoinHandle,
+    scoped_task::{self, ScopedJoinHandle},
     state_monitor::{MonitoredValue, StateMonitor},
 };
 use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{HashMap, HashSet},
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
     time::Duration,
 };
-use tokio::{net::UdpSocket, sync::Mutex, task, time::sleep};
+use tokio::{
+    net::UdpSocket,
+    sync::{mpsc, Mutex},
+    time::sleep,
+};
 
 // Selected at random but to not clash with some reserved ones:
 // https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
@@ -28,68 +34,165 @@ const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
 const PROTOCOL_VERSION: u8 = 0;
 
 // Poor man's local discovery using UDP multicast.
-// XXX: We should probably use mDNS, but so far all libraries I tried had some issues.
-pub(super) struct LocalDiscovery {
-    // Only used to filter out multicast packets from self.
-    id: InsecureRuntimeId,
-    listener_port: PeerPort,
-    socket_provider: Arc<SocketProvider>,
-    seen_peers: SeenPeers,
-    beacon_requests_received: MonitoredValue<u64>,
-    beacon_responses_received: MonitoredValue<u64>,
-    _beacon_handle: ScopedJoinHandle<()>,
+// XXX: We should probably use mDNS or DNS-SD, but so far all libraries I tried had some issues.
+// http://http://dns-sd.org/
+// One advantage of the above ones compared to our own is that we would be using a standart port
+// for it.
+
+pub(crate) struct LocalDiscovery {
+    peer_rx: mpsc::Receiver<SeenPeer>,
+    _work_handle: ScopedJoinHandle<()>,
 }
 
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> io::Result<Self> {
+    pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> Self {
+        let (peer_tx, peer_rx) = mpsc::channel(1);
+
+        let work_handle = scoped_task::spawn(async move {
+            let mut inner = LocalDiscoveryInner {
+                listener_port,
+                monitor,
+                peer_tx,
+                per_interface_discovery: HashMap::new(),
+            };
+
+            let mut interface_watcher = interface::watch_ipv4_multicast_interfaces();
+
+            while let Some(change) = interface_watcher.recv().await {
+                match change {
+                    InterfaceChange::Added(set) => inner.add(set),
+                    InterfaceChange::Removed(set) => inner.remove(set),
+                }
+            }
+        });
+
+        Self {
+            peer_rx,
+            _work_handle: work_handle,
+        }
+    }
+
+    pub async fn recv(&mut self) -> SeenPeer {
+        // Unwrap is OK because we don't expect the `LocalDiscoveryInner` instance to get destroyed
+        // before this `LocalDiscovery` instance.
+        self.peer_rx.recv().await.unwrap()
+    }
+}
+
+struct LocalDiscoveryInner {
+    listener_port: PeerPort,
+    monitor: StateMonitor,
+    peer_tx: mpsc::Sender<SeenPeer>,
+    per_interface_discovery: HashMap<Ipv4Addr, PerInterfaceLocalDiscovery>,
+}
+
+impl LocalDiscoveryInner {
+    fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>) {
+        use std::collections::hash_map::Entry;
+
+        for interface in new_interfaces {
+            match self.per_interface_discovery.entry(interface) {
+                Entry::Vacant(entry) => {
+                    let monitor = self.monitor.make_child(format!("{:?}", interface));
+
+                    let discovery = PerInterfaceLocalDiscovery::new(
+                        self.peer_tx.clone(),
+                        self.listener_port,
+                        interface,
+                        monitor,
+                    );
+
+                    match discovery {
+                        Ok(discovery) => {
+                            entry.insert(discovery);
+                            tracing::info!("Started local discovery on interface {:?}", interface);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to start local discovery on interface {:?}: {:?}",
+                                interface,
+                                err
+                            );
+                        }
+                    }
+                }
+                Entry::Occupied(_) => unreachable!(),
+            }
+        }
+    }
+
+    fn remove(&mut self, removed_interfaces: HashSet<Ipv4Addr>) {
+        for interface in removed_interfaces {
+            if self.per_interface_discovery.remove(&interface).is_some() {
+                tracing::info!("Removed local discovery from interface {:?}", interface);
+            }
+        }
+    }
+}
+
+struct PerInterfaceLocalDiscovery {
+    _beacon_handle: ScopedJoinHandle<()>,
+    _receiver_handle: ScopedJoinHandle<()>,
+}
+
+impl PerInterfaceLocalDiscovery {
+    pub fn new(
+        peer_tx: mpsc::Sender<SeenPeer>,
+        listener_port: PeerPort,
+        interface: Ipv4Addr,
+        monitor: StateMonitor,
+    ) -> io::Result<Self> {
+        // Only used to filter out multicast packets from self.
         let id = OsRng.gen();
-        let socket_provider = Arc::new(SocketProvider::new());
+        let socket_provider = Arc::new(SocketProvider::new(interface));
 
         let beacon_requests_received = monitor.make_value("beacon_requests_received".into(), 0);
         let beacon_responses_received = monitor.make_value("beacon_responses_received".into(), 0);
 
         let seen_peers = SeenPeers::new();
 
-        let beacon_handle = task::spawn(run_beacon(
+        let beacon_handle = scoped_task::spawn(run_beacon(
             socket_provider.clone(),
             id,
             listener_port,
             seen_peers.clone(),
             monitor,
         ));
-        let beacon_handle = ScopedJoinHandle(beacon_handle);
+
+        let receiver_handle = scoped_task::spawn(async move {
+            Self::run_recv_loop(
+                peer_tx,
+                id,
+                listener_port,
+                socket_provider,
+                seen_peers,
+                beacon_requests_received,
+                beacon_responses_received,
+            )
+            .await
+        });
 
         Ok(Self {
-            id,
-            listener_port,
-            socket_provider,
-            seen_peers,
-            beacon_requests_received,
-            beacon_responses_received,
             _beacon_handle: beacon_handle,
+            _receiver_handle: receiver_handle,
         })
     }
 
-    pub async fn recv(&self) -> Option<SeenPeer> {
-        loop {
-            let addr = match self.try_recv().await {
-                Some(addr) => addr,
-                None => return None,
-            };
-
-            if let Some(peer) = self.seen_peers.insert(addr) {
-                return Some(peer);
-            }
-        }
-    }
-
-    async fn try_recv(&self) -> Option<PeerAddr> {
+    async fn run_recv_loop(
+        peer_tx: mpsc::Sender<SeenPeer>,
+        self_id: InsecureRuntimeId,
+        listener_port: PeerPort,
+        socket_provider: Arc<SocketProvider>,
+        seen_peers: SeenPeers,
+        beacon_requests_received: MonitoredValue<u64>,
+        beacon_responses_received: MonitoredValue<u64>,
+    ) {
         let mut recv_buffer = [0; 64];
 
         let mut recv_error_reported = false;
 
-        let (socket, port, is_request, addr) = loop {
-            let socket = self.socket_provider.provide().await;
+        loop {
+            let socket = socket_provider.provide().await;
 
             let (size, addr) = match socket.recv_from(&mut recv_buffer).await {
                 Ok(pair) => {
@@ -101,7 +204,7 @@ impl LocalDiscovery {
                         recv_error_reported = true;
                         tracing::error!("Failed to receive discovery message: {}", error);
                     }
-                    self.socket_provider.mark_bad(socket).await;
+                    socket_provider.mark_bad(socket).await;
                     sleep(ERROR_DELAY).await;
                     continue;
                 }
@@ -127,57 +230,68 @@ impl LocalDiscovery {
                 continue;
             }
 
-            match versioned_message.message {
-                Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self.id => {
+            let (socket, port, is_request, addr) = match versioned_message.message {
+                Message::ImHereYouAll { id, .. } | Message::Reply { id, .. } if id == self_id => {
                     continue
                 }
-                Message::ImHereYouAll { port, .. } => break (socket, port, true, addr),
-                Message::Reply { port, .. } => break (socket, port, false, addr),
-            }
-        };
-
-        if is_request {
-            *self.beacon_requests_received.get() += 1;
-
-            let msg = Message::Reply {
-                port: self.listener_port,
-                id: self.id,
+                Message::ImHereYouAll { port, .. } => (socket, port, true, addr),
+                Message::Reply { port, .. } => (socket, port, false, addr),
             };
 
-            // TODO: Consider `spawn`ing this, so it doesn't block this function.
-            if let Err(error) = send(&socket, msg, addr).await {
-                tracing::error!("Failed to send discovery message: {}", error);
-                self.socket_provider.mark_bad(socket).await;
+            if is_request {
+                *beacon_requests_received.get() += 1;
+
+                let msg = Message::Reply {
+                    port: listener_port,
+                    id: self_id,
+                };
+
+                // TODO: Consider `spawn`ing this, so it doesn't block this function.
+                if let Err(error) = send(&socket, msg, addr).await {
+                    tracing::error!("Failed to send discovery message: {}", error);
+                    socket_provider.mark_bad(socket).await;
+                }
+            } else {
+                *beacon_responses_received.get() += 1;
             }
-        } else {
-            *self.beacon_responses_received.get() += 1;
+
+            let addr = match port {
+                PeerPort::Tcp(port) => PeerAddr::Tcp(SocketAddr::new(addr.ip(), port)),
+                PeerPort::Quic(port) => PeerAddr::Quic(SocketAddr::new(addr.ip(), port)),
+            };
+
+            if let Some(peer) = seen_peers.insert(addr) {
+                if peer_tx.send(peer).await.is_err() {
+                    // The interface watcher removed the interface corresponding to this discovery
+                    // instance.
+                    break;
+                }
+            }
         }
-
-        let addr = match port {
-            PeerPort::Tcp(port) => PeerAddr::Tcp(SocketAddr::new(addr.ip(), port)),
-            PeerPort::Quic(port) => PeerAddr::Quic(SocketAddr::new(addr.ip(), port)),
-        };
-
-        Some(addr)
     }
 }
 
-fn create_multicast_socket() -> io::Result<tokio::net::UdpSocket> {
+// The `_sync` version of this function calls system IO functions that may be blocking, so do it
+// all in a separate thread.
+async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
+    tokio::task::spawn_blocking(move || create_multicast_socket_sync(interface)).await?
+}
+
+fn create_multicast_socket_sync(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
     use socket2::{Domain, Socket, Type};
-    use std::net::SocketAddrV4;
 
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
     let sync_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
     sync_socket.set_reuse_address(true)?;
 
-    // FIXME: this might be blocking. We should make this whole function async and use
-    // `block_in_place`.
+    // This may be blocking
     sync_socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into())?;
 
     let sync_socket: std::net::UdpSocket = sync_socket.into();
 
-    sync_socket.join_multicast_v4(&MULTICAST_ADDR, &Ipv4Addr::UNSPECIFIED)?;
+    // This may be blocking
+    sync_socket.join_multicast_v4(&MULTICAST_ADDR, &interface)?;
 
     // This is not necessary if this is moved to async_std::net::UdpSocket,
     // but is if moved to tokio::net::UdpSocket.
@@ -262,12 +376,14 @@ enum Message {
 }
 
 struct SocketProvider {
+    interface: Ipv4Addr,
     socket: Mutex<Option<Arc<UdpSocket>>>,
 }
 
 impl SocketProvider {
-    fn new() -> Self {
+    fn new(interface: Ipv4Addr) -> Self {
         Self {
+            interface,
             socket: Mutex::new(None),
         }
     }
@@ -279,7 +395,7 @@ impl SocketProvider {
             Some(socket) => socket.clone(),
             None => {
                 let socket = loop {
-                    match create_multicast_socket() {
+                    match create_multicast_socket(self.interface).await {
                         Ok(socket) => break Arc::new(socket),
                         Err(_) => sleep(ERROR_DELAY).await,
                     }

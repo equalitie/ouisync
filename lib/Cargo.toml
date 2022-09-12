@@ -55,6 +55,16 @@ urlencoding = "2.1.0"
 vint64 = "1.0.1"
 zeroize = "1.2.0"
 
+# Using these to find out network interfaces. The `nix` package supports
+# Android out of the box, but doesn't support Windows. The `network-interfaces`
+# package doesn't officially support Android, though it looks as it shouldn't
+# be too big of a problem to do so (TODO). The latter also doesn't export
+# whether an interface supports multicast (only broadcast).
+[target.'cfg(unix)'.dependencies]
+nix = "0.25.0"
+[target.'cfg(windows)'.dependencies]
+network-interface = "0.1.3"
+
 [dev-dependencies]
 assert_matches = "1.5"
 proptest = "1.0"
