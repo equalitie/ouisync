@@ -1,8 +1,6 @@
 //! Peer exchange - a mechanism by which peers exchange information about other peers with each
 //! other in order to discover new peers.
 
-use crate::sync::uninitialized_watch;
-
 use super::{
     connection::ConnectionDirection,
     ip,
@@ -12,19 +10,23 @@ use super::{
     runtime_id::PublicRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
+use crate::sync::uninitialized_watch;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::Duration,
 };
-use tokio::{select, sync::mpsc};
+use tokio::{select, sync::mpsc, time::Instant};
 
 // TODO: add ability to enable/disable the PEX
-// TODO: don't announce recently announced addresses
 // TODO: announce only random subset of the addresses
 // TODO: figure out when to start new round on the `SeenPeers`.
 // TODO: bump the protocol version!
-// TODO: don't use ANNOUNCE_INTERVAL, announce immediately when a new connection is established/lost
+
+// Time interval after a contact is announced to a peer in which the same contact won't be
+// announced again to the same peer.
+const CONTACT_EXPIRY: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PexPayload(HashSet<PeerAddr>);
@@ -111,6 +113,8 @@ impl PexAnnouncer {
     /// Periodically announces known peer contacts to the bound peer. Runs until the `content_tx`
     /// channel gets closed.
     pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
+        let mut recent_filter = RecentFilter::new(CONTACT_EXPIRY);
+
         loop {
             select! {
                 result = self.peer_rx.changed() => {
@@ -137,7 +141,9 @@ impl PexAnnouncer {
                 .lock()
                 .unwrap()
                 .iter_for(&self.peer_id)
+                .filter(|addr| recent_filter.apply(*addr))
                 .collect();
+
             if contacts.is_empty() {
                 continue;
             }
@@ -199,5 +205,58 @@ impl ContactSet {
                     .filter(|info| !info.addr.is_tcp() || info.dir == ConnectionDirection::Incoming)
             })
             .map(|info| info.addr)
+    }
+}
+
+struct RecentFilter {
+    // Using `tokio::time::Instant` instead of `std::time::Instant` to be able to mock time in
+    // tests.
+    seen: HashMap<PeerAddr, Instant>,
+    expiry: Duration,
+}
+
+impl RecentFilter {
+    fn new(expiry: Duration) -> Self {
+        Self {
+            seen: HashMap::new(),
+            expiry,
+        }
+    }
+
+    fn apply(&mut self, addr: PeerAddr) -> bool {
+        self.cleanup();
+
+        match self.seen.entry(addr) {
+            Entry::Vacant(entry) => {
+                entry.insert(Instant::now());
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    fn cleanup(&mut self) {
+        self.seen
+            .retain(|_, timestamp| timestamp.elapsed() <= self.expiry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+    use tokio::time;
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn recent_filter() {
+        let mut filter = RecentFilter::new(Duration::from_millis(1000));
+        let contact = PeerAddr::Tcp((Ipv4Addr::LOCALHOST, 10001).into());
+        assert!(filter.apply(contact));
+
+        time::advance(Duration::from_millis(100)).await;
+        assert!(!filter.apply(contact));
+
+        time::advance(Duration::from_millis(1000)).await;
+        assert!(filter.apply(contact));
     }
 }
