@@ -65,7 +65,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
-    task::{self, AbortHandle, JoinSet},
+    task::{AbortHandle, JoinSet},
     time,
 };
 use tracing::{field, instrument, Instrument, Span};
@@ -206,9 +206,8 @@ impl Network {
 
         let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
 
-        let connection_deduplicator = ConnectionDeduplicator::new();
-
-        let (dht_peer_found_tx, mut dht_peer_found_rx) = mpsc::unbounded_channel();
+        // TODO: do we need unbounded channel here?
+        let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
 
         let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
@@ -236,9 +235,9 @@ impl Network {
             dht_local_addr_v4,
             dht_local_addr_v6,
             dht_discovery,
-            dht_peer_found_tx,
+            dht_discovery_tx,
             pex_discovery_tx,
-            connection_deduplicator,
+            connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
             on_protocol_mismatch_rx,
             user_provided_peers,
@@ -254,19 +253,6 @@ impl Network {
             _port_forwarder: port_forwarder,
         };
 
-        // Start waiting for peers found by DhtDiscovery.
-        // The spawned task gets destroyed once dht_peer_found_tx is destroyed.
-        task::spawn({
-            let weak = Arc::downgrade(&inner);
-            instrument_task(async move {
-                while let Some(seen_peer) = dht_peer_found_rx.recv().await {
-                    if let Some(inner) = weak.upgrade() {
-                        inner.spawn(inner.clone().handle_peer_found(seen_peer, PeerSource::Dht));
-                    }
-                }
-            })
-        });
-
         for listener in [tcp_listener_v4, tcp_listener_v6].into_iter().flatten() {
             inner.spawn(inner.clone().run_tcp_listener(listener));
         }
@@ -275,11 +261,9 @@ impl Network {
             inner.spawn(inner.clone().run_quic_listener(listener));
         }
 
-        inner
-            .enable_local_discovery(!options.disable_local_discovery)
-            .instrument(Span::current())
-            .await;
+        inner.enable_local_discovery(!options.disable_local_discovery);
 
+        inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
         for peer in &options.peers {
@@ -565,7 +549,7 @@ struct Inner {
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
-    dht_peer_found_tx: mpsc::UnboundedSender<SeenPeer>,
+    dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
@@ -593,7 +577,7 @@ impl State {
 }
 
 impl Inner {
-    async fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
+    fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
         let tasks = self.tasks.upgrade().unwrap();
         let mut tasks = tasks.lock().unwrap();
 
@@ -709,7 +693,13 @@ impl Inner {
     fn start_dht_lookup(&self, info_hash: InfoHash) -> Option<dht_discovery::LookupRequest> {
         self.dht_discovery
             .as_ref()
-            .map(|dht| dht.lookup(info_hash, self.dht_peer_found_tx.clone()))
+            .map(|dht| dht.lookup(info_hash, self.dht_discovery_tx.clone()))
+    }
+
+    async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
+        while let Some(seen_peer) = discovery_rx.recv().await {
+            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
+        }
     }
 
     async fn run_peer_exchange(self: Arc<Self>, discovery_rx: mpsc::Receiver<PexPayload>) {
