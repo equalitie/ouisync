@@ -32,7 +32,7 @@ pub enum PeerState {
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
-    connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
+    connections: Arc<SyncMutex<HashMap<ConnectionInfo, Peer>>>,
     on_change_tx: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -57,8 +57,9 @@ impl ConnectionDeduplicator {
         source: PeerSource,
         dir: ConnectionDirection,
     ) -> ReserveResult {
-        let key = ConnectionKey { addr, dir };
-        match self.connections.lock().unwrap().entry(key) {
+        let info = ConnectionInfo { addr, dir };
+
+        match self.connections.lock().unwrap().entry(info) {
             Entry::Vacant(entry) => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let on_release_tx = DropAwaitable::new();
@@ -74,7 +75,7 @@ impl ConnectionDeduplicator {
 
                 ReserveResult::Permit(ConnectionPermit {
                     connections: self.connections.clone(),
-                    key,
+                    info,
                     id,
                     on_release: on_release_rx,
                     on_deduplicator_change: self.on_change_tx.clone(),
@@ -108,11 +109,11 @@ impl ConnectionDeduplicator {
 
     pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
         let connections = self.connections.lock().unwrap();
-        let incoming = ConnectionKey {
+        let incoming = ConnectionInfo {
             addr,
             dir: ConnectionDirection::Incoming,
         };
-        let outgoing = ConnectionKey {
+        let outgoing = ConnectionInfo {
             addr,
             dir: ConnectionDirection::Outgoing,
         };
@@ -160,8 +161,8 @@ pub enum ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<SyncMutex<HashMap<ConnectionKey, Peer>>>,
-    key: ConnectionKey,
+    connections: Arc<SyncMutex<HashMap<ConnectionInfo, Peer>>>,
+    info: ConnectionInfo,
     id: u64,
     on_release: AwaitDrop,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
@@ -177,7 +178,7 @@ impl ConnectionPermit {
         (
             ConnectionPermitHalf(Self {
                 connections: self.connections.clone(),
-                key: self.key,
+                info: self.info,
                 id: self.id,
                 on_release: self.on_release.clone(),
                 on_deduplicator_change: self.on_deduplicator_change.clone(),
@@ -202,7 +203,7 @@ impl ConnectionPermit {
         let mut lock = self.connections.lock().unwrap();
 
         // Unwrap because if `self` exists, then the entry should exist as well.
-        let peer = lock.get_mut(&self.key).unwrap();
+        let peer = lock.get_mut(&self.info).unwrap();
 
         if peer.state != new_state {
             peer.state = new_state;
@@ -216,7 +217,7 @@ impl ConnectionPermit {
     }
 
     pub fn addr(&self) -> PeerAddr {
-        self.key.addr
+        self.info.addr
     }
 
     /// Dummy connection permit for tests.
@@ -227,7 +228,7 @@ impl ConnectionPermit {
 
         Self {
             connections: Arc::new(SyncMutex::new(HashMap::new())),
-            key: ConnectionKey {
+            info: ConnectionInfo {
                 addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
                 dir: ConnectionDirection::Incoming,
             },
@@ -240,7 +241,7 @@ impl ConnectionPermit {
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.key) {
+        if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.info) {
             if entry.get().id == self.id {
                 entry.remove();
             }
@@ -256,12 +257,12 @@ pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 impl ConnectionPermitHalf {
     pub fn peer_addr(&self) -> PeerAddr {
-        self.0.key.addr
+        self.0.info.addr
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ConnectionKey {
+pub struct ConnectionInfo {
     pub addr: PeerAddr,
     pub dir: ConnectionDirection,
 }
