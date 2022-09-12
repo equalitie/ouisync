@@ -122,7 +122,8 @@ impl MessageBroker {
         let sink = self.dispatcher.open_send(channel);
         let request_limiter = self.request_limiter.clone();
 
-        let pex_announcer = pex_announcer.bind(self.that_runtime_id, self.dispatcher.peer_addrs());
+        let pex_announcer =
+            pex_announcer.bind(self.that_runtime_id, self.dispatcher.connection_infos());
 
         drop(span_enter);
 

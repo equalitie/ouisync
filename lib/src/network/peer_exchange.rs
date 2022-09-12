@@ -2,9 +2,10 @@
 //! other in order to discover new peers.
 
 use super::{
+    connection::ConnectionDirection,
     ip,
     message::Content,
-    message_dispatcher::PeerAddrLiveSet,
+    message_dispatcher::LiveConnectionInfoSet,
     peer_addr::PeerAddr,
     runtime_id::PublicRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
@@ -75,8 +76,12 @@ impl PexAnnouncerGroup {
         }
     }
 
-    pub fn bind(&self, peer_id: PublicRuntimeId, peer_addrs: PeerAddrLiveSet) -> PexAnnouncer {
-        self.contacts.lock().unwrap().insert(peer_id, peer_addrs);
+    pub fn bind(
+        &self,
+        peer_id: PublicRuntimeId,
+        connections: LiveConnectionInfoSet,
+    ) -> PexAnnouncer {
+        self.contacts.lock().unwrap().insert(peer_id, connections);
 
         PexAnnouncer {
             peer_id,
@@ -121,15 +126,15 @@ impl Drop for PexAnnouncer {
 }
 
 #[derive(Default)]
-struct ContactSet(HashMap<PublicRuntimeId, PeerAddrLiveSet>);
+struct ContactSet(HashMap<PublicRuntimeId, LiveConnectionInfoSet>);
 
 impl ContactSet {
     fn new() -> Self {
         Self::default()
     }
 
-    fn insert(&mut self, peer_id: PublicRuntimeId, peer_addrs: PeerAddrLiveSet) {
-        self.0.insert(peer_id, peer_addrs);
+    fn insert(&mut self, peer_id: PublicRuntimeId, connections: LiveConnectionInfoSet) {
+        self.0.insert(peer_id, connections);
     }
 
     fn remove(&mut self, peer_id: &PublicRuntimeId) {
@@ -140,11 +145,11 @@ impl ContactSet {
         // If the recipient is local, we send them all known contacts - global and local. If they
         // are global, we send them only global contacts. A peer is considered local for this
         // purpose if at least one of their addresses is local.
-        let is_local = if let Some(peer_addrs) = self.0.get(recipient_id) {
-            peer_addrs
+        let is_local = if let Some(connections) = self.0.get(recipient_id) {
+            connections
                 .collect()
                 .iter()
-                .any(|addr| !ip::is_global(&addr.ip()))
+                .any(|info| !ip::is_global(&info.addr.ip()))
         } else {
             return HashSet::new();
         };
@@ -152,12 +157,16 @@ impl ContactSet {
         self.0
             .iter()
             .filter(|(peer_id, _)| *peer_id != recipient_id)
-            .flat_map(|(_, peer_addrs)| {
-                peer_addrs
+            .flat_map(|(_, connections)| {
+                connections
                     .collect()
                     .into_iter()
-                    .filter(|addr| is_local || ip::is_global(&addr.ip()))
+                    .filter(|info| is_local || ip::is_global(&info.addr.ip()))
+                    // Filter out incoming TCP contacts because they can't be used to establish
+                    // outgoing connection.
+                    .filter(|info| !info.addr.is_tcp() || info.dir == ConnectionDirection::Incoming)
             })
+            .map(|info| info.addr)
             .collect()
     }
 }

@@ -45,6 +45,13 @@ impl PeerAddr {
             Self::Quic(_) => true,
         }
     }
+
+    pub fn is_tcp(&self) -> bool {
+        match self {
+            Self::Tcp(_) => true,
+            Self::Quic(_) => false,
+        }
+    }
 }
 
 impl FromStr for PeerAddr {

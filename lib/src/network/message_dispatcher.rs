@@ -1,11 +1,10 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionPermit, ConnectionPermitHalf},
+    connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
-    peer_addr::PeerAddr,
     raw,
 };
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
@@ -71,9 +70,9 @@ impl MessageDispatcher {
         }
     }
 
-    /// Returns the remote addresses this dispatcher is connected to.
-    pub fn peer_addrs(&self) -> PeerAddrLiveSet {
-        PeerAddrLiveSet {
+    /// Returns the active connections of this dispatcher.
+    pub fn connection_infos(&self) -> LiveConnectionInfoSet {
+        LiveConnectionInfoSet {
             recv: self.recv.clone(),
             send: self.send.clone(),
         }
@@ -174,21 +173,21 @@ impl ContentSink {
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
 
-/// Live* collection of remote addresses a `MessageDispatcher` is connected to.
+/// Live* collection of active connections of a `MessageDispatcher`.
 ///
 /// *) It means it gets automatically updated as connections are added/removed to/from the
 /// dispatcher.
 #[derive(Clone)]
-pub(super) struct PeerAddrLiveSet {
+pub(super) struct LiveConnectionInfoSet {
     recv: Arc<RecvState>,
     send: Arc<MultiSink>,
 }
 
-impl PeerAddrLiveSet {
-    /// Collects the current addresses and returns them in a set.
-    pub fn collect(&self) -> HashSet<PeerAddr> {
-        let recv = self.recv.reader.peer_addrs();
-        let send = self.send.peer_addrs();
+impl LiveConnectionInfoSet {
+    /// Collects the current infos and returns them in a set.
+    pub fn collect(&self) -> HashSet<ConnectionInfo> {
+        let recv = self.recv.reader.connection_infos();
+        let send = self.send.connection_infos();
 
         recv.intersection(&send).copied().collect()
     }
@@ -237,8 +236,8 @@ impl PermittedStream {
         }
     }
 
-    fn peer_addr(&self) -> PeerAddr {
-        self.permit.peer_addr()
+    fn connection_info(&self) -> ConnectionInfo {
+        self.permit.info()
     }
 }
 
@@ -268,8 +267,8 @@ impl PermittedSink {
         }
     }
 
-    fn peer_addr(&self) -> PeerAddr {
-        self.permit.peer_addr()
+    fn connection_info(&self) -> ConnectionInfo {
+        self.permit.info()
     }
 }
 
@@ -336,13 +335,13 @@ impl MultiStream {
         self.inner.lock().unwrap().streams.is_empty()
     }
 
-    fn peer_addrs(&self) -> HashSet<PeerAddr> {
+    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
         self.inner
             .lock()
             .unwrap()
             .streams
             .iter()
-            .map(|stream| stream.peer_addr())
+            .map(|stream| stream.connection_info())
             .collect()
     }
 }
@@ -434,13 +433,13 @@ impl MultiSink {
         self.inner.lock().unwrap().sinks.is_empty()
     }
 
-    fn peer_addrs(&self) -> HashSet<PeerAddr> {
+    fn connection_infos(&self) -> HashSet<ConnectionInfo> {
         self.inner
             .lock()
             .unwrap()
             .sinks
             .iter()
-            .map(|sink| sink.peer_addr())
+            .map(|sink| sink.connection_info())
             .collect()
     }
 }

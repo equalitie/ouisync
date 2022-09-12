@@ -256,8 +256,8 @@ impl Drop for ConnectionPermit {
 pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 
 impl ConnectionPermitHalf {
-    pub fn peer_addr(&self) -> PeerAddr {
-        self.0.info.addr
+    pub fn info(&self) -> ConnectionInfo {
+        self.0.info
     }
 }
 
