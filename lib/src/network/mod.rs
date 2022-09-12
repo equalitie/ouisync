@@ -449,7 +449,7 @@ impl Handle {
             .start_dht_lookup(repository_info_hash(store.index.repository_id()));
 
         let pex_tx = self.inner.pex_tx.clone();
-        let pex_announcer = PexAnnouncerGroup::new();
+        let pex_announcer = PexAnnouncerGroup::new(self.inner.connection_deduplicator.on_change());
 
         let mut network_state = self.inner.state.lock().unwrap();
 
@@ -1043,7 +1043,6 @@ pub enum ConnectError {
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
 #[instrument(
-    level = "trace",
     skip_all,
     fields(
         this_version = ?this_version,
@@ -1051,7 +1050,7 @@ pub enum ConnectError {
         this_runtime_id = ?this_runtime_id.as_public_key(),
         that_runtime_id
     ),
-    ret
+    err(Debug)
 )]
 async fn perform_handshake(
     stream: &mut raw::Stream,
@@ -1081,6 +1080,8 @@ async fn perform_handshake(
         "that_runtime_id",
         &field::debug(that_runtime_id.as_public_key()),
     );
+
+    tracing::trace!("handshake complete");
 
     Ok(that_runtime_id)
 }

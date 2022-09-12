@@ -169,7 +169,7 @@ async fn maintain_link(
     store: Store,
     request_limiter: Arc<Semaphore>,
     pex_tx: mpsc::Sender<PexPayload>,
-    pex_announcer: PexAnnouncer,
+    mut pex_announcer: PexAnnouncer,
 ) {
     let mut backoff = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
@@ -205,7 +205,7 @@ async fn maintain_link(
             &store,
             request_limiter.clone(),
             pex_tx.clone(),
-            &pex_announcer,
+            &mut pex_announcer,
         )
         .await
         {
@@ -245,7 +245,7 @@ async fn run_link(
     store: &Store,
     request_limiter: Arc<Semaphore>,
     pex_tx: mpsc::Sender<PexPayload>,
-    pex_announcer: &PexAnnouncer,
+    pex_announcer: &mut PexAnnouncer,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);

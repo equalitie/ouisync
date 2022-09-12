@@ -1,6 +1,8 @@
 //! Peer exchange - a mechanism by which peers exchange information about other peers with each
 //! other in order to discover new peers.
 
+use crate::sync::uninitialized_watch;
+
 use super::{
     connection::ConnectionDirection,
     ip,
@@ -14,9 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
-    time::Duration,
 };
-use tokio::{select, sync::mpsc, time};
+use tokio::{select, sync::mpsc};
 
 // TODO: add ability to enable/disable the PEX
 // TODO: don't announce recently announced addresses
@@ -24,9 +25,6 @@ use tokio::{select, sync::mpsc, time};
 // TODO: figure out when to start new round on the `SeenPeers`.
 // TODO: bump the protocol version!
 // TODO: don't use ANNOUNCE_INTERVAL, announce immediately when a new connection is established/lost
-
-// const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(60);
-const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct PexPayload(HashSet<PeerAddr>);
@@ -67,12 +65,20 @@ impl PexDiscovery {
 /// individual `PexAnnouncer` for announcing only to a specific peer.
 pub(super) struct PexAnnouncerGroup {
     contacts: Arc<Mutex<ContactSet>>,
+    // Notified when the global peer set changes.
+    peer_rx: uninitialized_watch::Receiver<()>,
+    // Notified when a new link is created in this group.
+    link_tx: uninitialized_watch::Sender<()>,
 }
 
 impl PexAnnouncerGroup {
-    pub fn new() -> Self {
+    pub fn new(peer_rx: uninitialized_watch::Receiver<()>) -> Self {
+        let (link_tx, _) = uninitialized_watch::channel();
+
         Self {
             contacts: Arc::new(Mutex::new(ContactSet::new())),
+            peer_rx,
+            link_tx,
         }
     }
 
@@ -82,10 +88,13 @@ impl PexAnnouncerGroup {
         connections: LiveConnectionInfoSet,
     ) -> PexAnnouncer {
         self.contacts.lock().unwrap().insert(peer_id, connections);
+        self.link_tx.send(()).ok();
 
         PexAnnouncer {
             peer_id,
             contacts: self.contacts.clone(),
+            peer_rx: self.peer_rx.clone(),
+            link_rx: self.link_tx.subscribe(),
         }
     }
 }
@@ -94,16 +103,33 @@ impl PexAnnouncerGroup {
 pub(super) struct PexAnnouncer {
     peer_id: PublicRuntimeId,
     contacts: Arc<Mutex<ContactSet>>,
+    peer_rx: uninitialized_watch::Receiver<()>,
+    link_rx: uninitialized_watch::Receiver<()>,
 }
 
 impl PexAnnouncer {
     /// Periodically announces known peer contacts to the bound peer. Runs until the `content_tx`
     /// channel gets closed.
-    pub async fn run(&self, content_tx: mpsc::Sender<Content>) {
+    pub async fn run(&mut self, content_tx: mpsc::Sender<Content>) {
         loop {
             select! {
-                _ = time::sleep(ANNOUNCE_INTERVAL) => (),
-                _ = content_tx.closed() => break,
+                result = self.peer_rx.changed() => {
+                    if result.is_err() {
+                        // The `ConnectionDeduplicator` has been destroyed which means everything is
+                        // shutting down.
+                        break;
+                    }
+                }
+                result = self.link_rx.changed() => {
+                    if result.is_err() {
+                        // The repository has been unregistered.
+                        break;
+                    }
+                }
+                _ = content_tx.closed() => {
+                    // The connection to the current peer has been terminated.
+                    break;
+                }
             }
 
             let contacts: HashSet<_> = self
