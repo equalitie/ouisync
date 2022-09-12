@@ -1,6 +1,7 @@
 use super::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
+    interface::{self, InterfaceChange},
 };
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
@@ -28,8 +29,6 @@ const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
 const MULTICAST_PORT: u16 = 9271;
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
-// Interfaces may change at runtime (especially on mobile devices, but on desktops as well).
-const INTERFACE_REFRESH_DELAY: Duration = Duration::from_secs(5);
 
 const PROTOCOL_MAGIC: &[u8; 17] = b"OUISYNC_DISCOVERY";
 const PROTOCOL_VERSION: u8 = 0;
@@ -57,7 +56,7 @@ impl LocalDiscovery {
                 per_interface_discovery: HashMap::new(),
             };
 
-            let mut interface_watcher = network_interface_watcher();
+            let mut interface_watcher = interface::watch_ipv4_multicast_interfaces();
 
             while let Some(change) = interface_watcher.recv().await {
                 match change {
@@ -417,86 +416,4 @@ impl SocketProvider {
             }
         }
     }
-}
-
-enum InterfaceChange {
-    Added(HashSet<Ipv4Addr>),
-    Removed(HashSet<Ipv4Addr>),
-}
-
-// Tells us when a network interface has been added or removed.
-fn network_interface_watcher() -> mpsc::Receiver<InterfaceChange> {
-    let (tx, rx) = mpsc::channel(1);
-
-    tokio::spawn(async move {
-        let mut seen_interfaces = HashSet::new();
-
-        loop {
-            let found_interfaces = find_multicast_interfaces().await;
-
-            let to_remove = seen_interfaces
-                .difference(&found_interfaces)
-                .cloned()
-                .collect::<HashSet<_>>();
-
-            seen_interfaces.retain(|e| !to_remove.contains(e));
-
-            if tx.send(InterfaceChange::Removed(to_remove)).await.is_err() {
-                // Channel was closed.
-                return;
-            }
-
-            let to_add = found_interfaces
-                .difference(&seen_interfaces)
-                .cloned()
-                .collect::<HashSet<_>>();
-            for new in &to_add {
-                seen_interfaces.insert(*new);
-            }
-
-            if tx.send(InterfaceChange::Added(to_add)).await.is_err() {
-                // Channel was closed.
-                return;
-            }
-
-            sleep(INTERFACE_REFRESH_DELAY).await;
-        }
-    });
-
-    rx
-}
-
-async fn find_multicast_interfaces() -> HashSet<Ipv4Addr> {
-    match tokio::task::spawn_blocking(find_multicast_interfaces_sync).await {
-        Ok(interfaces) => interfaces,
-        Err(_) => HashSet::new(),
-    }
-}
-
-// TODO: Support IPv6?
-fn find_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
-    let mut ret = HashSet::new();
-
-    // This may be blocking
-    let addrs = match nix::ifaddrs::getifaddrs() {
-        Ok(addr) => addr,
-        Err(_) => return ret,
-    };
-
-    for ifaddr in addrs {
-        use nix::net::if_::InterfaceFlags;
-
-        if !ifaddr.flags.contains(InterfaceFlags::IFF_MULTICAST) {
-            continue;
-        }
-
-        if let Some(addr) = ifaddr.address.and_then(|addr| {
-            let addr: Option<SocketAddrV4> = addr.as_sockaddr_in().map(|addr| (*addr).into());
-            Some(*addr?.ip())
-        }) {
-            ret.insert(addr);
-        }
-    }
-
-    ret
 }

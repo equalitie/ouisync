@@ -4,6 +4,7 @@ mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
+mod interface;
 mod ip;
 mod keep_alive;
 mod local_discovery;
