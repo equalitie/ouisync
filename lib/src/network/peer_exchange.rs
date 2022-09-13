@@ -22,15 +22,19 @@ use std::{
 use tokio::{
     pin, select,
     sync::{mpsc, watch},
-    time::Instant,
+    time::{self, Instant},
 };
 use tokio_stream::StreamExt;
 
-// TODO: figure out when to start new round on the `SeenPeers`.
 // TODO: bump the protocol version!
 
-// Time interval after a contact is announced to a peer in which the same contact won't be
-// announced again to the same peer.
+// Time interval that affects how often we send contacts to other peers and also how often we
+// accept contacts from others. More specifically:
+//
+// 1. It's an interval after a contact is announced to a peer in which the same contact won't be
+//    announced again to the same peer
+// 2. It's the duration of one `SeenPeers` round used for the PEX discovery (see `SeenPeers` for
+//    more details on what this means).
 const CONTACT_EXPIRY: Duration = Duration::from_secs(10 * 60);
 
 // Maximum number of contacts sent in the same announce message. If there are more contacts than
@@ -45,31 +49,58 @@ pub(crate) struct PexPayload(HashSet<PeerAddr>);
 
 /// Utility to retrieve contacts discovered via the peer exchange.
 pub(super) struct PexDiscovery {
-    rx: mpsc::Receiver<PexPayload>,
+    rx: PexDiscoveryReceiver,
     seen_peers: SeenPeers,
+    next_round_time: Instant,
 }
 
 impl PexDiscovery {
     pub fn new(rx: mpsc::Receiver<PexPayload>) -> Self {
         Self {
-            rx,
+            rx: PexDiscoveryReceiver {
+                inner_rx: rx,
+                buffer: Vec::new(),
+            },
             seen_peers: SeenPeers::new(),
+            next_round_time: next_round_time(),
         }
     }
 
     pub async fn recv(&mut self) -> Option<SeenPeer> {
-        let mut addrs = Vec::new();
-
         loop {
-            let addr = if let Some(addr) = addrs.pop() {
-                addr
-            } else {
-                addrs.extend(self.rx.recv().await?.0.into_iter());
-                continue;
-            };
+            select! {
+                addr = self.rx.recv() => {
+                    if let Some(peer) = self.seen_peers.insert(addr?) {
+                        return Some(peer);
+                    }
+                }
+                _ = time::sleep_until(self.next_round_time) => {
+                    self.seen_peers.start_new_round();
+                    self.next_round_time = next_round_time();
+                    continue;
+                }
+            }
+        }
+    }
+}
 
-            if let Some(peer) = self.seen_peers.insert(addr) {
-                return Some(peer);
+fn next_round_time() -> Instant {
+    Instant::now() + CONTACT_EXPIRY
+}
+
+struct PexDiscoveryReceiver {
+    inner_rx: mpsc::Receiver<PexPayload>,
+    buffer: Vec<PeerAddr>,
+}
+
+impl PexDiscoveryReceiver {
+    async fn recv(&mut self) -> Option<PeerAddr> {
+        loop {
+            if let Some(addr) = self.buffer.pop() {
+                return Some(addr);
+            } else {
+                self.buffer
+                    .extend(self.inner_rx.recv().await?.0.into_iter());
             }
         }
     }
