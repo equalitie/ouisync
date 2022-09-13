@@ -648,11 +648,7 @@ impl Inner {
             {
                 self.spawn(
                     self.clone()
-                        .handle_new_connection(
-                            raw::Stream::Tcp(socket),
-                            PeerSource::Listener,
-                            permit,
-                        )
+                        .handle_new_connection(raw::Stream::Tcp(socket), permit)
                         .map(|_| ()),
                 )
             }
@@ -675,11 +671,7 @@ impl Inner {
             ) {
                 self.spawn(
                     self.clone()
-                        .handle_new_connection(
-                            raw::Stream::Quic(socket),
-                            PeerSource::Listener,
-                            permit,
-                        )
+                        .handle_new_connection(raw::Stream::Quic(socket), permit)
                         .map(|_| ()),
                 )
             }
@@ -780,11 +772,7 @@ impl Inner {
                 None => break,
             };
 
-            if !self
-                .clone()
-                .handle_new_connection(socket, source, permit)
-                .await
-            {
+            if !self.clone().handle_new_connection(socket, permit).await {
                 break;
             }
         }
@@ -937,11 +925,10 @@ impl Inner {
     }
 
     /// Return true iff the peer is suitable for reconnection.
-    #[instrument(name = "connection", skip(self, stream, permit), fields(addr = ?permit.addr()))]
+    #[instrument(name = "connection", skip_all, fields(addr = ?permit.addr()))]
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
-        peer_source: PeerSource,
         permit: ConnectionPermit,
     ) -> bool {
         tracing::info!("connection established");
