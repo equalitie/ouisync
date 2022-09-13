@@ -26,8 +26,6 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 
-// TODO: bump the protocol version!
-
 // Time interval that affects how often we send contacts to other peers and also how often we
 // accept contacts from others. More specifically:
 //
