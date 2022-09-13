@@ -3,4 +3,4 @@
 members = ["bindgen", "cli", "ffi", "lib", "util"]
 
 [patch.crates-io]
-sqlx = { git = "https://github.com/madadam/sqlx.git", branch = "patches" }
+sqlx = { git = "https://github.com/madadam/sqlx.git", rev = "c71ff113" }
