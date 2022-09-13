@@ -1,13 +1,6 @@
-use tokio::{
-    sync::mpsc,
-    time::sleep,
-};
+use tokio::{sync::mpsc, time::sleep};
 
-use std::{
-    collections::HashSet,
-    net::Ipv4Addr,
-    time::Duration,
-};
+use std::{collections::HashSet, net::Ipv4Addr, time::Duration};
 
 // Network interfaces may change at runtime (especially on mobile devices, but on desktops as
 // well). This code helps us track such changes.
@@ -106,11 +99,7 @@ fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
 fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
     let mut ret = HashSet::new();
 
-    use network_interface::{
-        NetworkInterface,
-        NetworkInterfaceConfig,
-        Addr,
-    };
+    use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 
     let network_interfaces = match NetworkInterface::show() {
         Ok(network_interfaces) => network_interfaces,
@@ -129,9 +118,8 @@ fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
                     if addr.broadcast.is_some() {
                         ret.insert(addr.ip);
                     }
-                },
-                Addr::V6(_addr) => {
-                },
+                }
+                Addr::V6(_addr) => {}
             }
         }
     }

@@ -1,7 +1,7 @@
 use super::{
+    interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
-    interface::{self, InterfaceChange},
 };
 use crate::{
     scoped_task::{self, ScopedJoinHandle},

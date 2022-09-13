@@ -1003,16 +1003,13 @@ impl Inner {
             };
         }
 
+        let _remover = MessageBrokerEntryGuard {
+            state: &self.state,
+            that_runtime_id,
+        };
+
         released.recv().await;
         tracing::info!("connection lost");
-
-        // Remove the broker if it has no more connections.
-        let mut state = self.state.lock().unwrap();
-        if let Entry::Occupied(entry) = state.message_brokers.entry(that_runtime_id) {
-            if !entry.get().has_connections() {
-                entry.remove();
-            }
-        }
 
         true
     }
@@ -1108,6 +1105,23 @@ pub struct NetworkError(#[from] io::Error);
 impl From<NetworkError> for Error {
     fn from(src: NetworkError) -> Self {
         Self::Network(src.0)
+    }
+}
+
+// RAII guard which when dropped removes the broker from the network state if it has no connections.
+struct MessageBrokerEntryGuard<'a> {
+    state: &'a BlockingMutex<State>,
+    that_runtime_id: PublicRuntimeId,
+}
+
+impl Drop for MessageBrokerEntryGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if let Entry::Occupied(entry) = state.message_brokers.entry(self.that_runtime_id) {
+            if !entry.get().has_connections() {
+                entry.remove();
+            }
+        }
     }
 }
 
