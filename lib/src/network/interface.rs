@@ -82,10 +82,7 @@ fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
         }
 
         if let Some(addr) = ifaddr.address.and_then(|addr| {
-            let addr: Option<SocketAddrV4> = match addr.as_sockaddr_in() {
-                Some(addr) => Some((*addr).into()),
-                None => None,
-            };
+            let addr: Option<SocketAddrV4> = addr.as_sockaddr_in().map(|addr| (*addr).into());
             Some(*addr?.ip())
         }) {
             ret.insert(addr);

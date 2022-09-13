@@ -30,9 +30,7 @@ mod upnp;
 
 pub use self::options::NetworkOptions;
 use self::{
-    connection::{
-        ConnectionDeduplicator, ConnectionDirection, ConnectionPermit, PeerInfo, ReserveResult,
-    },
+    connection::{ConnectionDeduplicator, ConnectionPermit, PeerInfo, ReserveResult},
     dht_discovery::DhtDiscovery,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
@@ -644,11 +642,10 @@ impl Inner {
                 }
             };
 
-            if let ReserveResult::Permit(permit) = self.connection_deduplicator.reserve(
-                PeerAddr::Tcp(addr),
-                PeerSource::Listener,
-                ConnectionDirection::Incoming,
-            ) {
+            if let ReserveResult::Permit(permit) = self
+                .connection_deduplicator
+                .reserve(PeerAddr::Tcp(addr), PeerSource::Listener)
+            {
                 self.spawn(
                     self.clone()
                         .handle_new_connection(
@@ -675,7 +672,6 @@ impl Inner {
             if let ReserveResult::Permit(permit) = self.connection_deduplicator.reserve(
                 PeerAddr::Quic(*socket.remote_address()),
                 PeerSource::Listener,
-                ConnectionDirection::Incoming,
             ) {
                 self.spawn(
                     self.clone()
@@ -762,11 +758,7 @@ impl Inner {
                 return;
             }
 
-            let permit = match self.connection_deduplicator.reserve(
-                addr,
-                source,
-                ConnectionDirection::Outgoing,
-            ) {
+            let permit = match self.connection_deduplicator.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
                 ReserveResult::Occupied(on_release, their_source) => {
                     if source == their_source {

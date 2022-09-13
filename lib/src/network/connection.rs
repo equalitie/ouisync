@@ -51,13 +51,11 @@ impl ConnectionDeduplicator {
     /// yet, it returns a `ConnectionPermit` which keeps the connection reserved as long as it
     /// lives. Otherwise it returns `None`. To release a connection the permit needs to be dropped.
     /// Also returns a notification object that can be used to wait until the permit gets released.
-    pub fn reserve(
-        &self,
-        addr: PeerAddr,
-        source: PeerSource,
-        dir: ConnectionDirection,
-    ) -> ReserveResult {
-        let info = ConnectionInfo { addr, dir };
+    pub fn reserve(&self, addr: PeerAddr, source: PeerSource) -> ReserveResult {
+        let info = ConnectionInfo {
+            addr,
+            dir: ConnectionDirection::from_source(source),
+        };
 
         match self.connections.lock().unwrap().entry(info) {
             Entry::Vacant(entry) => {
@@ -156,6 +154,18 @@ struct Peer {
 pub enum ConnectionDirection {
     Incoming,
     Outgoing,
+}
+
+impl ConnectionDirection {
+    fn from_source(source: PeerSource) -> Self {
+        match source {
+            PeerSource::Listener => Self::Incoming,
+            PeerSource::UserProvided
+            | PeerSource::LocalDiscovery
+            | PeerSource::Dht
+            | PeerSource::PeerExchange => Self::Outgoing,
+        }
+    }
 }
 
 /// Connection permit that prevents another connection to the same peer (socket address) to be
