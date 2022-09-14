@@ -3,7 +3,7 @@
 
 use super::peer_addr::PeerAddr;
 use clap::Parser;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Parser, Debug)]
 pub struct NetworkOptions {
@@ -28,36 +28,6 @@ pub struct NetworkOptions {
     /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
     #[clap(long)]
     pub peers: Vec<PeerAddr>,
-}
-
-impl NetworkOptions {
-    pub fn listen_tcp_addr_v4(&self) -> Option<SocketAddr> {
-        self.bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        })
-    }
-
-    pub fn listen_tcp_addr_v6(&self) -> Option<SocketAddr> {
-        self.bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        })
-    }
-
-    pub fn listen_quic_addr_v4(&self) -> Option<SocketAddr> {
-        self.bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        })
-    }
-
-    pub fn listen_quic_addr_v6(&self) -> Option<SocketAddr> {
-        self.bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        })
-    }
 }
 
 impl Default for NetworkOptions {

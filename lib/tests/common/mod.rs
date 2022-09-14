@@ -101,8 +101,8 @@ impl Proto {
 
     pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
         match self {
-            Self::Tcp => PeerAddr::Tcp(*network.tcp_listener_local_addr_v4().unwrap()),
-            Self::Quic => PeerAddr::Quic(*network.quic_listener_local_addr_v4().unwrap()),
+            Self::Tcp => PeerAddr::Tcp(network.tcp_listener_local_addr_v4().unwrap()),
+            Self::Quic => PeerAddr::Quic(network.quic_listener_local_addr_v4().unwrap()),
         }
     }
 }

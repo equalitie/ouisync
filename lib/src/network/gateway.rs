@@ -10,6 +10,7 @@ use crate::{
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use thiserror::Error;
@@ -23,99 +24,239 @@ use tracing::Instrument;
 
 /// Established incomming and outgoing connections.
 pub(super) struct Gateway {
-    quic_v4: Option<QuicStack>,
-    quic_v6: Option<QuicStack>,
-    tcp_v4: Option<TcpStack>,
-    tcp_v6: Option<TcpStack>,
-    _port_forwarder: upnp::PortForwarder,
+    // Note this unusual type (`Mutex<Arc<...>>`) is used as an await-free alternative to async
+    // `RwLock`. It allows to immutably access the underlying state and also to concurrently
+    // replace the state with a different one. It's a poor-man's alternative to
+    // [arc-swap](https://docs.rs/arc-swap/latest/arc_swap/).
+    state: Mutex<Arc<State>>,
+    config: ConfigStore,
+    port_forwarder: upnp::PortForwarder,
 }
 
 impl Gateway {
-    /// `incoming_tx` is the sender for the incoming connections.
+    /// Create a new `Gateway` that is initially disabled.
     ///
-    /// Returns `Self` and the side channels for IPv4 and IPv6 respecitvely (if available)
-    pub async fn new(
+    /// `incoming_tx` is the sender for the incoming connections.
+    pub fn new(
         options: &NetworkOptions,
         config: ConfigStore,
         monitor: StateMonitor,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-    ) -> (Self, Option<quic::SideChannel>, Option<quic::SideChannel>) {
-        let (mut quic_v4, side_channel_v4) = if let Some(addr) = options.listen_quic_addr_v4() {
-            QuicStack::new(addr, &config, incoming_tx.clone())
-                .await
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
-
-        let (quic_v6, side_channel_v6) = if let Some(addr) = options.listen_quic_addr_v6() {
-            QuicStack::new(addr, &config, incoming_tx.clone())
-                .await
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
-
-        let mut tcp_v4 = if let Some(addr) = options.listen_tcp_addr_v4() {
-            TcpStack::new(addr, &config, incoming_tx.clone()).await
-        } else {
-            None
-        };
-
-        let tcp_v6 = if let Some(addr) = options.listen_tcp_addr_v6() {
-            TcpStack::new(addr, &config, incoming_tx).await
-        } else {
-            None
-        };
+    ) -> Self {
+        let state = Disabled::new(&options.bind, !options.disable_upnp, incoming_tx);
+        let state = State::Disabled(state);
+        let state = Mutex::new(Arc::new(state));
 
         let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
-        if !options.disable_upnp {
-            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
-            if let Some(stack) = &mut quic_v4 {
-                stack.enable_port_forwarding(&port_forwarder);
-            }
-
-            if let Some(stack) = &mut tcp_v4 {
-                stack.enable_port_forwarding(&port_forwarder);
-            }
+        Self {
+            state,
+            config,
+            port_forwarder,
         }
+    }
 
-        let this = Self {
-            quic_v4,
-            quic_v6,
-            tcp_v4,
-            tcp_v6,
-            _port_forwarder: port_forwarder,
+    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
+        self.state
+            .lock()
+            .unwrap()
+            .tcp_listener_local_addr_v4()
+            .copied()
+    }
+
+    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
+        self.state
+            .lock()
+            .unwrap()
+            .tcp_listener_local_addr_v6()
+            .copied()
+    }
+
+    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
+        self.state
+            .lock()
+            .unwrap()
+            .quic_listener_local_addr_v4()
+            .copied()
+    }
+
+    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
+        self.state
+            .lock()
+            .unwrap()
+            .quic_listener_local_addr_v6()
+            .copied()
+    }
+
+    /// Enables all listeners and connectors. If the state actually transitioned from disabled to
+    /// enabled (that is, it wasn't already enabled), returns the IPv4 and IPv6 side channels
+    /// respectively, if available. Otherwise returns pair of `None`s.
+    pub async fn enable(&self) -> (Option<quic::SideChannel>, Option<quic::SideChannel>) {
+        let state = self.state.lock().unwrap().clone();
+
+        let disabled = match &*state {
+            State::Enabled(_) => return (None, None),
+            State::Disabled(disabled) => disabled,
         };
 
-        (this, side_channel_v4, side_channel_v6)
+        let (enabled, side_channel_v4, side_channel_v6) = disabled
+            .to_enabled(&self.config, &self.port_forwarder)
+            .await;
+
+        let mut state = self.state.lock().unwrap();
+
+        // The state might have changed to `Enabled` in the meantime. We need to check again (while
+        // holding the lock to prevent it changing yet again) and only replace it if it's still
+        // `Disabled`.
+        match &**state {
+            State::Enabled(_) => (None, None),
+            State::Disabled(_) => {
+                *state = Arc::new(State::Enabled(enabled));
+                (side_channel_v4, side_channel_v6)
+            }
+        }
     }
 
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.tcp_v4.as_ref().map(|stack| &stack.listener_local_addr)
+    /// Disables all listeners/connectors
+    pub fn disable(&self) {
+        let mut state = self.state.lock().unwrap();
+
+        match &**state {
+            State::Enabled(enabled) => *state = Arc::new(State::Disabled(enabled.to_disabled())),
+            State::Disabled(_) => (),
+        }
     }
 
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
+    /// Checks whether this `Gateway` is enabled
+    pub fn is_enabled(&self) -> bool {
+        matches!(&**self.state.lock().unwrap(), State::Enabled(_))
     }
 
-    pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+    pub async fn connect_with_retries(
+        &self,
+        peer: &SeenPeer,
+        source: PeerSource,
+    ) -> Option<raw::Stream> {
+        let state = self.state.lock().unwrap().clone();
+        match &*state {
+            State::Enabled(state) => state.connect_with_retries(peer, source).await,
+            State::Disabled(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub(super) enum ConnectError {
+    #[error("TCP error")]
+    Tcp(std::io::Error),
+    #[error("QUIC error")]
+    Quic(quic::Error),
+    #[error("No corresponding QUIC connector")]
+    NoSuitableQuicConnector,
+}
+
+enum State {
+    Enabled(Enabled),
+    Disabled(Disabled),
+}
+
+struct Enabled {
+    quic_v4: Option<QuicStack>,
+    quic_v6: Option<QuicStack>,
+    tcp_v4: Option<TcpStack>,
+    tcp_v6: Option<TcpStack>,
+    incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+}
+
+struct Disabled {
+    quic_listener_local_addr_v4: Option<SocketAddr>,
+    quic_listener_local_addr_v6: Option<SocketAddr>,
+    tcp_listener_local_addr_v4: Option<SocketAddr>,
+    tcp_listener_local_addr_v6: Option<SocketAddr>,
+    port_forwarding_enabled: bool,
+    incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+}
+
+impl State {
+    fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        match self {
+            Self::Enabled(state) => state.quic_listener_local_addr_v4(),
+            Self::Disabled(state) => state.quic_listener_local_addr_v4.as_ref(),
+        }
+    }
+
+    fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        match self {
+            Self::Enabled(state) => state.quic_listener_local_addr_v6(),
+            Self::Disabled(state) => state.quic_listener_local_addr_v6.as_ref(),
+        }
+    }
+
+    fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        match self {
+            Self::Enabled(state) => state.tcp_listener_local_addr_v4(),
+            Self::Disabled(state) => state.tcp_listener_local_addr_v4.as_ref(),
+        }
+    }
+
+    fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        match self {
+            Self::Enabled(state) => state.tcp_listener_local_addr_v6(),
+            Self::Disabled(state) => state.tcp_listener_local_addr_v6.as_ref(),
+        }
+    }
+}
+
+impl Enabled {
+    fn to_disabled(&self) -> Disabled {
+        let port_forwarding_enabled =
+            self.quic_port_forwarding_enabled() || self.tcp_port_forwarding_enabled();
+
+        Disabled {
+            quic_listener_local_addr_v4: self.quic_listener_local_addr_v4().copied(),
+            quic_listener_local_addr_v6: self.quic_listener_local_addr_v6().copied(),
+            tcp_listener_local_addr_v4: self.tcp_listener_local_addr_v4().copied(),
+            tcp_listener_local_addr_v6: self.tcp_listener_local_addr_v6().copied(),
+            port_forwarding_enabled,
+            incoming_tx: self.incoming_tx.clone(),
+        }
+    }
+
+    fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
         self.quic_v4
             .as_ref()
             .map(|stack| &stack.listener_local_addr)
     }
 
-    pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+    fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
         self.quic_v6
             .as_ref()
             .map(|stack| &stack.listener_local_addr)
     }
 
-    pub async fn connect_with_retries(
+    fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+        self.tcp_v4.as_ref().map(|stack| &stack.listener_local_addr)
+    }
+
+    fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+        self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
+    }
+
+    fn quic_port_forwarding_enabled(&self) -> bool {
+        self.quic_v4
+            .as_ref()
+            .map(|stack| stack.port_mapping.is_some())
+            .unwrap_or(false)
+    }
+
+    fn tcp_port_forwarding_enabled(&self) -> bool {
+        self.tcp_v4
+            .as_ref()
+            .map(|stack| stack.port_mapping.is_some())
+            .unwrap_or(false)
+    }
+
+    async fn connect_with_retries(
         &self,
         peer: &SeenPeer,
         source: PeerSource,
@@ -223,14 +364,102 @@ impl Gateway {
     }
 }
 
-#[derive(Debug, Error)]
-pub(super) enum ConnectError {
-    #[error("TCP error")]
-    Tcp(std::io::Error),
-    #[error("QUIC error")]
-    Quic(quic::Error),
-    #[error("No corresponding QUIC connector")]
-    NoSuitableQuicConnector,
+impl Disabled {
+    fn new(
+        bind: &[PeerAddr],
+        port_forwarding_enabled: bool,
+        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    ) -> Self {
+        let quic_listener_local_addr_v4 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+
+        let quic_listener_local_addr_v6 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+        let tcp_listener_local_addr_v4 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+        let tcp_listener_local_addr_v6 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+
+        Self {
+            quic_listener_local_addr_v4,
+            quic_listener_local_addr_v6,
+            tcp_listener_local_addr_v4,
+            tcp_listener_local_addr_v6,
+            port_forwarding_enabled,
+            incoming_tx,
+        }
+    }
+
+    async fn to_enabled(
+        &self,
+        config: &ConfigStore,
+        port_forwarder: &upnp::PortForwarder,
+    ) -> (
+        Enabled,
+        Option<quic::SideChannel>,
+        Option<quic::SideChannel>,
+    ) {
+        let (mut quic_v4, side_channel_v4) = if let Some(addr) = self.quic_listener_local_addr_v4 {
+            QuicStack::new(addr, config, self.incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        let (quic_v6, side_channel_v6) = if let Some(addr) = self.quic_listener_local_addr_v6 {
+            QuicStack::new(addr, config, self.incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        let mut tcp_v4 = if let Some(addr) = self.tcp_listener_local_addr_v4 {
+            TcpStack::new(addr, config, self.incoming_tx.clone()).await
+        } else {
+            None
+        };
+
+        let tcp_v6 = if let Some(addr) = self.tcp_listener_local_addr_v6 {
+            TcpStack::new(addr, config, self.incoming_tx.clone()).await
+        } else {
+            None
+        };
+
+        if self.port_forwarding_enabled {
+            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+
+            if let Some(stack) = &mut quic_v4 {
+                stack.enable_port_forwarding(port_forwarder);
+            }
+
+            if let Some(stack) = &mut tcp_v4 {
+                stack.enable_port_forwarding(port_forwarder);
+            }
+        }
+
+        let enabled = Enabled {
+            quic_v4,
+            quic_v6,
+            tcp_v4,
+            tcp_v6,
+            incoming_tx: self.incoming_tx.clone(),
+        };
+
+        (enabled, side_channel_v4, side_channel_v6)
+    }
 }
 
 struct QuicStack {

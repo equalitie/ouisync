@@ -81,13 +81,14 @@ impl Network {
         monitor: StateMonitor,
     ) -> Result<Self, NetworkError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let (gateway, side_channel_v4, side_channel_v6) = Gateway::new(
+        let gateway = Gateway::new(
             options,
             config.clone(),
             monitor.clone(), // using the root monitor to avoid unnecessary nesting
             incoming_tx,
-        )
-        .await;
+        );
+
+        let (side_channel_v4, side_channel_v6) = gateway.enable().await;
 
         let dht_discovery = if !options.disable_dht {
             // Note that we're now only using quic for the transport discovered over the dht.
@@ -152,19 +153,19 @@ impl Network {
         Ok(network)
     }
 
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.inner.gateway.tcp_listener_local_addr_v4()
     }
 
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.inner.gateway.tcp_listener_local_addr_v6()
     }
 
-    pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
+    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.inner.gateway.quic_listener_local_addr_v4()
     }
 
-    pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
+    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.inner.gateway.quic_listener_local_addr_v6()
     }
 
@@ -193,6 +194,7 @@ impl Network {
     pub fn current_protocol_version(&self) -> u32 {
         VERSION.into()
     }
+
     pub fn highest_seen_protocol_version(&self) -> u32 {
         (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
     }
