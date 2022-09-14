@@ -16,6 +16,7 @@ use tokio::{
     sync::mpsc,
     time,
 };
+use tracing::Instrument;
 
 /// Established incomming and outgoing connections.
 pub(super) struct Gateway {
@@ -128,17 +129,33 @@ impl Gateway {
             (None, None, None)
         };
 
-        let quic_listener_task_v4 = quic_listener_v4
-            .map(|listener| scoped_task::spawn(run_quic_listener(listener, incoming_tx.clone())));
+        let quic_listener_task_v4 = quic_listener_v4.map(|listener| {
+            scoped_task::spawn(
+                run_quic_listener(listener, incoming_tx.clone())
+                    .instrument(tracing::info_span!("quic_listener_v4")),
+            )
+        });
 
-        let quic_listener_task_v6 = quic_listener_v6
-            .map(|listener| scoped_task::spawn(run_quic_listener(listener, incoming_tx.clone())));
+        let quic_listener_task_v6 = quic_listener_v6.map(|listener| {
+            scoped_task::spawn(
+                run_quic_listener(listener, incoming_tx.clone())
+                    .instrument(tracing::info_span!("quic_listener_v6")),
+            )
+        });
 
-        let tcp_listener_task_v4 = tcp_listener_v4
-            .map(|listener| scoped_task::spawn(run_tcp_listener(listener, incoming_tx.clone())));
+        let tcp_listener_task_v4 = tcp_listener_v4.map(|listener| {
+            scoped_task::spawn(
+                run_tcp_listener(listener, incoming_tx.clone())
+                    .instrument(tracing::info_span!("tcp_listener_v4")),
+            )
+        });
 
-        let tcp_listener_task_v6 = tcp_listener_v6
-            .map(|listener| scoped_task::spawn(run_tcp_listener(listener, incoming_tx.clone())));
+        let tcp_listener_task_v6 = tcp_listener_v6.map(|listener| {
+            scoped_task::spawn(
+                run_tcp_listener(listener, incoming_tx.clone())
+                    .instrument(tracing::info_span!("tcp_listener_v6")),
+            )
+        });
 
         let this = Self {
             quic_connector_v4,
