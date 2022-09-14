@@ -16,7 +16,6 @@ use std::{
     fmt,
     future::Future,
     io, net,
-    pin::Pin,
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant, SystemTime},
 };
@@ -107,10 +106,6 @@ impl PortForwarder {
         }
     }
 
-    pub fn has_mappings(&self) -> bool {
-        !self.mappings.lock().unwrap().is_empty()
-    }
-
     async fn run(
         mappings: Arc<Mutex<Mappings>>,
         on_change_rx: watch::Receiver<()>,
@@ -178,44 +173,42 @@ impl PortForwarder {
                 let mappings = mappings.clone();
                 let monitor = monitor.clone();
 
-                Self::spawn_if_not_running(device_url.clone(), &job_handles, move || {
-                    Box::pin(async move {
-                        let device = Device::from_url(device_url).await?;
+                Self::spawn_if_not_running(device_url.clone(), &job_handles, move || async move {
+                    let device = Device::from_url(device_url).await?;
 
-                        // We are only interested in IGD.
-                        if device.device_type().typ() != "InternetGatewayDevice" {
-                            return Ok(());
-                        }
+                    // We are only interested in IGD.
+                    if device.device_type().typ() != "InternetGatewayDevice" {
+                        return Ok(());
+                    }
 
-                        if let Some(service) = find_connection_service(&device) {
-                            let monitor = monitor.make_child(device.friendly_name());
-                            let url = device.url().clone();
+                    if let Some(service) = find_connection_service(&device) {
+                        let monitor = monitor.make_child(device.friendly_name());
+                        let url = device.url().clone();
 
-                            let per_igd_port_forwarder = PerIGDPortForwarder {
-                                device_url: url.clone(),
-                                service,
-                                on_change_rx,
-                                mappings,
-                                active_mappings: Default::default(),
-                                monitor,
-                            };
+                        let per_igd_port_forwarder = PerIGDPortForwarder {
+                            device_url: url.clone(),
+                            service,
+                            on_change_rx,
+                            mappings,
+                            active_mappings: Default::default(),
+                            monitor,
+                        };
 
-                            per_igd_port_forwarder.run().await;
+                        per_igd_port_forwarder.run().await;
 
-                            // The above is expected to never exit. But even if it does (e.g. if
-                            // the code changes), it should be Ok because the device is re-spawned
-                            // the next time the discovery finds it.
-                            Ok(())
-                        } else {
-                            Err(rupnp::Error::InvalidResponse(
-                                format!(
-                                    "port forwarding failed: non-compliant device '{}'",
-                                    device.friendly_name()
-                                )
-                                .into(),
-                            ))
-                        }
-                    })
+                        // The above is expected to never exit. But even if it does (e.g. if
+                        // the code changes), it should be Ok because the device is re-spawned
+                        // the next time the discovery finds it.
+                        Ok(())
+                    } else {
+                        Err(rupnp::Error::InvalidResponse(
+                            format!(
+                                "port forwarding failed: non-compliant device '{}'",
+                                device.friendly_name()
+                            )
+                            .into(),
+                        ))
+                    }
                 });
             }
 
@@ -223,14 +216,13 @@ impl PortForwarder {
         }
     }
 
-    fn spawn_if_not_running<JobMaker>(
+    fn spawn_if_not_running<JobMaker, JobFuture>(
         device_url: Uri,
         job_handles: &Arc<Mutex<JobHandles>>,
         job: JobMaker,
     ) where
-        JobMaker: FnOnce() -> Pin<Box<dyn Future<Output = Result<(), rupnp::Error>> + Send>>
-            + Send
-            + 'static,
+        JobMaker: FnOnce() -> JobFuture + Send + 'static,
+        JobFuture: Future<Output = Result<(), rupnp::Error>> + Send,
     {
         let weak_handles = Arc::downgrade(job_handles);
 
