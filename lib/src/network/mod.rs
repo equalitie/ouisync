@@ -158,7 +158,7 @@ impl Network {
             .and_then(|d| d.local_addr_v6())
             .cloned();
 
-        let (port_forwarder, tcp_port_map, quic_port_map, dht_port_map) = if !options.disable_upnp {
+        let (port_forwarder, tcp_port_map, quic_port_map) = if !options.disable_upnp {
             let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
@@ -181,25 +181,12 @@ impl Network {
             });
 
             if tcp_port_map.is_some() || quic_port_map.is_some() {
-                let dht_port_map = dht_local_addr_v4.map(|addr| {
-                    port_forwarder.add_mapping(
-                        addr.port(), // internal
-                        addr.port(), // external
-                        ip::Protocol::Udp,
-                    )
-                });
-
-                (
-                    Some(port_forwarder),
-                    tcp_port_map,
-                    quic_port_map,
-                    dht_port_map,
-                )
+                (Some(port_forwarder), tcp_port_map, quic_port_map)
             } else {
-                (None, None, None, None)
+                (None, None, None)
             }
         } else {
-            (None, None, None, None)
+            (None, None, None)
         };
 
         let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
@@ -229,7 +216,6 @@ impl Network {
             }),
             _tcp_port_map: tcp_port_map,
             _quic_port_map: quic_port_map,
-            _dht_port_map: dht_port_map,
             dht_local_addr_v4,
             dht_local_addr_v6,
             dht_discovery,
@@ -543,7 +529,6 @@ struct Inner {
     state: BlockingMutex<State>,
     _tcp_port_map: Option<upnp::Mapping>,
     _quic_port_map: Option<upnp::Mapping>,
-    _dht_port_map: Option<upnp::Mapping>,
     dht_local_addr_v4: Option<SocketAddr>,
     dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
