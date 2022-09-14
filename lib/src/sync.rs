@@ -184,3 +184,65 @@ impl AwaitDrop {
         while self.rx.changed().await.is_ok() {}
     }
 }
+
+/// Wrapper that allows non-blocking concurrent read or replace of the underlying value.
+pub(crate) mod atomic_slot {
+    use std::{
+        mem,
+        ops::Deref,
+        sync::{Arc, Mutex},
+    };
+
+    pub struct AtomicSlot<T>(Mutex<Arc<T>>);
+
+    impl<T> AtomicSlot<T> {
+        pub fn new(value: T) -> Self {
+            Self(Mutex::new(Arc::new(value)))
+        }
+
+        /// Obtain read access to the underlying value without blocking.
+        pub fn read(&self) -> Guard<T> {
+            Guard(self.0.lock().unwrap().clone())
+        }
+
+        /// Atomically replace the current value with the provided one and returns the previous one.
+        pub fn swap(&self, value: T) -> Guard<T> {
+            let value = Arc::new(value);
+            Guard(mem::replace(&mut *self.0.lock().unwrap(), value))
+        }
+
+        /// If the current value is same as `current`, replaces it with `new` and returns the
+        /// previous value in an `Ok`. Otherwise leaves the current value unchanged and returns it
+        /// together with `new` in an `Err`
+        pub fn compare_and_swap(
+            &self,
+            current: &Guard<T>,
+            new: T,
+        ) -> Result<Guard<T>, (Guard<T>, T)> {
+            let mut lock = self.0.lock().unwrap();
+
+            if Arc::ptr_eq(&*lock, &current.0) {
+                Ok(Guard(mem::replace(&mut *lock, Arc::new(new))))
+            } else {
+                Err((Guard(lock.clone()), new))
+            }
+        }
+    }
+
+    /// Handle to provide read access to a value stored in `AtomicSlot`.
+    pub struct Guard<T>(Arc<T>);
+
+    impl<T> From<T> for Guard<T> {
+        fn from(value: T) -> Self {
+            Self(Arc::new(value))
+        }
+    }
+
+    impl<T> Deref for Guard<T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            self.0.deref()
+        }
+    }
+}

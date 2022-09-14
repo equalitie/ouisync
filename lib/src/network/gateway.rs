@@ -6,11 +6,11 @@ use crate::{
     config::ConfigStore,
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
+    sync::atomic_slot::AtomicSlot,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
     time::Duration,
 };
 use thiserror::Error;
@@ -24,11 +24,7 @@ use tracing::Instrument;
 
 /// Established incomming and outgoing connections.
 pub(super) struct Gateway {
-    // Note this unusual type (`Mutex<Arc<...>>`) is used as an await-free alternative to async
-    // `RwLock`. It allows to immutably access the underlying state and also to concurrently
-    // replace the state with a different one. It's a poor-man's alternative to
-    // [arc-swap](https://docs.rs/arc-swap/latest/arc_swap/).
-    state: Mutex<Arc<State>>,
+    state: AtomicSlot<State>,
     config: ConfigStore,
     port_forwarder: upnp::PortForwarder,
 }
@@ -45,7 +41,7 @@ impl Gateway {
     ) -> Self {
         let state = Disabled::new(&options.bind, !options.disable_upnp, incoming_tx);
         let state = State::Disabled(state);
-        let state = Mutex::new(Arc::new(state));
+        let state = AtomicSlot::new(state);
 
         let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
@@ -57,79 +53,68 @@ impl Gateway {
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.state
-            .lock()
-            .unwrap()
-            .tcp_listener_local_addr_v4()
-            .copied()
+        self.state.read().tcp_listener_local_addr_v4().copied()
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.state
-            .lock()
-            .unwrap()
-            .tcp_listener_local_addr_v6()
-            .copied()
+        self.state.read().tcp_listener_local_addr_v6().copied()
     }
 
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.state
-            .lock()
-            .unwrap()
-            .quic_listener_local_addr_v4()
-            .copied()
+        self.state.read().quic_listener_local_addr_v4().copied()
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.state
-            .lock()
-            .unwrap()
-            .quic_listener_local_addr_v6()
-            .copied()
+        self.state.read().quic_listener_local_addr_v6().copied()
     }
 
     /// Enables all listeners and connectors. If the state actually transitioned from disabled to
     /// enabled (that is, it wasn't already enabled), returns the IPv4 and IPv6 side channels
     /// respectively, if available. Otherwise returns pair of `None`s.
     pub async fn enable(&self) -> (Option<quic::SideChannel>, Option<quic::SideChannel>) {
-        let state = self.state.lock().unwrap().clone();
+        let mut current_state = self.state.read();
 
-        let disabled = match &*state {
-            State::Enabled(_) => return (None, None),
-            State::Disabled(disabled) => disabled,
-        };
+        loop {
+            let disabled = match &*current_state {
+                State::Enabled(_) => break (None, None),
+                State::Disabled(disabled) => disabled,
+            };
 
-        let (enabled, side_channel_v4, side_channel_v6) = disabled
-            .to_enabled(&self.config, &self.port_forwarder)
-            .await;
+            let (enabled, side_channel_v4, side_channel_v6) = disabled
+                .to_enabled(&self.config, &self.port_forwarder)
+                .await;
+            let next_state = State::Enabled(enabled);
 
-        let mut state = self.state.lock().unwrap();
-
-        // The state might have changed to `Enabled` in the meantime. We need to check again (while
-        // holding the lock to prevent it changing yet again) and only replace it if it's still
-        // `Disabled`.
-        match &**state {
-            State::Enabled(_) => (None, None),
-            State::Disabled(_) => {
-                *state = Arc::new(State::Enabled(enabled));
-                (side_channel_v4, side_channel_v6)
+            match self.state.compare_and_swap(&current_state, next_state) {
+                Ok(_) => break (side_channel_v4, side_channel_v6),
+                Err((prev_state, _)) => current_state = prev_state,
             }
         }
     }
 
     /// Disables all listeners/connectors
     pub fn disable(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut current_state = self.state.read();
 
-        match &**state {
-            State::Enabled(enabled) => *state = Arc::new(State::Disabled(enabled.to_disabled())),
-            State::Disabled(_) => (),
+        loop {
+            let enabled = match &*current_state {
+                State::Enabled(enabled) => enabled,
+                State::Disabled(_) => break,
+            };
+
+            let disabled = enabled.to_disabled();
+            let next_state = State::Disabled(disabled);
+
+            match self.state.compare_and_swap(&current_state, next_state) {
+                Ok(_) => break,
+                Err((prev_state, _)) => current_state = prev_state,
+            }
         }
     }
 
     /// Checks whether this `Gateway` is enabled
     pub fn is_enabled(&self) -> bool {
-        matches!(&**self.state.lock().unwrap(), State::Enabled(_))
+        matches!(*self.state.read(), State::Enabled(_))
     }
 
     pub async fn connect_with_retries(
@@ -137,7 +122,7 @@ impl Gateway {
         peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
-        let state = self.state.lock().unwrap().clone();
+        let state = self.state.read();
         match &*state {
             State::Enabled(state) => state.connect_with_retries(peer, source).await,
             State::Disabled(_) => None,
