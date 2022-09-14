@@ -4,6 +4,7 @@ mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
+mod gateway;
 mod interface;
 mod ip;
 mod keep_alive;
@@ -32,6 +33,7 @@ pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, PeerInfo, ReserveResult},
     dht_discovery::DhtDiscovery,
+    gateway::Gateway,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
@@ -42,11 +44,10 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, error::Error, repository::RepositoryId, scoped_task,
-    state_monitor::StateMonitor, store::Store, sync::uninitialized_watch,
+    config::ConfigStore, error::Error, repository::RepositoryId, state_monitor::StateMonitor,
+    store::Store, sync::uninitialized_watch,
 };
 use async_trait::async_trait;
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
 use slab::Slab;
@@ -56,15 +57,12 @@ use std::{
     io,
     net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
-    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
     task::{AbortHandle, JoinSet},
-    time,
 };
 use tracing::{field, instrument, Instrument, Span};
 
@@ -74,7 +72,6 @@ pub struct Network {
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<BlockingMutex<Tasks>>,
-    _port_forwarder: Option<upnp::PortForwarder>,
 }
 
 impl Network {
@@ -83,58 +80,17 @@ impl Network {
         config: ConfigStore,
         monitor: StateMonitor,
     ) -> Result<Self, NetworkError> {
-        let (quic_connector_v4, quic_listener_v4, udp_socket_v4) =
-            if let Some(addr) = options.listen_quic_addr_v4() {
-                Self::bind_quic_listener(addr, &config)
-                    .await
-                    .map(|(connector, acceptor, side_channel)| {
-                        (Some(connector), Some(acceptor), Some(side_channel))
-                    })
-                    .unwrap_or((None, None, None))
-            } else {
-                (None, None, None)
-            };
-
-        let (quic_connector_v6, quic_listener_v6, udp_socket_v6) =
-            if let Some(addr) = options.listen_quic_addr_v6() {
-                Self::bind_quic_listener(addr, &config)
-                    .await
-                    .map(|(connector, acceptor, side_channel)| {
-                        (Some(connector), Some(acceptor), Some(side_channel))
-                    })
-                    .unwrap_or((None, None, None))
-            } else {
-                (None, None, None)
-            };
-
-        let (tcp_listener_v4, tcp_listener_local_addr_v4) =
-            if let Some(addr) = options.listen_tcp_addr_v4() {
-                Self::bind_tcp_listener(addr, &config)
-                    .await
-                    .map(|(listener, addr)| (Some(listener), Some(addr)))
-                    .unwrap_or((None, None))
-            } else {
-                (None, None)
-            };
-
-        let (tcp_listener_v6, tcp_listener_local_addr_v6) =
-            if let Some(addr) = options.listen_tcp_addr_v6() {
-                Self::bind_tcp_listener(addr, &config)
-                    .await
-                    .map(|(listener, addr)| (Some(listener), Some(addr)))
-                    .unwrap_or((None, None))
-            } else {
-                (None, None)
-            };
-
-        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| *l.local_addr());
-        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| *l.local_addr());
-
-        let hole_puncher_v4 = udp_socket_v4.as_ref().map(|s| s.create_sender());
-        let hole_puncher_v6 = udp_socket_v6.as_ref().map(|s| s.create_sender());
+        let (incoming_tx, incoming_rx) = mpsc::channel(1);
+        let (gateway, side_channel_v4, side_channel_v6) = Gateway::new(
+            options,
+            config.clone(),
+            monitor.make_child("Gateway"),
+            incoming_tx,
+        )
+        .await;
 
         let dht_discovery = if !options.disable_dht {
-            // Also note that we're now only using quic for the transport discovered over the dht.
+            // Note that we're now only using quic for the transport discovered over the dht.
             // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
             // TCP, UDP or anything else.
             // TODO: There are ways to address this: e.g. we could try both, or we could include
@@ -143,40 +99,9 @@ impl Network {
 
             let monitor = monitor.make_child("DhtDiscovery");
 
-            Some(DhtDiscovery::new(udp_socket_v4, udp_socket_v6, monitor).await)
+            Some(DhtDiscovery::new(side_channel_v4, side_channel_v6, monitor).await)
         } else {
             None
-        };
-
-        let (port_forwarder, tcp_port_map, quic_port_map) = if !options.disable_upnp {
-            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
-
-            // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-            // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
-
-            let tcp_port_map = tcp_listener_local_addr_v4.map(|addr| {
-                port_forwarder.add_mapping(
-                    addr.port(), // internal
-                    addr.port(), // external
-                    ip::Protocol::Tcp,
-                )
-            });
-
-            let quic_port_map = quic_listener_local_addr_v4.map(|addr| {
-                port_forwarder.add_mapping(
-                    addr.port(), // internal
-                    addr.port(), // external
-                    ip::Protocol::Udp,
-                )
-            });
-
-            if tcp_port_map.is_some() || quic_port_map.is_some() {
-                (Some(port_forwarder), tcp_port_map, quic_port_map)
-            } else {
-                (None, None, None)
-            }
-        } else {
-            (None, None, None)
         };
 
         let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
@@ -185,33 +110,23 @@ impl Network {
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
         let (pex_discovery_tx, pex_discovery_rx) = mpsc::channel(1);
 
-        let (on_protocol_mismatch_tx, on_protocol_mismatch_rx) = uninitialized_watch::channel();
+        let (on_protocol_mismatch_tx, _) = uninitialized_watch::channel();
 
         let user_provided_peers = SeenPeers::new();
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
-            quic_connector_v4,
-            quic_connector_v6,
-            quic_listener_local_addr_v4,
-            quic_listener_local_addr_v6,
-            tcp_listener_local_addr_v4,
-            tcp_listener_local_addr_v6,
-            hole_puncher_v4,
-            hole_puncher_v6,
+            gateway,
             this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            _tcp_port_map: tcp_port_map,
-            _quic_port_map: quic_port_map,
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
             on_protocol_mismatch_tx,
-            on_protocol_mismatch_rx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
@@ -222,19 +137,11 @@ impl Network {
             inner: inner.clone(),
             monitor,
             _tasks: tasks,
-            _port_forwarder: port_forwarder,
         };
 
-        for listener in [tcp_listener_v4, tcp_listener_v6].into_iter().flatten() {
-            inner.spawn(inner.clone().run_tcp_listener(listener));
-        }
-
-        for listener in [quic_listener_v4, quic_listener_v6].into_iter().flatten() {
-            inner.spawn(inner.clone().run_quic_listener(listener));
-        }
+        inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
 
         inner.enable_local_discovery(!options.disable_local_discovery);
-
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
@@ -246,19 +153,19 @@ impl Network {
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.tcp_listener_local_addr_v4.as_ref()
+        self.inner.gateway.tcp_listener_local_addr_v4()
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.tcp_listener_local_addr_v6.as_ref()
+        self.inner.gateway.tcp_listener_local_addr_v6()
     }
 
     pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.quic_listener_local_addr_v4.as_ref()
+        self.inner.gateway.quic_listener_local_addr_v4()
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.quic_listener_local_addr_v6.as_ref()
+        self.inner.gateway.quic_listener_local_addr_v6()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -281,96 +188,6 @@ impl Network {
 
     pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
         self.inner.connection_deduplicator.is_connected_to(addr)
-    }
-
-    // If the user did not specify (through NetworkOptions) the preferred port, then try to use
-    // the one used last time. If that fails, or if this is the first time the app is running,
-    // then use a random port.
-    async fn bind_tcp_listener(
-        preferred_addr: SocketAddr,
-        config: &ConfigStore,
-    ) -> Option<(TcpListener, SocketAddr)> {
-        let (proto, config_key) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
-            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
-        };
-
-        match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
-            Ok(listener) => match listener.local_addr() {
-                Ok(addr) => {
-                    tracing::info!("Configured {} TCP listener on {:?}", proto, addr);
-                    Some((listener, addr))
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "Failed to get an address of {} TCP listener: {:?}",
-                        proto,
-                        err
-                    );
-                    None
-                }
-            },
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to bind listener to {} TCP address {:?}: {:?}",
-                    proto,
-                    preferred_addr,
-                    err
-                );
-                None
-            }
-        }
-    }
-
-    async fn bind_quic_listener(
-        preferred_addr: SocketAddr,
-        config: &ConfigStore,
-    ) -> Option<(quic::Connector, quic::Acceptor, quic::SideChannel)> {
-        let (proto, config_key) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
-            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
-        };
-
-        let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
-        {
-            Ok(socket) => socket,
-            Err(err) => {
-                tracing::error!(
-                    "Failed to bind {} QUIC socket to {:?}: {:?}",
-                    proto,
-                    preferred_addr,
-                    err
-                );
-                return None;
-            }
-        };
-
-        let socket = match socket.into_std() {
-            Ok(socket) => socket,
-            Err(err) => {
-                tracing::error!(
-                    "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
-                    proto,
-                    err
-                );
-                return None;
-            }
-        };
-
-        match quic::configure(socket) {
-            Ok((connector, listener, side_channel)) => {
-                tracing::info!(
-                    "Configured {} QUIC stack on {:?}",
-                    proto,
-                    listener.local_addr()
-                );
-                Some((connector, listener, side_channel))
-            }
-            Err(e) => {
-                tracing::warn!("Failed to configure {} QUIC stack: {}", proto, e);
-                None
-            }
-        }
     }
 
     pub fn current_protocol_version(&self) -> u32 {
@@ -419,7 +236,7 @@ impl Handle {
 
     /// Subscribe to network protocol mismatch events.
     pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.on_protocol_mismatch_rx.clone()
+        self.inner.on_protocol_mismatch_tx.subscribe()
     }
 
     /// Subscribe change in connected peers events.
@@ -497,24 +314,14 @@ struct Tasks {
 
 struct Inner {
     monitor: StateMonitor,
-    quic_connector_v4: Option<quic::Connector>,
-    quic_connector_v6: Option<quic::Connector>,
-    quic_listener_local_addr_v4: Option<SocketAddr>,
-    quic_listener_local_addr_v6: Option<SocketAddr>,
-    tcp_listener_local_addr_v4: Option<SocketAddr>,
-    tcp_listener_local_addr_v6: Option<SocketAddr>,
-    hole_puncher_v4: Option<quic::SideChannelSender>,
-    hole_puncher_v6: Option<quic::SideChannelSender>,
+    gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
-    _tcp_port_map: Option<upnp::Mapping>,
-    _quic_port_map: Option<upnp::Mapping>,
     dht_discovery: Option<DhtDiscovery>,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
-    on_protocol_mismatch_rx: uninitialized_watch::Receiver<()>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
@@ -555,12 +362,12 @@ impl Inner {
         }
 
         let tcp_port = self
-            .tcp_listener_local_addr_v4
-            .as_ref()
+            .gateway
+            .tcp_listener_local_addr_v4()
             .map(|addr| PeerPort::Tcp(addr.port()));
         let quic_port = self
-            .quic_listener_local_addr_v4
-            .as_ref()
+            .gateway
+            .quic_listener_local_addr_v4()
             .map(|addr| PeerPort::Quic(addr.port()));
 
         // Arbitrary order of preference.
@@ -592,52 +399,6 @@ impl Inner {
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
             )
-        }
-    }
-
-    async fn run_tcp_listener(self: Arc<Self>, listener: TcpListener) {
-        loop {
-            let (socket, addr) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(error) => {
-                    tracing::error!("Failed to accept incoming TCP connection: {}", error);
-                    break;
-                }
-            };
-
-            if let ReserveResult::Permit(permit) = self
-                .connection_deduplicator
-                .reserve(PeerAddr::Tcp(addr), PeerSource::Listener)
-            {
-                self.spawn(
-                    self.clone()
-                        .handle_new_connection(raw::Stream::Tcp(socket), permit)
-                        .map(|_| ()),
-                )
-            }
-        }
-    }
-
-    async fn run_quic_listener(self: Arc<Self>, mut listener: quic::Acceptor) {
-        loop {
-            let socket = match listener.accept().await {
-                Ok(socket) => socket,
-                Err(error) => {
-                    tracing::error!("Failed to accept incoming QUIC connection: {}", error);
-                    break;
-                }
-            };
-
-            if let ReserveResult::Permit(permit) = self.connection_deduplicator.reserve(
-                PeerAddr::Quic(*socket.remote_address()),
-                PeerSource::Listener,
-            ) {
-                self.spawn(
-                    self.clone()
-                        .handle_new_connection(raw::Stream::Quic(socket), permit)
-                        .map(|_| ()),
-                )
-            }
         }
     }
 
@@ -677,26 +438,20 @@ impl Inner {
         )
     }
 
-    async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
-        match addr {
-            PeerAddr::Tcp(addr) => TcpStream::connect(addr)
-                .await
-                .map(raw::Stream::Tcp)
-                .map_err(ConnectError::Tcp),
-            PeerAddr::Quic(addr) => {
-                let connector = if addr.is_ipv4() {
-                    &self.quic_connector_v4
-                } else {
-                    &self.quic_connector_v6
-                };
-
-                connector
-                    .as_ref()
-                    .ok_or(ConnectError::NoSuitableQuicConnector)?
-                    .connect(addr)
-                    .await
-                    .map(raw::Stream::Quic)
-                    .map_err(ConnectError::Quic)
+    async fn handle_incoming_connections(
+        self: Arc<Self>,
+        mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
+    ) {
+        while let Some((stream, addr)) = rx.recv().await {
+            if let ReserveResult::Permit(permit) = self
+                .connection_deduplicator
+                .reserve(addr, PeerSource::Listener)
+            {
+                self.spawn(
+                    self.clone()
+                        .handle_new_connection(stream, permit)
+                        .map(|_| ()),
+                )
             }
         }
     }
@@ -730,7 +485,7 @@ impl Inner {
 
             permit.mark_as_connecting();
 
-            let socket = match self.connect_with_retries(&peer, source).await {
+            let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
@@ -739,139 +494,6 @@ impl Inner {
                 break;
             }
         }
-    }
-
-    async fn connect_with_retries(
-        &self,
-        peer: &SeenPeer,
-        source: PeerSource,
-    ) -> Option<raw::Stream> {
-        if !Self::ok_to_connect(peer.addr()?.socket_addr(), source) {
-            return None;
-        }
-
-        let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(200))
-            .with_max_interval(Duration::from_secs(10))
-            // We'll continue trying for as long as `peer.addr().is_some()`.
-            .with_max_elapsed_time(None)
-            .build();
-
-        let _hole_punching_task = self.start_punching_holes(*peer.addr()?);
-
-        loop {
-            // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
-            // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
-            // found it is no longer seeing it.
-            let addr = *peer.addr()?;
-
-            match self.connect(addr).await {
-                Ok(socket) => {
-                    return Some(socket);
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        "Failed to create {} connection to address {:?}: {:?}",
-                        source,
-                        addr,
-                        error
-                    );
-
-                    match backoff.next_backoff() {
-                        Some(duration) => {
-                            time::sleep(duration).await;
-                        }
-                        // We set max elapsed time to None above.
-                        None => unreachable!(),
-                    }
-                }
-            }
-        }
-    }
-
-    // Filter out some weird `SocketAddr`s. We don't want to connect to those.
-    fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
-        if addr.port() == 0 || addr.port() == 1 {
-            return false;
-        }
-
-        match addr {
-            SocketAddr::V4(addr) => {
-                let ip_addr = addr.ip();
-                if ip_addr.octets()[0] == 0 {
-                    return false;
-                }
-                if ip::is_benchmarking(ip_addr)
-                    || ip::is_reserved(ip_addr)
-                    || ip_addr.is_broadcast()
-                    || ip_addr.is_documentation()
-                {
-                    return false;
-                }
-
-                if source == PeerSource::Dht
-                    && (ip_addr.is_private() || ip_addr.is_loopback() || ip_addr.is_link_local())
-                {
-                    return false;
-                }
-            }
-            SocketAddr::V6(addr) => {
-                let ip_addr = addr.ip();
-
-                if ip_addr.is_multicast()
-                    || ip_addr.is_unspecified()
-                    || ip::is_documentation(ip_addr)
-                {
-                    return false;
-                }
-
-                if source == PeerSource::Dht
-                    && (ip_addr.is_loopback()
-                        || ip::is_unicast_link_local(ip_addr)
-                        || ip::is_unique_local(ip_addr))
-                {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
-
-    fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
-        if !addr.is_quic() {
-            return None;
-        }
-
-        if !ip::is_global(&addr.ip()) {
-            return None;
-        }
-
-        use std::net::IpAddr;
-
-        let sender = match addr.ip() {
-            IpAddr::V4(_) => self.hole_puncher_v4.clone(),
-            IpAddr::V6(_) => self.hole_puncher_v6.clone(),
-        };
-
-        sender.map(|sender| {
-            scoped_task::spawn(async move {
-                use rand::Rng;
-
-                let addr = addr.socket_addr();
-                loop {
-                    let duration_ms = rand::thread_rng().gen_range(5_000..15_000);
-                    // Sleep first because the `connect` function that is normally called right
-                    // after this function will send a SYN packet right a way, so no need to do
-                    // double work here.
-                    time::sleep(Duration::from_millis(duration_ms)).await;
-                    // TODO: Consider using something non-identifiable (random) but something that
-                    // won't interfere with (will be ignored by) the quic and btdht protocols.
-                    let msg = b"punch";
-                    sender.send_to(msg, addr).await.map(|_| ()).unwrap_or(());
-                }
-            })
-        })
     }
 
     fn on_protocol_mismatch(&self, their_version: Version) {
@@ -970,17 +592,6 @@ impl Inner {
             .other
             .spawn(instrument_task(f));
     }
-}
-
-//------------------------------------------------------------------------------
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectError {
-    #[error("TCP error")]
-    Tcp(std::io::Error),
-    #[error("QUIC error")]
-    Quic(quic::Error),
-    #[error("No corresponding QUIC connector")]
-    NoSuitableQuicConnector,
 }
 
 //------------------------------------------------------------------------------
