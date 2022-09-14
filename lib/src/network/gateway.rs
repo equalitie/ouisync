@@ -8,7 +8,10 @@ use crate::{
     state_monitor::StateMonitor,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
@@ -20,178 +23,104 @@ use tracing::Instrument;
 
 /// Established incomming and outgoing connections.
 pub(super) struct Gateway {
-    quic_connector_v4: Option<quic::Connector>,
-    quic_connector_v6: Option<quic::Connector>,
-    quic_listener_local_addr_v4: Option<SocketAddr>,
-    quic_listener_local_addr_v6: Option<SocketAddr>,
-    _quic_listener_task_v4: Option<ScopedJoinHandle<()>>,
-    _quic_listener_task_v6: Option<ScopedJoinHandle<()>>,
-    tcp_listener_local_addr_v4: Option<SocketAddr>,
-    tcp_listener_local_addr_v6: Option<SocketAddr>,
-    _tcp_listener_task_v4: Option<ScopedJoinHandle<()>>,
-    _tcp_listener_task_v6: Option<ScopedJoinHandle<()>>,
-    hole_puncher_v4: Option<quic::SideChannelSender>,
-    hole_puncher_v6: Option<quic::SideChannelSender>,
+    quic_v4: Option<QuicStack>,
+    quic_v6: Option<QuicStack>,
+    tcp_v4: Option<TcpStack>,
+    tcp_v6: Option<TcpStack>,
     _port_forwarder: Option<upnp::PortForwarder>,
-    _tcp_port_map: Option<upnp::Mapping>,
-    _quic_port_map: Option<upnp::Mapping>,
 }
 
 impl Gateway {
     /// `incoming_tx` is the sender for the incoming connections.
     ///
-    /// Apart from `Self` also returns the side channels for IPv4 and IPv6 respecitvely (if
-    /// available)
+    /// Returns `Self` and the side channels for IPv4 and IPv6 respecitvely (if available)
     pub async fn new(
         options: &NetworkOptions,
         config: ConfigStore,
         monitor: StateMonitor,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> (Self, Option<quic::SideChannel>, Option<quic::SideChannel>) {
-        let (quic_connector_v4, quic_listener_v4, udp_socket_v4) =
-            if let Some(addr) = options.listen_quic_addr_v4() {
-                configure_quic(addr, &config)
-                    .await
-                    .map(|(connector, acceptor, side_channel)| {
-                        (Some(connector), Some(acceptor), Some(side_channel))
-                    })
-                    .unwrap_or((None, None, None))
-            } else {
-                (None, None, None)
-            };
+        let (mut quic_v4, side_channel_v4) = if let Some(addr) = options.listen_quic_addr_v4() {
+            QuicStack::new(addr, &config, incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
 
-        let (quic_connector_v6, quic_listener_v6, udp_socket_v6) =
-            if let Some(addr) = options.listen_quic_addr_v6() {
-                configure_quic(addr, &config)
-                    .await
-                    .map(|(connector, acceptor, side_channel)| {
-                        (Some(connector), Some(acceptor), Some(side_channel))
-                    })
-                    .unwrap_or((None, None, None))
-            } else {
-                (None, None, None)
-            };
+        let (quic_v6, side_channel_v6) = if let Some(addr) = options.listen_quic_addr_v6() {
+            QuicStack::new(addr, &config, incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
 
-        let (tcp_listener_v4, tcp_listener_local_addr_v4) =
-            if let Some(addr) = options.listen_tcp_addr_v4() {
-                configure_tcp(addr, &config)
-                    .await
-                    .map(|(listener, addr)| (Some(listener), Some(addr)))
-                    .unwrap_or((None, None))
-            } else {
-                (None, None)
-            };
+        let mut tcp_v4 = if let Some(addr) = options.listen_tcp_addr_v4() {
+            TcpStack::new(addr, &config, incoming_tx.clone()).await
+        } else {
+            None
+        };
 
-        let (tcp_listener_v6, tcp_listener_local_addr_v6) =
-            if let Some(addr) = options.listen_tcp_addr_v6() {
-                configure_tcp(addr, &config)
-                    .await
-                    .map(|(listener, addr)| (Some(listener), Some(addr)))
-                    .unwrap_or((None, None))
-            } else {
-                (None, None)
-            };
+        let tcp_v6 = if let Some(addr) = options.listen_tcp_addr_v6() {
+            TcpStack::new(addr, &config, incoming_tx).await
+        } else {
+            None
+        };
 
-        let quic_listener_local_addr_v4 = quic_listener_v4.as_ref().map(|l| *l.local_addr());
-        let quic_listener_local_addr_v6 = quic_listener_v6.as_ref().map(|l| *l.local_addr());
-
-        let hole_puncher_v4 = udp_socket_v4.as_ref().map(|s| s.create_sender());
-        let hole_puncher_v6 = udp_socket_v6.as_ref().map(|s| s.create_sender());
-
-        let (port_forwarder, tcp_port_map, quic_port_map) = if !options.disable_upnp {
+        let port_forwarder = if !options.disable_upnp {
             let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
             // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+            if let Some(stack) = &mut quic_v4 {
+                stack.enable_port_forwarding(&port_forwarder);
+            }
 
-            let tcp_port_map = tcp_listener_local_addr_v4.map(|addr| {
-                port_forwarder.add_mapping(
-                    addr.port(), // internal
-                    addr.port(), // external
-                    ip::Protocol::Tcp,
-                )
-            });
+            if let Some(stack) = &mut tcp_v4 {
+                stack.enable_port_forwarding(&port_forwarder);
+            }
 
-            let quic_port_map = quic_listener_local_addr_v4.map(|addr| {
-                port_forwarder.add_mapping(
-                    addr.port(), // internal
-                    addr.port(), // external
-                    ip::Protocol::Udp,
-                )
-            });
-
-            if tcp_port_map.is_some() || quic_port_map.is_some() {
-                (Some(port_forwarder), tcp_port_map, quic_port_map)
+            if port_forwarder.has_mappings() {
+                Some(port_forwarder)
             } else {
-                (None, None, None)
+                None
             }
         } else {
-            (None, None, None)
+            None
         };
-
-        let quic_listener_task_v4 = quic_listener_v4.map(|listener| {
-            scoped_task::spawn(
-                run_quic_listener(listener, incoming_tx.clone())
-                    .instrument(tracing::info_span!("quic_listener_v4")),
-            )
-        });
-
-        let quic_listener_task_v6 = quic_listener_v6.map(|listener| {
-            scoped_task::spawn(
-                run_quic_listener(listener, incoming_tx.clone())
-                    .instrument(tracing::info_span!("quic_listener_v6")),
-            )
-        });
-
-        let tcp_listener_task_v4 = tcp_listener_v4.map(|listener| {
-            scoped_task::spawn(
-                run_tcp_listener(listener, incoming_tx.clone())
-                    .instrument(tracing::info_span!("tcp_listener_v4")),
-            )
-        });
-
-        let tcp_listener_task_v6 = tcp_listener_v6.map(|listener| {
-            scoped_task::spawn(
-                run_tcp_listener(listener, incoming_tx.clone())
-                    .instrument(tracing::info_span!("tcp_listener_v6")),
-            )
-        });
 
         let this = Self {
-            quic_connector_v4,
-            quic_connector_v6,
-            quic_listener_local_addr_v4,
-            quic_listener_local_addr_v6,
-            _quic_listener_task_v4: quic_listener_task_v4,
-            _quic_listener_task_v6: quic_listener_task_v6,
-            tcp_listener_local_addr_v4,
-            tcp_listener_local_addr_v6,
-            _tcp_listener_task_v4: tcp_listener_task_v4,
-            _tcp_listener_task_v6: tcp_listener_task_v6,
-            hole_puncher_v4,
-            hole_puncher_v6,
+            quic_v4,
+            quic_v6,
+            tcp_v4,
+            tcp_v6,
             _port_forwarder: port_forwarder,
-            _tcp_port_map: tcp_port_map,
-            _quic_port_map: quic_port_map,
         };
 
-        (this, udp_socket_v4, udp_socket_v6)
+        (this, side_channel_v4, side_channel_v6)
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.tcp_listener_local_addr_v4.as_ref()
+        self.tcp_v4.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.tcp_listener_local_addr_v6.as_ref()
+        self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
     pub fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.quic_listener_local_addr_v4.as_ref()
+        self.quic_v4
+            .as_ref()
+            .map(|stack| &stack.listener_local_addr)
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.quic_listener_local_addr_v6.as_ref()
+        self.quic_v6
+            .as_ref()
+            .map(|stack| &stack.listener_local_addr)
     }
 
     pub async fn connect_with_retries(
@@ -249,15 +178,12 @@ impl Gateway {
                 .map(raw::Stream::Tcp)
                 .map_err(ConnectError::Tcp),
             PeerAddr::Quic(addr) => {
-                let connector = if addr.is_ipv4() {
-                    &self.quic_connector_v4
-                } else {
-                    &self.quic_connector_v6
-                };
+                let stack = self
+                    .quic_stack_for(&addr.ip())
+                    .ok_or(ConnectError::NoSuitableQuicConnector)?;
 
-                connector
-                    .as_ref()
-                    .ok_or(ConnectError::NoSuitableQuicConnector)?
+                stack
+                    .connector
                     .connect(addr)
                     .await
                     .map(raw::Stream::Quic)
@@ -275,31 +201,33 @@ impl Gateway {
             return None;
         }
 
-        use std::net::IpAddr;
+        let stack = self.quic_stack_for(&addr.ip())?;
+        let sender = stack.hole_puncher.clone();
+        let task = scoped_task::spawn(async move {
+            use rand::Rng;
 
-        let sender = match addr.ip() {
-            IpAddr::V4(_) => self.hole_puncher_v4.clone(),
-            IpAddr::V6(_) => self.hole_puncher_v6.clone(),
-        };
+            let addr = addr.socket_addr();
+            loop {
+                let duration_ms = rand::thread_rng().gen_range(5_000..15_000);
+                // Sleep first because the `connect` function that is normally called right
+                // after this function will send a SYN packet right a way, so no need to do
+                // double work here.
+                time::sleep(Duration::from_millis(duration_ms)).await;
+                // TODO: Consider using something non-identifiable (random) but something that
+                // won't interfere with (will be ignored by) the quic and btdht protocols.
+                let msg = b"punch";
+                sender.send_to(msg, addr).await.map(|_| ()).unwrap_or(());
+            }
+        });
 
-        sender.map(|sender| {
-            scoped_task::spawn(async move {
-                use rand::Rng;
+        Some(task)
+    }
 
-                let addr = addr.socket_addr();
-                loop {
-                    let duration_ms = rand::thread_rng().gen_range(5_000..15_000);
-                    // Sleep first because the `connect` function that is normally called right
-                    // after this function will send a SYN packet right a way, so no need to do
-                    // double work here.
-                    time::sleep(Duration::from_millis(duration_ms)).await;
-                    // TODO: Consider using something non-identifiable (random) but something that
-                    // won't interfere with (will be ignored by) the quic and btdht protocols.
-                    let msg = b"punch";
-                    sender.send_to(msg, addr).await.map(|_| ()).unwrap_or(());
-                }
-            })
-        })
+    fn quic_stack_for(&self, ip: &IpAddr) -> Option<&QuicStack> {
+        match ip {
+            IpAddr::V4(_) => self.quic_v4.as_ref(),
+            IpAddr::V6(_) => self.quic_v6.as_ref(),
+        }
     }
 }
 
@@ -313,94 +241,167 @@ pub(super) enum ConnectError {
     NoSuitableQuicConnector,
 }
 
-// If the user did not specify (through NetworkOptions) the preferred port, then try to use
-// the one used last time. If that fails, or if this is the first time the app is running,
-// then use a random port.
-//
-// Returns the TCP listener and the address it's actually bound to.
-async fn configure_tcp(
-    preferred_addr: SocketAddr,
-    config: &ConfigStore,
-) -> Option<(TcpListener, SocketAddr)> {
-    let (proto, config_key) = match preferred_addr {
-        SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
-        SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
-    };
+struct QuicStack {
+    connector: quic::Connector,
+    listener_local_addr: SocketAddr,
+    _listener_task: ScopedJoinHandle<()>,
+    hole_puncher: quic::SideChannelSender,
+    port_mapping: Option<upnp::Mapping>,
+}
 
-    match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
-        Ok(listener) => match listener.local_addr() {
+impl QuicStack {
+    async fn new(
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
+        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    ) -> Option<(Self, quic::SideChannel)> {
+        let (family, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
+        };
+
+        let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
+        {
+            Ok(socket) => socket,
+            Err(err) => {
+                tracing::error!(
+                    "Failed to bind {} QUIC socket to {:?}: {:?}",
+                    family,
+                    preferred_addr,
+                    err
+                );
+                return None;
+            }
+        };
+
+        let socket = match socket.into_std() {
+            Ok(socket) => socket,
+            Err(err) => {
+                tracing::error!(
+                    "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
+                    family,
+                    err
+                );
+                return None;
+            }
+        };
+
+        let (connector, listener, side_channel) = match quic::configure(socket) {
+            Ok((connector, listener, side_channel)) => {
+                tracing::info!(
+                    "Configured {} QUIC stack on {:?}",
+                    family,
+                    listener.local_addr()
+                );
+                (connector, listener, side_channel)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to configure {} QUIC stack: {}", family, e);
+                return None;
+            }
+        };
+
+        let listener_local_addr = *listener.local_addr();
+        let listener_task = scoped_task::spawn(
+            run_quic_listener(listener, incoming_tx).instrument(tracing::info_span!(
+                "listener",
+                proto = "QUIC",
+                family
+            )),
+        );
+
+        let hole_puncher = side_channel.create_sender();
+
+        let this = Self {
+            connector,
+            listener_local_addr,
+            _listener_task: listener_task,
+            hole_puncher,
+            port_mapping: None,
+        };
+
+        Some((this, side_channel))
+    }
+
+    fn enable_port_forwarding(&mut self, forwarder: &upnp::PortForwarder) {
+        self.port_mapping = Some(forwarder.add_mapping(
+            self.listener_local_addr.port(), // internal
+            self.listener_local_addr.port(), // external
+            ip::Protocol::Udp,
+        ));
+    }
+}
+
+struct TcpStack {
+    listener_local_addr: SocketAddr,
+    _listener_task: ScopedJoinHandle<()>,
+    port_mapping: Option<upnp::Mapping>,
+}
+
+impl TcpStack {
+    // If the user did not specify (through NetworkOptions) the preferred port, then try to use
+    // the one used last time. If that fails, or if this is the first time the app is running,
+    // then use a random port.
+    async fn new(
+        preferred_addr: SocketAddr,
+        config: &ConfigStore,
+        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    ) -> Option<Self> {
+        let (family, config_key) = match preferred_addr {
+            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
+            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
+        };
+
+        let listener =
+            match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to bind listener to {} TCP address {:?}: {:?}",
+                        family,
+                        preferred_addr,
+                        err
+                    );
+                    return None;
+                }
+            };
+
+        let listener_local_addr = match listener.local_addr() {
             Ok(addr) => {
-                tracing::info!("Configured {} TCP listener on {:?}", proto, addr);
-                Some((listener, addr))
+                tracing::info!("Configured {} TCP listener on {:?}", family, addr);
+                addr
             }
             Err(err) => {
                 tracing::warn!(
                     "Failed to get local address of {} TCP listener: {:?}",
-                    proto,
+                    family,
                     err
                 );
-                None
+                return None;
             }
-        },
-        Err(err) => {
-            tracing::warn!(
-                "Failed to bind listener to {} TCP address {:?}: {:?}",
-                proto,
-                preferred_addr,
-                err
-            );
-            None
-        }
+        };
+
+        let listener_task = scoped_task::spawn(
+            run_tcp_listener(listener, incoming_tx).instrument(tracing::info_span!(
+                "listener",
+                proto = "TCP",
+                family
+            )),
+        );
+
+        Some(Self {
+            listener_local_addr,
+            _listener_task: listener_task,
+            port_mapping: None,
+        })
     }
-}
 
-async fn configure_quic(
-    preferred_addr: SocketAddr,
-    config: &ConfigStore,
-) -> Option<(quic::Connector, quic::Acceptor, quic::SideChannel)> {
-    let (proto, config_key) = match preferred_addr {
-        SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
-        SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
-    };
-
-    let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await {
-        Ok(socket) => socket,
-        Err(err) => {
-            tracing::error!(
-                "Failed to bind {} QUIC socket to {:?}: {:?}",
-                proto,
-                preferred_addr,
-                err
-            );
-            return None;
-        }
-    };
-
-    let socket = match socket.into_std() {
-        Ok(socket) => socket,
-        Err(err) => {
-            tracing::error!(
-                "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
-                proto,
-                err
-            );
-            return None;
-        }
-    };
-
-    match quic::configure(socket) {
-        Ok((connector, listener, side_channel)) => {
-            tracing::info!(
-                "Configured {} QUIC stack on {:?}",
-                proto,
-                listener.local_addr()
-            );
-            Some((connector, listener, side_channel))
-        }
-        Err(e) => {
-            tracing::warn!("Failed to configure {} QUIC stack: {}", proto, e);
-            None
-        }
+    fn enable_port_forwarding(&mut self, forwarder: &upnp::PortForwarder) {
+        self.port_mapping = Some(forwarder.add_mapping(
+            self.listener_local_addr.port(), // internal
+            self.listener_local_addr.port(), // external
+            ip::Protocol::Tcp,
+        ));
     }
 }
 

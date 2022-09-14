@@ -91,6 +91,10 @@ impl PortForwarder {
         }
     }
 
+    pub fn has_mappings(&self) -> bool {
+        !self.mappings.lock().unwrap().is_empty()
+    }
+
     async fn run(
         mappings: Arc<Mutex<Mappings>>,
         on_change_rx: watch::Receiver<()>,
