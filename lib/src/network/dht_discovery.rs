@@ -107,14 +107,6 @@ impl DhtDiscovery {
 
         request
     }
-
-    pub fn local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.dht_v4.as_ref().map(|dht| &dht.local_addr)
-    }
-
-    pub fn local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.dht_v6.as_ref().map(|dht| &dht.local_addr)
-    }
 }
 
 async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
@@ -190,7 +182,6 @@ async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> Restart
 
     RestartableDht {
         dht,
-        local_addr,
         _monitoring_task: Arc::new(monitoring_task),
     }
 }
@@ -201,7 +192,6 @@ async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> Restart
 #[derive(Clone)]
 struct RestartableDht {
     dht: MainlineDht,
-    local_addr: SocketAddr,
     _monitoring_task: Arc<ScopedJoinHandle<()>>,
 }
 

@@ -148,16 +148,6 @@ impl Network {
             None
         };
 
-        let dht_local_addr_v4 = dht_discovery
-            .as_ref()
-            .and_then(|d| d.local_addr_v4())
-            .cloned();
-
-        let dht_local_addr_v6 = dht_discovery
-            .as_ref()
-            .and_then(|d| d.local_addr_v6())
-            .cloned();
-
         let (port_forwarder, tcp_port_map, quic_port_map) = if !options.disable_upnp {
             let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
@@ -216,8 +206,6 @@ impl Network {
             }),
             _tcp_port_map: tcp_port_map,
             _quic_port_map: quic_port_map,
-            dht_local_addr_v4,
-            dht_local_addr_v6,
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
@@ -271,14 +259,6 @@ impl Network {
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
         self.inner.quic_listener_local_addr_v6.as_ref()
-    }
-
-    pub fn dht_local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.inner.dht_local_addr_v4.as_ref()
-    }
-
-    pub fn dht_local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.inner.dht_local_addr_v6.as_ref()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -529,8 +509,6 @@ struct Inner {
     state: BlockingMutex<State>,
     _tcp_port_map: Option<upnp::Mapping>,
     _quic_port_map: Option<upnp::Mapping>,
-    dht_local_addr_v4: Option<SocketAddr>,
-    dht_local_addr_v6: Option<SocketAddr>,
     dht_discovery: Option<DhtDiscovery>,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,

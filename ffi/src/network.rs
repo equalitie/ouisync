@@ -198,11 +198,13 @@ pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
 /// See [`network_local_addr`] for the format details.
 ///
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+// FIXME: remove this function
+#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v4 instead"]
 #[no_mangle]
 pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
     session::get()
         .network()
-        .dht_local_addr_v4()
+        .quic_listener_local_addr_v4()
         .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
         .unwrap_or(ptr::null_mut())
 }
@@ -211,11 +213,13 @@ pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
 /// See [`network_local_addr`] for the format details.
 ///
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+// FIXME: remove this function
+#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v6 instead"]
 #[no_mangle]
 pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
     session::get()
         .network()
-        .dht_local_addr_v6()
+        .quic_listener_local_addr_v6()
         .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
         .unwrap_or(ptr::null_mut())
 }
