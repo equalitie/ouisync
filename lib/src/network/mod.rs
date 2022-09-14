@@ -84,7 +84,7 @@ impl Network {
         let (gateway, side_channel_v4, side_channel_v6) = Gateway::new(
             options,
             config.clone(),
-            monitor.make_child("Gateway"),
+            monitor.clone(), // using the root monitor to avoid unnecessary nesting
             incoming_tx,
         )
         .await;

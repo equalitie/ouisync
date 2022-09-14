@@ -17,7 +17,7 @@ use std::{
     future::Future,
     io, net,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant, SystemTime},
 };
 use tokio::{sync::watch, time::sleep};
@@ -34,28 +34,20 @@ struct TrackedDevice {
 pub(crate) struct PortForwarder {
     mappings: Arc<Mutex<Mappings>>,
     on_change_tx: Arc<watch::Sender<()>>,
-    _task: ScopedJoinHandle<()>,
+    task: Mutex<Weak<ScopedJoinHandle<()>>>,
+    monitor: StateMonitor,
 }
 
 impl PortForwarder {
     pub fn new(monitor: StateMonitor) -> Self {
         let mappings = Arc::new(Mutex::new(Default::default()));
-
-        let (on_change_tx, on_change_rx) = watch::channel(());
-
-        let task = scoped_task::spawn({
-            let mappings = mappings.clone();
-            async move {
-                let result = Self::run(mappings, on_change_rx, monitor).await;
-                // Warning, because we don't actually expect this to happen.
-                tracing::warn!("UPnP port forwarding ended ({:?})", result)
-            }
-        });
+        let (on_change_tx, _) = watch::channel(());
 
         Self {
             mappings,
             on_change_tx: Arc::new(on_change_tx),
-            _task: task,
+            task: Mutex::new(Weak::new()),
+            monitor,
         }
     }
 
@@ -66,9 +58,7 @@ impl PortForwarder {
             protocol,
         };
 
-        let mut mappings = self.mappings.lock().unwrap();
-
-        match mappings.entry(data) {
+        match self.mappings.lock().unwrap().entry(data) {
             hash_map::Entry::Occupied(mut entry) => {
                 *entry.get_mut() += 1;
             }
@@ -84,10 +74,36 @@ impl PortForwarder {
             }
         }
 
+        // Start the forwarder when the first mapping is created and stop it when the last mapping
+        // is destroyed.
+        let mut task_lock = self.task.lock().unwrap();
+
+        let task = if let Some(task) = task_lock.upgrade() {
+            task
+        } else {
+            let task = scoped_task::spawn({
+                let mappings = self.mappings.clone();
+                let on_change_rx = self.on_change_tx.subscribe();
+                let monitor = self.monitor.clone();
+
+                async move {
+                    let result = Self::run(mappings, on_change_rx, monitor).await;
+                    // Warning, because we don't actually expect this to happen.
+                    tracing::warn!("UPnP port forwarding ended ({:?})", result)
+                }
+            });
+
+            let task = Arc::new(task);
+            *task_lock = Arc::downgrade(&task);
+
+            task
+        };
+
         Mapping {
             data,
             on_change_tx: self.on_change_tx.clone(),
             mappings: self.mappings.clone(),
+            _task: task,
         }
     }
 
@@ -274,6 +290,7 @@ pub(crate) struct Mapping {
     data: MappingData,
     on_change_tx: Arc<watch::Sender<()>>,
     mappings: Arc<Mutex<Mappings>>,
+    _task: Arc<ScopedJoinHandle<()>>,
 }
 
 impl Drop for Mapping {

@@ -27,7 +27,7 @@ pub(super) struct Gateway {
     quic_v6: Option<QuicStack>,
     tcp_v4: Option<TcpStack>,
     tcp_v6: Option<TcpStack>,
-    _port_forwarder: Option<upnp::PortForwarder>,
+    _port_forwarder: upnp::PortForwarder,
 }
 
 impl Gateway {
@@ -70,9 +70,9 @@ impl Gateway {
             None
         };
 
-        let port_forwarder = if !options.disable_upnp {
-            let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
+        let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
+        if !options.disable_upnp {
             // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
             // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
             if let Some(stack) = &mut quic_v4 {
@@ -82,15 +82,7 @@ impl Gateway {
             if let Some(stack) = &mut tcp_v4 {
                 stack.enable_port_forwarding(&port_forwarder);
             }
-
-            if port_forwarder.has_mappings() {
-                Some(port_forwarder)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
 
         let this = Self {
             quic_v4,
