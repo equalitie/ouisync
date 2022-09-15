@@ -100,7 +100,7 @@ async fn relay() {
 
     // The "relay" peer.
     let network_r = Network::new(
-        &common::test_network_options(proto),
+        &common::test_bind_addrs(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )

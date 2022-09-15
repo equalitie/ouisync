@@ -6,8 +6,7 @@ use anyhow::{format_err, Context, Error, Result};
 use clap::Parser;
 use ouisync_lib::{
     crypto::{cipher::SecretKey, Password},
-    network::NetworkOptions,
-    AccessMode, MasterSecret, ShareToken,
+    AccessMode, MasterSecret, PeerAddr, ShareToken,
 };
 use std::{
     path::{Path, PathBuf},
@@ -33,8 +32,11 @@ pub(crate) struct Options {
     #[clap(long)]
     pub disable_merger: bool,
 
-    #[clap(flatten)]
-    pub network: NetworkOptions,
+    /// Addresses to bind to. The expected format is {tcp,quic}/IP:PORT. Note that there may be at
+    /// most one of each (protoco x IP-version) combinations. If more are specified, only the first
+    /// one is used.
+    #[clap(long, default_values = &["quic/0.0.0.0:0", "quic/[::]:0"], value_name = "proto/ip:port")]
+    pub bind: Vec<PeerAddr>,
 
     /// Disable UPnP
     #[clap(long)]
@@ -51,6 +53,10 @@ pub(crate) struct Options {
     /// Disable Peer Exchange
     #[clap(long)]
     pub disable_pex: bool,
+
+    /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
+    #[clap(long)]
+    pub peers: Vec<PeerAddr>,
 
     /// Create new repository with the specified name. Can be specified multiple times to create
     /// multiple repositories.

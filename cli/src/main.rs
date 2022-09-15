@@ -124,8 +124,7 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network =
-        Network::new(&options.network, config, root_monitor.make_child("Network")).await?;
+    let network = Network::new(&options.bind, config, root_monitor.make_child("Network")).await?;
 
     if !options.disable_upnp {
         network.enable_port_forwarding();
@@ -133,6 +132,10 @@ async fn main() -> Result<()> {
 
     if !options.disable_local_discovery {
         network.enable_local_discovery();
+    }
+
+    for peer in &options.peers {
+        network.add_user_provided_peer(peer);
     }
 
     let network_handle = network.handle();

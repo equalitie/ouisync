@@ -13,7 +13,6 @@ mod message;
 mod message_broker;
 mod message_dispatcher;
 mod message_io;
-mod options;
 pub mod peer_addr;
 mod peer_exchange;
 mod peer_source;
@@ -29,7 +28,6 @@ mod socket;
 mod tests;
 mod upnp;
 
-pub use self::options::NetworkOptions;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, PeerInfo, ReserveResult},
     dht_discovery::DhtDiscovery,
@@ -55,7 +53,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     io,
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
 };
 use thiserror::Error;
@@ -76,13 +74,13 @@ pub struct Network {
 
 impl Network {
     pub async fn new(
-        options: &NetworkOptions,
+        bind: &[PeerAddr],
         config: ConfigStore,
         monitor: StateMonitor,
     ) -> Result<Self, NetworkError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(
-            &options.bind,
+            bind,
             config.clone(),
             monitor.clone(), // using the root monitor to avoid unnecessary nesting
             incoming_tx,
@@ -140,11 +138,24 @@ impl Network {
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
-        for peer in &options.peers {
-            inner.clone().establish_user_provided_connection(peer);
-        }
-
         Ok(network)
+    }
+
+    /// Create a `Network` with the listeners bound to the default addresses:
+    /// quic/0.0.0.0:0 and quic/[::]:0
+    pub async fn with_default_bind_addrs(
+        config: ConfigStore,
+        monitor: StateMonitor,
+    ) -> Result<Self, NetworkError> {
+        Self::new(
+            &[
+                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
+                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
+            ],
+            config,
+            monitor,
+        )
+        .await
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {

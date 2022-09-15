@@ -6,7 +6,7 @@ use super::{
 };
 use ouisync_lib::{
     device_id::{self, DeviceId},
-    network::{Network, NetworkOptions},
+    network::Network,
     ConfigStore, Error, Result, StateMonitor,
 };
 use std::{
@@ -86,17 +86,14 @@ pub unsafe extern "C" fn session_open(
         let repos_monitor = root_monitor.make_child("Repositories");
         let network_monitor = root_monitor.make_child("Network");
 
-        let network = match runtime.block_on(Network::new(
-            &NetworkOptions::default(),
-            config,
-            network_monitor,
-        )) {
-            Ok(network) => network,
-            Err(error) => {
-                sender.send_result(port, Err(error.into()));
-                return;
-            }
-        };
+        let network =
+            match runtime.block_on(Network::with_default_bind_addrs(config, network_monitor)) {
+                Ok(network) => network,
+                Err(error) => {
+                    sender.send_result(port, Err(error.into()));
+                    return;
+                }
+            };
 
         // TODO: consider leaving these decisions up to the app
         network.enable_port_forwarding();
