@@ -40,6 +40,10 @@ pub(crate) struct Options {
     #[clap(long)]
     pub disable_dht: bool,
 
+    /// Disable Peer Exchange
+    #[clap(long)]
+    pub disable_pex: bool,
+
     /// Create new repository with the specified name. Can be specified multiple times to create
     /// multiple repositories.
     #[clap(short, long, value_name = "NAME")]

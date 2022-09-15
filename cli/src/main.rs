@@ -151,8 +151,9 @@ async fn main() -> Result<()> {
             registration.enable_dht();
         }
 
-        // TODO: add option to disable PEX
-        registration.enable_pex();
+        if !options.disable_pex {
+            registration.enable_pex();
+        }
 
         let mount_guard =
             virtual_filesystem::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
