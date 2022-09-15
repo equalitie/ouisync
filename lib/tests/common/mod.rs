@@ -144,7 +144,6 @@ pub(crate) fn test_network_options(proto: Proto) -> NetworkOptions {
     NetworkOptions {
         bind: vec![proto.wrap_addr((Ipv4Addr::LOCALHOST, 0).into())],
         disable_local_discovery: true,
-        disable_upnp: true,
         ..Default::default()
     }
 }

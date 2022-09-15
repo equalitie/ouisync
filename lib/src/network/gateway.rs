@@ -1,6 +1,6 @@
 use super::{
-    config_keys, ip, options::NetworkOptions, peer_addr::PeerAddr, peer_source::PeerSource, quic,
-    raw, seen_peers::SeenPeer, socket, upnp,
+    config_keys, ip, peer_addr::PeerAddr, peer_source::PeerSource, quic, raw, seen_peers::SeenPeer,
+    socket, upnp,
 };
 use crate::{
     config::ConfigStore,
@@ -38,12 +38,12 @@ impl Gateway {
     ///
     /// `incoming_tx` is the sender for the incoming connections.
     pub fn new(
-        options: &NetworkOptions,
+        bind: &[PeerAddr],
         config: ConfigStore,
         monitor: StateMonitor,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> Self {
-        let state = Disabled::new(&options.bind, incoming_tx);
+        let state = Disabled::new(bind, incoming_tx);
         let state = State::Disabled(state);
         let state = AtomicSlot::new(state);
 

@@ -36,6 +36,10 @@ pub(crate) struct Options {
     #[clap(flatten)]
     pub network: NetworkOptions,
 
+    /// Disable UPnP
+    #[clap(long)]
+    pub disable_upnp: bool,
+
     /// Disable DHT
     #[clap(long)]
     pub disable_dht: bool,

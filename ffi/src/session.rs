@@ -98,6 +98,9 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
+        // TODO: consider leaving the decision whether to enable UPnP up to the app
+        network.enable_port_forwarding();
+
         let session = Session {
             runtime,
             device_id,

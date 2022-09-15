@@ -127,6 +127,10 @@ async fn main() -> Result<()> {
     let network =
         Network::new(&options.network, config, root_monitor.make_child("Network")).await?;
 
+    if !options.disable_upnp {
+        network.enable_port_forwarding();
+    }
+
     let network_handle = network.handle();
 
     // Mount repositories

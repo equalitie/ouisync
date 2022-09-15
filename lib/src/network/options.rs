@@ -17,10 +17,6 @@ pub struct NetworkOptions {
     #[clap(short, long)]
     pub disable_local_discovery: bool,
 
-    /// Disable UPnP
-    #[clap(long)]
-    pub disable_upnp: bool,
-
     /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
     #[clap(long)]
     pub peers: Vec<PeerAddr>,
@@ -34,7 +30,6 @@ impl Default for NetworkOptions {
                 PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
             ],
             disable_local_discovery: false,
-            disable_upnp: false,
             peers: Vec::new(),
         }
     }

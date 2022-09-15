@@ -82,17 +82,13 @@ impl Network {
     ) -> Result<Self, NetworkError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(
-            options,
+            &options.bind,
             config.clone(),
             monitor.clone(), // using the root monitor to avoid unnecessary nesting
             incoming_tx,
         );
 
         let (side_channel_maker_v4, side_channel_maker_v6) = gateway.enable().await;
-
-        if !options.disable_upnp {
-            gateway.enable_port_forwarding();
-        }
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -167,6 +163,14 @@ impl Network {
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.inner.gateway.quic_listener_local_addr_v6()
+    }
+
+    pub fn enable_port_forwarding(&self) {
+        self.inner.gateway.enable_port_forwarding()
+    }
+
+    pub fn disable_port_forwarding(&self) {
+        self.inner.gateway.disable_port_forwarding()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
