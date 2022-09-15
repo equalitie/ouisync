@@ -219,6 +219,16 @@ impl Network {
     pub fn highest_seen_protocol_version(&self) -> u32 {
         (*self.inner.highest_seen_protocol_version.lock().unwrap()).into()
     }
+
+    /// Subscribe to network protocol mismatch events.
+    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
+        self.inner.on_protocol_mismatch_tx.subscribe()
+    }
+
+    /// Subscribe change in connected peers events.
+    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
+        self.inner.connection_deduplicator.on_change()
+    }
 }
 
 /// Handle for the network which can be cheaply cloned and sent to other threads.
@@ -252,16 +262,6 @@ impl Handle {
             inner: self.inner.clone(),
             key,
         }
-    }
-
-    /// Subscribe to network protocol mismatch events.
-    pub fn on_protocol_mismatch(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.on_protocol_mismatch_tx.subscribe()
-    }
-
-    /// Subscribe change in connected peers events.
-    pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.inner.connection_deduplicator.on_change()
     }
 }
 

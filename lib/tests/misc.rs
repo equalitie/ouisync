@@ -881,8 +881,8 @@ async fn peer_exchange() {
     let addr_b = proto.listener_local_addr_v4(&network_b);
     let addr_c = proto.listener_local_addr_v4(&network_c);
 
-    let mut rx_b = network_b.handle().on_peer_set_change();
-    let mut rx_c = network_c.handle().on_peer_set_change();
+    let mut rx_b = network_b.on_peer_set_change();
+    let mut rx_c = network_c.on_peer_set_change();
 
     // ...eventually B and C connect to each other via peer exchange.
     let connected = async {

@@ -15,8 +15,8 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
     let session = session::get();
     let sender = session.sender();
 
-    let mut on_protocol_mismatch = session.network().handle().on_protocol_mismatch();
-    let mut on_peer_set_change = session.network().handle().on_peer_set_change();
+    let mut on_protocol_mismatch = session.network().on_protocol_mismatch();
+    let mut on_peer_set_change = session.network().on_peer_set_change();
 
     let handle = session.runtime().spawn(async move {
         // TODO: This loop exits when the first of the watched channels closes. It might be less
