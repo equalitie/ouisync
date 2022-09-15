@@ -79,34 +79,26 @@ impl Gateway {
     ) {
         let mut current_state = self.state.read();
 
-        loop {
-            let disabled = match &*current_state {
-                State::Enabled(_) => break (None, None),
-                State::Disabled(disabled) => disabled,
-            };
-
+        while let State::Disabled(disabled) = &*current_state {
             let (enabled, side_channel_maker_v4, side_channel_maker_v6) = disabled
                 .to_enabled(&self.config, &self.port_forwarder)
                 .await;
             let next_state = State::Enabled(enabled);
 
             match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(_) => break (side_channel_maker_v4, side_channel_maker_v6),
+                Ok(_) => return (side_channel_maker_v4, side_channel_maker_v6),
                 Err((prev_state, _)) => current_state = prev_state,
             }
         }
+
+        (None, None)
     }
 
     /// Disables all listeners/connectors
     pub fn disable(&self) {
         let mut current_state = self.state.read();
 
-        loop {
-            let enabled = match &*current_state {
-                State::Enabled(enabled) => enabled,
-                State::Disabled(_) => break,
-            };
-
+        while let State::Enabled(enabled) = &*current_state {
             let disabled = enabled.to_disabled();
             let next_state = State::Disabled(disabled);
 

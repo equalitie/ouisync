@@ -42,8 +42,8 @@ pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 pub(super) struct DhtDiscovery {
-    dht_v4: Option<RestartableDht>,
-    dht_v6: Option<RestartableDht>,
+    dht_v4: Option<Dht>,
+    dht_v6: Option<Dht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
     monitor: StateMonitor,
@@ -55,8 +55,8 @@ impl DhtDiscovery {
         socket_maker_v6: Option<quic::SideChannelMaker>,
         monitor: StateMonitor,
     ) -> Self {
-        let dht_v4 = socket_maker_v4.map(|maker| start_dht(maker.make(), &monitor));
-        let dht_v6 = socket_maker_v6.map(|maker| start_dht(maker.make(), &monitor));
+        let dht_v4 = socket_maker_v4.map(|maker| Dht::start(maker.make(), &monitor));
+        let dht_v6 = socket_maker_v6.map(|maker| Dht::start(maker.make(), &monitor));
 
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
@@ -100,90 +100,89 @@ impl DhtDiscovery {
     }
 }
 
-fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
-    // TODO: Unwrap
-    let local_addr = socket.local_addr().unwrap();
-
-    let protocol = match local_addr {
-        SocketAddr::V4(_) => "IPv4",
-        SocketAddr::V6(_) => "IPv6",
-    };
-
-    let monitor = monitor.make_child(protocol);
-
-    // TODO: load the DHT state from a previous save if it exists.
-    let dht = MainlineDht::builder()
-        .add_routers(DHT_ROUTERS.iter().copied())
-        .set_read_only(false)
-        .start(socket)
-        // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
-        // since we just succeeded in binding the socket above, that shouldn't happen.
-        .unwrap();
-
-    // Spawn a task to monitor the DHT status.
-    let monitoring_task = scoped_task::spawn({
-        let dht = dht.clone();
-
-        let first_bootstrap =
-            monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
-
-        async move {
-            if dht.bootstrapped(None).await {
-                *first_bootstrap.get() = "done";
-                tracing::info!("DHT {} bootstrap complete", protocol);
-            } else {
-                *first_bootstrap.get() = "failed";
-                tracing::error!("DHT {} bootstrap failed", protocol);
-
-                // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
-                // is preserved for the user to see.
-                pending::<()>().await;
-            }
-
-            let i = monitor.make_value::<u64>("probe_counter".into(), 0);
-
-            let is_running = monitor.make_value::<Option<bool>>("is_running".into(), None);
-            let bootstrapped = monitor.make_value::<Option<bool>>("bootstrapped".into(), None);
-            let good_node_count =
-                monitor.make_value::<Option<usize>>("good_node_count".into(), None);
-            let questionable_node_count =
-                monitor.make_value::<Option<usize>>("questionable_node_count".into(), None);
-            let bucket_count = monitor.make_value::<Option<usize>>("bucket_count".into(), None);
-
-            loop {
-                *i.get() += 1;
-
-                if let Some(state) = dht.get_state().await {
-                    *is_running.get() = Some(state.is_running);
-                    *bootstrapped.get() = Some(state.bootstrapped);
-                    *good_node_count.get() = Some(state.good_node_count);
-                    *questionable_node_count.get() = Some(state.questionable_node_count);
-                    *bucket_count.get() = Some(state.bucket_count);
-                } else {
-                    *is_running.get() = None;
-                    *bootstrapped.get() = None;
-                    *good_node_count.get() = None;
-                    *questionable_node_count.get() = None;
-                    *bucket_count.get() = None;
-                }
-                time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    });
-
-    RestartableDht {
-        dht,
-        _monitoring_task: Arc::new(monitoring_task),
-    }
-}
-
-// A wrapper over MainlineDht that periodically retries to initialize and bootstrap (and
-// rebootstrap when/if all nodes disappear). This is necessary because the network may go up and
-// down.
 #[derive(Clone)]
-struct RestartableDht {
+struct Dht {
     dht: MainlineDht,
     _monitoring_task: Arc<ScopedJoinHandle<()>>,
+}
+
+impl Dht {
+    fn start(socket: quic::SideChannel, monitor: &StateMonitor) -> Self {
+        // TODO: Unwrap
+        let local_addr = socket.local_addr().unwrap();
+
+        let protocol = match local_addr {
+            SocketAddr::V4(_) => "IPv4",
+            SocketAddr::V6(_) => "IPv6",
+        };
+
+        let monitor = monitor.make_child(protocol);
+
+        // TODO: load the DHT state from a previous save if it exists.
+        let dht = MainlineDht::builder()
+            .add_routers(DHT_ROUTERS.iter().copied())
+            .set_read_only(false)
+            .start(socket)
+            // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
+            // since we just succeeded in binding the socket above, that shouldn't happen.
+            .unwrap();
+
+        // Spawn a task to monitor the DHT status.
+        let monitoring_task = scoped_task::spawn({
+            let dht = dht.clone();
+
+            let first_bootstrap =
+                monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
+
+            async move {
+                if dht.bootstrapped(None).await {
+                    *first_bootstrap.get() = "done";
+                    tracing::info!("DHT {} bootstrap complete", protocol);
+                } else {
+                    *first_bootstrap.get() = "failed";
+                    tracing::error!("DHT {} bootstrap failed", protocol);
+
+                    // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
+                    // is preserved for the user to see.
+                    pending::<()>().await;
+                }
+
+                let i = monitor.make_value::<u64>("probe_counter".into(), 0);
+
+                let is_running = monitor.make_value::<Option<bool>>("is_running".into(), None);
+                let bootstrapped = monitor.make_value::<Option<bool>>("bootstrapped".into(), None);
+                let good_node_count =
+                    monitor.make_value::<Option<usize>>("good_node_count".into(), None);
+                let questionable_node_count =
+                    monitor.make_value::<Option<usize>>("questionable_node_count".into(), None);
+                let bucket_count = monitor.make_value::<Option<usize>>("bucket_count".into(), None);
+
+                loop {
+                    *i.get() += 1;
+
+                    if let Some(state) = dht.get_state().await {
+                        *is_running.get() = Some(state.is_running);
+                        *bootstrapped.get() = Some(state.bootstrapped);
+                        *good_node_count.get() = Some(state.good_node_count);
+                        *questionable_node_count.get() = Some(state.questionable_node_count);
+                        *bucket_count.get() = Some(state.bucket_count);
+                    } else {
+                        *is_running.get() = None;
+                        *bootstrapped.get() = None;
+                        *good_node_count.get() = None;
+                        *questionable_node_count.get() = None;
+                        *bucket_count.get() = None;
+                    }
+                    time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        });
+
+        Self {
+            dht,
+            _monitoring_task: Arc::new(monitoring_task),
+        }
+    }
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
@@ -225,8 +224,8 @@ struct Lookup {
 
 impl Lookup {
     fn new(
-        dht_v4: Option<RestartableDht>,
-        dht_v6: Option<RestartableDht>,
+        dht_v4: Option<Dht>,
+        dht_v6: Option<Dht>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
     ) -> Self {
@@ -270,8 +269,8 @@ impl Lookup {
     }
 
     fn start_task(
-        dht_v4: Option<RestartableDht>,
-        dht_v6: Option<RestartableDht>,
+        dht_v4: Option<Dht>,
+        dht_v6: Option<Dht>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
