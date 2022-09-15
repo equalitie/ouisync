@@ -64,6 +64,10 @@ pub unsafe extern "C" fn repository_create(
 
             let registration = network_handle.register(repository.store().clone());
 
+            // TODO: consider leaving the decision to enable DHT, PEX to the app.
+            registration.enable_dht();
+            registration.enable_pex();
+
             let holder = Arc::new(RepositoryHolder {
                 repository,
                 registration,
@@ -105,6 +109,10 @@ pub unsafe extern "C" fn repository_open(
             .await?;
 
             let registration = network_handle.register(repository.store().clone());
+
+            // TODO: consider leaving the decision to enable DHT, PEX to the app.
+            registration.enable_dht();
+            registration.enable_pex();
 
             let holder = Arc::new(RepositoryHolder {
                 repository,

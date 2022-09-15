@@ -216,11 +216,6 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub fn register(&self, store: Store) -> Registration {
-        // TODO: consider disabling DHT by default, for privacy reasons.
-        let dht = self
-            .inner
-            .start_dht_lookup(repository_info_hash(store.index.repository_id()));
-
         let pex = PexController::new(
             self.inner.connection_deduplicator.on_change(),
             self.inner.pex_discovery_tx.clone(),
@@ -230,9 +225,11 @@ impl Handle {
 
         network_state.create_link(store.clone(), &pex);
 
-        let key = network_state
-            .registry
-            .insert(RegistrationHolder { store, dht, pex });
+        let key = network_state.registry.insert(RegistrationHolder {
+            store,
+            dht: None,
+            pex,
+        });
 
         Registration {
             inner: self.inner.clone(),

@@ -146,6 +146,14 @@ async fn main() -> Result<()> {
         };
 
         let registration = network_handle.register(repo.store().clone());
+
+        if !options.network.disable_dht {
+            registration.enable_dht();
+        }
+
+        // TODO: add option to disable PEX
+        registration.enable_pex();
+
         let mount_guard =
             virtual_filesystem::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
 

@@ -867,13 +867,16 @@ async fn peer_exchange() {
         common::create_peer_connected_to(proto.listener_local_addr_v4(&network_a)).await;
 
     let repo_a = env.create_repo().await;
-    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let reg_a = network_a.handle().register(repo_a.store().clone());
+    reg_a.enable_pex();
 
     let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.store().clone());
+    let reg_b = network_b.handle().register(repo_b.store().clone());
+    reg_b.enable_pex();
 
     let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_c = network_c.handle().register(repo_c.store().clone());
+    let reg_c = network_c.handle().register(repo_c.store().clone());
+    reg_c.enable_pex();
 
     let addr_b = proto.listener_local_addr_v4(&network_b);
     let addr_c = proto.listener_local_addr_v4(&network_c);

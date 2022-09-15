@@ -139,8 +139,8 @@ impl PexController {
         peer_rx: uninitialized_watch::Receiver<()>,
         discovery_tx: mpsc::Sender<PexPayload>,
     ) -> Self {
-        // TODO: PEX should be disabled by default
-        let (enabled_tx, _) = watch::channel(true);
+        // PEX is disabled initially.
+        let (enabled_tx, _) = watch::channel(false);
         let (link_tx, _) = uninitialized_watch::channel();
 
         Self {
