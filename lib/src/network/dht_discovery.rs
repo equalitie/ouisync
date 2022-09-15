@@ -7,6 +7,7 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
 };
+use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
@@ -15,6 +16,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     future::pending,
+    io,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -432,4 +434,19 @@ fn make_lookups_monitor(monitor: &StateMonitor, info_hash: &InfoHash) -> StateMo
     monitor
         .make_child("lookups")
         .make_child(format!("{:?}", info_hash))
+}
+
+#[async_trait]
+impl btdht::SocketTrait for quic::SideChannel {
+    async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
+        self.send_to(buf, target).await
+    }
+
+    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(buf).await
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr()
+    }
 }

@@ -45,7 +45,6 @@ use crate::{
     config::ConfigStore, error::Error, repository::RepositoryId, state_monitor::StateMonitor,
     store::Store, sync::uninitialized_watch,
 };
-use async_trait::async_trait;
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
 use slab::Slab;
@@ -709,21 +708,6 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
         .unwrap()
-}
-
-#[async_trait]
-impl btdht::SocketTrait for quic::SideChannel {
-    async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.send_to(buf, target).await
-    }
-
-    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.recv_from(buf).await
-    }
-
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.local_addr()
-    }
 }
 
 fn instrument_task<F>(task: F) -> tracing::instrument::Instrumented<F>
