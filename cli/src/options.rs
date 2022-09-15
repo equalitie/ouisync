@@ -40,6 +40,10 @@ pub(crate) struct Options {
     #[clap(long)]
     pub disable_upnp: bool,
 
+    /// Disable local discovery
+    #[clap(short, long)]
+    pub disable_local_discovery: bool,
+
     /// Disable DHT
     #[clap(long)]
     pub disable_dht: bool,

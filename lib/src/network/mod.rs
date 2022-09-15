@@ -137,8 +137,6 @@ impl Network {
         };
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
-
-        inner.enable_local_discovery(!options.disable_local_discovery);
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
@@ -171,6 +169,14 @@ impl Network {
 
     pub fn disable_port_forwarding(&self) {
         self.inner.gateway.disable_port_forwarding()
+    }
+
+    pub fn enable_local_discovery(&self) {
+        self.inner.set_local_discovery_enabled(true)
+    }
+
+    pub fn disable_local_discovery(&self) {
+        self.inner.set_local_discovery_enabled(false)
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -349,11 +355,11 @@ impl State {
 }
 
 impl Inner {
-    fn enable_local_discovery(self: &Arc<Self>, enable: bool) {
+    fn set_local_discovery_enabled(self: &Arc<Self>, enabled: bool) {
         let tasks = self.tasks.upgrade().unwrap();
         let mut tasks = tasks.lock().unwrap();
 
-        if !enable {
+        if !enabled {
             if let Some(handle) = tasks.local_discovery.take() {
                 handle.abort();
             }

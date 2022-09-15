@@ -131,6 +131,10 @@ async fn main() -> Result<()> {
         network.enable_port_forwarding();
     }
 
+    if !options.disable_local_discovery {
+        network.enable_local_discovery();
+    }
+
     let network_handle = network.handle();
 
     // Mount repositories
