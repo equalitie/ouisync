@@ -259,7 +259,7 @@ impl Handle {
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
-            dht: None,
+            dht: DhtLookupState::new(),
             pex,
         });
 
@@ -279,7 +279,7 @@ impl Registration {
     pub fn enable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht = Some(
+        holder.dht = DhtLookupState::Enabled(
             self.inner
                 .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
         );
@@ -287,12 +287,14 @@ impl Registration {
 
     pub fn disable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht = None;
+        state.registry[self.key]
+            .dht
+            .disable(DisableReason::Explicit);
     }
 
     pub fn is_dht_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht.is_some()
+        state.registry[self.key].dht.is_enabled()
     }
 
     pub fn enable_pex(&self) {
@@ -328,7 +330,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     store: Store,
-    dht: Option<dht_discovery::LookupRequest>,
+    dht: DhtLookupState,
     pex: PexController,
 }
 
@@ -728,6 +730,25 @@ impl LocalDiscoveryState {
 enum DhtLookupState {
     Enabled(dht_discovery::LookupRequest),
     Disabled(DisableReason),
+}
+
+impl DhtLookupState {
+    fn new() -> Self {
+        Self::Disabled(DisableReason::Explicit)
+    }
+
+    fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    fn disable(&mut self, reason: DisableReason) {
+        match self {
+            Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
+                *self = Self::Disabled(reason);
+            }
+            Self::Disabled(DisableReason::Explicit) => (),
+        }
+    }
 }
 
 enum DisableReason {
