@@ -100,7 +100,11 @@ impl Network {
 
             let monitor = monitor.make_child("DhtDiscovery");
 
-            Some(DhtDiscovery::new(side_channel_maker_v4, side_channel_maker_v6, monitor).await)
+            Some(DhtDiscovery::new(
+                side_channel_maker_v4,
+                side_channel_maker_v6,
+                monitor,
+            ))
         } else {
             None
         };

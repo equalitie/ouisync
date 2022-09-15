@@ -586,7 +586,7 @@ impl SideChannel {
         self.io.local_addr()
     }
 
-    pub fn sender(self) -> SideChannelSender {
+    pub fn sender(&self) -> SideChannelSender {
         SideChannelSender {
             io: self.io.clone(),
         }

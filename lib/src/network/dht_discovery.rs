@@ -50,22 +50,13 @@ pub(super) struct DhtDiscovery {
 }
 
 impl DhtDiscovery {
-    pub async fn new(
+    pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
         monitor: StateMonitor,
     ) -> Self {
-        let dht_v4 = if let Some(maker) = socket_maker_v4 {
-            Some(start_dht(maker.make(), &monitor).await)
-        } else {
-            None
-        };
-
-        let dht_v6 = if let Some(maker) = socket_maker_v6 {
-            Some(start_dht(maker.make(), &monitor).await)
-        } else {
-            None
-        };
+        let dht_v4 = socket_maker_v4.map(|maker| start_dht(maker.make(), &monitor));
+        let dht_v6 = socket_maker_v6.map(|maker| start_dht(maker.make(), &monitor));
 
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
@@ -109,7 +100,7 @@ impl DhtDiscovery {
     }
 }
 
-async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
+fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
     // TODO: Unwrap
     let local_addr = socket.local_addr().unwrap();
 
