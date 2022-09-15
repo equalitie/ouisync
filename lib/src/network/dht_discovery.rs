@@ -68,6 +68,34 @@ impl DhtDiscovery {
         }
     }
 
+    // Bind new sockets to the DHT instances. If there are any ongoing lookups, the current DHTs
+    // are terminated, new DHTs with the new sockets are created and the lookups are restarted on
+    // those new DHTs.
+    pub fn rebind(
+        &self,
+        socket_maker_v4: Option<quic::SideChannelMaker>,
+        socket_maker_v6: Option<quic::SideChannelMaker>,
+    ) {
+        let mut v4 = self.v4.lock().unwrap();
+        let mut v6 = self.v6.lock().unwrap();
+
+        v4.rebind(socket_maker_v4);
+        v6.rebind(socket_maker_v6);
+
+        let mut lookups = self.lookups.lock().unwrap();
+
+        if lookups.is_empty() {
+            return;
+        }
+
+        let dht_v4 = v4.fetch(&self.monitor);
+        let dht_v6 = v6.fetch(&self.monitor);
+
+        for (info_hash, lookup) in &mut *lookups {
+            lookup.restart(dht_v4.clone(), dht_v6.clone(), *info_hash, &self.monitor);
+        }
+    }
+
     pub fn lookup(
         &self,
         info_hash: InfoHash,
@@ -89,7 +117,7 @@ impl DhtDiscovery {
                 let dht_v4 = self.v4.lock().unwrap().fetch(&self.monitor);
                 let dht_v6 = self.v6.lock().unwrap().fetch(&self.monitor);
 
-                Lookup::new(dht_v4, dht_v6, info_hash, &self.monitor)
+                Lookup::start(dht_v4, dht_v6, info_hash, &self.monitor)
             })
             .add_request(id, found_peers_tx);
 
@@ -127,6 +155,11 @@ impl RestartableDht {
         } else {
             Arc::new(None)
         }
+    }
+
+    fn rebind(&mut self, socket_maker: Option<quic::SideChannelMaker>) {
+        self.socket_maker = socket_maker;
+        self.dht = Weak::new();
     }
 }
 
@@ -249,11 +282,11 @@ struct Lookup {
     seen_peers: Arc<SeenPeers>,
     requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
-    _task: ScopedJoinHandle<()>,
+    task: ScopedJoinHandle<()>,
 }
 
 impl Lookup {
-    fn new(
+    fn start(
         dht_v4: Arc<Option<MonitoredDht>>,
         dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
@@ -264,9 +297,7 @@ impl Lookup {
         // but only when we create the first request.
         wake_up_rx.borrow_and_update();
 
-        let monitor = monitor
-            .make_child("lookups")
-            .make_child(format!("{:?}", info_hash));
+        let monitor = make_lookups_monitor(monitor, &info_hash);
 
         let seen_peers = Arc::new(SeenPeers::new());
         let requests = Arc::new(Mutex::new(HashMap::new()));
@@ -285,8 +316,30 @@ impl Lookup {
             seen_peers,
             requests,
             wake_up_tx,
-            _task: task,
+            task,
         }
+    }
+
+    // Start this same lookup on different DHT instances
+    fn restart(
+        &mut self,
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
+        info_hash: InfoHash,
+        monitor: &StateMonitor,
+    ) {
+        let monitor = make_lookups_monitor(monitor, &info_hash);
+        let task = Self::start_task(
+            dht_v4,
+            dht_v6,
+            info_hash,
+            self.seen_peers.clone(),
+            self.requests.clone(),
+            self.wake_up_tx.subscribe(),
+            &monitor,
+        );
+
+        self.task = task;
     }
 
     fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
@@ -373,4 +426,10 @@ impl Lookup {
 
         scoped_task::spawn(task)
     }
+}
+
+fn make_lookups_monitor(monitor: &StateMonitor, info_hash: &InfoHash) -> StateMonitor {
+    monitor
+        .make_child("lookups")
+        .make_child(format!("{:?}", info_hash))
 }
