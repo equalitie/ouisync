@@ -198,6 +198,11 @@ impl Network {
         self.inner.user_provided_peers.remove(peer)
     }
 
+    /// Disconnect from all currently connected peers, regardless of their source.
+    pub fn disconnect_all(&self) {
+        self.inner.state.lock().unwrap().message_brokers.clear();
+    }
+
     pub fn handle(&self) -> Handle {
         Handle {
             inner: self.inner.clone(),
