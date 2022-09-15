@@ -36,6 +36,10 @@ pub(crate) struct Options {
     #[clap(flatten)]
     pub network: NetworkOptions,
 
+    /// Disable DHT
+    #[clap(long)]
+    pub disable_dht: bool,
+
     /// Create new repository with the specified name. Can be specified multiple times to create
     /// multiple repositories.
     #[clap(short, long, value_name = "NAME")]

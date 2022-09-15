@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
 
         let registration = network_handle.register(repo.store().clone());
 
-        if !options.network.disable_dht {
+        if !options.disable_dht {
             registration.enable_dht();
         }
 

@@ -90,23 +90,15 @@ impl Network {
 
         let (side_channel_maker_v4, side_channel_maker_v6) = gateway.enable().await;
 
-        let dht_discovery = if !options.disable_dht {
-            // Note that we're now only using quic for the transport discovered over the dht.
-            // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
-            // TCP, UDP or anything else.
-            // TODO: There are ways to address this: e.g. we could try both, or we could include
-            // the protocol information in the info-hash generation. There are pros and cons to
-            // these approaches.
-
+        // Note that we're now only using quic for the transport discovered over the dht.
+        // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
+        // TCP, UDP or anything else.
+        // TODO: There are ways to address this: e.g. we could try both, or we could include
+        // the protocol information in the info-hash generation. There are pros and cons to
+        // these approaches.
+        let dht_discovery = {
             let monitor = monitor.make_child("DhtDiscovery");
-
-            Some(DhtDiscovery::new(
-                side_channel_maker_v4,
-                side_channel_maker_v6,
-                monitor,
-            ))
-        } else {
-            None
+            DhtDiscovery::new(side_channel_maker_v4, side_channel_maker_v6, monitor)
         };
 
         let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
@@ -257,9 +249,10 @@ impl Registration {
     pub fn enable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht = self
-            .inner
-            .start_dht_lookup(repository_info_hash(holder.store.index.repository_id()));
+        holder.dht = Some(
+            self.inner
+                .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
+        );
     }
 
     pub fn disable_dht(&self) {
@@ -320,7 +313,7 @@ struct Inner {
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
-    dht_discovery: Option<DhtDiscovery>,
+    dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
@@ -405,10 +398,9 @@ impl Inner {
         }
     }
 
-    fn start_dht_lookup(&self, info_hash: InfoHash) -> Option<dht_discovery::LookupRequest> {
+    fn start_dht_lookup(&self, info_hash: InfoHash) -> dht_discovery::LookupRequest {
         self.dht_discovery
-            .as_ref()
-            .map(|dht| dht.lookup(info_hash, self.dht_discovery_tx.clone()))
+            .lookup(info_hash, self.dht_discovery_tx.clone())
     }
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {

@@ -21,10 +21,6 @@ pub struct NetworkOptions {
     #[clap(long)]
     pub disable_upnp: bool,
 
-    /// Disable DHT
-    #[clap(long)]
-    pub disable_dht: bool,
-
     /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
     #[clap(long)]
     pub peers: Vec<PeerAddr>,
@@ -39,7 +35,6 @@ impl Default for NetworkOptions {
             ],
             disable_local_discovery: false,
             disable_upnp: false,
-            disable_dht: false,
             peers: Vec::new(),
         }
     }
