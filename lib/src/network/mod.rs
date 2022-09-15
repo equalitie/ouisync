@@ -68,7 +68,7 @@ pub struct Network {
     pub monitor: StateMonitor,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
-    _tasks: Arc<BlockingMutex<Tasks>>,
+    _tasks: Arc<BlockingMutex<JoinSet<()>>>,
 }
 
 impl Network {
@@ -98,7 +98,7 @@ impl Network {
             DhtDiscovery::new(side_channel_maker_v4, side_channel_maker_v6, monitor)
         };
 
-        let tasks = Arc::new(BlockingMutex::new(Tasks::default()));
+        let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
         // TODO: do we need unbounded channel here?
         let (dht_discovery_tx, dht_discovery_rx) = mpsc::unbounded_channel();
@@ -116,6 +116,7 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
+            local_discovery_state: BlockingMutex::new(LocalDiscoveryState::new()),
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
@@ -331,17 +332,12 @@ struct RegistrationHolder {
     pex: PexController,
 }
 
-#[derive(Default)]
-struct Tasks {
-    local_discovery: Option<AbortHandle>,
-    other: JoinSet<()>,
-}
-
 struct Inner {
     monitor: StateMonitor,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
+    local_discovery_state: BlockingMutex<LocalDiscoveryState>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
@@ -350,7 +346,7 @@ struct Inner {
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
     // was Dropped, we would not be asking for the upgrade in the first place.
-    tasks: Weak<BlockingMutex<Tasks>>,
+    tasks: Weak<BlockingMutex<JoinSet<()>>>,
     highest_seen_protocol_version: BlockingMutex<Version>,
     // Used to prevent repeatedly connecting to self.
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
@@ -371,18 +367,17 @@ impl State {
 
 impl Inner {
     fn set_local_discovery_enabled(self: &Arc<Self>, enabled: bool) {
-        let tasks = self.tasks.upgrade().unwrap();
-        let mut tasks = tasks.lock().unwrap();
+        let mut state = self.local_discovery_state.lock().unwrap();
 
-        if !enabled {
-            if let Some(handle) = tasks.local_discovery.take() {
-                handle.abort();
+        if state.is_enabled() {
+            if !enabled {
+                state.disable(DisableReason::Explicit);
             }
 
             return;
         }
 
-        if tasks.local_discovery.is_some() {
+        if !enabled {
             return;
         }
 
@@ -400,11 +395,8 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            tasks.local_discovery = Some(
-                tasks
-                    .other
-                    .spawn(instrument_task(self.clone().run_local_discovery(port))),
-            );
+            let handle = self.spawn(instrument_task(self.clone().run_local_discovery(port)));
+            state.enable(handle);
         } else {
             tracing::error!(
                 "Failed to enable local discovery because we don't have an IPv4 listener"
@@ -423,7 +415,7 @@ impl Inner {
             self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
-            )
+            );
         }
     }
 
@@ -445,7 +437,7 @@ impl Inner {
             self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::PeerExchange),
-            )
+            );
         }
     }
 
@@ -459,7 +451,7 @@ impl Inner {
         self.spawn(
             self.clone()
                 .handle_peer_found(peer, PeerSource::UserProvided),
-        )
+        );
     }
 
     async fn handle_incoming_connections(
@@ -475,7 +467,7 @@ impl Inner {
                     self.clone()
                         .handle_new_connection(stream, permit)
                         .map(|_| ()),
-                )
+                );
             }
         }
     }
@@ -602,7 +594,7 @@ impl Inner {
         true
     }
 
-    fn spawn<Fut>(&self, f: Fut)
+    fn spawn<Fut>(&self, f: Fut) -> AbortHandle
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
@@ -613,8 +605,7 @@ impl Inner {
             .unwrap()
             .lock()
             .unwrap()
-            .other
-            .spawn(instrument_task(f));
+            .spawn(instrument_task(f))
     }
 }
 
@@ -700,6 +691,48 @@ impl Drop for MessageBrokerEntryGuard<'_> {
             }
         }
     }
+}
+
+enum LocalDiscoveryState {
+    Enabled(AbortHandle),
+    Disabled(DisableReason),
+}
+
+impl LocalDiscoveryState {
+    fn new() -> Self {
+        Self::Disabled(DisableReason::Explicit)
+    }
+
+    fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    fn disable(&mut self, reason: DisableReason) {
+        match self {
+            Self::Enabled(handle) => {
+                handle.abort();
+                *self = Self::Disabled(reason);
+            }
+            Self::Disabled(DisableReason::Explicit) => (),
+            Self::Disabled(DisableReason::Implicit) => *self = Self::Disabled(reason),
+        }
+    }
+
+    // Panics if already enabled.
+    fn enable(&mut self, handle: AbortHandle) {
+        assert!(!self.is_enabled());
+        *self = Self::Enabled(handle);
+    }
+}
+
+enum DhtLookupState {
+    Enabled(dht_discovery::LookupRequest),
+    Disabled(DisableReason),
+}
+
+enum DisableReason {
+    Implicit,
+    Explicit,
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
