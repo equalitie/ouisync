@@ -70,8 +70,13 @@ impl Gateway {
 
     /// Enables all listeners and connectors. If the state actually transitioned from disabled to
     /// enabled (that is, it wasn't already enabled), returns the IPv4 and IPv6 side channels
-    /// respectively, if available. Otherwise returns pair of `None`s.
-    pub async fn enable(&self) -> (Option<quic::SideChannel>, Option<quic::SideChannel>) {
+    /// makers respectively, if available. Otherwise returns pair of `None`s.
+    pub async fn enable(
+        &self,
+    ) -> (
+        Option<quic::SideChannelMaker>,
+        Option<quic::SideChannelMaker>,
+    ) {
         let mut current_state = self.state.read();
 
         loop {
@@ -80,13 +85,13 @@ impl Gateway {
                 State::Disabled(disabled) => disabled,
             };
 
-            let (enabled, side_channel_v4, side_channel_v6) = disabled
+            let (enabled, side_channel_maker_v4, side_channel_maker_v6) = disabled
                 .to_enabled(&self.config, &self.port_forwarder)
                 .await;
             let next_state = State::Enabled(enabled);
 
             match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(_) => break (side_channel_v4, side_channel_v6),
+                Ok(_) => break (side_channel_maker_v4, side_channel_maker_v6),
                 Err((prev_state, _)) => current_state = prev_state,
             }
         }
@@ -389,19 +394,21 @@ impl Disabled {
         port_forwarder: &upnp::PortForwarder,
     ) -> (
         Enabled,
-        Option<quic::SideChannel>,
-        Option<quic::SideChannel>,
+        Option<quic::SideChannelMaker>,
+        Option<quic::SideChannelMaker>,
     ) {
-        let (mut quic_v4, side_channel_v4) = if let Some(addr) = self.quic_listener_local_addr_v4 {
-            QuicStack::new(addr, config, self.incoming_tx.clone())
-                .await
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
+        let (mut quic_v4, side_channel_maker_v4) =
+            if let Some(addr) = self.quic_listener_local_addr_v4 {
+                QuicStack::new(addr, config, self.incoming_tx.clone())
+                    .await
+                    .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
-        let (quic_v6, side_channel_v6) = if let Some(addr) = self.quic_listener_local_addr_v6 {
+        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = self.quic_listener_local_addr_v6
+        {
             QuicStack::new(addr, config, self.incoming_tx.clone())
                 .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
@@ -443,7 +450,7 @@ impl Disabled {
             incoming_tx: self.incoming_tx.clone(),
         };
 
-        (enabled, side_channel_v4, side_channel_v6)
+        (enabled, side_channel_maker_v4, side_channel_maker_v6)
     }
 }
 
@@ -460,7 +467,7 @@ impl QuicStack {
         preferred_addr: SocketAddr,
         config: &ConfigStore,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-    ) -> Option<(Self, quic::SideChannel)> {
+    ) -> Option<(Self, quic::SideChannelMaker)> {
         let (family, config_key) = match preferred_addr {
             SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
             SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
@@ -492,14 +499,14 @@ impl QuicStack {
             }
         };
 
-        let (connector, listener, side_channel) = match quic::configure(socket) {
-            Ok((connector, listener, side_channel)) => {
+        let (connector, listener, side_channel_maker) = match quic::configure(socket) {
+            Ok((connector, listener, side_channel_maker)) => {
                 tracing::info!(
                     "Configured {} QUIC stack on {:?}",
                     family,
                     listener.local_addr()
                 );
-                (connector, listener, side_channel)
+                (connector, listener, side_channel_maker)
             }
             Err(e) => {
                 tracing::warn!("Failed to configure {} QUIC stack: {}", family, e);
@@ -516,7 +523,7 @@ impl QuicStack {
             )),
         );
 
-        let hole_puncher = side_channel.create_sender();
+        let hole_puncher = side_channel_maker.make().sender();
 
         let this = Self {
             connector,
@@ -526,7 +533,7 @@ impl QuicStack {
             port_mapping: None,
         };
 
-        Some((this, side_channel))
+        Some((this, side_channel_maker))
     }
 
     fn enable_port_forwarding(&mut self, forwarder: &upnp::PortForwarder) {

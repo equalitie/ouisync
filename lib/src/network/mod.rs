@@ -88,7 +88,7 @@ impl Network {
             incoming_tx,
         );
 
-        let (side_channel_v4, side_channel_v6) = gateway.enable().await;
+        let (side_channel_maker_v4, side_channel_maker_v6) = gateway.enable().await;
 
         let dht_discovery = if !options.disable_dht {
             // Note that we're now only using quic for the transport discovered over the dht.
@@ -100,7 +100,7 @@ impl Network {
 
             let monitor = monitor.make_child("DhtDiscovery");
 
-            Some(DhtDiscovery::new(side_channel_v4, side_channel_v6, monitor).await)
+            Some(DhtDiscovery::new(side_channel_maker_v4, side_channel_maker_v6, monitor).await)
         } else {
             None
         };

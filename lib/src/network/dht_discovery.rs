@@ -51,18 +51,18 @@ pub(super) struct DhtDiscovery {
 
 impl DhtDiscovery {
     pub async fn new(
-        socket_v4: Option<quic::SideChannel>,
-        socket_v6: Option<quic::SideChannel>,
+        socket_maker_v4: Option<quic::SideChannelMaker>,
+        socket_maker_v6: Option<quic::SideChannelMaker>,
         monitor: StateMonitor,
     ) -> Self {
-        let dht_v4 = if let Some(socket_v4) = socket_v4 {
-            Some(start_dht(socket_v4, &monitor).await)
+        let dht_v4 = if let Some(maker) = socket_maker_v4 {
+            Some(start_dht(maker.make(), &monitor).await)
         } else {
             None
         };
 
-        let dht_v6 = if let Some(socket_v6) = socket_v6 {
-            Some(start_dht(socket_v6, &monitor).await)
+        let dht_v6 = if let Some(maker) = socket_maker_v6 {
+            Some(start_dht(maker.make(), &monitor).await)
         } else {
             None
         };
