@@ -90,6 +90,10 @@ impl Network {
 
         let (side_channel_maker_v4, side_channel_maker_v6) = gateway.enable().await;
 
+        if !options.disable_upnp {
+            gateway.enable_port_forwarding();
+        }
+
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
         // TCP, UDP or anything else.
