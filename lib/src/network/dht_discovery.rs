@@ -42,8 +42,8 @@ pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 pub(super) struct DhtDiscovery {
-    dht_v4: Option<Dht>,
-    dht_v6: Option<Dht>,
+    v4: Mutex<RestartableDht>,
+    v6: Mutex<RestartableDht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
     monitor: StateMonitor,
@@ -55,14 +55,13 @@ impl DhtDiscovery {
         socket_maker_v6: Option<quic::SideChannelMaker>,
         monitor: StateMonitor,
     ) -> Self {
-        let dht_v4 = socket_maker_v4.map(|maker| Dht::start(maker.make(), &monitor));
-        let dht_v6 = socket_maker_v6.map(|maker| Dht::start(maker.make(), &monitor));
-
+        let v4 = Mutex::new(RestartableDht::new(socket_maker_v4));
+        let v6 = Mutex::new(RestartableDht::new(socket_maker_v6));
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
         Self {
-            dht_v4,
-            dht_v6,
+            v4,
+            v6,
             lookups,
             next_id: AtomicU64::new(0),
             monitor,
@@ -87,12 +86,10 @@ impl DhtDiscovery {
             .unwrap()
             .entry(info_hash)
             .or_insert_with(|| {
-                Lookup::new(
-                    self.dht_v4.clone(),
-                    self.dht_v6.clone(),
-                    info_hash,
-                    &self.monitor,
-                )
+                let dht_v4 = self.v4.lock().unwrap().fetch(&self.monitor);
+                let dht_v6 = self.v6.lock().unwrap().fetch(&self.monitor);
+
+                Lookup::new(dht_v4, dht_v6, info_hash, &self.monitor)
             })
             .add_request(id, found_peers_tx);
 
@@ -100,13 +97,46 @@ impl DhtDiscovery {
     }
 }
 
-#[derive(Clone)]
-struct Dht {
-    dht: MainlineDht,
-    _monitoring_task: Arc<ScopedJoinHandle<()>>,
+// Wrapper for a DHT instance that can be stopped and restarted at any point.
+struct RestartableDht {
+    socket_maker: Option<quic::SideChannelMaker>,
+    dht: Weak<Option<MonitoredDht>>,
 }
 
-impl Dht {
+impl RestartableDht {
+    fn new(socket_maker: Option<quic::SideChannelMaker>) -> Self {
+        Self {
+            socket_maker,
+            dht: Weak::new(),
+        }
+    }
+
+    // Retrieve a shared pointer to a running DHT instance if there is one already or start a new
+    // one. When all such pointers are dropped, the underlying DHT is terminated.
+    fn fetch(&mut self, monitor: &StateMonitor) -> Arc<Option<MonitoredDht>> {
+        if let Some(dht) = self.dht.upgrade() {
+            dht
+        } else if let Some(maker) = &self.socket_maker {
+            let socket = maker.make();
+            let dht = MonitoredDht::start(socket, monitor);
+            let dht = Arc::new(Some(dht));
+
+            self.dht = Arc::downgrade(&dht);
+
+            dht
+        } else {
+            Arc::new(None)
+        }
+    }
+}
+
+// Wrapper for a DHT instance that periodically outputs it's state to the provided StateMonitor.
+struct MonitoredDht {
+    dht: MainlineDht,
+    _monitoring_task: ScopedJoinHandle<()>,
+}
+
+impl MonitoredDht {
     fn start(socket: quic::SideChannel, monitor: &StateMonitor) -> Self {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
@@ -180,7 +210,7 @@ impl Dht {
 
         Self {
             dht,
-            _monitoring_task: Arc::new(monitoring_task),
+            _monitoring_task: monitoring_task,
         }
     }
 }
@@ -224,8 +254,8 @@ struct Lookup {
 
 impl Lookup {
     fn new(
-        dht_v4: Option<Dht>,
-        dht_v6: Option<Dht>,
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
     ) -> Self {
@@ -269,8 +299,8 @@ impl Lookup {
     }
 
     fn start_task(
-        dht_v4: Option<Dht>,
-        dht_v6: Option<Dht>,
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
