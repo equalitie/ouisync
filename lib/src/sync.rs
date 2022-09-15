@@ -206,6 +206,7 @@ pub(crate) mod atomic_slot {
         }
 
         /// Atomically replace the current value with the provided one and returns the previous one.
+        #[allow(unused)] // currently not used anywhere in this crate
         pub fn swap(&self, value: T) -> Guard<T> {
             let value = Arc::new(value);
             Guard(mem::replace(&mut *self.0.lock().unwrap(), value))

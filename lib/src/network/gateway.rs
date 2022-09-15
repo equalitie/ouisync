@@ -238,14 +238,14 @@ impl Enabled {
     fn is_quic_port_forwarding_enabled(&self) -> bool {
         self.quic_v4
             .as_ref()
-            .map(|stack| stack.listener_state.is_port_forwarding_enabled())
+            .map(|stack| stack.is_port_forwarding_enabled())
             .unwrap_or(false)
     }
 
     fn is_tcp_port_forwarding_enabled(&self) -> bool {
         self.tcp_v4
             .as_ref()
-            .map(|stack| stack.listener_state.is_port_forwarding_enabled())
+            .map(|stack| stack.is_port_forwarding_enabled())
             .unwrap_or(false)
     }
 

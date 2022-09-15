@@ -174,6 +174,58 @@ impl Network {
         self.inner.gateway.quic_listener_local_addr_v6()
     }
 
+    /// Disable whole network
+    pub fn disable(&self) {
+        // disable gateway
+        self.inner.gateway.disable();
+
+        // disable local discovery
+        self.inner
+            .local_discovery_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Implicit);
+
+        // disable DHT
+        for (_, registration) in &mut self.inner.state.lock().unwrap().registry {
+            registration.dht.disable(DisableReason::Implicit);
+        }
+
+        // drop all connections
+        self.disconnect_all();
+    }
+
+    /// Enable whole network
+    pub async fn enable(&self) {
+        // enable gateway
+        if !self.inner.gateway.is_enabled() {
+            let (side_channel_maker_v4, side_channel_maker_v6) = self.inner.gateway.enable().await;
+            self.inner
+                .dht_discovery
+                .rebind(side_channel_maker_v4, side_channel_maker_v6);
+        }
+
+        // enable local discovery
+        {
+            let mut local_discovery_state = self.inner.local_discovery_state.lock().unwrap();
+            if local_discovery_state.is_implicitly_disabled() {
+                if let Some(handle) = self.inner.spawn_local_discovery() {
+                    local_discovery_state.enable(handle);
+                }
+            }
+        }
+
+        // enable DHT
+        for (_, registration) in &mut self.inner.state.lock().unwrap().registry {
+            if registration.dht.is_implicitly_disabled() {
+                let info_hash = repository_info_hash(registration.store.index.repository_id());
+                registration
+                    .dht
+                    .enable(self.inner.start_dht_lookup(info_hash));
+            }
+        }
+    }
+
     pub fn enable_port_forwarding(&self) {
         self.inner.gateway.enable_port_forwarding()
     }
@@ -182,12 +234,36 @@ impl Network {
         self.inner.gateway.disable_port_forwarding()
     }
 
+    pub fn is_port_forwarding_enabled(&self) -> bool {
+        self.inner.gateway.is_port_forwarding_enabled()
+    }
+
     pub fn enable_local_discovery(&self) {
-        self.inner.set_local_discovery_enabled(true)
+        let mut state = self.inner.local_discovery_state.lock().unwrap();
+
+        if state.is_enabled() {
+            return;
+        }
+
+        if let Some(handle) = self.inner.spawn_local_discovery() {
+            state.enable(handle);
+        }
     }
 
     pub fn disable_local_discovery(&self) {
-        self.inner.set_local_discovery_enabled(false)
+        self.inner
+            .local_discovery_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Explicit);
+    }
+
+    pub fn is_local_discovery_enabled(&self) -> bool {
+        self.inner
+            .local_discovery_state
+            .lock()
+            .unwrap()
+            .is_enabled()
     }
 
     pub fn add_user_provided_peer(&self, peer: &PeerAddr) {
@@ -279,7 +355,7 @@ impl Registration {
     pub fn enable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht = DhtLookupState::Enabled(
+        holder.dht.enable(
             self.inner
                 .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
         );
@@ -368,21 +444,7 @@ impl State {
 }
 
 impl Inner {
-    fn set_local_discovery_enabled(self: &Arc<Self>, enabled: bool) {
-        let mut state = self.local_discovery_state.lock().unwrap();
-
-        if state.is_enabled() {
-            if !enabled {
-                state.disable(DisableReason::Explicit);
-            }
-
-            return;
-        }
-
-        if !enabled {
-            return;
-        }
-
+    fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
         let tcp_port = self
             .gateway
             .tcp_listener_local_addr_v4()
@@ -397,12 +459,12 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            let handle = self.spawn(instrument_task(self.clone().run_local_discovery(port)));
-            state.enable(handle);
+            Some(self.spawn(instrument_task(self.clone().run_local_discovery(port))))
         } else {
             tracing::error!(
                 "Failed to enable local discovery because we don't have an IPv4 listener"
             );
+            None
         }
     }
 
@@ -709,6 +771,10 @@ impl LocalDiscoveryState {
         matches!(self, Self::Enabled(_))
     }
 
+    fn is_implicitly_disabled(&self) -> bool {
+        matches!(self, Self::Disabled(DisableReason::Implicit))
+    }
+
     fn disable(&mut self, reason: DisableReason) {
         match self {
             Self::Enabled(handle) => {
@@ -741,6 +807,10 @@ impl DhtLookupState {
         matches!(self, Self::Enabled(_))
     }
 
+    fn is_implicitly_disabled(&self) -> bool {
+        matches!(self, Self::Disabled(DisableReason::Implicit))
+    }
+
     fn disable(&mut self, reason: DisableReason) {
         match self {
             Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
@@ -749,10 +819,16 @@ impl DhtLookupState {
             Self::Disabled(DisableReason::Explicit) => (),
         }
     }
+
+    fn enable(&mut self, lookup: dht_discovery::LookupRequest) {
+        *self = Self::Enabled(lookup)
+    }
 }
 
 enum DisableReason {
+    // Disabled implicitly because `Network` was disabled
     Implicit,
+    // Disabled explicitly
     Explicit,
 }
 
