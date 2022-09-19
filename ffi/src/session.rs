@@ -96,8 +96,11 @@ pub unsafe extern "C" fn session_open(
             };
 
         // TODO: consider leaving these decisions up to the app
-        network.enable_port_forwarding();
-        network.enable_local_discovery();
+        {
+            let _enter = runtime.enter(); // runtime context is needed for the following calls
+            network.enable_port_forwarding();
+            network.enable_local_discovery();
+        }
 
         let session = Session {
             runtime,

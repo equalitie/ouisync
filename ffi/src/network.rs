@@ -252,7 +252,9 @@ pub unsafe extern "C" fn network_is_enabled() -> bool {
 /// Enables port forwarding (UPnP)
 #[no_mangle]
 pub unsafe extern "C" fn network_enable_port_forwarding() {
-    session::get().network().enable_port_forwarding()
+    let session = session::get();
+    let _enter = session.runtime().enter();
+    session.network().enable_port_forwarding()
 }
 
 /// Disables port forwarding (UPnP)
@@ -270,7 +272,9 @@ pub unsafe extern "C" fn network_is_port_forwarding_enabled() -> bool {
 /// Enables local discovery
 #[no_mangle]
 pub unsafe extern "C" fn network_enable_local_discovery() {
-    session::get().network().enable_local_discovery()
+    let session = session::get();
+    let _enter = session.runtime().enter();
+    session.network().enable_local_discovery()
 }
 
 /// Disables local discovery
