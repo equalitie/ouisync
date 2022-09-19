@@ -224,13 +224,7 @@ pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
         .unwrap_or(ptr::null_mut())
 }
 
-/// Disable the entire network
-#[no_mangle]
-pub unsafe extern "C" fn network_disable() {
-    session::get().network().handle().disable();
-}
-
-/// Enable the entire network
+/// Enables the entire network
 #[no_mangle]
 pub unsafe extern "C" fn network_enable(port: Port<()>) {
     let session = session::get();
@@ -243,8 +237,32 @@ pub unsafe extern "C" fn network_enable(port: Port<()>) {
     });
 }
 
-/// Check whether network is enabled
+/// Disables the entire network
+#[no_mangle]
+pub unsafe extern "C" fn network_disable() {
+    session::get().network().handle().disable();
+}
+
+/// Checks whether network is enabled
 #[no_mangle]
 pub unsafe extern "C" fn network_is_enabled() -> bool {
     session::get().network().handle().is_enabled()
+}
+
+/// Enables port forwarding (UPnP)
+#[no_mangle]
+pub unsafe extern "C" fn network_enable_port_forwarding() {
+    session::get().network().enable_port_forwarding()
+}
+
+/// Disables port forwarding (UPnP)
+#[no_mangle]
+pub unsafe extern "C" fn network_disable_port_forwarding() {
+    session::get().network().disable_port_forwarding()
+}
+
+/// Checks whether port forwarding (UPnP) is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_port_forwarding_enabled() -> bool {
+    session::get().network().is_port_forwarding_enabled()
 }
