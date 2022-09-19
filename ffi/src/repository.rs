@@ -245,6 +245,21 @@ pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<RepositoryH
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn repository_is_pex_enabled(handle: SharedHandle<RepositoryHolder>) -> bool {
+    handle.get().registration.is_pex_enabled()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_enable_pex(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.enable_pex()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_disable_pex(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.disable_pex()
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     handle: SharedHandle<RepositoryHolder>,
     access_mode: u8,
