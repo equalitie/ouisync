@@ -15,8 +15,8 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
     let session = session::get();
     let sender = session.sender();
 
-    let mut on_protocol_mismatch = session.network().handle().on_protocol_mismatch();
-    let mut on_peer_set_change = session.network().handle().on_peer_set_change();
+    let mut on_protocol_mismatch = session.network().on_protocol_mismatch();
+    let mut on_peer_set_change = session.network().on_peer_set_change();
 
     let handle = session.runtime().spawn(async move {
         // TODO: This loop exits when the first of the watched channels closes. It might be less
@@ -198,11 +198,13 @@ pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
 /// See [`network_local_addr`] for the format details.
 ///
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+// FIXME: remove this function
+#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v4 instead"]
 #[no_mangle]
 pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
     session::get()
         .network()
-        .dht_local_addr_v4()
+        .quic_listener_local_addr_v4()
         .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
         .unwrap_or(ptr::null_mut())
 }
@@ -211,11 +213,74 @@ pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
 /// See [`network_local_addr`] for the format details.
 ///
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
+// FIXME: remove this function
+#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v6 instead"]
 #[no_mangle]
 pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
     session::get()
         .network()
-        .dht_local_addr_v6()
+        .quic_listener_local_addr_v6()
         .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
         .unwrap_or(ptr::null_mut())
+}
+
+/// Enables the entire network
+#[no_mangle]
+pub unsafe extern "C" fn network_enable(port: Port<()>) {
+    let session = session::get();
+    let network_handle = session.network().handle();
+    let sender = session.sender();
+
+    session.runtime().spawn(async move {
+        network_handle.enable().await;
+        sender.send(port, ());
+    });
+}
+
+/// Disables the entire network
+#[no_mangle]
+pub unsafe extern "C" fn network_disable() {
+    session::get().network().handle().disable();
+}
+
+/// Checks whether network is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_enabled() -> bool {
+    session::get().network().handle().is_enabled()
+}
+
+/// Enables port forwarding (UPnP)
+#[no_mangle]
+pub unsafe extern "C" fn network_enable_port_forwarding() {
+    session::get().network().enable_port_forwarding()
+}
+
+/// Disables port forwarding (UPnP)
+#[no_mangle]
+pub unsafe extern "C" fn network_disable_port_forwarding() {
+    session::get().network().disable_port_forwarding()
+}
+
+/// Checks whether port forwarding (UPnP) is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_port_forwarding_enabled() -> bool {
+    session::get().network().is_port_forwarding_enabled()
+}
+
+/// Enables local discovery
+#[no_mangle]
+pub unsafe extern "C" fn network_enable_local_discovery() {
+    session::get().network().enable_local_discovery()
+}
+
+/// Disables local discovery
+#[no_mangle]
+pub unsafe extern "C" fn network_disable_local_discovery() {
+    session::get().network().disable_local_discovery()
+}
+
+/// Checks whether local discovery is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_local_discovery_enabled() -> bool {
+    session::get().network().is_local_discovery_enabled()
 }

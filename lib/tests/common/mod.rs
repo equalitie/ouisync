@@ -1,7 +1,6 @@
 use ouisync::{
-    network::{Network, NetworkOptions},
-    AccessSecrets, BranchChangedReceiver, ConfigStore, MasterSecret, PeerAddr, Repository,
-    StateMonitor,
+    network::Network, AccessSecrets, BranchChangedReceiver, ConfigStore, MasterSecret, PeerAddr,
+    Repository, StateMonitor,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -101,8 +100,8 @@ impl Proto {
 
     pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
         match self {
-            Self::Tcp => PeerAddr::Tcp(*network.tcp_listener_local_addr_v4().unwrap()),
-            Self::Quic => PeerAddr::Quic(*network.quic_listener_local_addr_v4().unwrap()),
+            Self::Tcp => PeerAddr::Tcp(network.tcp_listener_local_addr_v4().unwrap()),
+            Self::Quic => PeerAddr::Quic(network.quic_listener_local_addr_v4().unwrap()),
         }
     }
 }
@@ -110,7 +109,7 @@ impl Proto {
 // Create a single `Network` instance initially not connected to anyone.
 pub(crate) async fn create_disconnected_peer(proto: Proto) -> Network {
     Network::new(
-        &test_network_options(proto),
+        &test_bind_addrs(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
@@ -128,26 +127,20 @@ pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
 
 // Create a `Network` instance connected only to the given address.
 pub(crate) async fn create_peer_connected_to(addr: PeerAddr) -> Network {
-    Network::new(
-        &NetworkOptions {
-            peers: vec![addr],
-            ..test_network_options(Proto::of(&addr))
-        },
+    let network = Network::new(
+        &test_bind_addrs(Proto::of(&addr)),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
     .await
-    .unwrap()
+    .unwrap();
+
+    network.add_user_provided_peer(&addr);
+    network
 }
 
-pub(crate) fn test_network_options(proto: Proto) -> NetworkOptions {
-    NetworkOptions {
-        bind: vec![proto.wrap_addr((Ipv4Addr::LOCALHOST, 0).into())],
-        disable_local_discovery: true,
-        disable_upnp: true,
-        disable_dht: true,
-        ..Default::default()
-    }
+pub(crate) fn test_bind_addrs(proto: Proto) -> Vec<PeerAddr> {
+    vec![proto.wrap_addr((Ipv4Addr::LOCALHOST, 0).into())]
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.

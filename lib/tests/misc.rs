@@ -100,7 +100,7 @@ async fn relay() {
 
     // The "relay" peer.
     let network_r = Network::new(
-        &common::test_network_options(proto),
+        &common::test_bind_addrs(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
     )
@@ -867,19 +867,22 @@ async fn peer_exchange() {
         common::create_peer_connected_to(proto.listener_local_addr_v4(&network_a)).await;
 
     let repo_a = env.create_repo().await;
-    let _reg_a = network_a.handle().register(repo_a.store().clone());
+    let reg_a = network_a.handle().register(repo_a.store().clone());
+    reg_a.enable_pex();
 
     let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_b = network_b.handle().register(repo_b.store().clone());
+    let reg_b = network_b.handle().register(repo_b.store().clone());
+    reg_b.enable_pex();
 
     let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_c = network_c.handle().register(repo_c.store().clone());
+    let reg_c = network_c.handle().register(repo_c.store().clone());
+    reg_c.enable_pex();
 
     let addr_b = proto.listener_local_addr_v4(&network_b);
     let addr_c = proto.listener_local_addr_v4(&network_c);
 
-    let mut rx_b = network_b.handle().on_peer_set_change();
-    let mut rx_c = network_c.handle().on_peer_set_change();
+    let mut rx_b = network_b.on_peer_set_change();
+    let mut rx_c = network_c.on_peer_set_change();
 
     // ...eventually B and C connect to each other via peer exchange.
     let connected = async {

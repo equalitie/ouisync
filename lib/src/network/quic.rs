@@ -306,12 +306,14 @@ impl Drop for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor, SideChannel)> {
+pub(super) fn configure(
+    socket: std::net::UdpSocket,
+) -> Result<(Connector, Acceptor, SideChannelMaker)> {
     let server_config = make_server_config()?;
 
     let custom_socket = CustomUdpSocket::from_std(socket)?;
 
-    let side_channel = custom_socket.create_side_channel();
+    let side_channel_maker = custom_socket.side_channel_maker();
 
     let (mut endpoint, incoming) = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
@@ -330,7 +332,7 @@ pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor, Si
         local_addr,
     };
 
-    Ok((connector, acceptor, side_channel))
+    Ok((connector, acceptor, side_channel_maker))
 }
 
 //------------------------------------------------------------------------------
@@ -434,7 +436,7 @@ struct Packet {
 }
 
 #[derive(Debug)]
-pub struct CustomUdpSocket {
+pub(super) struct CustomUdpSocket {
     io: Arc<tokio::net::UdpSocket>,
     quinn_socket_state: quinn_udp::UdpSocketState,
     side_channel_tx: broadcast::Sender<Packet>,
@@ -450,10 +452,10 @@ impl CustomUdpSocket {
         })
     }
 
-    pub fn create_side_channel(&self) -> SideChannel {
-        SideChannel {
+    pub fn side_channel_maker(&self) -> SideChannelMaker {
+        SideChannelMaker {
             io: self.io.clone(),
-            packet_receiver: self.side_channel_tx.subscribe(),
+            side_channel_tx: self.side_channel_tx.clone(),
         }
     }
 }
@@ -539,7 +541,23 @@ fn send_to_side_channels(
 }
 
 //------------------------------------------------------------------------------
-pub struct SideChannel {
+
+/// Makes new `SideChannel`s.
+pub(super) struct SideChannelMaker {
+    io: Arc<tokio::net::UdpSocket>,
+    side_channel_tx: broadcast::Sender<Packet>,
+}
+
+impl SideChannelMaker {
+    pub fn make(&self) -> SideChannel {
+        SideChannel {
+            io: self.io.clone(),
+            packet_receiver: self.side_channel_tx.subscribe(),
+        }
+    }
+}
+
+pub(super) struct SideChannel {
     io: Arc<tokio::net::UdpSocket>,
     packet_receiver: broadcast::Receiver<Packet>,
 }
@@ -568,7 +586,7 @@ impl SideChannel {
         self.io.local_addr()
     }
 
-    pub fn create_sender(&self) -> SideChannelSender {
+    pub fn sender(&self) -> SideChannelSender {
         SideChannelSender {
             io: self.io.clone(),
         }
@@ -578,7 +596,7 @@ impl SideChannel {
 // `SideChannelSender` is less expensive than the `SideChannel` because there is no additional
 // `broadcast::Receiver` that the `CustomUdpSocket` would need to pass messages to.
 #[derive(Clone)]
-pub struct SideChannelSender {
+pub(super) struct SideChannelSender {
     io: Arc<tokio::net::UdpSocket>,
 }
 
@@ -631,7 +649,8 @@ mod tests {
         let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let addr = socket.local_addr().unwrap();
 
-        let (_connector, mut acceptor, mut side_channel) = configure(socket).unwrap();
+        let (_connector, mut acceptor, side_channel_maker) = configure(socket).unwrap();
+        let mut side_channel = side_channel_maker.make();
 
         // We must ensure quinn polls on the socket for side channel to be able to receive data.
         task::spawn(async move {

@@ -23,7 +23,6 @@ bytes = "1.1.0"
 camino = "1.0.5"
 chacha20 = "0.9.0"
 chrono = "0.4.19"
-clap = { version = "3.2.2", features = ["derive"] }
 crc = "3.0"
 ed25519-dalek = { version = "1", features = ["serde"] }
 either = { version = "1.6.1", default-features = false }

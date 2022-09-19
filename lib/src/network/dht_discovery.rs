@@ -7,6 +7,7 @@ use crate::{
     scoped_task::{self, ScopedJoinHandle},
     state_monitor::StateMonitor,
 };
+use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
@@ -15,6 +16,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     future::pending,
+    io,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -42,39 +44,57 @@ pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 pub(super) struct DhtDiscovery {
-    dht_v4: Option<RestartableDht>,
-    dht_v6: Option<RestartableDht>,
+    v4: Mutex<RestartableDht>,
+    v6: Mutex<RestartableDht>,
     lookups: Arc<Mutex<Lookups>>,
     next_id: AtomicU64,
     monitor: StateMonitor,
 }
 
 impl DhtDiscovery {
-    pub async fn new(
-        socket_v4: Option<quic::SideChannel>,
-        socket_v6: Option<quic::SideChannel>,
+    pub fn new(
+        socket_maker_v4: Option<quic::SideChannelMaker>,
+        socket_maker_v6: Option<quic::SideChannelMaker>,
         monitor: StateMonitor,
     ) -> Self {
-        let dht_v4 = if let Some(socket_v4) = socket_v4 {
-            Some(start_dht(socket_v4, &monitor).await)
-        } else {
-            None
-        };
-
-        let dht_v6 = if let Some(socket_v6) = socket_v6 {
-            Some(start_dht(socket_v6, &monitor).await)
-        } else {
-            None
-        };
-
+        let v4 = Mutex::new(RestartableDht::new(socket_maker_v4));
+        let v6 = Mutex::new(RestartableDht::new(socket_maker_v6));
         let lookups = Arc::new(Mutex::new(HashMap::default()));
 
         Self {
-            dht_v4,
-            dht_v6,
+            v4,
+            v6,
             lookups,
             next_id: AtomicU64::new(0),
             monitor,
+        }
+    }
+
+    // Bind new sockets to the DHT instances. If there are any ongoing lookups, the current DHTs
+    // are terminated, new DHTs with the new sockets are created and the lookups are restarted on
+    // those new DHTs.
+    pub fn rebind(
+        &self,
+        socket_maker_v4: Option<quic::SideChannelMaker>,
+        socket_maker_v6: Option<quic::SideChannelMaker>,
+    ) {
+        let mut v4 = self.v4.lock().unwrap();
+        let mut v6 = self.v6.lock().unwrap();
+
+        v4.rebind(socket_maker_v4);
+        v6.rebind(socket_maker_v6);
+
+        let mut lookups = self.lookups.lock().unwrap();
+
+        if lookups.is_empty() {
+            return;
+        }
+
+        let dht_v4 = v4.fetch(&self.monitor);
+        let dht_v6 = v6.fetch(&self.monitor);
+
+        for (info_hash, lookup) in &mut *lookups {
+            lookup.restart(dht_v4.clone(), dht_v6.clone(), *info_hash, &self.monitor);
         }
     }
 
@@ -96,113 +116,138 @@ impl DhtDiscovery {
             .unwrap()
             .entry(info_hash)
             .or_insert_with(|| {
-                Lookup::new(
-                    self.dht_v4.clone(),
-                    self.dht_v6.clone(),
-                    info_hash,
-                    &self.monitor,
-                )
+                let dht_v4 = self.v4.lock().unwrap().fetch(&self.monitor);
+                let dht_v6 = self.v6.lock().unwrap().fetch(&self.monitor);
+
+                Lookup::start(dht_v4, dht_v6, info_hash, &self.monitor)
             })
             .add_request(id, found_peers_tx);
 
         request
     }
-
-    pub fn local_addr_v4(&self) -> Option<&SocketAddr> {
-        self.dht_v4.as_ref().map(|dht| &dht.local_addr)
-    }
-
-    pub fn local_addr_v6(&self) -> Option<&SocketAddr> {
-        self.dht_v6.as_ref().map(|dht| &dht.local_addr)
-    }
 }
 
-async fn start_dht(socket: quic::SideChannel, monitor: &StateMonitor) -> RestartableDht {
-    // TODO: Unwrap
-    let local_addr = socket.local_addr().unwrap();
-
-    let protocol = match local_addr {
-        SocketAddr::V4(_) => "IPv4",
-        SocketAddr::V6(_) => "IPv6",
-    };
-
-    let monitor = monitor.make_child(protocol);
-
-    // TODO: load the DHT state from a previous save if it exists.
-    let dht = MainlineDht::builder()
-        .add_routers(DHT_ROUTERS.iter().copied())
-        .set_read_only(false)
-        .start(socket)
-        // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
-        // since we just succeeded in binding the socket above, that shouldn't happen.
-        .unwrap();
-
-    // Spawn a task to monitor the DHT status.
-    let monitoring_task = scoped_task::spawn({
-        let dht = dht.clone();
-
-        let first_bootstrap =
-            monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
-
-        async move {
-            if dht.bootstrapped(None).await {
-                *first_bootstrap.get() = "done";
-                tracing::info!("DHT {} bootstrap complete", protocol);
-            } else {
-                *first_bootstrap.get() = "failed";
-                tracing::error!("DHT {} bootstrap failed", protocol);
-
-                // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
-                // is preserved for the user to see.
-                pending::<()>().await;
-            }
-
-            let i = monitor.make_value::<u64>("probe_counter".into(), 0);
-
-            let is_running = monitor.make_value::<Option<bool>>("is_running".into(), None);
-            let bootstrapped = monitor.make_value::<Option<bool>>("bootstrapped".into(), None);
-            let good_node_count =
-                monitor.make_value::<Option<usize>>("good_node_count".into(), None);
-            let questionable_node_count =
-                monitor.make_value::<Option<usize>>("questionable_node_count".into(), None);
-            let bucket_count = monitor.make_value::<Option<usize>>("bucket_count".into(), None);
-
-            loop {
-                *i.get() += 1;
-
-                if let Some(state) = dht.get_state().await {
-                    *is_running.get() = Some(state.is_running);
-                    *bootstrapped.get() = Some(state.bootstrapped);
-                    *good_node_count.get() = Some(state.good_node_count);
-                    *questionable_node_count.get() = Some(state.questionable_node_count);
-                    *bucket_count.get() = Some(state.bucket_count);
-                } else {
-                    *is_running.get() = None;
-                    *bootstrapped.get() = None;
-                    *good_node_count.get() = None;
-                    *questionable_node_count.get() = None;
-                    *bucket_count.get() = None;
-                }
-                time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    });
-
-    RestartableDht {
-        dht,
-        local_addr,
-        _monitoring_task: Arc::new(monitoring_task),
-    }
-}
-
-// A wrapper over MainlineDht that periodically retries to initialize and bootstrap (and
-// rebootstrap when/if all nodes disappear). This is necessary because the network may go up and
-// down.
-#[derive(Clone)]
+// Wrapper for a DHT instance that can be stopped and restarted at any point.
 struct RestartableDht {
+    socket_maker: Option<quic::SideChannelMaker>,
+    dht: Weak<Option<MonitoredDht>>,
+}
+
+impl RestartableDht {
+    fn new(socket_maker: Option<quic::SideChannelMaker>) -> Self {
+        Self {
+            socket_maker,
+            dht: Weak::new(),
+        }
+    }
+
+    // Retrieve a shared pointer to a running DHT instance if there is one already or start a new
+    // one. When all such pointers are dropped, the underlying DHT is terminated.
+    fn fetch(&mut self, monitor: &StateMonitor) -> Arc<Option<MonitoredDht>> {
+        if let Some(dht) = self.dht.upgrade() {
+            dht
+        } else if let Some(maker) = &self.socket_maker {
+            let socket = maker.make();
+            let dht = MonitoredDht::start(socket, monitor);
+            let dht = Arc::new(Some(dht));
+
+            self.dht = Arc::downgrade(&dht);
+
+            dht
+        } else {
+            Arc::new(None)
+        }
+    }
+
+    fn rebind(&mut self, socket_maker: Option<quic::SideChannelMaker>) {
+        self.socket_maker = socket_maker;
+        self.dht = Weak::new();
+    }
+}
+
+// Wrapper for a DHT instance that periodically outputs it's state to the provided StateMonitor.
+struct MonitoredDht {
     dht: MainlineDht,
-    local_addr: SocketAddr,
-    _monitoring_task: Arc<ScopedJoinHandle<()>>,
+    _monitoring_task: ScopedJoinHandle<()>,
+}
+
+impl MonitoredDht {
+    fn start(socket: quic::SideChannel, monitor: &StateMonitor) -> Self {
+        // TODO: Unwrap
+        let local_addr = socket.local_addr().unwrap();
+
+        let protocol = match local_addr {
+            SocketAddr::V4(_) => "IPv4",
+            SocketAddr::V6(_) => "IPv6",
+        };
+
+        let monitor = monitor.make_child(protocol);
+
+        // TODO: load the DHT state from a previous save if it exists.
+        let dht = MainlineDht::builder()
+            .add_routers(DHT_ROUTERS.iter().copied())
+            .set_read_only(false)
+            .start(socket)
+            // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
+            // since we just succeeded in binding the socket above, that shouldn't happen.
+            .unwrap();
+
+        // Spawn a task to monitor the DHT status.
+        let monitoring_task = scoped_task::spawn({
+            let dht = dht.clone();
+
+            let first_bootstrap =
+                monitor.make_value::<&'static str>("first_bootstrap".into(), "in progress");
+
+            async move {
+                if dht.bootstrapped(None).await {
+                    *first_bootstrap.get() = "done";
+                    tracing::info!("DHT {} bootstrap complete", protocol);
+                } else {
+                    *first_bootstrap.get() = "failed";
+                    tracing::error!("DHT {} bootstrap failed", protocol);
+
+                    // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
+                    // is preserved for the user to see.
+                    pending::<()>().await;
+                }
+
+                let i = monitor.make_value::<u64>("probe_counter".into(), 0);
+
+                let is_running = monitor.make_value::<Option<bool>>("is_running".into(), None);
+                let bootstrapped = monitor.make_value::<Option<bool>>("bootstrapped".into(), None);
+                let good_node_count =
+                    monitor.make_value::<Option<usize>>("good_node_count".into(), None);
+                let questionable_node_count =
+                    monitor.make_value::<Option<usize>>("questionable_node_count".into(), None);
+                let bucket_count = monitor.make_value::<Option<usize>>("bucket_count".into(), None);
+
+                loop {
+                    *i.get() += 1;
+
+                    if let Some(state) = dht.get_state().await {
+                        *is_running.get() = Some(state.is_running);
+                        *bootstrapped.get() = Some(state.bootstrapped);
+                        *good_node_count.get() = Some(state.good_node_count);
+                        *questionable_node_count.get() = Some(state.questionable_node_count);
+                        *bucket_count.get() = Some(state.bucket_count);
+                    } else {
+                        *is_running.get() = None;
+                        *bootstrapped.get() = None;
+                        *good_node_count.get() = None;
+                        *questionable_node_count.get() = None;
+                        *bucket_count.get() = None;
+                    }
+                    time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        });
+
+        Self {
+            dht,
+            _monitoring_task: monitoring_task,
+        }
+    }
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
@@ -239,13 +284,13 @@ struct Lookup {
     seen_peers: Arc<SeenPeers>,
     requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
-    _task: ScopedJoinHandle<()>,
+    task: ScopedJoinHandle<()>,
 }
 
 impl Lookup {
-    fn new(
-        dht_v4: Option<RestartableDht>,
-        dht_v6: Option<RestartableDht>,
+    fn start(
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
     ) -> Self {
@@ -254,9 +299,7 @@ impl Lookup {
         // but only when we create the first request.
         wake_up_rx.borrow_and_update();
 
-        let monitor = monitor
-            .make_child("lookups")
-            .make_child(format!("{:?}", info_hash));
+        let monitor = make_lookups_monitor(monitor, &info_hash);
 
         let seen_peers = Arc::new(SeenPeers::new());
         let requests = Arc::new(Mutex::new(HashMap::new()));
@@ -275,8 +318,30 @@ impl Lookup {
             seen_peers,
             requests,
             wake_up_tx,
-            _task: task,
+            task,
         }
+    }
+
+    // Start this same lookup on different DHT instances
+    fn restart(
+        &mut self,
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
+        info_hash: InfoHash,
+        monitor: &StateMonitor,
+    ) {
+        let monitor = make_lookups_monitor(monitor, &info_hash);
+        let task = Self::start_task(
+            dht_v4,
+            dht_v6,
+            info_hash,
+            self.seen_peers.clone(),
+            self.requests.clone(),
+            self.wake_up_tx.subscribe(),
+            &monitor,
+        );
+
+        self.task = task;
     }
 
     fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
@@ -289,8 +354,8 @@ impl Lookup {
     }
 
     fn start_task(
-        dht_v4: Option<RestartableDht>,
-        dht_v6: Option<RestartableDht>,
+        dht_v4: Arc<Option<MonitoredDht>>,
+        dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
@@ -362,5 +427,26 @@ impl Lookup {
         let task = task.instrument(span);
 
         scoped_task::spawn(task)
+    }
+}
+
+fn make_lookups_monitor(monitor: &StateMonitor, info_hash: &InfoHash) -> StateMonitor {
+    monitor
+        .make_child("lookups")
+        .make_child(format!("{:?}", info_hash))
+}
+
+#[async_trait]
+impl btdht::SocketTrait for quic::SideChannel {
+    async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
+        self.send_to(buf, target).await
+    }
+
+    async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv_from(buf).await
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr()
     }
 }

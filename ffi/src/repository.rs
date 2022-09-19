@@ -64,6 +64,10 @@ pub unsafe extern "C" fn repository_create(
 
             let registration = network_handle.register(repository.store().clone());
 
+            // TODO: consider leaving the decision to enable DHT, PEX to the app.
+            registration.enable_dht();
+            registration.enable_pex();
+
             let holder = Arc::new(RepositoryHolder {
                 repository,
                 registration,
@@ -105,6 +109,10 @@ pub unsafe extern "C" fn repository_open(
             .await?;
 
             let registration = network_handle.register(repository.store().clone());
+
+            // TODO: consider leaving the decision to enable DHT, PEX to the app.
+            registration.enable_dht();
+            registration.enable_pex();
 
             let holder = Arc::new(RepositoryHolder {
                 repository,
@@ -234,6 +242,21 @@ pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<RepositoryHo
 #[no_mangle]
 pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<RepositoryHolder>) {
     handle.get().registration.disable_dht()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_is_pex_enabled(handle: SharedHandle<RepositoryHolder>) -> bool {
+    handle.get().registration.is_pex_enabled()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_enable_pex(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.enable_pex()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn repository_disable_pex(handle: SharedHandle<RepositoryHolder>) {
+    handle.get().registration.disable_pex()
 }
 
 #[no_mangle]
