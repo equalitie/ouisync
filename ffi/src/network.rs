@@ -266,3 +266,21 @@ pub unsafe extern "C" fn network_disable_port_forwarding() {
 pub unsafe extern "C" fn network_is_port_forwarding_enabled() -> bool {
     session::get().network().is_port_forwarding_enabled()
 }
+
+/// Enables local discovery
+#[no_mangle]
+pub unsafe extern "C" fn network_enable_local_discovery() {
+    session::get().network().enable_local_discovery()
+}
+
+/// Disables local discovery
+#[no_mangle]
+pub unsafe extern "C" fn network_disable_local_discovery() {
+    session::get().network().disable_local_discovery()
+}
+
+/// Checks whether local discovery is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_local_discovery_enabled() -> bool {
+    session::get().network().is_local_discovery_enabled()
+}
