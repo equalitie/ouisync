@@ -174,58 +174,6 @@ impl Network {
         self.inner.gateway.quic_listener_local_addr_v6()
     }
 
-    /// Disable whole network
-    pub fn disable(&self) {
-        // disable gateway
-        self.inner.gateway.disable();
-
-        // disable local discovery
-        self.inner
-            .local_discovery_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Implicit);
-
-        // disable DHT
-        for (_, registration) in &mut self.inner.state.lock().unwrap().registry {
-            registration.dht.disable(DisableReason::Implicit);
-        }
-
-        // drop all connections
-        self.disconnect_all();
-    }
-
-    /// Enable whole network
-    pub async fn enable(&self) {
-        // enable gateway
-        if !self.inner.gateway.is_enabled() {
-            let (side_channel_maker_v4, side_channel_maker_v6) = self.inner.gateway.enable().await;
-            self.inner
-                .dht_discovery
-                .rebind(side_channel_maker_v4, side_channel_maker_v6);
-        }
-
-        // enable local discovery
-        {
-            let mut local_discovery_state = self.inner.local_discovery_state.lock().unwrap();
-            if local_discovery_state.is_implicitly_disabled() {
-                if let Some(handle) = self.inner.spawn_local_discovery() {
-                    local_discovery_state.enable(handle);
-                }
-            }
-        }
-
-        // enable DHT
-        for (_, registration) in &mut self.inner.state.lock().unwrap().registry {
-            if registration.dht.is_implicitly_disabled() {
-                let info_hash = repository_info_hash(registration.store.index.repository_id());
-                registration
-                    .dht
-                    .enable(self.inner.start_dht_lookup(info_hash));
-            }
-        }
-    }
-
     pub fn enable_port_forwarding(&self) {
         self.inner.gateway.enable_port_forwarding()
     }
@@ -272,11 +220,6 @@ impl Network {
 
     pub fn remove_user_provided_peer(&self, peer: &PeerAddr) {
         self.inner.user_provided_peers.remove(peer)
-    }
-
-    /// Disconnect from all currently connected peers, regardless of their source.
-    pub fn disconnect_all(&self) {
-        self.inner.state.lock().unwrap().message_brokers.clear();
     }
 
     pub fn handle(&self) -> Handle {
@@ -343,6 +286,21 @@ impl Handle {
             inner: self.inner.clone(),
             key,
         }
+    }
+
+    /// Disable whole network
+    pub fn disable(&self) {
+        self.inner.disable()
+    }
+
+    /// Enable whole network
+    pub async fn enable(&self) {
+        self.inner.enable().await
+    }
+
+    /// Is the network enabled
+    pub fn is_enabled(&self) -> bool {
+        self.inner.is_enabled()
     }
 }
 
@@ -444,6 +402,63 @@ impl State {
 }
 
 impl Inner {
+    // Disable whole network
+    fn disable(&self) {
+        // disable gateway
+        self.gateway.disable();
+
+        // disable local discovery
+        self.local_discovery_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Implicit);
+
+        // disable DHT
+        for (_, registration) in &mut self.state.lock().unwrap().registry {
+            registration.dht.disable(DisableReason::Implicit);
+        }
+
+        // drop all connections
+        self.disconnect_all();
+    }
+
+    // Enable whole network
+    async fn enable(self: &Arc<Self>) {
+        // enable gateway
+        if !self.gateway.is_enabled() {
+            let (side_channel_maker_v4, side_channel_maker_v6) = self.gateway.enable().await;
+            self.dht_discovery
+                .rebind(side_channel_maker_v4, side_channel_maker_v6);
+        }
+
+        // enable local discovery
+        {
+            let mut local_discovery_state = self.local_discovery_state.lock().unwrap();
+            if local_discovery_state.is_implicitly_disabled() {
+                if let Some(handle) = self.spawn_local_discovery() {
+                    local_discovery_state.enable(handle);
+                }
+            }
+        }
+
+        // enable DHT
+        for (_, registration) in &mut self.state.lock().unwrap().registry {
+            if registration.dht.is_implicitly_disabled() {
+                let info_hash = repository_info_hash(registration.store.index.repository_id());
+                registration.dht.enable(self.start_dht_lookup(info_hash));
+            }
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.gateway.is_enabled()
+    }
+
+    // Disconnect from all currently connected peers, regardless of their source.
+    fn disconnect_all(&self) {
+        self.state.lock().unwrap().message_brokers.clear();
+    }
+
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
         let tcp_port = self
             .gateway

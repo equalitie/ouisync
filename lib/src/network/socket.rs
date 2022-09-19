@@ -42,7 +42,7 @@ pub(super) trait Socket: Sized {
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-type DynIoFuture<T> = Pin<Box<dyn Future<Output = io::Result<T>>>>;
+type DynIoFuture<T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send>>;
 
 impl Socket for TcpListener {
     fn bind(addr: SocketAddr) -> DynIoFuture<Self> {

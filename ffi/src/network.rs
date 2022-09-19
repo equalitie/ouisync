@@ -223,3 +223,28 @@ pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
         .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
         .unwrap_or(ptr::null_mut())
 }
+
+/// Disable the entire network
+#[no_mangle]
+pub unsafe extern "C" fn network_disable() {
+    session::get().network().handle().disable();
+}
+
+/// Enable the entire network
+#[no_mangle]
+pub unsafe extern "C" fn network_enable(port: Port<()>) {
+    let session = session::get();
+    let network_handle = session.network().handle();
+    let sender = session.sender();
+
+    session.runtime().spawn(async move {
+        network_handle.enable().await;
+        sender.send(port, ());
+    });
+}
+
+/// Check whether network is enabled
+#[no_mangle]
+pub unsafe extern "C" fn network_is_enabled() -> bool {
+    session::get().network().handle().is_enabled()
+}
