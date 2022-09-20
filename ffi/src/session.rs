@@ -351,7 +351,6 @@ impl Sender {
 
 pub(super) enum NetworkEnableState {
     Enabled,
-    BeingEnabled,
-    BeingEnabledThenDisable,
+    BeingEnabled(JoinHandle<()>),
     Disabled,
 }

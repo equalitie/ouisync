@@ -235,31 +235,27 @@ pub unsafe extern "C" fn network_enable() {
 
     match *status {
         NetworkEnableState::Enabled => {}
-        NetworkEnableState::BeingEnabled => {}
-        NetworkEnableState::BeingEnabledThenDisable => {
-            *status = NetworkEnableState::BeingEnabled;
-        }
+        NetworkEnableState::BeingEnabled(_) => {}
         NetworkEnableState::Disabled => {
-            *status = NetworkEnableState::BeingEnabled;
-            drop(status);
+            let handle = session.runtime().spawn({
+                let status_arc = status_arc.clone();
 
-            session.runtime().spawn(async move {
-                network_handle.enable().await;
+                async move {
+                    network_handle.enable().await;
 
-                let mut status = status_arc.lock().unwrap();
+                    let mut status = status_arc.lock().unwrap();
 
-                match *status {
-                    NetworkEnableState::Enabled => unreachable!(),
-                    NetworkEnableState::BeingEnabled => {
-                        *status = NetworkEnableState::Enabled;
+                    match *status {
+                        NetworkEnableState::Enabled => unreachable!(),
+                        NetworkEnableState::BeingEnabled(_) => {
+                            *status = NetworkEnableState::Enabled;
+                        }
+                        NetworkEnableState::Disabled => unreachable!(),
                     }
-                    NetworkEnableState::BeingEnabledThenDisable => {
-                        network_handle.disable();
-                        *status = NetworkEnableState::Disabled;
-                    }
-                    NetworkEnableState::Disabled => unreachable!(),
                 }
             });
+
+            *status = NetworkEnableState::BeingEnabled(handle);
         }
     }
 }
@@ -270,15 +266,16 @@ pub unsafe extern "C" fn network_disable() {
     let session = session::get();
     let mut status = session.network_enable_state().lock().unwrap();
 
-    match *status {
+    match &*status {
         NetworkEnableState::Enabled => {
             session.network().handle().disable();
             *status = NetworkEnableState::Disabled;
         }
-        NetworkEnableState::BeingEnabled => {
-            *status = NetworkEnableState::BeingEnabledThenDisable;
+        NetworkEnableState::BeingEnabled(task_handle) => {
+            task_handle.abort();
+            session.network().handle().disable();
+            *status = NetworkEnableState::Disabled;
         }
-        NetworkEnableState::BeingEnabledThenDisable => {}
         NetworkEnableState::Disabled => {}
     }
 }
@@ -288,8 +285,7 @@ pub unsafe extern "C" fn network_disable() {
 pub unsafe extern "C" fn network_is_enabled() -> bool {
     match *session::get().network_enable_state().lock().unwrap() {
         NetworkEnableState::Enabled => true,
-        NetworkEnableState::BeingEnabled => true,
-        NetworkEnableState::BeingEnabledThenDisable => false,
+        NetworkEnableState::BeingEnabled(_) => true,
         NetworkEnableState::Disabled => false,
     }
 }
