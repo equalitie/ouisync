@@ -1,5 +1,5 @@
 use super::{
-    session,
+    session::{self, NetworkEnableState},
     utils::{self, Bytes, Port, UniqueHandle},
 };
 use ouisync_lib::network::peer_addr::PeerAddr;
@@ -226,27 +226,72 @@ pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
 
 /// Enables the entire network
 #[no_mangle]
-pub unsafe extern "C" fn network_enable(port: Port<()>) {
+pub unsafe extern "C" fn network_enable() {
     let session = session::get();
     let network_handle = session.network().handle();
-    let sender = session.sender();
 
-    session.runtime().spawn(async move {
-        network_handle.enable().await;
-        sender.send(port, ());
-    });
+    let status_arc = session.network_enable_state().clone();
+    let mut status = status_arc.lock().unwrap();
+
+    match *status {
+        NetworkEnableState::Enabled => {}
+        NetworkEnableState::BeingEnabled => {}
+        NetworkEnableState::BeingEnabledThenDisable => {
+            *status = NetworkEnableState::BeingEnabled;
+        }
+        NetworkEnableState::Disabled => {
+            *status = NetworkEnableState::BeingEnabled;
+            drop(status);
+
+            session.runtime().spawn(async move {
+                network_handle.enable().await;
+
+                let mut status = status_arc.lock().unwrap();
+
+                match *status {
+                    NetworkEnableState::Enabled => unreachable!(),
+                    NetworkEnableState::BeingEnabled => {
+                        *status = NetworkEnableState::Enabled;
+                    }
+                    NetworkEnableState::BeingEnabledThenDisable => {
+                        network_handle.disable();
+                        *status = NetworkEnableState::Disabled;
+                    }
+                    NetworkEnableState::Disabled => unreachable!(),
+                }
+            });
+        }
+    }
 }
 
 /// Disables the entire network
 #[no_mangle]
 pub unsafe extern "C" fn network_disable() {
-    session::get().network().handle().disable();
+    let session = session::get();
+    let mut status = session.network_enable_state().lock().unwrap();
+
+    match *status {
+        NetworkEnableState::Enabled => {
+            session.network().handle().disable();
+            *status = NetworkEnableState::Disabled;
+        }
+        NetworkEnableState::BeingEnabled => {
+            *status = NetworkEnableState::BeingEnabledThenDisable;
+        }
+        NetworkEnableState::BeingEnabledThenDisable => {}
+        NetworkEnableState::Disabled => {}
+    }
 }
 
 /// Checks whether network is enabled
 #[no_mangle]
 pub unsafe extern "C" fn network_is_enabled() -> bool {
-    session::get().network().handle().is_enabled()
+    match *session::get().network_enable_state().lock().unwrap() {
+        NetworkEnableState::Enabled => true,
+        NetworkEnableState::BeingEnabled => true,
+        NetworkEnableState::BeingEnabledThenDisable => false,
+        NetworkEnableState::Disabled => false,
+    }
 }
 
 /// Enables port forwarding (UPnP)

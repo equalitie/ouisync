@@ -13,7 +13,9 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    ptr, thread,
+    ptr,
+    sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 use tokio::{
@@ -102,6 +104,12 @@ pub unsafe extern "C" fn session_open(
             network.enable_local_discovery();
         }
 
+        let network_enable_state = if network.handle().is_enabled() {
+            NetworkEnableState::Enabled
+        } else {
+            NetworkEnableState::Disabled
+        };
+
         let session = Session {
             runtime,
             device_id,
@@ -109,6 +117,7 @@ pub unsafe extern "C" fn session_open(
             sender,
             root_monitor,
             repos_monitor,
+            network_enable_state: Arc::new(Mutex::new(network_enable_state)),
             _logger: logger,
         };
 
@@ -240,6 +249,7 @@ pub(super) struct Session {
     sender: Sender,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
+    network_enable_state: Arc<Mutex<NetworkEnableState>>,
     _logger: Logger,
 }
 
@@ -258,6 +268,10 @@ impl Session {
 
     pub(super) fn repos_monitor(&self) -> &StateMonitor {
         &self.repos_monitor
+    }
+
+    pub(super) fn network_enable_state(&self) -> &Arc<Mutex<NetworkEnableState>> {
+        &self.network_enable_state
     }
 }
 
@@ -333,4 +347,11 @@ impl Sender {
     {
         (self.post_c_object_fn)(port.into(), &mut value.into());
     }
+}
+
+pub(super) enum NetworkEnableState {
+    Enabled,
+    BeingEnabled,
+    BeingEnabledThenDisable,
+    Disabled,
 }
