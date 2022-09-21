@@ -2,7 +2,7 @@ use super::{
     interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
-    socket,
+    socket::{self, ReuseAddr},
 };
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
@@ -273,8 +273,9 @@ impl PerInterfaceLocalDiscovery {
 }
 
 async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
-    let socket: tokio::net::UdpSocket = socket::bind_with_reuse_address(
+    let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
         SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
+        ReuseAddr::Required,
     )
     .await?;
     socket.join_multicast_v4(MULTICAST_ADDR, interface)?;

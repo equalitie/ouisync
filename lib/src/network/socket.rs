@@ -19,13 +19,13 @@ pub(super) async fn bind<T: Socket>(
 
     // Enable reuse address (`SO_REUSEADDR`) on the socket so that when the network or the whole
     // app is restarted, we can immediatelly re-bind to the same address as before.
-    let socket: T = match bind_with_reuse_address(addr).await {
+    let socket: T = match bind_with_reuse_addr(addr, ReuseAddr::Preferred).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
             // Try again with random port, unless we already used random port initially.
             if addr.port() != 0 {
                 addr.set_port(0);
-                bind_with_reuse_address(addr).await
+                bind_with_reuse_addr(addr, ReuseAddr::Preferred).await
             } else {
                 Err(e)
             }
@@ -40,12 +40,29 @@ pub(super) async fn bind<T: Socket>(
     Ok(socket)
 }
 
-pub(super) async fn bind_with_reuse_address<T: Socket>(addr: SocketAddr) -> io::Result<T> {
+pub(super) enum ReuseAddr {
+    // Reuse address is required. If we fail to set it, we also fail to create the socket.
+    Required,
+    // Reuse address is a nice-to-have. If we fail to set it, we proceed with the socket creation
+    // regardless.
+    Preferred,
+}
+
+pub(super) async fn bind_with_reuse_addr<T: Socket>(
+    addr: SocketAddr,
+    reuse_addr: ReuseAddr,
+) -> io::Result<T> {
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
     let domain = socket2::Domain::for_address(addr);
     let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
-    socket.set_reuse_address(true)?;
+
+    if let Err(error) = socket.set_reuse_address(true) {
+        match reuse_addr {
+            ReuseAddr::Required => return Err(error),
+            ReuseAddr::Preferred => (),
+        }
+    }
 
     task::block_in_place(|| socket.bind(&addr.into()))?;
 
