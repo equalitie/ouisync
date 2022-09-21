@@ -6,7 +6,7 @@ use tokio::{
     time,
 };
 
-const BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+const BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bind socket to the given address. If the port is 0, will try to use the same port as the last
 /// time this function was called. The port is loaded/stored in the given config entry.
@@ -14,8 +14,6 @@ pub(super) async fn bind<T: Socket>(
     mut addr: SocketAddr,
     config: ConfigEntry<u16>,
 ) -> io::Result<T> {
-    let original_port = addr.port();
-
     if addr.port() == 0 {
         if let Ok(last_port) = config.get().await {
             addr.set_port(last_port);
@@ -25,7 +23,8 @@ pub(super) async fn bind<T: Socket>(
     let socket = match bind_with_retries(addr).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
-            if original_port == 0 && original_port != addr.port() {
+            // Try one last time with random port, unless we already used random port initially.
+            if addr.port() != 0 {
                 addr.set_port(0);
                 T::bind(addr).await
             } else {

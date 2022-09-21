@@ -917,7 +917,7 @@ async fn network_disable_enable_idle() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_with_pending_connection() {
+async fn network_disable_enable_pending_connection() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
 
@@ -946,6 +946,38 @@ async fn network_disable_enable_with_pending_connection() {
 
     let local_addr_1 = proto.listener_local_addr_v4(&network);
     assert_eq!(local_addr_1, local_addr_0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_disable_enable_addr_takeover() {
+    use tokio::net::UdpSocket;
+
+    let _env = Env::with_seed(0);
+    let proto = Proto::Quic;
+
+    let network = common::create_disconnected_peer(proto).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&network);
+
+    network.handle().disable();
+
+    // Bind some other socket to the same address while the network is disabled.
+    let _socket = time::timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
+                break socket;
+            } else {
+                time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    // Enabling the network binds it to a different address.
+    network.handle().enable().await;
+
+    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    assert_ne!(local_addr_1, local_addr_0);
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
