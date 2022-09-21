@@ -2,6 +2,7 @@ use super::{
     interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
+    socket,
 };
 use crate::{
     scoped_task::{self, ScopedJoinHandle},
@@ -274,30 +275,13 @@ impl PerInterfaceLocalDiscovery {
 // The `_sync` version of this function calls system IO functions that may be blocking, so do it
 // all in a separate thread.
 async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
-    tokio::task::spawn_blocking(move || create_multicast_socket_sync(interface)).await?
-}
+    let socket: tokio::net::UdpSocket = socket::bind_with_reuse_address(
+        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
+    )
+    .await?;
+    socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
 
-fn create_multicast_socket_sync(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
-    use socket2::{Domain, Socket, Type};
-
-    // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
-    // one set reuse_address(true) before "binding" the socket.
-    let sync_socket = Socket::new(Domain::IPV4, Type::DGRAM, None)?;
-    sync_socket.set_reuse_address(true)?;
-
-    // This may be blocking
-    sync_socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into())?;
-
-    let sync_socket: std::net::UdpSocket = sync_socket.into();
-
-    // This may be blocking
-    sync_socket.join_multicast_v4(&MULTICAST_ADDR, &interface)?;
-
-    // This is not necessary if this is moved to async_std::net::UdpSocket,
-    // but is if moved to tokio::net::UdpSocket.
-    sync_socket.set_nonblocking(true)?;
-
-    tokio::net::UdpSocket::from_std(sync_socket)
+    Ok(socket)
 }
 
 async fn run_beacon(

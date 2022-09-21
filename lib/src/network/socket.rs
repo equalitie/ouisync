@@ -20,7 +20,7 @@ pub(super) async fn bind<T: Socket>(
     let socket: T = match bind_with_reuse_address(addr).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
-            // Try one last time with random port, unless we already used random port initially.
+            // Try again with random port, unless we already used random port initially.
             if addr.port() != 0 {
                 addr.set_port(0);
                 bind_with_reuse_address(addr).await
@@ -36,6 +36,24 @@ pub(super) async fn bind<T: Socket>(
     }
 
     Ok(socket)
+}
+
+pub(super) async fn bind_with_reuse_address<T: Socket>(addr: SocketAddr) -> io::Result<T> {
+    // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
+    // one set reuse_address(true) before "binding" the socket.
+    let domain = match addr {
+        SocketAddr::V4(_) => socket2::Domain::IPV4,
+        SocketAddr::V6(_) => socket2::Domain::IPV6,
+    };
+
+    let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
+    socket.set_reuse_address(true)?;
+
+    task::block_in_place(|| socket.bind(&addr.into()))?;
+
+    socket.set_nonblocking(true)?;
+
+    T::from_raw(socket)
 }
 
 // Internal trait to abstract over different types of network sockets.
@@ -68,20 +86,4 @@ impl Socket for UdpSocket {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         UdpSocket::local_addr(self)
     }
-}
-
-pub(super) async fn bind_with_reuse_address<T: Socket>(addr: SocketAddr) -> io::Result<T> {
-    // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
-    // one set reuse_address(true) before "binding" the socket.
-    let domain = match addr {
-        SocketAddr::V4(_) => socket2::Domain::IPV4,
-        SocketAddr::V6(_) => socket2::Domain::IPV6,
-    };
-
-    let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
-    socket.set_reuse_address(true)?;
-
-    task::block_in_place(|| socket.bind(&addr.into()))?;
-
-    T::from_raw(socket)
 }
