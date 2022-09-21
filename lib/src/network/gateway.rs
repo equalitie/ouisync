@@ -119,7 +119,10 @@ impl Gateway {
             let next_state = State::Disabled(disabled);
 
             match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(_) => break,
+                Ok(prev_state) => {
+                    prev_state.close();
+                    break;
+                }
                 Err((prev_state, _)) => current_state = prev_state,
             }
         }
@@ -177,9 +180,29 @@ pub(super) enum ConnectError {
     NoSuitableQuicConnector,
 }
 
+impl ConnectError {
+    fn is_localy_closed(&self) -> bool {
+        matches!(
+            self,
+            Self::Quic(quic::Error::Connection(
+                quinn::ConnectionError::LocallyClosed
+            ))
+        )
+    }
+}
+
 enum State {
     Enabled(Enabled),
     Disabled(Disabled),
+}
+
+impl State {
+    fn close(&self) {
+        match self {
+            Self::Enabled(state) => state.close(),
+            Self::Disabled(_) => (),
+        }
+    }
 }
 
 struct Enabled {
@@ -302,6 +325,11 @@ impl Enabled {
                         error
                     );
 
+                    if error.is_localy_closed() {
+                        // Connector locally closed - no point in retrying.
+                        return None;
+                    }
+
                     match backoff.next_backoff() {
                         Some(duration) => {
                             time::sleep(duration).await;
@@ -370,6 +398,16 @@ impl Enabled {
         match ip {
             IpAddr::V4(_) => self.quic_v4.as_ref(),
             IpAddr::V6(_) => self.quic_v6.as_ref(),
+        }
+    }
+
+    fn close(&self) {
+        if let Some(stack) = &self.quic_v4 {
+            stack.close();
+        }
+
+        if let Some(stack) = &self.quic_v6 {
+            stack.close();
         }
     }
 }
@@ -471,9 +509,9 @@ impl Disabled {
 }
 
 struct QuicStack {
-    connector: quic::Connector,
     listener_state: ListenerState,
-    _listener_task: ScopedJoinHandle<()>,
+    listener_task: ScopedJoinHandle<()>,
+    connector: quic::Connector,
     hole_puncher: quic::SideChannelSender,
 }
 
@@ -545,7 +583,7 @@ impl QuicStack {
         let this = Self {
             connector,
             listener_state,
-            _listener_task: listener_task,
+            listener_task,
             hole_puncher,
         };
 
@@ -559,6 +597,11 @@ impl QuicStack {
 
     fn is_port_forwarding_enabled(&self) -> bool {
         self.listener_state.is_port_forwarding_enabled()
+    }
+
+    fn close(&self) {
+        self.listener_task.abort();
+        self.connector.close();
     }
 }
 

@@ -105,7 +105,7 @@ impl ConnectionDeduplicator {
         self.on_change_tx.subscribe()
     }
 
-    pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
+    pub fn contains(&self, addr: PeerAddr) -> bool {
         let connections = self.connections.lock().unwrap();
         let incoming = ConnectionInfo {
             addr,

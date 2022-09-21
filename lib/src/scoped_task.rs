@@ -8,6 +8,13 @@ use tokio::task::{self, JoinError, JoinHandle};
 /// Wrapper for a `JoinHandle` that auto-aborts on drop.
 pub struct ScopedJoinHandle<T>(pub JoinHandle<T>);
 
+impl<T> ScopedJoinHandle<T> {
+    /// Explicitly abort the task before dropping this handle.
+    pub fn abort(&self) {
+        self.0.abort()
+    }
+}
+
 impl<T> Drop for ScopedJoinHandle<T> {
     fn drop(&mut self) {
         self.0.abort()
