@@ -166,8 +166,9 @@ impl StateMonitorShared {
             }
             map::Entry::Occupied(mut e) => {
                 tracing::error!(
-                    "StateMonitor: Monitored value of the same name ({:?}) already exists",
-                    name
+                    "StateMonitor: Monitored value of the same name ({:?}) under monitor {:?} already exists",
+                    name,
+                    self.path()
                 );
                 let v = e.get_mut();
                 v.refcount += 1;
@@ -203,6 +204,14 @@ impl StateMonitorShared {
 
     fn lock(&self) -> MutexGuard<'_, StateMonitorInner> {
         self.inner.lock().unwrap()
+    }
+
+    fn path(&self) -> String {
+        if let Some(parent) = self.parent.as_ref() {
+            format!("{}/{}", parent.path(), self.name)
+        } else {
+            format!("/{}", self.name)
+        }
     }
 }
 
