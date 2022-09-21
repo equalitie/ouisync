@@ -109,13 +109,13 @@ impl Proto {
 
 // Create a single `Network` instance initially not connected to anyone.
 pub(crate) async fn create_disconnected_peer(proto: Proto) -> Network {
-    Network::new(
+    let network = Network::new(
         &test_bind_addrs(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
-    )
-    .await
-    .unwrap()
+    );
+    network.handle().enable().await;
+    network
 }
 
 // Create two `Network` instances connected together.
@@ -132,10 +132,8 @@ pub(crate) async fn create_peer_connected_to(addr: PeerAddr) -> Network {
         &test_bind_addrs(Proto::of(&addr)),
         ConfigStore::null(),
         StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
-
+    );
+    network.handle().enable().await;
     network.add_user_provided_peer(&addr);
     network
 }
