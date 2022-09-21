@@ -92,7 +92,6 @@ pub unsafe extern "C" fn session_open(
 
         let network = Network::with_default_bind_addrs(config, network_monitor);
 
-        runtime.block_on(network.handle().enable());
         network.enable_port_forwarding();
         network.enable_local_discovery();
 
