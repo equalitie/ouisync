@@ -30,6 +30,12 @@ impl Connector {
         let (tx, rx) = connection.open_bi().await?;
         Ok(Connection::new(rx, tx, connection.remote_address()))
     }
+
+    // forcefully close all connections (any pending operation on any connection will immediatelly
+    // return error)
+    pub fn close(&self) {
+        self.endpoint.close(quinn::VarInt::from_u32(0), &[]);
+    }
 }
 
 //------------------------------------------------------------------------------

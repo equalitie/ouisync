@@ -232,8 +232,8 @@ impl Network {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
-    pub fn is_connected_to(&self, addr: PeerAddr) -> bool {
-        self.inner.connection_deduplicator.is_connected_to(addr)
+    pub fn knows_peer(&self, addr: PeerAddr) -> bool {
+        self.inner.connection_deduplicator.contains(addr)
     }
 
     pub fn current_protocol_version(&self) -> u32 {
@@ -406,6 +406,7 @@ impl Inner {
     fn disable(&self) {
         // disable gateway
         self.gateway.disable();
+        self.dht_discovery.rebind(None, None); // needed to make sure we drop the UDP sockets
 
         // disable local discovery
         self.local_discovery_state
@@ -474,7 +475,7 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            Some(self.spawn(instrument_task(self.clone().run_local_discovery(port))))
+            Some(self.spawn(self.clone().run_local_discovery(port)))
         } else {
             tracing::error!(
                 "Failed to enable local discovery because we don't have an IPv4 listener"

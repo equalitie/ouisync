@@ -8,7 +8,7 @@ use ouisync::{
     EntryType, Error, File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
+use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{select, task, time};
 use tracing::{Instrument, Span};
 
@@ -887,7 +887,7 @@ async fn peer_exchange() {
     // ...eventually B and C connect to each other via peer exchange.
     let connected = async {
         loop {
-            if network_b.is_connected_to(addr_c) && network_c.is_connected_to(addr_b) {
+            if network_b.knows_peer(addr_c) && network_c.knows_peer(addr_b) {
                 break;
             }
 
@@ -899,6 +899,53 @@ async fn peer_exchange() {
     };
 
     time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_disable_enable_idle() {
+    let _env = Env::with_seed(0);
+    let proto = Proto::Quic;
+
+    let network = common::create_disconnected_peer(proto).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&network);
+
+    network.handle().disable();
+    network.handle().enable().await;
+
+    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    assert_eq!(local_addr_1, local_addr_0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_disable_enable_with_pending_connection() {
+    let _env = Env::with_seed(0);
+    let proto = Proto::Quic;
+
+    let network = common::create_disconnected_peer(proto).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&network);
+
+    let remote_addr = proto.wrap_addr((Ipv4Addr::LOCALHOST, 12345).into());
+    network.add_user_provided_peer(&remote_addr);
+
+    // Wait until the connection starts begin established.
+    let mut rx = network.on_peer_set_change();
+    time::timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            if network.knows_peer(remote_addr) {
+                break;
+            }
+
+            rx.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+
+    network.handle().disable();
+    network.handle().enable().await;
+
+    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    assert_eq!(local_addr_1, local_addr_0);
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the

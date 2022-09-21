@@ -98,6 +98,7 @@ impl Proto {
         }
     }
 
+    #[track_caller]
     pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
         match self {
             Self::Tcp => PeerAddr::Tcp(network.tcp_listener_local_addr_v4().unwrap()),
