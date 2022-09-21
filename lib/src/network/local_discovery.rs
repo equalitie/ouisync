@@ -272,8 +272,6 @@ impl PerInterfaceLocalDiscovery {
     }
 }
 
-// The `_sync` version of this function calls system IO functions that may be blocking, so do it
-// all in a separate thread.
 async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
     let socket: tokio::net::UdpSocket = socket::bind_with_reuse_address(
         SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),

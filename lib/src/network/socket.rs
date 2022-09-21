@@ -17,6 +17,8 @@ pub(super) async fn bind<T: Socket>(
         }
     }
 
+    // Enable reuse address (`SO_REUSEADDR`) on the socket so that when the network or the whole
+    // app is restarted, we can immediatelly re-bind to the same address as before.
     let socket: T = match bind_with_reuse_address(addr).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
@@ -41,11 +43,7 @@ pub(super) async fn bind<T: Socket>(
 pub(super) async fn bind_with_reuse_address<T: Socket>(addr: SocketAddr) -> io::Result<T> {
     // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
     // one set reuse_address(true) before "binding" the socket.
-    let domain = match addr {
-        SocketAddr::V4(_) => socket2::Domain::IPV4,
-        SocketAddr::V6(_) => socket2::Domain::IPV6,
-    };
-
+    let domain = socket2::Domain::for_address(addr);
     let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
     socket.set_reuse_address(true)?;
 
@@ -68,6 +66,12 @@ impl Socket for TcpListener {
     const RAW_TYPE: socket2::Type = socket2::Type::STREAM;
 
     fn from_raw(raw: socket2::Socket) -> io::Result<Self> {
+        // Marks the socket as ready for accepting incoming connections. This needs to be set for
+        // TCP listeners otherwise we get "Invalid argument" error when calling `accept`.
+        //
+        // See https://stackoverflow.com/a/10002936/170073 for explanation of the parameter.
+        raw.listen(128)?;
+
         TcpListener::from_std(raw.into())
     }
 
