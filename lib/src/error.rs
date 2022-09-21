@@ -44,8 +44,6 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
-    #[error("network error")]
-    Network(#[source] io::Error),
     #[error("failed to initialize logger")]
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]

@@ -21,8 +21,6 @@ pub enum ErrorCode {
     DirectoryNotEmpty = 7,
     /// The indended operation is not supported
     OperationNotSupported = 8,
-    /// Network error
-    Network = 9,
     /// Failed to read from or write into the device ID config file
     DeviceIdConfig = 10,
     /// Unspecified error
@@ -45,7 +43,6 @@ impl ToErrorCode for Error {
             Self::AmbiguousEntry => ErrorCode::AmbiguousEntry,
             Self::DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
             Self::OperationNotSupported => ErrorCode::OperationNotSupported,
-            Self::Network(_) => ErrorCode::Network,
             Self::BlockNotFound(_)
             | Self::BlockNotReferenced
             | Self::WrongBlockLength(_)

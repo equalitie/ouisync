@@ -42,8 +42,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, error::Error, repository::RepositoryId, state_monitor::StateMonitor,
-    store::Store, sync::uninitialized_watch,
+    config::ConfigStore, repository::RepositoryId, state_monitor::StateMonitor, store::Store,
+    sync::uninitialized_watch,
 };
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
@@ -72,20 +72,14 @@ pub struct Network {
 }
 
 impl Network {
-    pub async fn new(
-        bind: &[PeerAddr],
-        config: ConfigStore,
-        monitor: StateMonitor,
-    ) -> Result<Self, NetworkError> {
+    pub fn new(bind: &[PeerAddr], config: ConfigStore, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(
             bind,
-            config.clone(),
+            config,
             monitor.clone(), // using the root monitor to avoid unnecessary nesting
             incoming_tx,
         );
-
-        let (side_channel_maker_v4, side_channel_maker_v6) = gateway.enable().await;
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -95,7 +89,7 @@ impl Network {
         // these approaches.
         let dht_discovery = {
             let monitor = monitor.make_child("DhtDiscovery");
-            DhtDiscovery::new(side_channel_maker_v4, side_channel_maker_v6, monitor)
+            DhtDiscovery::new(None, None, monitor)
         };
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
@@ -128,25 +122,20 @@ impl Network {
             our_addresses: BlockingMutex::new(HashSet::new()),
         });
 
-        let network = Self {
-            inner: inner.clone(),
-            monitor,
-            _tasks: tasks,
-        };
-
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
-        Ok(network)
+        Self {
+            inner,
+            monitor,
+            _tasks: tasks,
+        }
     }
 
     /// Create a `Network` with the listeners bound to the default addresses:
     /// quic/0.0.0.0:0 and quic/[::]:0
-    pub async fn with_default_bind_addrs(
-        config: ConfigStore,
-        monitor: StateMonitor,
-    ) -> Result<Self, NetworkError> {
+    pub fn with_default_bind_addrs(config: ConfigStore, monitor: StateMonitor) -> Self {
         Self::new(
             &[
                 PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
@@ -155,7 +144,6 @@ impl Network {
             config,
             monitor,
         )
-        .await
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
@@ -744,16 +732,6 @@ enum HandshakeError {
     BadMagic,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
-}
-
-#[derive(Debug, Error)]
-#[error("network error")]
-pub struct NetworkError(#[from] io::Error);
-
-impl From<NetworkError> for Error {
-    fn from(src: NetworkError) -> Self {
-        Self::Network(src.0)
-    }
 }
 
 // RAII guard which when dropped removes the broker from the network state if it has no connections.

@@ -29,11 +29,10 @@ pub(crate) fn watch_ipv4_multicast_interfaces() -> mpsc::Receiver<InterfaceChang
 
             seen_interfaces.retain(|e| !to_remove.contains(e));
 
-            if !to_remove.is_empty() {
-                if tx.send(InterfaceChange::Removed(to_remove)).await.is_err() {
-                    // Channel was closed.
-                    return;
-                }
+            if !to_remove.is_empty() && tx.send(InterfaceChange::Removed(to_remove)).await.is_err()
+            {
+                // Channel was closed.
+                return;
             }
 
             let to_add = found_interfaces
@@ -45,11 +44,9 @@ pub(crate) fn watch_ipv4_multicast_interfaces() -> mpsc::Receiver<InterfaceChang
                 seen_interfaces.insert(*new);
             }
 
-            if !to_add.is_empty() {
-                if tx.send(InterfaceChange::Added(to_add)).await.is_err() {
-                    // Channel was closed.
-                    return;
-                }
+            if !to_add.is_empty() && tx.send(InterfaceChange::Added(to_add)).await.is_err() {
+                // Channel was closed.
+                return;
             }
 
             sleep(INTERFACE_REFRESH_DELAY).await;

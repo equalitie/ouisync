@@ -103,9 +103,8 @@ async fn relay() {
         &common::test_bind_addrs(proto),
         ConfigStore::null(),
         StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    );
+    network_r.handle().enable().await;
 
     let network_a =
         common::create_peer_connected_to(proto.listener_local_addr_v4(&network_r)).await;
