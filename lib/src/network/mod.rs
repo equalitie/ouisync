@@ -42,8 +42,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, error::Error, repository::RepositoryId, state_monitor::StateMonitor,
-    store::Store, sync::uninitialized_watch,
+    config::ConfigStore, repository::RepositoryId, state_monitor::StateMonitor, store::Store,
+    sync::uninitialized_watch,
 };
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
@@ -732,16 +732,6 @@ enum HandshakeError {
     BadMagic,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
-}
-
-#[derive(Debug, Error)]
-#[error("network error")]
-pub struct NetworkError(#[from] io::Error);
-
-impl From<NetworkError> for Error {
-    fn from(src: NetworkError) -> Self {
-        Self::Network(src.0)
-    }
 }
 
 // RAII guard which when dropped removes the broker from the network state if it has no connections.
