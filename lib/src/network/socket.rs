@@ -1,12 +1,9 @@
 use crate::config::ConfigEntry;
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use std::{future::Future, io, net::SocketAddr, pin::Pin, time::Duration};
+use std::{io, net::SocketAddr};
 use tokio::{
     net::{TcpListener, UdpSocket},
-    time,
+    task,
 };
-
-const BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bind socket to the given address. If the port is 0, will try to use the same port as the last
 /// time this function was called. The port is loaded/stored in the given config entry.
@@ -20,13 +17,13 @@ pub(super) async fn bind<T: Socket>(
         }
     }
 
-    let socket = match bind_with_retries(addr).await {
+    let socket: T = match bind_with_reuse_address(addr).await {
         Ok(socket) => Ok(socket),
         Err(e) => {
             // Try one last time with random port, unless we already used random port initially.
             if addr.port() != 0 {
                 addr.set_port(0);
-                T::bind(addr).await
+                bind_with_reuse_address(addr).await
             } else {
                 Err(e)
             }
@@ -41,50 +38,19 @@ pub(super) async fn bind<T: Socket>(
     Ok(socket)
 }
 
-/// Bind to the specified address, trying a couple of times with an exponential backoff strategy in
-/// case the address is already in use.
-///
-/// This is a workaround for a situation where we bind to that address, drop the socket and then
-/// attempt to bind to it again which sometimes still returns the "address in use" error for some
-/// reason (perhaps the OS is taking its time cleaning the socket up, perhaps it's something in the
-/// quinn library or on our side). Giving it a couple of atempts seems to solve it.
-async fn bind_with_retries<T: Socket>(addr: SocketAddr) -> io::Result<T> {
-    let mut backoff = ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_millis(50))
-        .with_max_interval(Duration::from_millis(500))
-        .with_max_elapsed_time(Some(BIND_RETRY_TIMEOUT))
-        .build();
-
-    loop {
-        match T::bind(addr).await {
-            Ok(socket) => {
-                return Ok(socket);
-            }
-            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
-                let duration = backoff.next_backoff().ok_or(error)?;
-                tracing::debug!(
-                    "Bind failed - address {:?} already in use. Trying again in {:?}",
-                    addr,
-                    duration
-                );
-                time::sleep(duration).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
 // Internal trait to abstract over different types of network sockets.
 pub(super) trait Socket: Sized {
-    fn bind(addr: SocketAddr) -> DynIoFuture<Self>;
+    const RAW_TYPE: socket2::Type;
+
+    fn from_raw(raw: socket2::Socket) -> io::Result<Self>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-type DynIoFuture<T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send>>;
-
 impl Socket for TcpListener {
-    fn bind(addr: SocketAddr) -> DynIoFuture<Self> {
-        Box::pin(TcpListener::bind(addr))
+    const RAW_TYPE: socket2::Type = socket2::Type::STREAM;
+
+    fn from_raw(raw: socket2::Socket) -> io::Result<Self> {
+        TcpListener::from_std(raw.into())
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -93,11 +59,29 @@ impl Socket for TcpListener {
 }
 
 impl Socket for UdpSocket {
-    fn bind(addr: SocketAddr) -> DynIoFuture<Self> {
-        Box::pin(UdpSocket::bind(addr))
+    const RAW_TYPE: socket2::Type = socket2::Type::DGRAM;
+
+    fn from_raw(raw: socket2::Socket) -> io::Result<Self> {
+        UdpSocket::from_std(raw.into())
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
         UdpSocket::local_addr(self)
     }
+}
+
+pub(super) async fn bind_with_reuse_address<T: Socket>(addr: SocketAddr) -> io::Result<T> {
+    // Using socket2 because, std::net, nor async_std::net nor tokio::net lets
+    // one set reuse_address(true) before "binding" the socket.
+    let domain = match addr {
+        SocketAddr::V4(_) => socket2::Domain::IPV4,
+        SocketAddr::V6(_) => socket2::Domain::IPV6,
+    };
+
+    let socket = socket2::Socket::new(domain, T::RAW_TYPE, None)?;
+    socket.set_reuse_address(true)?;
+
+    task::block_in_place(|| socket.bind(&addr.into()))?;
+
+    T::from_raw(socket)
 }
