@@ -284,7 +284,7 @@ struct Lookup {
     seen_peers: Arc<SeenPeers>,
     requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
-    task: ScopedJoinHandle<()>,
+    task: Option<ScopedJoinHandle<()>>,
 }
 
 impl Lookup {
@@ -318,7 +318,7 @@ impl Lookup {
             seen_peers,
             requests,
             wake_up_tx,
-            task,
+            task: Some(task),
         }
     }
 
@@ -330,6 +330,11 @@ impl Lookup {
         info_hash: InfoHash,
         monitor: &StateMonitor,
     ) {
+        if dht_v4.is_none() && dht_v6.is_none() {
+            self.task.take();
+            return;
+        }
+
         let monitor = make_lookups_monitor(monitor, &info_hash);
         let task = Self::start_task(
             dht_v4,
@@ -341,7 +346,7 @@ impl Lookup {
             &monitor,
         );
 
-        self.task = task;
+        self.task = Some(task);
     }
 
     fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
