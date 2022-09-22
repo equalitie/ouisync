@@ -352,6 +352,7 @@ impl Lookup {
         );
 
         self.task = Some(task);
+        self.wake_up_tx.send(()).ok();
     }
 
     fn add_request(&mut self, id: RequestId, tx: mpsc::UnboundedSender<SeenPeer>) {
