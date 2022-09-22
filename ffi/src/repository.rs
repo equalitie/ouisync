@@ -239,9 +239,12 @@ pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<RepositoryHo
     // HACK: the `enable_dht` call isn't async so spawning it should not be necessary. However,
     // calling it directly (even with entered runtime context) sometimes causes crash in the app
     // (SIGSEGV / stack corruption) for some reason. The spawn seems to fix it.
-    session
+    let task = session
         .runtime()
         .spawn(async move { holder.registration.enable_dht() });
+
+    // HACK: wait until the task completes so that this function is actually sync.
+    session.runtime().block_on(task).ok();
 }
 
 #[no_mangle]
