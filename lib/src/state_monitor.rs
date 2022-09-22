@@ -85,34 +85,35 @@ impl StateMonitorShared {
     }
 
     fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<Self> {
-        let mut is_new = false;
         let name = name.into();
-        let name_clone = name.clone();
         let mut lock = self.lock();
+        let mut is_new = false;
 
-        let child = match lock.children.entry(name_clone) {
-            map::Entry::Vacant(e) => {
-                is_new = true;
+        // Note: the nodes are responsible for removing themeselves from the map but it can still
+        // happen the entry's refcount reaches zero before the entry itself is removed* and so we
+        // have to handle also the case where the entry exists, but it's refcount is 0.
+        //
+        // *) because `Arc` decrements the refcount before running the destructor of the contained
+        //    value.
+        let child_weak = lock.children.entry(name.clone()).or_insert_with(Weak::new);
+        let child = if let Some(child) = child_weak.upgrade() {
+            child
+        } else {
+            let child = Arc::new(Self {
+                name,
+                parent: Some(self.clone()),
+                inner: Mutex::new(StateMonitorInner {
+                    version: 0,
+                    values: BTreeMap::new(),
+                    children: BTreeMap::new(),
+                    on_change: uninitialized_watch::channel().0,
+                }),
+            });
 
-                let child = Arc::new(Self {
-                    name,
-                    parent: Some(self.clone()),
-                    inner: Mutex::new(StateMonitorInner {
-                        version: 0,
-                        values: BTreeMap::new(),
-                        children: BTreeMap::new(),
-                        on_change: uninitialized_watch::channel().0,
-                    }),
-                });
+            *child_weak = Arc::downgrade(&child);
+            is_new = true;
 
-                e.insert(Arc::downgrade(&child));
-                child
-            }
-            map::Entry::Occupied(e) => {
-                // Unwrap OK because children are responsible for removing themselves from the map on
-                // Drop.
-                e.get().upgrade().unwrap()
-            }
+            child
         };
 
         if is_new {
@@ -135,18 +136,16 @@ impl StateMonitorShared {
             None => (path, None),
         };
 
-        // Unwrap OK because children are responsible for removing themselves from the map on
-        // Drop.
-        let child = self
-            .lock()
+        // Note: it can still happen that an entry exists in the map but it's refcount is zero.
+        // See the comment in `make_child` for more details.
+        self.lock()
             .children
             .get(child)
-            .map(|child| child.upgrade().unwrap());
-
-        child.and_then(|child| match rest {
-            Some(rest) => child.locate(rest),
-            None => Some(child),
-        })
+            .and_then(|child| child.upgrade())
+            .and_then(|child| match rest {
+                Some(rest) => child.locate(rest),
+                None => Some(child),
+            })
     }
 
     fn make_value<T: 'static + fmt::Debug + Sync + Send>(
@@ -222,8 +221,10 @@ impl Drop for StateMonitorShared {
             let mut parent_lock = parent.lock();
 
             if let map::Entry::Occupied(e) = parent_lock.children.entry(name) {
-                e.remove();
-                parent.changed(parent_lock);
+                if e.get().strong_count() == 0 {
+                    e.remove();
+                    parent.changed(parent_lock);
+                }
             }
         }
     }

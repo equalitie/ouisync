@@ -979,6 +979,22 @@ async fn network_disable_enable_addr_takeover() {
     assert_ne!(local_addr_1, local_addr_0);
 }
 
+// Test for an edge case that used to panic.
+#[tokio::test(flavor = "multi_thread")]
+async fn dht_toggle() {
+    let mut env = Env::with_seed(0);
+    let proto = Proto::Quic;
+
+    let network = common::create_disconnected_peer(proto).await;
+
+    let repo = env.create_repo().await;
+    let reg = network.handle().register(repo.store().clone());
+
+    reg.enable_dht();
+    reg.disable_dht();
+    reg.enable_dht();
+}
+
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the
 // file content matches.
 async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
