@@ -299,26 +299,30 @@ impl Lookup {
         // but only when we create the first request.
         wake_up_rx.borrow_and_update();
 
-        let monitor = make_lookups_monitor(monitor, &info_hash);
-
         let seen_peers = Arc::new(SeenPeers::new());
         let requests = Arc::new(Mutex::new(HashMap::new()));
 
-        let task = Self::start_task(
-            dht_v4,
-            dht_v6,
-            info_hash,
-            seen_peers.clone(),
-            requests.clone(),
-            wake_up_rx,
-            &monitor,
-        );
+        let task = if dht_v4.is_some() || dht_v6.is_some() {
+            let monitor = make_lookups_monitor(monitor, &info_hash);
+
+            Some(Self::start_task(
+                dht_v4,
+                dht_v6,
+                info_hash,
+                seen_peers.clone(),
+                requests.clone(),
+                wake_up_rx,
+                &monitor,
+            ))
+        } else {
+            None
+        };
 
         Lookup {
             seen_peers,
             requests,
             wake_up_tx,
-            task: Some(task),
+            task,
         }
     }
 
@@ -336,6 +340,7 @@ impl Lookup {
         }
 
         let monitor = make_lookups_monitor(monitor, &info_hash);
+
         let task = Self::start_task(
             dht_v4,
             dht_v6,
@@ -355,7 +360,9 @@ impl Lookup {
         }
 
         self.requests.lock().unwrap().insert(id, tx);
-        self.wake_up_tx.send(()).unwrap();
+        // `unwrap_or` because if the network is down, there should be no tasks that listen to this
+        // wake up request.
+        self.wake_up_tx.send(()).unwrap_or(());
     }
 
     fn start_task(
