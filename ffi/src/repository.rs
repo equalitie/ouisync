@@ -233,10 +233,15 @@ pub unsafe extern "C" fn repository_is_dht_enabled(handle: SharedHandle<Reposito
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_enable_dht(handle: SharedHandle<RepositoryHolder>) {
-    // The `enable_dht` function internally calls `task::spawn` so needs the current Tokio context
-    // (thus the `_runtime_guard`).
-    let _runtime_guard = session::get().runtime().enter();
-    handle.get().registration.enable_dht()
+    let session = session::get();
+    let holder = handle.get();
+
+    // HACK: the `enable_dht` call isn't async so spawning it should not be necessary. However,
+    // calling it directly (even with entered runtime context) sometimes causes crash in the app
+    // (SIGSEGV / stack corruption) for some reason. The spawn seems to fix it.
+    session
+        .runtime()
+        .spawn(async move { holder.registration.enable_dht() });
 }
 
 #[no_mangle]
