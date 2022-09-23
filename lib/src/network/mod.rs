@@ -314,9 +314,14 @@ impl Registration {
             .disable(DisableReason::Explicit);
     }
 
+    /// This function provides the information to the user whether DHT is enabled for this
+    /// repository, not necessarily whether the DHT tasks are currently running. The subtle
+    /// difference is in that this function should return true even in case e.g. the whole network
+    /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht.is_enabled()
+        let dht = &state.registry[self.key].dht;
+        dht.is_enabled() || dht.is_implicitly_disabled()
     }
 
     pub fn enable_pex(&self) {
