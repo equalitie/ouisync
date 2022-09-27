@@ -110,7 +110,9 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            local_discovery_state: BlockingMutex::new(LocalDiscoveryState::new()),
+            local_discovery_state: BlockingMutex::new(LocalDiscoveryState::disabled(
+                DisableReason::Implicit,
+            )),
             dht_discovery,
             dht_discovery_tx,
             pex_discovery_tx,
@@ -762,8 +764,8 @@ enum LocalDiscoveryState {
 }
 
 impl LocalDiscoveryState {
-    fn new() -> Self {
-        Self::Disabled(DisableReason::Explicit)
+    fn disabled(reason: DisableReason) -> Self {
+        Self::Disabled(reason)
     }
 
     fn is_enabled(&self) -> bool {

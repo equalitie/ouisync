@@ -93,7 +93,6 @@ pub unsafe extern "C" fn session_open(
         let network = Network::with_default_bind_addrs(config, network_monitor);
 
         network.enable_port_forwarding();
-        network.enable_local_discovery();
 
         let network_enable_state = if network.handle().is_enabled() {
             NetworkEnableState::Enabled

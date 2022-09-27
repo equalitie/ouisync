@@ -102,7 +102,10 @@ impl Gateway {
             let next_state = State::Enabled(enabled);
 
             match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(_) => return (side_channel_maker_v4, side_channel_maker_v6),
+                Ok(_) => {
+                    tracing::debug!("gateway enabled");
+                    return (side_channel_maker_v4, side_channel_maker_v6);
+                }
                 Err((prev_state, _)) => current_state = prev_state,
             }
         }
@@ -121,6 +124,7 @@ impl Gateway {
             match self.state.compare_and_swap(&current_state, next_state) {
                 Ok(prev_state) => {
                     prev_state.close();
+                    tracing::debug!("gateway disabled");
                     break;
                 }
                 Err((prev_state, _)) => current_state = prev_state,
