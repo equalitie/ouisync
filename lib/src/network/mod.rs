@@ -74,12 +74,7 @@ pub struct Network {
 impl Network {
     pub fn new(bind: &[PeerAddr], config: ConfigStore, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(
-            bind,
-            config,
-            monitor.clone(), // using the root monitor to avoid unnecessary nesting
-            incoming_tx,
-        );
+        let gateway = Gateway::new(bind, config, incoming_tx);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -90,6 +85,11 @@ impl Network {
         let dht_discovery = {
             let monitor = monitor.make_child("DhtDiscovery");
             DhtDiscovery::new(None, None, monitor)
+        };
+
+        let port_forwarder = {
+            let monitor = monitor.make_child("UPnP");
+            upnp::PortForwarder::new(monitor)
         };
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
@@ -110,6 +110,10 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
+            port_forwarder,
+            port_forwarder_state: BlockingMutex::new(ComponentState::disabled(
+                DisableReason::Explicit,
+            )),
             local_discovery_state: BlockingMutex::new(ComponentState::disabled(
                 DisableReason::Implicit,
             )),
@@ -165,15 +169,15 @@ impl Network {
     }
 
     pub fn enable_port_forwarding(&self) {
-        self.inner.gateway.enable_port_forwarding()
+        self.inner.enable_port_forwarding()
     }
 
     pub fn disable_port_forwarding(&self) {
-        self.inner.gateway.disable_port_forwarding()
+        self.inner.disable_port_forwarding()
     }
 
     pub fn is_port_forwarding_enabled(&self) -> bool {
-        self.inner.gateway.is_port_forwarding_enabled()
+        self.inner.is_port_forwarding_enabled()
     }
 
     pub fn enable_local_discovery(&self) {
@@ -372,6 +376,8 @@ struct Inner {
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
+    port_forwarder: upnp::PortForwarder,
+    port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
     local_discovery_state: BlockingMutex<ComponentState<AbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
@@ -407,6 +413,12 @@ impl Inner {
         self.gateway.disable();
         self.dht_discovery.rebind(None, None); // needed to make sure we drop the UDP sockets
 
+        // disable port forwarding
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Implicit);
+
         // disable local discovery
         self.local_discovery_state
             .lock()
@@ -431,12 +443,20 @@ impl Inner {
                 .rebind(side_channel_maker_v4, side_channel_maker_v6);
         }
 
+        // enable port forwarding
+        {
+            let mut state = self.port_forwarder_state.lock().unwrap();
+            if state.is_implicitly_disabled() {
+                state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
+            }
+        }
+
         // enable local discovery
         {
-            let mut local_discovery_state = self.local_discovery_state.lock().unwrap();
-            if local_discovery_state.is_implicitly_disabled() {
+            let mut state = self.local_discovery_state.lock().unwrap();
+            if state.is_implicitly_disabled() {
                 if let Some(handle) = self.spawn_local_discovery() {
-                    local_discovery_state.enable(handle);
+                    state.enable(handle);
                 }
             }
         }
@@ -457,6 +477,24 @@ impl Inner {
     // Disconnect from all currently connected peers, regardless of their source.
     fn disconnect_all(&self) {
         self.state.lock().unwrap().message_brokers.clear();
+    }
+
+    fn enable_port_forwarding(&self) {
+        let mut state = self.port_forwarder_state.lock().unwrap();
+        if !state.is_enabled() {
+            state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
+        }
+    }
+
+    fn disable_port_forwarding(&self) {
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Explicit);
+    }
+
+    fn is_port_forwarding_enabled(&self) -> bool {
+        self.port_forwarder_state.lock().unwrap().is_enabled()
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
@@ -760,6 +798,39 @@ impl Drop for MessageBrokerEntryGuard<'_> {
             if !entry.get().has_connections() {
                 entry.remove();
             }
+        }
+    }
+}
+
+struct PortMappings {
+    _tcp_v4: Option<upnp::Mapping>,
+    _quic_v4: Option<upnp::Mapping>,
+}
+
+impl PortMappings {
+    fn new(forwarder: &upnp::PortForwarder, gateway: &Gateway) -> Self {
+        let tcp_v4 = gateway.tcp_listener_local_addr_v4().map(|addr| {
+            forwarder.add_mapping(
+                addr.port(), // internal
+                addr.port(), // external
+                ip::Protocol::Tcp,
+            )
+        });
+
+        let quic_v4 = gateway.quic_listener_local_addr_v4().map(|addr| {
+            forwarder.add_mapping(
+                addr.port(), // internal
+                addr.port(), // external
+                ip::Protocol::Udp,
+            )
+        });
+
+        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+        // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+
+        Self {
+            _tcp_v4: tcp_v4,
+            _quic_v4: quic_v4,
         }
     }
 }
