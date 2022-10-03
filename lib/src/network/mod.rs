@@ -578,6 +578,8 @@ impl Inner {
                 }
             };
 
+            tracing::trace!(?addr, ?source, "peer found");
+
             permit.mark_as_connecting();
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {

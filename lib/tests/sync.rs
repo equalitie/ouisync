@@ -6,11 +6,11 @@ use self::common::{Env, Proto, DEFAULT_TIMEOUT};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, db, network::Network, AccessMode, AccessSecrets, ConfigStore,
-    EntryType, Error, File, MasterSecret, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, db, AccessMode, AccessSecrets, EntryType, Error, File, MasterSecret,
+    Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
+use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{task, time};
 use tracing::{Instrument, Span};
 
@@ -101,17 +101,13 @@ async fn relay() {
     let proto = Proto::Tcp;
 
     // The "relay" peer.
-    let network_r = Network::new(
-        &common::test_bind_addrs(proto),
-        ConfigStore::null(),
-        StateMonitor::make_root(),
-    );
-    network_r.handle().enable().await;
+    let network_r = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
-    let network_a =
-        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_r)).await;
-    let network_b =
-        common::create_peer_connected_to(proto.listener_local_addr_v4(&network_r)).await;
+    let network_a = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    network_a.add_user_provided_peer(&proto.listener_local_addr_v4(&network_r));
+
+    let network_b = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    network_b.add_user_provided_peer(&proto.listener_local_addr_v4(&network_r));
 
     let repo_a = env.create_repo().await;
     let _reg_a = network_a.handle().register(repo_a.store().clone());
