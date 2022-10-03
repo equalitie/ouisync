@@ -149,27 +149,18 @@ async fn dht_toggle() {
     reg.enable_dht();
 }
 
-/*
 #[tokio::test(flavor = "multi_thread")]
 async fn local_discovery() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
 
     // A and B are initially disconnected and don't know each other's socket addesses.
-    let network_a = common::create_peer(proto).await;
-    let network_b = common::create_peer(proto).await;
-
-    // let network_a = common::create_disconnected_peer_bound_to(
-    //     proto.wrap_addr((Ipv4Addr::UNSPECIFIED, 0).into()),
-    // )
-    // .await;
-    // let network_b = common::create_disconnected_peer_bound_to(
-    //     proto.wrap_addr((Ipv4Addr::UNSPECIFIED, 0).into()),
-    // )
-    // .await;
+    let network_a = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
+    let network_b = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
 
     // Note we compare only the ports because we bind to `UNSPECIFIED` (0.0.0.0) and that's what
-    // `listener_local_addr_v4` returns as well, but local discovery produces the actual addresses.
+    // `listener_local_addr_v4` returns as well, but local discovery produces the actual LAN
+    // addresses. Comparing the ports should be enough to test that local discovery works.
     let port_a = proto.listener_local_addr_v4(&network_a).port();
     let port_b = proto.listener_local_addr_v4(&network_b).port();
 
@@ -201,4 +192,3 @@ async fn local_discovery() {
 
     time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
 }
-*/
