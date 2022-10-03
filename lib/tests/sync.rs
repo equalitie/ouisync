@@ -1,3 +1,5 @@
+//! Synchronization tests
+
 mod common;
 
 use self::common::{Env, Proto, DEFAULT_TIMEOUT};
