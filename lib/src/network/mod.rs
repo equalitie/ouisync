@@ -51,7 +51,7 @@ use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
-    io,
+    io, mem,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex as BlockingMutex, Weak},
 };
@@ -110,7 +110,7 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            local_discovery_state: BlockingMutex::new(LocalDiscoveryState::disabled(
+            local_discovery_state: BlockingMutex::new(ComponentState::disabled(
                 DisableReason::Implicit,
             )),
             dht_discovery,
@@ -189,11 +189,15 @@ impl Network {
     }
 
     pub fn disable_local_discovery(&self) {
-        self.inner
+        let handle = self
+            .inner
             .local_discovery_state
             .lock()
             .unwrap()
             .disable(DisableReason::Explicit);
+        if let Some(handle) = handle {
+            handle.abort();
+        }
     }
 
     pub fn is_local_discovery_enabled(&self) -> bool {
@@ -268,7 +272,7 @@ impl Handle {
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
-            dht: DhtLookupState::new(),
+            dht: ComponentState::disabled(DisableReason::Explicit),
             pex,
         });
 
@@ -359,7 +363,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     store: Store,
-    dht: DhtLookupState,
+    dht: ComponentState<dht_discovery::LookupRequest>,
     pex: PexController,
 }
 
@@ -368,7 +372,7 @@ struct Inner {
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
-    local_discovery_state: BlockingMutex<LocalDiscoveryState>,
+    local_discovery_state: BlockingMutex<ComponentState<AbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
@@ -758,12 +762,12 @@ impl Drop for MessageBrokerEntryGuard<'_> {
     }
 }
 
-enum LocalDiscoveryState {
-    Enabled(AbortHandle),
+enum ComponentState<T> {
+    Enabled(T),
     Disabled(DisableReason),
 }
 
-impl LocalDiscoveryState {
+impl<T> ComponentState<T> {
     fn disabled(reason: DisableReason) -> Self {
         Self::Disabled(reason)
     }
@@ -776,53 +780,23 @@ impl LocalDiscoveryState {
         matches!(self, Self::Disabled(DisableReason::Implicit))
     }
 
-    fn disable(&mut self, reason: DisableReason) {
+    fn disable(&mut self, reason: DisableReason) -> Option<T> {
         match self {
-            Self::Enabled(handle) => {
-                handle.abort();
-                *self = Self::Disabled(reason);
+            Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
+                match mem::replace(self, Self::Disabled(reason)) {
+                    Self::Enabled(payload) => Some(payload),
+                    Self::Disabled(DisableReason::Implicit) => None,
+                    Self::Disabled(DisableReason::Explicit) => unreachable!(),
+                }
             }
-            Self::Disabled(DisableReason::Explicit) => (),
-            Self::Disabled(DisableReason::Implicit) => *self = Self::Disabled(reason),
+            Self::Disabled(DisableReason::Explicit) => None,
         }
     }
 
     // Panics if already enabled.
-    fn enable(&mut self, handle: AbortHandle) {
+    fn enable(&mut self, payload: T) {
         assert!(!self.is_enabled());
-        *self = Self::Enabled(handle);
-    }
-}
-
-enum DhtLookupState {
-    Enabled(dht_discovery::LookupRequest),
-    Disabled(DisableReason),
-}
-
-impl DhtLookupState {
-    fn new() -> Self {
-        Self::Disabled(DisableReason::Explicit)
-    }
-
-    fn is_enabled(&self) -> bool {
-        matches!(self, Self::Enabled(_))
-    }
-
-    fn is_implicitly_disabled(&self) -> bool {
-        matches!(self, Self::Disabled(DisableReason::Implicit))
-    }
-
-    fn disable(&mut self, reason: DisableReason) {
-        match self {
-            Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
-                *self = Self::Disabled(reason);
-            }
-            Self::Disabled(DisableReason::Explicit) => (),
-        }
-    }
-
-    fn enable(&mut self, lookup: dht_discovery::LookupRequest) {
-        *self = Self::Enabled(lookup)
+        *self = Self::Enabled(payload);
     }
 }
 
