@@ -115,7 +115,7 @@ impl Network {
                 DisableReason::Explicit,
             )),
             local_discovery_state: BlockingMutex::new(ComponentState::disabled(
-                DisableReason::Implicit,
+                DisableReason::Explicit,
             )),
             dht_discovery,
             dht_discovery_tx,
@@ -187,8 +187,13 @@ impl Network {
             return;
         }
 
-        if let Some(handle) = self.inner.spawn_local_discovery() {
-            state.enable(handle);
+        if self.inner.gateway.is_enabled() {
+            if let Some(handle) = self.inner.spawn_local_discovery() {
+                state.enable(handle);
+            }
+        } else {
+            // Local discovery will get enabled when Gateway gets enabled
+            state.disable(DisableReason::Implicit);
         }
     }
 
@@ -414,20 +419,26 @@ impl Inner {
         self.dht_discovery.rebind(None, None); // needed to make sure we drop the UDP sockets
 
         // disable port forwarding
-        self.port_forwarder_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Implicit);
+        {
+            let mut state = self.port_forwarder_state.lock().unwrap();
+            if state.is_enabled() {
+                state.disable(DisableReason::Implicit);
+            }
+        }
 
         // disable local discovery
-        self.local_discovery_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Implicit);
+        {
+            let mut state = self.local_discovery_state.lock().unwrap();
+            if state.is_enabled() {
+                state.disable(DisableReason::Implicit);
+            }
+        }
 
         // disable DHT
         for (_, registration) in &mut self.state.lock().unwrap().registry {
-            registration.dht.disable(DisableReason::Implicit);
+            if registration.dht.is_enabled() {
+                registration.dht.disable(DisableReason::Implicit);
+            }
         }
 
         // drop all connections
@@ -481,8 +492,15 @@ impl Inner {
 
     fn enable_port_forwarding(&self) {
         let mut state = self.port_forwarder_state.lock().unwrap();
-        if !state.is_enabled() {
+
+        if state.is_enabled() {
+            return;
+        }
+
+        if self.gateway.is_enabled() {
             state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
+        } else {
+            state.disable(DisableReason::Implicit);
         }
     }
 
@@ -854,15 +872,9 @@ impl<T> ComponentState<T> {
     }
 
     fn disable(&mut self, reason: DisableReason) -> Option<T> {
-        match self {
-            Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
-                match mem::replace(self, Self::Disabled(reason)) {
-                    Self::Enabled(payload) => Some(payload),
-                    Self::Disabled(DisableReason::Implicit) => None,
-                    Self::Disabled(DisableReason::Explicit) => unreachable!(),
-                }
-            }
-            Self::Disabled(DisableReason::Explicit) => None,
+        match mem::replace(self, Self::Disabled(reason)) {
+            Self::Enabled(payload) => Some(payload),
+            Self::Disabled(_) => None,
         }
     }
 

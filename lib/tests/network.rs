@@ -158,6 +158,9 @@ async fn local_discovery() {
     let network_a = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
     let network_b = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
 
+    network_a.enable_local_discovery();
+    network_b.enable_local_discovery();
+
     // Note we compare only the ports because we bind to `UNSPECIFIED` (0.0.0.0) and that's what
     // `listener_local_addr_v4` returns as well, but local discovery produces the actual LAN
     // addresses. Comparing the ports should be enough to test that local discovery works.
