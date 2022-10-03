@@ -67,6 +67,7 @@ impl Env {
         .unwrap()
     }
 
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
         let repo_a = self.create_repo().await;
         let repo_b = self
@@ -119,6 +120,7 @@ pub(crate) async fn create_disconnected_peer(proto: Proto) -> Network {
 }
 
 // Create two `Network` instances connected together.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
     let a = create_disconnected_peer(proto).await;
     let b = create_peer_connected_to(proto.listener_local_addr_v4(&a)).await;
@@ -143,6 +145,7 @@ pub(crate) fn test_bind_addrs(proto: Proto) -> Vec<PeerAddr> {
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn eventually<F, Fut>(repo: &Repository, mut f: F)
 where
     F: FnMut() -> Fut,
