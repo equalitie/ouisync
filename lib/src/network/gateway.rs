@@ -21,7 +21,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-/// Established incomming and outgoing connections.
+/// Established incoming and outgoing connections.
 pub(super) struct Gateway {
     state: AtomicSlot<State>,
     config: ConfigStore,
@@ -33,7 +33,7 @@ impl Gateway {
     ///
     /// `incoming_tx` is the sender for the incoming connections.
     pub fn new(config: ConfigStore, incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
-        let state = State::Disabled;
+        let state = State::unbound();
         let state = AtomicSlot::new(state);
 
         Self {
@@ -44,35 +44,23 @@ impl Gateway {
     }
 
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        match &*self.state.read() {
-            State::Enabled(state) => state.quic_listener_local_addr_v4().copied(),
-            State::Disabled => None,
-        }
+        self.state.read().quic_listener_local_addr_v4().copied()
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        match &*self.state.read() {
-            State::Enabled(state) => state.quic_listener_local_addr_v6().copied(),
-            State::Disabled => None,
-        }
+        self.state.read().quic_listener_local_addr_v6().copied()
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        match &*self.state.read() {
-            State::Enabled(state) => state.tcp_listener_local_addr_v4().copied(),
-            State::Disabled => None,
-        }
+        self.state.read().tcp_listener_local_addr_v4().copied()
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        match &*self.state.read() {
-            State::Enabled(state) => state.tcp_listener_local_addr_v6().copied(),
-            State::Disabled => None,
-        }
+        self.state.read().tcp_listener_local_addr_v6().copied()
     }
 
-    /// Enables all listeners and connectors. If they were already enabled, they are rebound.
-    pub async fn enable(
+    /// Binds the gateway to the specified addresses. Rebinds if already bound.
+    pub async fn bind(
         &self,
         bind: &[PeerAddr],
     ) -> (
@@ -80,26 +68,22 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next_state, side_channel_maker_v4, side_channel_maker_v6) =
-            Enabled::new(bind, &self.config, self.incoming_tx.clone()).await;
-        let next_state = State::Enabled(next_state);
+            State::bind(bind, &self.config, self.incoming_tx.clone()).await;
 
-        if let State::Enabled(prev_state) = &*self.state.swap(next_state) {
-            prev_state.close();
-        }
+        self.state.swap(next_state).close();
 
         (side_channel_maker_v4, side_channel_maker_v6)
     }
 
-    /// Disables all listeners/connectors
-    pub fn disable(&self) {
-        if let State::Enabled(prev_state) = &*self.state.swap(State::Disabled) {
-            prev_state.close();
-        }
+    /// Unbinds the gateway from all addresses, effectively disabling all network access.
+    pub fn unbind(&self) {
+        let next_state = State::unbound();
+        self.state.swap(next_state).close();
     }
 
-    /// Checks whether this `Gateway` is enabled
-    pub fn is_enabled(&self) -> bool {
-        matches!(*self.state.read(), State::Enabled(_))
+    /// Checks whether this `Gateway` is bound to at least one address.
+    pub fn is_bound(&self) -> bool {
+        self.state.read().is_bound()
     }
 
     pub async fn connect_with_retries(
@@ -107,11 +91,7 @@ impl Gateway {
         peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
-        let state = self.state.read();
-        match &*state {
-            State::Enabled(state) => state.connect_with_retries(peer, source).await,
-            State::Disabled => None,
-        }
+        self.state.read().connect_with_retries(peer, source).await
     }
 }
 
@@ -136,20 +116,24 @@ impl ConnectError {
     }
 }
 
-enum State {
-    Enabled(Enabled),
-    Disabled,
-}
-
-struct Enabled {
+struct State {
     quic_v4: Option<QuicStack>,
     quic_v6: Option<QuicStack>,
     tcp_v4: Option<TcpStack>,
     tcp_v6: Option<TcpStack>,
 }
 
-impl Enabled {
-    async fn new(
+impl State {
+    fn unbound() -> Self {
+        Self {
+            quic_v4: None,
+            quic_v6: None,
+            tcp_v4: None,
+            tcp_v6: None,
+        }
+    }
+
+    async fn bind(
         bind: &[PeerAddr],
         config: &ConfigStore,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
@@ -214,6 +198,13 @@ impl Enabled {
         };
 
         (this, side_channel_maker_v4, side_channel_maker_v6)
+    }
+
+    fn is_bound(&self) -> bool {
+        self.quic_v4.is_some()
+            || self.quic_v6.is_some()
+            || self.tcp_v4.is_some()
+            || self.tcp_v6.is_some()
     }
 
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {

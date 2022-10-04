@@ -188,7 +188,7 @@ impl Network {
             return;
         }
 
-        if self.inner.gateway.is_enabled() {
+        if self.inner.gateway.is_bound() {
             if let Some(handle) = self.inner.spawn_local_discovery() {
                 state.enable(handle);
             }
@@ -414,7 +414,7 @@ impl Inner {
     // Disable whole network
     fn disable(&self) {
         // disable gateway
-        self.gateway.disable();
+        self.gateway.unbind();
 
         // Disable DHT and drop the UDP sockets
         self.dht_discovery.rebind(None, None);
@@ -440,9 +440,9 @@ impl Inner {
     // Enable whole network
     async fn enable(self: &Arc<Self>) {
         // enable gateway
-        if !self.gateway.is_enabled() {
+        if !self.gateway.is_bound() {
             let (side_channel_maker_v4, side_channel_maker_v6) =
-                self.gateway.enable(&self.bind_addrs).await;
+                self.gateway.bind(&self.bind_addrs).await;
 
             // enable DHT
             self.dht_discovery
@@ -471,7 +471,7 @@ impl Inner {
     }
 
     fn is_enabled(&self) -> bool {
-        self.gateway.is_enabled()
+        self.gateway.is_bound()
     }
 
     // Disconnect from all currently connected peers, regardless of their source.
@@ -486,7 +486,7 @@ impl Inner {
             return;
         }
 
-        if self.gateway.is_enabled() {
+        if self.gateway.is_bound() {
             state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
         } else {
             state.disable(DisableReason::Implicit);
