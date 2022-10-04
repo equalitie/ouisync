@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Proto, DEFAULT_TIMEOUT};
+use self::common::{Env, Node, Proto, DEFAULT_TIMEOUT};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::{select, time};
 
@@ -12,35 +12,39 @@ async fn peer_exchange() {
     let proto = Proto::Quic;
 
     // B and C are initially connected only to A...
-    let network_a = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let network_b = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let network_c = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_c = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
-    network_b.add_user_provided_peer(&proto.listener_local_addr_v4(&network_a));
-    network_c.add_user_provided_peer(&proto.listener_local_addr_v4(&network_a));
+    node_b
+        .network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_a.network));
+    node_c
+        .network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_a.network));
 
     let repo_a = env.create_repo().await;
-    let reg_a = network_a.handle().register(repo_a.store().clone());
+    let reg_a = node_a.network.handle().register(repo_a.store().clone());
     reg_a.enable_pex();
 
     let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_b = network_b.handle().register(repo_b.store().clone());
+    let reg_b = node_b.network.handle().register(repo_b.store().clone());
     reg_b.enable_pex();
 
     let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_c = network_c.handle().register(repo_c.store().clone());
+    let reg_c = node_c.network.handle().register(repo_c.store().clone());
     reg_c.enable_pex();
 
-    let addr_b = proto.listener_local_addr_v4(&network_b);
-    let addr_c = proto.listener_local_addr_v4(&network_c);
+    let addr_b = proto.listener_local_addr_v4(&node_b.network);
+    let addr_c = proto.listener_local_addr_v4(&node_c.network);
 
-    let mut rx_b = network_b.on_peer_set_change();
-    let mut rx_c = network_c.on_peer_set_change();
+    let mut rx_b = node_b.network.on_peer_set_change();
+    let mut rx_c = node_c.network.on_peer_set_change();
 
     // ...eventually B and C connect to each other via peer exchange.
     let connected = async {
         loop {
-            if network_b.knows_peer(addr_c) && network_c.knows_peer(addr_b) {
+            if node_b.network.knows_peer(addr_c) && node_c.network.knows_peer(addr_b) {
                 break;
             }
 
@@ -59,13 +63,13 @@ async fn network_disable_enable_idle() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
 
-    let network = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&network);
+    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
-    network.handle().disable();
-    network.handle().enable().await;
+    node.network.handle().disable();
+    node.network.handle().enable().await;
 
-    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_eq!(local_addr_1, local_addr_0);
 }
 
@@ -74,17 +78,17 @@ async fn network_disable_enable_pending_connection() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
 
-    let network = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&network);
+    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
     let remote_addr = proto.wrap((Ipv4Addr::LOCALHOST, 12345));
-    network.add_user_provided_peer(&remote_addr);
+    node.network.add_user_provided_peer(&remote_addr);
 
     // Wait until the connection starts begin established.
-    let mut rx = network.on_peer_set_change();
+    let mut rx = node.network.on_peer_set_change();
     time::timeout(DEFAULT_TIMEOUT, async {
         loop {
-            if network.knows_peer(remote_addr) {
+            if node.network.knows_peer(remote_addr) {
                 break;
             }
 
@@ -94,10 +98,10 @@ async fn network_disable_enable_pending_connection() {
     .await
     .unwrap();
 
-    network.handle().disable();
-    network.handle().enable().await;
+    node.network.handle().disable();
+    node.network.handle().enable().await;
 
-    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_eq!(local_addr_1, local_addr_0);
 }
 
@@ -108,10 +112,10 @@ async fn network_disable_enable_addr_takeover() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
 
-    let network = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&network);
+    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
-    network.handle().disable();
+    node.network.handle().disable();
 
     // Bind some other socket to the same address while the network is disabled.
     let _socket = time::timeout(DEFAULT_TIMEOUT, async {
@@ -127,9 +131,9 @@ async fn network_disable_enable_addr_takeover() {
     .unwrap();
 
     // Enabling the network binds it to a different address.
-    network.handle().enable().await;
+    node.network.handle().enable().await;
 
-    let local_addr_1 = proto.listener_local_addr_v4(&network);
+    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_ne!(local_addr_1, local_addr_0);
 }
 
@@ -139,10 +143,10 @@ async fn dht_toggle() {
     let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
 
-    let network = common::create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
     let repo = env.create_repo().await;
-    let reg = network.handle().register(repo.store().clone());
+    let reg = node.network.handle().register(repo.store().clone());
 
     reg.enable_dht();
     reg.disable_dht();
@@ -155,29 +159,31 @@ async fn local_discovery() {
     let proto = Proto::Quic;
 
     // A and B are initially disconnected and don't know each other's socket addesses.
-    let network_a = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
-    let network_b = common::create_peer(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
+    let node_a = Node::new(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
+    let node_b = Node::new(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
 
-    network_a.enable_local_discovery();
-    network_b.enable_local_discovery();
+    node_a.network.enable_local_discovery();
+    node_b.network.enable_local_discovery();
 
     // Note we compare only the ports because we bind to `UNSPECIFIED` (0.0.0.0) and that's what
     // `listener_local_addr_v4` returns as well, but local discovery produces the actual LAN
     // addresses. Comparing the ports should be enough to test that local discovery works.
-    let port_a = proto.listener_local_addr_v4(&network_a).port();
-    let port_b = proto.listener_local_addr_v4(&network_b).port();
+    let port_a = proto.listener_local_addr_v4(&node_a.network).port();
+    let port_b = proto.listener_local_addr_v4(&node_b.network).port();
 
-    let mut rx_a = network_a.on_peer_set_change();
-    let mut rx_b = network_b.on_peer_set_change();
+    let mut rx_a = node_a.network.on_peer_set_change();
+    let mut rx_b = node_b.network.on_peer_set_change();
 
     // ...eventually they discover each other via local discovery.
     let connected = async {
         loop {
-            let mut peer_ports_a = network_a
+            let mut peer_ports_a = node_a
+                .network
                 .collect_peer_info()
                 .into_iter()
                 .map(|info| info.port);
-            let mut peer_ports_b = network_b
+            let mut peer_ports_b = node_b
+                .network
                 .collect_peer_info()
                 .into_iter()
                 .map(|info| info.port);

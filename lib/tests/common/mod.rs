@@ -79,6 +79,39 @@ impl Env {
     }
 }
 
+pub(crate) struct Node {
+    pub network: Network,
+    _config_store: TempDir,
+}
+
+impl Node {
+    pub async fn new(bind: PeerAddr) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_PEER_ID: AtomicU64 = AtomicU64::new(0);
+        let peer_id = NEXT_PEER_ID.fetch_add(1, Ordering::Relaxed);
+        let span = tracing::info_span!("peer", id = peer_id);
+
+        let config_store = TempDir::new().unwrap();
+
+        let network = {
+            let _enter = span.enter();
+            Network::new(
+                &[bind],
+                ConfigStore::new(config_store.path()),
+                StateMonitor::make_root(),
+            )
+        };
+
+        network.handle().enable().instrument(span).await;
+
+        Self {
+            network,
+            _config_store: config_store,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Proto {
     #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
@@ -104,30 +137,14 @@ impl Proto {
     }
 }
 
-// Create a single `Network` instance initially bound to the specified address.
-pub(crate) async fn create_peer(bind: PeerAddr) -> Network {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_PEER_ID: AtomicU64 = AtomicU64::new(0);
-    let peer_id = NEXT_PEER_ID.fetch_add(1, Ordering::Relaxed);
-    let span = tracing::info_span!("peer", id = peer_id);
-
-    let network = {
-        let _enter = span.enter();
-        Network::new(&[bind], ConfigStore::null(), StateMonitor::make_root())
-    };
-
-    network.handle().enable().instrument(span).await;
-    network
-}
-
-// Create two `Network` instances connected together.
+// Create two nodes connected together.
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
-    let a = create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let b = create_peer(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+pub(crate) async fn create_connected_nodes(proto: Proto) -> (Node, Node) {
+    let a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
-    b.add_user_provided_peer(&proto.listener_local_addr_v4(&a));
+    b.network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&a.network));
 
     (a, b)
 }
