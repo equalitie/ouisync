@@ -23,7 +23,7 @@ use tracing::Instrument;
 
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
-    state: AtomicSlot<State>,
+    stacks: AtomicSlot<Stacks>,
     config: ConfigStore,
     incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
 }
@@ -33,30 +33,30 @@ impl Gateway {
     ///
     /// `incoming_tx` is the sender for the incoming connections.
     pub fn new(config: ConfigStore, incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
-        let state = State::unbound();
-        let state = AtomicSlot::new(state);
+        let stacks = Stacks::unbound();
+        let stacks = AtomicSlot::new(stacks);
 
         Self {
-            state,
+            stacks,
             config,
             incoming_tx,
         }
     }
 
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.state.read().quic_listener_local_addr_v4().copied()
+        self.stacks.read().quic_listener_local_addr_v4().copied()
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.state.read().quic_listener_local_addr_v6().copied()
+        self.stacks.read().quic_listener_local_addr_v6().copied()
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.state.read().tcp_listener_local_addr_v4().copied()
+        self.stacks.read().tcp_listener_local_addr_v4().copied()
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.state.read().tcp_listener_local_addr_v6().copied()
+        self.stacks.read().tcp_listener_local_addr_v6().copied()
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
@@ -68,22 +68,22 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next_state, side_channel_maker_v4, side_channel_maker_v6) =
-            State::bind(bind, &self.config, self.incoming_tx.clone()).await;
+            Stacks::bind(bind, &self.config, self.incoming_tx.clone()).await;
 
-        self.state.swap(next_state).close();
+        self.stacks.swap(next_state).close();
 
         (side_channel_maker_v4, side_channel_maker_v6)
     }
 
     /// Unbinds the gateway from all addresses, effectively disabling all network access.
     pub fn unbind(&self) {
-        let next_state = State::unbound();
-        self.state.swap(next_state).close();
+        let next_state = Stacks::unbound();
+        self.stacks.swap(next_state).close();
     }
 
     /// Checks whether this `Gateway` is bound to at least one address.
     pub fn is_bound(&self) -> bool {
-        self.state.read().is_bound()
+        self.stacks.read().is_bound()
     }
 
     pub async fn connect_with_retries(
@@ -91,7 +91,7 @@ impl Gateway {
         peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
-        self.state.read().connect_with_retries(peer, source).await
+        self.stacks.read().connect_with_retries(peer, source).await
     }
 }
 
@@ -116,14 +116,14 @@ impl ConnectError {
     }
 }
 
-struct State {
+struct Stacks {
     quic_v4: Option<QuicStack>,
     quic_v6: Option<QuicStack>,
     tcp_v4: Option<TcpStack>,
     tcp_v6: Option<TcpStack>,
 }
 
-impl State {
+impl Stacks {
     fn unbound() -> Self {
         Self {
             quic_v4: None,
