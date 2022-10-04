@@ -206,27 +206,9 @@ pub(crate) mod atomic_slot {
         }
 
         /// Atomically replace the current value with the provided one and returns the previous one.
-        #[allow(unused)] // currently not used anywhere in this crate
         pub fn swap(&self, value: T) -> Guard<T> {
             let value = Arc::new(value);
             Guard(mem::replace(&mut *self.0.lock().unwrap(), value))
-        }
-
-        /// If the current value is same as `current`, replaces it with `new` and returns the
-        /// previous value in an `Ok`. Otherwise leaves the current value unchanged and returns it
-        /// together with `new` in an `Err`
-        pub fn compare_and_swap(
-            &self,
-            current: &Guard<T>,
-            new: T,
-        ) -> Result<Guard<T>, (Guard<T>, T)> {
-            let mut lock = self.0.lock().unwrap();
-
-            if Arc::ptr_eq(&*lock, &current.0) {
-                Ok(Guard(mem::replace(&mut *lock, Arc::new(new))))
-            } else {
-                Err((Guard(lock.clone()), new))
-            }
         }
     }
 

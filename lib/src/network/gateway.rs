@@ -71,9 +71,7 @@ impl Gateway {
         }
     }
 
-    /// Enables all listeners and connectors. If the state actually transitioned from disabled to
-    /// enabled (that is, it wasn't already enabled), returns the IPv4 and IPv6 side channels
-    /// makers respectively, if available. Otherwise returns pair of `None`s.
+    /// Enables all listeners and connectors. If they were already enabled, they are rebound.
     pub async fn enable(
         &self,
         bind: &[PeerAddr],
@@ -81,40 +79,21 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
         Option<quic::SideChannelMaker>,
     ) {
-        let mut current_state = self.state.read();
+        let (next_state, side_channel_maker_v4, side_channel_maker_v6) =
+            Enabled::new(bind, &self.config, self.incoming_tx.clone()).await;
+        let next_state = State::Enabled(next_state);
 
-        while let State::Disabled = &*current_state {
-            let (enabled, side_channel_maker_v4, side_channel_maker_v6) =
-                Enabled::new(bind, &self.config, self.incoming_tx.clone()).await;
-            let next_state = State::Enabled(enabled);
-
-            match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(_) => {
-                    tracing::debug!("gateway enabled");
-                    return (side_channel_maker_v4, side_channel_maker_v6);
-                }
-                Err((prev_state, _)) => current_state = prev_state,
-            }
+        if let State::Enabled(prev_state) = &*self.state.swap(next_state) {
+            prev_state.close();
         }
 
-        (None, None)
+        (side_channel_maker_v4, side_channel_maker_v6)
     }
 
     /// Disables all listeners/connectors
     pub fn disable(&self) {
-        let mut current_state = self.state.read();
-
-        while let State::Enabled(_) = &*current_state {
-            let next_state = State::Disabled;
-
-            match self.state.compare_and_swap(&current_state, next_state) {
-                Ok(prev_state) => {
-                    prev_state.close();
-                    tracing::debug!("gateway disabled");
-                    break;
-                }
-                Err((prev_state, _)) => current_state = prev_state,
-            }
+        if let State::Enabled(prev_state) = &*self.state.swap(State::Disabled) {
+            prev_state.close();
         }
     }
 
@@ -160,15 +139,6 @@ impl ConnectError {
 enum State {
     Enabled(Enabled),
     Disabled,
-}
-
-impl State {
-    fn close(&self) {
-        match self {
-            Self::Enabled(state) => state.close(),
-            Self::Disabled => (),
-        }
-    }
 }
 
 struct Enabled {

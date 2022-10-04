@@ -433,6 +433,8 @@ impl Inner {
 
         // drop all connections
         self.disconnect_all();
+
+        tracing::debug!("network disabled");
     }
 
     // Enable whole network
@@ -464,6 +466,8 @@ impl Inner {
                 }
             }
         }
+
+        tracing::debug!("network enabled");
     }
 
     fn is_enabled(&self) -> bool {
