@@ -281,7 +281,7 @@ impl Handle {
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
-            dht: ComponentState::disabled(DisableReason::Explicit),
+            dht: None,
             pex,
         });
 
@@ -316,7 +316,7 @@ impl Registration {
     pub fn enable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht.enable(
+        holder.dht = Some(
             self.inner
                 .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
         );
@@ -324,9 +324,7 @@ impl Registration {
 
     pub fn disable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
-        state.registry[self.key]
-            .dht
-            .disable(DisableReason::Explicit);
+        state.registry[self.key].dht = None;
     }
 
     /// This function provides the information to the user whether DHT is enabled for this
@@ -335,8 +333,7 @@ impl Registration {
     /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        let dht = &state.registry[self.key].dht;
-        dht.is_enabled() || dht.is_implicitly_disabled()
+        state.registry[self.key].dht.is_some()
     }
 
     pub fn enable_pex(&self) {
@@ -372,7 +369,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     store: Store,
-    dht: ComponentState<dht_discovery::LookupRequest>,
+    dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
 }
 
@@ -416,30 +413,21 @@ impl Inner {
     fn disable(&self) {
         // disable gateway
         self.gateway.disable();
-        self.dht_discovery.rebind(None, None); // needed to make sure we drop the UDP sockets
+
+        // Disable DHT and drop the UDP sockets
+        self.dht_discovery.rebind(None, None);
 
         // disable port forwarding
-        {
-            let mut state = self.port_forwarder_state.lock().unwrap();
-            if state.is_enabled() {
-                state.disable(DisableReason::Implicit);
-            }
-        }
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .disable_if_enabled(DisableReason::Implicit);
 
         // disable local discovery
-        {
-            let mut state = self.local_discovery_state.lock().unwrap();
-            if state.is_enabled() {
-                state.disable(DisableReason::Implicit);
-            }
-        }
-
-        // disable DHT
-        for (_, registration) in &mut self.state.lock().unwrap().registry {
-            if registration.dht.is_enabled() {
-                registration.dht.disable(DisableReason::Implicit);
-            }
-        }
+        self.local_discovery_state
+            .lock()
+            .unwrap()
+            .disable_if_enabled(DisableReason::Implicit);
 
         // drop all connections
         self.disconnect_all();
@@ -450,6 +438,8 @@ impl Inner {
         // enable gateway
         if !self.gateway.is_enabled() {
             let (side_channel_maker_v4, side_channel_maker_v6) = self.gateway.enable().await;
+
+            // enable DHT
             self.dht_discovery
                 .rebind(side_channel_maker_v4, side_channel_maker_v6);
         }
@@ -469,14 +459,6 @@ impl Inner {
                 if let Some(handle) = self.spawn_local_discovery() {
                     state.enable(handle);
                 }
-            }
-        }
-
-        // enable DHT
-        for (_, registration) in &mut self.state.lock().unwrap().registry {
-            if registration.dht.is_implicitly_disabled() {
-                let info_hash = repository_info_hash(registration.store.index.repository_id());
-                registration.dht.enable(self.start_dht_lookup(info_hash));
             }
         }
     }
@@ -874,6 +856,16 @@ impl<T> ComponentState<T> {
     fn disable(&mut self, reason: DisableReason) -> Option<T> {
         match mem::replace(self, Self::Disabled(reason)) {
             Self::Enabled(payload) => Some(payload),
+            Self::Disabled(_) => None,
+        }
+    }
+
+    fn disable_if_enabled(&mut self, reason: DisableReason) -> Option<T> {
+        match self {
+            Self::Enabled(_) => match mem::replace(self, Self::Disabled(reason)) {
+                Self::Enabled(payload) => Some(payload),
+                Self::Disabled(_) => unreachable!(),
+            },
             Self::Disabled(_) => None,
         }
     }
