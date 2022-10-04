@@ -244,12 +244,6 @@ pub unsafe extern "C" fn network_disable() {
     session::get().bind_network(vec![]);
 }
 
-/// Checks whether network is enabled
-#[no_mangle]
-pub unsafe extern "C" fn network_is_enabled() -> bool {
-    session::get().network().handle().is_bound()
-}
-
 /// Enables port forwarding (UPnP)
 #[no_mangle]
 pub unsafe extern "C" fn network_enable_port_forwarding() {
