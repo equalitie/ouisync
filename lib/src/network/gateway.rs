@@ -32,13 +32,8 @@ impl Gateway {
     /// Create a new `Gateway` that is initially disabled.
     ///
     /// `incoming_tx` is the sender for the incoming connections.
-    pub fn new(
-        bind: &[PeerAddr],
-        config: ConfigStore,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-    ) -> Self {
-        let state = Disabled::new(bind);
-        let state = State::Disabled(state);
+    pub fn new(config: ConfigStore, incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
+        let state = State::Disabled;
         let state = AtomicSlot::new(state);
 
         Self {
@@ -51,28 +46,28 @@ impl Gateway {
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         match &*self.state.read() {
             State::Enabled(state) => state.quic_listener_local_addr_v4().copied(),
-            State::Disabled(state) => state.quic_listener_local_addr_v4,
+            State::Disabled => None,
         }
     }
 
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         match &*self.state.read() {
             State::Enabled(state) => state.quic_listener_local_addr_v6().copied(),
-            State::Disabled(state) => state.quic_listener_local_addr_v6,
+            State::Disabled => None,
         }
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         match &*self.state.read() {
             State::Enabled(state) => state.tcp_listener_local_addr_v4().copied(),
-            State::Disabled(state) => state.tcp_listener_local_addr_v4,
+            State::Disabled => None,
         }
     }
 
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         match &*self.state.read() {
             State::Enabled(state) => state.tcp_listener_local_addr_v6().copied(),
-            State::Disabled(state) => state.tcp_listener_local_addr_v6,
+            State::Disabled => None,
         }
     }
 
@@ -81,16 +76,16 @@ impl Gateway {
     /// makers respectively, if available. Otherwise returns pair of `None`s.
     pub async fn enable(
         &self,
+        bind: &[PeerAddr],
     ) -> (
         Option<quic::SideChannelMaker>,
         Option<quic::SideChannelMaker>,
     ) {
         let mut current_state = self.state.read();
 
-        while let State::Disabled(disabled) = &*current_state {
-            let (enabled, side_channel_maker_v4, side_channel_maker_v6) = disabled
-                .to_enabled(&self.config, self.incoming_tx.clone())
-                .await;
+        while let State::Disabled = &*current_state {
+            let (enabled, side_channel_maker_v4, side_channel_maker_v6) =
+                Enabled::new(bind, &self.config, self.incoming_tx.clone()).await;
             let next_state = State::Enabled(enabled);
 
             match self.state.compare_and_swap(&current_state, next_state) {
@@ -109,9 +104,8 @@ impl Gateway {
     pub fn disable(&self) {
         let mut current_state = self.state.read();
 
-        while let State::Enabled(enabled) = &*current_state {
-            let disabled = enabled.to_disabled();
-            let next_state = State::Disabled(disabled);
+        while let State::Enabled(_) = &*current_state {
+            let next_state = State::Disabled;
 
             match self.state.compare_and_swap(&current_state, next_state) {
                 Ok(prev_state) => {
@@ -137,7 +131,7 @@ impl Gateway {
         let state = self.state.read();
         match &*state {
             State::Enabled(state) => state.connect_with_retries(peer, source).await,
-            State::Disabled(_) => None,
+            State::Disabled => None,
         }
     }
 }
@@ -165,14 +159,14 @@ impl ConnectError {
 
 enum State {
     Enabled(Enabled),
-    Disabled(Disabled),
+    Disabled,
 }
 
 impl State {
     fn close(&self) {
         match self {
             Self::Enabled(state) => state.close(),
-            Self::Disabled(_) => (),
+            Self::Disabled => (),
         }
     }
 }
@@ -184,21 +178,72 @@ struct Enabled {
     tcp_v6: Option<TcpStack>,
 }
 
-struct Disabled {
-    quic_listener_local_addr_v4: Option<SocketAddr>,
-    quic_listener_local_addr_v6: Option<SocketAddr>,
-    tcp_listener_local_addr_v4: Option<SocketAddr>,
-    tcp_listener_local_addr_v6: Option<SocketAddr>,
-}
-
 impl Enabled {
-    fn to_disabled(&self) -> Disabled {
-        Disabled {
-            quic_listener_local_addr_v4: self.quic_listener_local_addr_v4().copied(),
-            quic_listener_local_addr_v6: self.quic_listener_local_addr_v6().copied(),
-            tcp_listener_local_addr_v4: self.tcp_listener_local_addr_v4().copied(),
-            tcp_listener_local_addr_v6: self.tcp_listener_local_addr_v6().copied(),
-        }
+    async fn new(
+        bind: &[PeerAddr],
+        config: &ConfigStore,
+        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
+    ) -> (
+        Self,
+        Option<quic::SideChannelMaker>,
+        Option<quic::SideChannelMaker>,
+    ) {
+        let bind_quic_v4 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+
+        let bind_quic_v6 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+        let bind_tcp_v4 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+        let bind_tcp_v6 = bind.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+
+        let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind_quic_v4 {
+            QuicStack::new(addr, config, incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind_quic_v6 {
+            QuicStack::new(addr, config, incoming_tx.clone())
+                .await
+                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        let tcp_v4 = if let Some(addr) = bind_tcp_v4 {
+            TcpStack::new(addr, config, incoming_tx.clone()).await
+        } else {
+            None
+        };
+
+        let tcp_v6 = if let Some(addr) = bind_tcp_v6 {
+            TcpStack::new(addr, config, incoming_tx).await
+        } else {
+            None
+        };
+
+        let this = Self {
+            quic_v4,
+            quic_v6,
+            tcp_v4,
+            tcp_v6,
+        };
+
+        (this, side_channel_maker_v4, side_channel_maker_v6)
     }
 
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -341,86 +386,6 @@ impl Enabled {
         if let Some(stack) = &self.quic_v6 {
             stack.close();
         }
-    }
-}
-
-impl Disabled {
-    fn new(bind: &[PeerAddr]) -> Self {
-        let quic_listener_local_addr_v4 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-
-        let quic_listener_local_addr_v6 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
-        let tcp_listener_local_addr_v4 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-        let tcp_listener_local_addr_v6 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
-
-        Self {
-            quic_listener_local_addr_v4,
-            quic_listener_local_addr_v6,
-            tcp_listener_local_addr_v4,
-            tcp_listener_local_addr_v6,
-        }
-    }
-
-    async fn to_enabled(
-        &self,
-        config: &ConfigStore,
-        incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
-    ) -> (
-        Enabled,
-        Option<quic::SideChannelMaker>,
-        Option<quic::SideChannelMaker>,
-    ) {
-        let (quic_v4, side_channel_maker_v4) = if let Some(addr) = self.quic_listener_local_addr_v4
-        {
-            QuicStack::new(addr, config, incoming_tx.clone())
-                .await
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
-
-        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = self.quic_listener_local_addr_v6
-        {
-            QuicStack::new(addr, config, incoming_tx.clone())
-                .await
-                .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
-
-        let tcp_v4 = if let Some(addr) = self.tcp_listener_local_addr_v4 {
-            TcpStack::new(addr, config, incoming_tx.clone()).await
-        } else {
-            None
-        };
-
-        let tcp_v6 = if let Some(addr) = self.tcp_listener_local_addr_v6 {
-            TcpStack::new(addr, config, incoming_tx).await
-        } else {
-            None
-        };
-
-        let enabled = Enabled {
-            quic_v4,
-            quic_v6,
-            tcp_v4,
-            tcp_v6,
-        };
-
-        (enabled, side_channel_maker_v4, side_channel_maker_v6)
     }
 }
 

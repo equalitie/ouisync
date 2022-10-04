@@ -74,7 +74,7 @@ pub struct Network {
 impl Network {
     pub fn new(bind: &[PeerAddr], config: ConfigStore, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(bind, config, incoming_tx);
+        let gateway = Gateway::new(config, incoming_tx);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -104,6 +104,7 @@ impl Network {
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
+            bind_addrs: bind.to_owned(),
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
@@ -375,6 +376,7 @@ struct RegistrationHolder {
 
 struct Inner {
     monitor: StateMonitor,
+    bind_addrs: Vec<PeerAddr>,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
@@ -437,7 +439,8 @@ impl Inner {
     async fn enable(self: &Arc<Self>) {
         // enable gateway
         if !self.gateway.is_enabled() {
-            let (side_channel_maker_v4, side_channel_maker_v6) = self.gateway.enable().await;
+            let (side_channel_maker_v4, side_channel_maker_v6) =
+                self.gateway.enable(&self.bind_addrs).await;
 
             // enable DHT
             self.dht_discovery
