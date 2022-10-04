@@ -62,12 +62,13 @@ async fn peer_exchange() {
 async fn network_disable_enable_idle() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
+    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node = Node::new(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
-    node.network.handle().disable();
-    node.network.handle().enable().await;
+    node.network.handle().bind(&[]).await;
+    node.network.handle().bind(&[bind]).await;
 
     let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_eq!(local_addr_1, local_addr_0);
@@ -77,8 +78,9 @@ async fn network_disable_enable_idle() {
 async fn network_disable_enable_pending_connection() {
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
+    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node = Node::new(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
     let remote_addr = proto.wrap((Ipv4Addr::LOCALHOST, 12345));
@@ -98,8 +100,8 @@ async fn network_disable_enable_pending_connection() {
     .await
     .unwrap();
 
-    node.network.handle().disable();
-    node.network.handle().enable().await;
+    node.network.handle().bind(&[]).await;
+    node.network.handle().bind(&[bind]).await;
 
     let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_eq!(local_addr_1, local_addr_0);
@@ -111,11 +113,12 @@ async fn network_disable_enable_addr_takeover() {
 
     let _env = Env::with_seed(0);
     let proto = Proto::Quic;
+    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node = Node::new(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
-    node.network.handle().disable();
+    node.network.handle().bind(&[]).await;
 
     // Bind some other socket to the same address while the network is disabled.
     let _socket = time::timeout(DEFAULT_TIMEOUT, async {
@@ -130,8 +133,8 @@ async fn network_disable_enable_addr_takeover() {
     .await
     .unwrap();
 
-    // Enabling the network binds it to a different address.
-    node.network.handle().enable().await;
+    // Enabling the network binds it to a different port.
+    node.network.handle().bind(&[bind]).await;
 
     let local_addr_1 = proto.listener_local_addr_v4(&node.network);
     assert_ne!(local_addr_1, local_addr_0);

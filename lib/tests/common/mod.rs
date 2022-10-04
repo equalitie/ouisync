@@ -97,13 +97,12 @@ impl Node {
         let network = {
             let _enter = span.enter();
             Network::new(
-                &[bind],
                 ConfigStore::new(config_store.path()),
                 StateMonitor::make_root(),
             )
         };
 
-        network.handle().enable().instrument(span).await;
+        network.handle().bind(&[bind]).instrument(span).await;
 
         Self {
             network,

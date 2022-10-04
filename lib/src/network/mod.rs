@@ -52,7 +52,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     io, mem,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
 };
 use thiserror::Error;
@@ -72,7 +72,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(bind: &[PeerAddr], config: ConfigStore, monitor: StateMonitor) -> Self {
+    pub fn new(config: ConfigStore, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(config, incoming_tx);
 
@@ -104,7 +104,6 @@ impl Network {
 
         let inner = Arc::new(Inner {
             monitor: monitor.clone(),
-            bind_addrs: bind.to_owned(),
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
@@ -138,19 +137,6 @@ impl Network {
             monitor,
             _tasks: tasks,
         }
-    }
-
-    /// Create a `Network` with the listeners bound to the default addresses:
-    /// quic/0.0.0.0:0 and quic/[::]:0
-    pub fn with_default_bind_addrs(config: ConfigStore, monitor: StateMonitor) -> Self {
-        Self::new(
-            &[
-                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
-                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
-            ],
-            config,
-            monitor,
-        )
     }
 
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
@@ -281,19 +267,15 @@ impl Handle {
         }
     }
 
-    /// Disable whole network
-    pub fn disable(&self) {
-        self.inner.disable()
-    }
-
-    /// Enable whole network
-    pub async fn enable(&self) {
-        self.inner.enable().await
+    /// Binds the network to the specified addresses.
+    /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
+    pub async fn bind(&self, addrs: &[PeerAddr]) {
+        self.inner.bind(addrs).await
     }
 
     /// Is the network enabled
-    pub fn is_enabled(&self) -> bool {
-        self.inner.is_enabled()
+    pub fn is_bound(&self) -> bool {
+        self.inner.gateway.is_bound()
     }
 }
 
@@ -365,7 +347,6 @@ struct RegistrationHolder {
 
 struct Inner {
     monitor: StateMonitor,
-    bind_addrs: Vec<PeerAddr>,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
@@ -400,53 +381,46 @@ impl State {
 }
 
 impl Inner {
-    // Disable whole network
-    fn disable(&self) {
-        // disable gateway
-        self.gateway.unbind();
+    async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
+        let conn = Connectivity::infer(bind);
 
-        // Disable DHT and drop the UDP sockets
-        self.dht_discovery.rebind(None, None);
+        // Gateway
+        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
+            Connectivity::Full => self.gateway.bind(bind).await,
+            Connectivity::LocalOnly => {
+                self.gateway.bind(bind).await;
+                (None, None)
+            }
+            Connectivity::Disabled => {
+                self.gateway.unbind();
+                (None, None)
+            }
+        };
 
-        // disable port forwarding
-        self.port_forwarder_state
-            .lock()
-            .unwrap()
-            .disable_if_enabled(DisableReason::Implicit);
+        // DHT
+        self.dht_discovery
+            .rebind(side_channel_maker_v4, side_channel_maker_v6);
 
-        // disable local discovery
-        self.local_discovery_state
-            .lock()
-            .unwrap()
-            .disable_if_enabled(DisableReason::Implicit);
-
-        // drop all connections
-        self.disconnect_all();
-
-        tracing::debug!("network disabled");
-    }
-
-    // Enable whole network
-    async fn enable(self: &Arc<Self>) {
-        // enable gateway
-        if !self.gateway.is_bound() {
-            let (side_channel_maker_v4, side_channel_maker_v6) =
-                self.gateway.bind(&self.bind_addrs).await;
-
-            // enable DHT
-            self.dht_discovery
-                .rebind(side_channel_maker_v4, side_channel_maker_v6);
-        }
-
-        // enable port forwarding
-        {
-            let mut state = self.port_forwarder_state.lock().unwrap();
-            if !state.is_disabled(DisableReason::Explicit) {
-                state.enable(PortMappings::new(&self.port_forwarder, &self.gateway));
+        // Port forwarding
+        match conn {
+            Connectivity::Full => {
+                let mut state = self.port_forwarder_state.lock().unwrap();
+                if !state.is_disabled(DisableReason::Explicit) {
+                    state.enable(PortMappings::new(&self.port_forwarder, &self.gateway));
+                }
+            }
+            Connectivity::LocalOnly | Connectivity::Disabled => {
+                self.port_forwarder_state
+                    .lock()
+                    .unwrap()
+                    .disable_if_enabled(DisableReason::Implicit);
             }
         }
 
-        // enable local discovery
+        // Local discovery
+        //
+        // Note: no need to check the Connectivity because local discovery depends only on whether
+        // Gateway is bound.
         {
             let mut state = self.local_discovery_state.lock().unwrap();
             if !state.is_disabled(DisableReason::Explicit) {
@@ -458,11 +432,15 @@ impl Inner {
             }
         }
 
-        tracing::debug!("network enabled");
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.gateway.is_bound()
+        // - If we are disabling connectivity, disconnect from all existing peers.
+        // - If we are going from `Full` -> `LocalOnly`, also disconnect from all with the
+        //   assumption that the local ones will be subsequently re-established. Ideally we would
+        //   disconnect only the non-local ones to avoid the reconnect overhead, but the
+        //   implementation is simpler this way and the trade-off doesn't seem to be too bad.
+        // - If we are going to `Full`, keep all existing connections.
+        if matches!(conn, Connectivity::LocalOnly | Connectivity::Disabled) {
+            self.disconnect_all();
+        }
     }
 
     // Disconnect from all currently connected peers, regardless of their source.
@@ -878,6 +856,31 @@ enum DisableReason {
     Implicit,
     // Disabled explicitly
     Explicit,
+}
+
+enum Connectivity {
+    Disabled,
+    LocalOnly,
+    Full,
+}
+
+impl Connectivity {
+    fn infer(addrs: &[PeerAddr]) -> Self {
+        if addrs.is_empty() {
+            return Self::Disabled;
+        }
+
+        let global = addrs
+            .iter()
+            .map(|addr| addr.ip())
+            .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
+
+        if global {
+            Self::Full
+        } else {
+            Self::LocalOnly
+        }
+    }
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
