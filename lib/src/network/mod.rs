@@ -42,8 +42,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, repository::RepositoryId, state_monitor::StateMonitor, store::Store,
-    sync::uninitialized_watch,
+    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle,
+    state_monitor::StateMonitor, store::Store, sync::uninitialized_watch,
 };
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
@@ -184,30 +184,19 @@ impl Network {
     pub fn enable_local_discovery(&self) {
         let mut state = self.inner.local_discovery_state.lock().unwrap();
 
-        if state.is_enabled() {
-            return;
-        }
-
-        if self.inner.gateway.is_bound() {
-            if let Some(handle) = self.inner.spawn_local_discovery() {
-                state.enable(handle);
-            }
+        if let Some(handle) = self.inner.spawn_local_discovery() {
+            state.enable(handle.into());
         } else {
-            // Local discovery will get enabled when Gateway gets enabled
             state.disable(DisableReason::Implicit);
         }
     }
 
     pub fn disable_local_discovery(&self) {
-        let handle = self
-            .inner
+        self.inner
             .local_discovery_state
             .lock()
             .unwrap()
             .disable(DisableReason::Explicit);
-        if let Some(handle) = handle {
-            handle.abort();
-        }
     }
 
     pub fn is_local_discovery_enabled(&self) -> bool {
@@ -382,7 +371,7 @@ struct Inner {
     state: BlockingMutex<State>,
     port_forwarder: upnp::PortForwarder,
     port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
-    local_discovery_state: BlockingMutex<ComponentState<AbortHandle>>,
+    local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
@@ -452,17 +441,19 @@ impl Inner {
         // enable port forwarding
         {
             let mut state = self.port_forwarder_state.lock().unwrap();
-            if state.is_implicitly_disabled() {
-                state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
+            if !state.is_disabled(DisableReason::Explicit) {
+                state.enable(PortMappings::new(&self.port_forwarder, &self.gateway));
             }
         }
 
         // enable local discovery
         {
             let mut state = self.local_discovery_state.lock().unwrap();
-            if state.is_implicitly_disabled() {
+            if !state.is_disabled(DisableReason::Explicit) {
                 if let Some(handle) = self.spawn_local_discovery() {
-                    state.enable(handle);
+                    state.enable(handle.into());
+                } else {
+                    state.disable(DisableReason::Implicit);
                 }
             }
         }
@@ -480,17 +471,10 @@ impl Inner {
     }
 
     fn enable_port_forwarding(&self) {
-        let mut state = self.port_forwarder_state.lock().unwrap();
-
-        if state.is_enabled() {
-            return;
-        }
-
-        if self.gateway.is_bound() {
-            state.enable(PortMappings::new(&self.port_forwarder, &self.gateway))
-        } else {
-            state.disable(DisableReason::Implicit);
-        }
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .enable(PortMappings::new(&self.port_forwarder, &self.gateway));
     }
 
     fn disable_port_forwarding(&self) {
@@ -856,8 +840,11 @@ impl<T> ComponentState<T> {
         matches!(self, Self::Enabled(_))
     }
 
-    fn is_implicitly_disabled(&self) -> bool {
-        matches!(self, Self::Disabled(DisableReason::Implicit))
+    fn is_disabled(&self, reason: DisableReason) -> bool {
+        match self {
+            Self::Disabled(current_reason) if *current_reason == reason => true,
+            Self::Disabled(_) | Self::Enabled(_) => false,
+        }
     }
 
     fn disable(&mut self, reason: DisableReason) -> Option<T> {
@@ -877,13 +864,15 @@ impl<T> ComponentState<T> {
         }
     }
 
-    // Panics if already enabled.
-    fn enable(&mut self, payload: T) {
-        assert!(!self.is_enabled());
-        *self = Self::Enabled(payload);
+    fn enable(&mut self, payload: T) -> Option<T> {
+        match mem::replace(self, Self::Enabled(payload)) {
+            Self::Enabled(payload) => Some(payload),
+            Self::Disabled(_) => None,
+        }
     }
 }
 
+#[derive(Eq, PartialEq)]
 enum DisableReason {
     // Disabled implicitly because `Network` was disabled
     Implicit,
