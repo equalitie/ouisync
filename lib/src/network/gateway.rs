@@ -67,18 +67,31 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
         Option<quic::SideChannelMaker>,
     ) {
-        let (next_state, side_channel_maker_v4, side_channel_maker_v6) =
+        let (next, side_channel_maker_v4, side_channel_maker_v6) =
             Stacks::bind(bind, &self.config, self.incoming_tx.clone()).await;
 
-        self.stacks.swap(next_state).close();
+        let prev = self.stacks.swap(next);
+        let next = self.stacks.read();
+
+        if prev.quic_v4.is_some() && next.quic_v4.is_none() {
+            tracing::info!("Terminated IPv4 QUIC stack");
+        }
+
+        if prev.quic_v6.is_some() && next.quic_v6.is_none() {
+            tracing::info!("Terminated IPv6 QUIC stack");
+        }
+
+        if prev.tcp_v4.is_some() && next.tcp_v4.is_none() {
+            tracing::info!("Terminated IPv4 TCP stack");
+        }
+
+        if prev.tcp_v6.is_some() && next.tcp_v6.is_none() {
+            tracing::info!("Terminated IPv6 TCP stack");
+        }
+
+        prev.close();
 
         (side_channel_maker_v4, side_channel_maker_v6)
-    }
-
-    /// Unbinds the gateway from all addresses, effectively disabling all network access.
-    pub fn unbind(&self) {
-        let next_state = Stacks::unbound();
-        self.stacks.swap(next_state).close();
     }
 
     /// Checks whether this `Gateway` is bound to at least one address.

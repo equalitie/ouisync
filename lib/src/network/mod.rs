@@ -385,19 +385,14 @@ impl Inner {
         let conn = Connectivity::infer(bind);
 
         // Gateway
-        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
-            Connectivity::Full => self.gateway.bind(bind).await,
-            Connectivity::LocalOnly => {
-                self.gateway.bind(bind).await;
-                (None, None)
-            }
-            Connectivity::Disabled => {
-                self.gateway.unbind();
-                (None, None)
-            }
-        };
+        let side_channel_makers = self.gateway.bind(bind).await;
 
         // DHT
+        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
+            Connectivity::Full => side_channel_makers,
+            Connectivity::LocalOnly | Connectivity::Disabled => (None, None),
+        };
+
         self.dht_discovery
             .rebind(side_channel_maker_v4, side_channel_maker_v6);
 
