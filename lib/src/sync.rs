@@ -108,9 +108,7 @@ pub(crate) mod uninitialized_watch {
     impl<T: Clone> Receiver<T> {
         pub async fn changed(&mut self) -> Result<T, w::error::RecvError> {
             loop {
-                if let Err(e) = self.0.changed().await {
-                    return Err(e);
-                }
+                self.0.changed().await?;
 
                 // Note: the w::Ref struct returned by `borrow` does not implement `Map`, so (I
                 // think) we need to clone the value wrapped in `Option`.

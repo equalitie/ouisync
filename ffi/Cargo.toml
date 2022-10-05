@@ -1,13 +1,13 @@
 [package]
 name = "ouisync-ffi"
 description = "Secure P2P file sharing (foreign function interface)"
-version = "0.1.0"
-authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
-license = "MPL-2.0"
-repository = "https://github.com/equalitie/ouisync"
-edition = "2021"
-rust-version = "1.56.0"
 publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lib]
 crate-type = ["cdylib"] # TODO: we might also need `staticlib` for ios
@@ -15,11 +15,11 @@ crate-type = ["cdylib"] # TODO: we might also need `staticlib` for ios
 [dependencies]
 camino = "1.0.9"
 hex = "0.4.3"
-tracing = { version = "0.1.35" }
-ouisync-lib = { package = "ouisync", version = "0.2", path = "../lib" }
+ouisync-lib = { package = "ouisync", path = "../lib" }
 rmp-serde = "1.1.0"
-tokio = "1.21.0"
-tracing-subscriber = { version = "0.3.15" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-sys = "0.3.0"
@@ -30,4 +30,4 @@ os_pipe = "0.9.2"
 paranoid-android = "0.2.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

@@ -1,6 +1,18 @@
 [workspace]
-
 members = ["bindgen", "cli", "ffi", "lib", "util"]
+
+[workspace.package]
+version = "0.2.0"
+authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
+repository = "https://github.com/equalitie/ouisync"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.64.0"
+
+[workspace.dependencies]
+tokio = { version = "1.21.0", default-features = false }
+tracing = { version = "0.1.35" }
+tracing-subscriber = { version = "0.3.15" }
 
 [patch.crates-io]
 sqlx = { git = "https://github.com/madadam/sqlx.git", rev = "c71ff113" }

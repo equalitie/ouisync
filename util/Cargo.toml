@@ -1,11 +1,13 @@
 [package]
 name = "ouisync-utilities"
 description = "Utilities for working with and debugging OuiSync"
-version = "0.1.0"
-authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
-license = "MPL-2.0"
-edition = "2021"
 publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [[bin]]
 name = "btdht"
@@ -19,4 +21,4 @@ ouisync-lib = { package = "ouisync", path = "../lib" }
 env_logger = "0.9.0"
 log = "0.4.17"
 structopt = "0.3.26"
-tokio = { version = "1.21.0", features = ["signal"] }
+tokio = { workspace = true, features = ["signal"] }
