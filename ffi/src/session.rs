@@ -7,15 +7,13 @@ use super::{
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::Network,
-    ConfigStore, Error, PeerAddr, Result, StateMonitor,
+    ConfigStore, Error, Result, StateMonitor,
 };
 use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    ptr,
-    sync::Mutex,
-    thread,
+    ptr, thread,
     time::Duration,
 };
 use tokio::{
@@ -95,13 +93,10 @@ pub unsafe extern "C" fn session_open(
         network.enable_port_forwarding();
         network.enable_local_discovery();
 
-        let network_bind_task = runtime.spawn(async {});
-
         let session = Session {
             runtime,
             device_id,
             network,
-            network_bind_task: Mutex::new(network_bind_task),
             sender,
             root_monitor,
             repos_monitor,
@@ -233,7 +228,6 @@ pub(super) struct Session {
     runtime: Runtime,
     device_id: DeviceId,
     network: Network,
-    network_bind_task: Mutex<JoinHandle<()>>,
     sender: Sender,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
@@ -251,16 +245,6 @@ impl Session {
 
     pub(super) fn network(&self) -> &Network {
         &self.network
-    }
-
-    pub(super) fn bind_network(&self, addrs: Vec<PeerAddr>) {
-        let network_handle = self.network.handle();
-        mem::replace(
-            &mut *self.network_bind_task.lock().unwrap(),
-            self.runtime
-                .spawn(async move { network_handle.bind(&addrs).await }),
-        )
-        .abort();
     }
 
     pub(super) fn repos_monitor(&self) -> &StateMonitor {

@@ -483,9 +483,7 @@ impl Inner {
         if let Some(port) = port {
             Some(self.spawn(self.clone().run_local_discovery(port)))
         } else {
-            tracing::error!(
-                "Failed to enable local discovery because we don't have an IPv4 listener"
-            );
+            tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
             None
         }
     }

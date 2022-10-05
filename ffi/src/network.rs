@@ -2,9 +2,9 @@ use super::{
     session,
     utils::{self, Bytes, Port, UniqueHandle},
 };
-use ouisync_lib::network::peer_addr::PeerAddr;
+use ouisync_lib::{network::peer_addr::PeerAddr, Result};
 use std::{
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     os::raw::c_char,
     ptr,
     str::FromStr,
@@ -13,6 +13,44 @@ use tokio::{select, task::JoinHandle};
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
 pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
+
+/// Binds the network to the specified addresses.
+/// Rebinds if already bound. If any of the addresses is null, that particular protocol/family
+/// combination is not bound. If all are null the network is disabled.
+/// Yields `Ok` if the binding was successful, `Err` if any of the given addresses failed to
+/// parse or are were of incorrect type (e.g. IPv4 instead of IpV6).
+#[no_mangle]
+pub unsafe extern "C" fn network_bind(
+    quic_v4: *const c_char,
+    quic_v6: *const c_char,
+    tcp_v4: *const c_char,
+    tcp_v6: *const c_char,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let quic_v4: Option<SocketAddrV4> = utils::parse_from_ptr(quic_v4)?;
+        let quic_v6: Option<SocketAddrV6> = utils::parse_from_ptr(quic_v6)?;
+        let tcp_v4: Option<SocketAddrV4> = utils::parse_from_ptr(tcp_v4)?;
+        let tcp_v6: Option<SocketAddrV6> = utils::parse_from_ptr(tcp_v6)?;
+
+        let addrs: Vec<_> = [
+            quic_v4.map(|a| PeerAddr::Quic(a.into())),
+            quic_v6.map(|a| PeerAddr::Quic(a.into())),
+            tcp_v4.map(|a| PeerAddr::Tcp(a.into())),
+            tcp_v6.map(|a| PeerAddr::Tcp(a.into())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        let network_handle = ctx.network().handle();
+
+        ctx.spawn(async move {
+            network_handle.bind(&addrs).await;
+            Ok(())
+        })
+    })
+}
 
 /// Subscribe to network event notifications.
 #[no_mangle]
@@ -197,21 +235,6 @@ pub unsafe extern "C" fn network_current_protocol_version() -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
     session::get().network().highest_seen_protocol_version()
-}
-
-/// Enables the entire network
-#[no_mangle]
-pub unsafe extern "C" fn network_enable() {
-    session::get().bind_network(vec![
-        PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
-        PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
-    ]);
-}
-
-/// Disables the entire network
-#[no_mangle]
-pub unsafe extern "C" fn network_disable() {
-    session::get().bind_network(vec![]);
 }
 
 /// Enables port forwarding (UPnP)

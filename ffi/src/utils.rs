@@ -2,6 +2,7 @@ use super::dart::{self, DartCObject};
 use camino::Utf8PathBuf;
 use ouisync_lib::{Error, Result};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,
@@ -162,6 +163,16 @@ pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
 
 pub unsafe fn ptr_to_native_path_buf(ptr: *const c_char) -> Result<PathBuf> {
     Ok(PathBuf::from(ptr_to_str(ptr)?))
+}
+
+pub unsafe fn parse_from_ptr<T: FromStr>(ptr: *const c_char) -> Result<Option<T>> {
+    let s = ptr_to_str(ptr)?;
+
+    if s.is_empty() {
+        Ok(None)
+    } else {
+        s.parse().map(Some).map_err(|_| Error::MalformedData)
+    }
 }
 
 pub fn str_to_c_string(s: &str) -> Result<CString> {
