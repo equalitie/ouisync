@@ -12,6 +12,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast::error::RecvError;
+use tracing::Instrument;
 
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -67,6 +68,7 @@ impl Env {
         .unwrap()
     }
 
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
         let repo_a = self.create_repo().await;
         let repo_b = self
@@ -77,24 +79,51 @@ impl Env {
     }
 }
 
+pub(crate) struct Node {
+    pub network: Network,
+    _config_store: TempDir,
+}
+
+impl Node {
+    pub async fn new(bind: PeerAddr) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_PEER_ID: AtomicU64 = AtomicU64::new(0);
+        let peer_id = NEXT_PEER_ID.fetch_add(1, Ordering::Relaxed);
+        let span = tracing::info_span!("peer", id = peer_id);
+
+        let config_store = TempDir::new().unwrap();
+
+        let network = {
+            let _enter = span.enter();
+            Network::new(
+                ConfigStore::new(config_store.path()),
+                StateMonitor::make_root(),
+            )
+        };
+
+        network.handle().bind(&[bind]).instrument(span).await;
+
+        Self {
+            network,
+            _config_store: config_store,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Proto {
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Tcp,
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Quic,
 }
 
 impl Proto {
-    pub fn of(addr: &PeerAddr) -> Self {
-        match addr {
-            PeerAddr::Tcp(_) => Self::Tcp,
-            PeerAddr::Quic(_) => Self::Quic,
-        }
-    }
-
-    pub fn wrap_addr(&self, addr: SocketAddr) -> PeerAddr {
+    pub fn wrap(&self, addr: impl Into<SocketAddr>) -> PeerAddr {
         match self {
-            Self::Tcp => PeerAddr::Tcp(addr),
-            Self::Quic => PeerAddr::Quic(addr),
+            Self::Tcp => PeerAddr::Tcp(addr.into()),
+            Self::Quic => PeerAddr::Quic(addr.into()),
         }
     }
 
@@ -107,42 +136,20 @@ impl Proto {
     }
 }
 
-// Create a single `Network` instance initially not connected to anyone.
-pub(crate) async fn create_disconnected_peer(proto: Proto) -> Network {
-    let network = Network::new(
-        &test_bind_addrs(proto),
-        ConfigStore::null(),
-        StateMonitor::make_root(),
-    );
-    network.handle().enable().await;
-    network
-}
+// Create two nodes connected together.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_connected_nodes(proto: Proto) -> (Node, Node) {
+    let a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
-// Create two `Network` instances connected together.
-pub(crate) async fn create_connected_peers(proto: Proto) -> (Network, Network) {
-    let a = create_disconnected_peer(proto).await;
-    let b = create_peer_connected_to(proto.listener_local_addr_v4(&a)).await;
+    b.network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&a.network));
 
     (a, b)
 }
 
-// Create a `Network` instance connected only to the given address.
-pub(crate) async fn create_peer_connected_to(addr: PeerAddr) -> Network {
-    let network = Network::new(
-        &test_bind_addrs(Proto::of(&addr)),
-        ConfigStore::null(),
-        StateMonitor::make_root(),
-    );
-    network.handle().enable().await;
-    network.add_user_provided_peer(&addr);
-    network
-}
-
-pub(crate) fn test_bind_addrs(proto: Proto) -> Vec<PeerAddr> {
-    vec![proto.wrap_addr((Ipv4Addr::LOCALHOST, 0).into())]
-}
-
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn eventually<F, Fut>(repo: &Repository, mut f: F)
 where
     F: FnMut() -> Fut,

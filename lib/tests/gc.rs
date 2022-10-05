@@ -30,10 +30,10 @@ async fn local_delete_local_file() {
 async fn local_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
+    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = network_l.handle().register(repo_l.store().clone());
-    let _reg_r = network_r.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
@@ -64,10 +64,10 @@ async fn local_delete_remote_file() {
 async fn remote_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
+    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = network_l.handle().register(repo_l.store().clone());
-    let _reg_r = network_r.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     repo_r.create_file("test.dat").await.unwrap();
 
@@ -114,10 +114,10 @@ async fn local_truncate_local_file() {
 async fn local_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
+    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = network_l.handle().register(repo_l.store().clone());
-    let _reg_r = network_r.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
@@ -155,10 +155,10 @@ async fn local_truncate_remote_file() {
 async fn remote_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
+    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = network_l.handle().register(repo_l.store().clone());
-    let _reg_r = network_r.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
@@ -192,10 +192,10 @@ async fn remote_truncate_remote_file() {
 async fn concurrent_delete_update() {
     let mut env = Env::with_seed(0);
 
-    let (network_l, network_r) = common::create_connected_peers(Proto::Tcp).await;
+    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let reg_l = network_l.handle().register(repo_l.store().clone());
-    let reg_r = network_r.handle().register(repo_r.store().clone());
+    let reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
@@ -231,8 +231,8 @@ async fn concurrent_delete_update() {
     file.flush(&mut conn).await.unwrap();
 
     // Re-connect
-    let _reg_l = network_l.handle().register(repo_l.store().clone());
-    let _reg_r = network_r.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     // 1 for the local root + 1 for the remote root + 2 for the file
     time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 4))

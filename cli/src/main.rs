@@ -124,10 +124,10 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network = Network::new(&options.bind, config, root_monitor.make_child("Network"));
+    let network = Network::new(config, root_monitor.make_child("Network"));
     let network_handle = network.handle();
 
-    network_handle.enable().await;
+    network_handle.bind(&options.bind).await;
 
     if !options.disable_upnp {
         network.enable_port_forwarding();

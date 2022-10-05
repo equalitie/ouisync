@@ -7,14 +7,14 @@ use super::{
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::Network,
-    ConfigStore, Error, Result, StateMonitor,
+    ConfigStore, Error, PeerAddr, Result, StateMonitor,
 };
 use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
     ptr,
-    sync::{Arc, Mutex},
+    sync::Mutex,
     thread,
     time::Duration,
 };
@@ -90,24 +90,21 @@ pub unsafe extern "C" fn session_open(
 
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let network = Network::with_default_bind_addrs(config, network_monitor);
+        let network = Network::new(config, network_monitor);
 
         network.enable_port_forwarding();
+        network.enable_local_discovery();
 
-        let network_enable_state = if network.handle().is_enabled() {
-            NetworkEnableState::Enabled
-        } else {
-            NetworkEnableState::Disabled
-        };
+        let network_bind_task = runtime.spawn(async {});
 
         let session = Session {
             runtime,
             device_id,
             network,
+            network_bind_task: Mutex::new(network_bind_task),
             sender,
             root_monitor,
             repos_monitor,
-            network_enable_state: Arc::new(Mutex::new(network_enable_state)),
             _logger: logger,
         };
 
@@ -236,10 +233,10 @@ pub(super) struct Session {
     runtime: Runtime,
     device_id: DeviceId,
     network: Network,
+    network_bind_task: Mutex<JoinHandle<()>>,
     sender: Sender,
     root_monitor: StateMonitor,
     repos_monitor: StateMonitor,
-    network_enable_state: Arc<Mutex<NetworkEnableState>>,
     _logger: Logger,
 }
 
@@ -256,12 +253,18 @@ impl Session {
         &self.network
     }
 
-    pub(super) fn repos_monitor(&self) -> &StateMonitor {
-        &self.repos_monitor
+    pub(super) fn bind_network(&self, addrs: Vec<PeerAddr>) {
+        let network_handle = self.network.handle();
+        mem::replace(
+            &mut *self.network_bind_task.lock().unwrap(),
+            self.runtime
+                .spawn(async move { network_handle.bind(&addrs).await }),
+        )
+        .abort();
     }
 
-    pub(super) fn network_enable_state(&self) -> &Arc<Mutex<NetworkEnableState>> {
-        &self.network_enable_state
+    pub(super) fn repos_monitor(&self) -> &StateMonitor {
+        &self.repos_monitor
     }
 }
 
@@ -337,10 +340,4 @@ impl Sender {
     {
         (self.post_c_object_fn)(port.into(), &mut value.into());
     }
-}
-
-pub(super) enum NetworkEnableState {
-    Enabled,
-    BeingEnabled(JoinHandle<()>),
-    Disabled,
 }

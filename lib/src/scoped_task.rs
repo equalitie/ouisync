@@ -3,7 +3,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::task::{self, JoinError, JoinHandle};
+use tokio::task::{self, AbortHandle, JoinError, JoinHandle};
 
 /// Wrapper for a `JoinHandle` that auto-aborts on drop.
 pub struct ScopedJoinHandle<T>(pub JoinHandle<T>);
@@ -35,4 +35,19 @@ where
     T::Output: Send + 'static,
 {
     ScopedJoinHandle(task::spawn(task))
+}
+
+/// Wrapper for `AbortHandle` that auto-aborts on drop.
+pub struct ScopedAbortHandle(pub AbortHandle);
+
+impl From<AbortHandle> for ScopedAbortHandle {
+    fn from(handle: AbortHandle) -> Self {
+        Self(handle)
+    }
+}
+
+impl Drop for ScopedAbortHandle {
+    fn drop(&mut self) {
+        self.0.abort()
+    }
 }

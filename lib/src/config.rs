@@ -13,19 +13,14 @@ use tokio::{
 
 #[derive(Clone)]
 pub struct ConfigStore {
-    dir: Option<Arc<Path>>,
+    dir: Arc<Path>,
 }
 
 impl ConfigStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
-            dir: Some(dir.into().into_boxed_path().into()),
+            dir: dir.into().into_boxed_path().into(),
         }
-    }
-
-    // Create "null" config store which doesn't actually store anything on the filesystem.
-    pub fn null() -> Self {
-        Self { dir: None }
     }
 
     // Obtain the config entry for the specified key.
@@ -68,11 +63,7 @@ where
 
 impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
     pub async fn set(&self, value: &Value) -> io::Result<()> {
-        let path = if let Some(path) = self.path() {
-            path
-        } else {
-            return Ok(());
-        };
+        let path = self.path();
 
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).await?;
@@ -96,13 +87,7 @@ impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
     }
 
     pub async fn get(&self) -> io::Result<Value> {
-        let path = self.path().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{:?}: null config store", self.key.name),
-            )
-        })?;
-
+        let path = self.path();
         let file = File::open(path).await?;
         let line = self.find_value_line(file).await?;
 
@@ -114,11 +99,8 @@ impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
         })
     }
 
-    fn path(&self) -> Option<PathBuf> {
-        self.store
-            .dir
-            .as_ref()
-            .map(|dir| dir.join(self.key.name).with_extension("conf"))
+    fn path(&self) -> PathBuf {
+        self.store.dir.join(self.key.name).with_extension("conf")
     }
 
     async fn find_value_line(&self, file: File) -> io::Result<String> {

@@ -1,9 +1,14 @@
 use super::{
-    session::{self, NetworkEnableState},
+    session,
     utils::{self, Bytes, Port, UniqueHandle},
 };
 use ouisync_lib::network::peer_addr::PeerAddr;
-use std::{net::SocketAddr, os::raw::c_char, ptr, str::FromStr};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    os::raw::c_char,
+    ptr,
+    str::FromStr,
+};
 use tokio::{select, task::JoinHandle};
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
@@ -194,100 +199,19 @@ pub unsafe extern "C" fn network_highest_seen_protocol_version() -> u32 {
     session::get().network().highest_seen_protocol_version()
 }
 
-/// Returns the local dht address for ipv4, if available.
-/// See [`network_local_addr`] for the format details.
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
-// FIXME: remove this function
-#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v4 instead"]
-#[no_mangle]
-pub unsafe extern "C" fn network_dht_local_addr_v4() -> *mut c_char {
-    session::get()
-        .network()
-        .quic_listener_local_addr_v4()
-        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
-        .unwrap_or(ptr::null_mut())
-}
-
-/// Returns the local dht address for ipv6, if available.
-/// See [`network_local_addr`] for the format details.
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
-// FIXME: remove this function
-#[deprecated = "DHT address is the same as QUIC address. Use network_quic_listener_local_addr_v6 instead"]
-#[no_mangle]
-pub unsafe extern "C" fn network_dht_local_addr_v6() -> *mut c_char {
-    session::get()
-        .network()
-        .quic_listener_local_addr_v6()
-        .map(|addr| utils::str_to_ptr(&format!("UDP:{}", addr)))
-        .unwrap_or(ptr::null_mut())
-}
-
 /// Enables the entire network
 #[no_mangle]
 pub unsafe extern "C" fn network_enable() {
-    let session = session::get();
-    let network_handle = session.network().handle();
-
-    let status_arc = session.network_enable_state().clone();
-    let mut status = status_arc.lock().unwrap();
-
-    match *status {
-        NetworkEnableState::Enabled => {}
-        NetworkEnableState::BeingEnabled(_) => {}
-        NetworkEnableState::Disabled => {
-            let handle = session.runtime().spawn({
-                let status_arc = status_arc.clone();
-
-                async move {
-                    network_handle.enable().await;
-
-                    let mut status = status_arc.lock().unwrap();
-
-                    match *status {
-                        NetworkEnableState::Enabled => unreachable!(),
-                        NetworkEnableState::BeingEnabled(_) => {
-                            *status = NetworkEnableState::Enabled;
-                        }
-                        NetworkEnableState::Disabled => unreachable!(),
-                    }
-                }
-            });
-
-            *status = NetworkEnableState::BeingEnabled(handle);
-        }
-    }
+    session::get().bind_network(vec![
+        PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
+        PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
+    ]);
 }
 
 /// Disables the entire network
 #[no_mangle]
 pub unsafe extern "C" fn network_disable() {
-    let session = session::get();
-    let mut status = session.network_enable_state().lock().unwrap();
-
-    match &*status {
-        NetworkEnableState::Enabled => {
-            session.network().handle().disable();
-            *status = NetworkEnableState::Disabled;
-        }
-        NetworkEnableState::BeingEnabled(task_handle) => {
-            task_handle.abort();
-            session.network().handle().disable();
-            *status = NetworkEnableState::Disabled;
-        }
-        NetworkEnableState::Disabled => {}
-    }
-}
-
-/// Checks whether network is enabled
-#[no_mangle]
-pub unsafe extern "C" fn network_is_enabled() -> bool {
-    match *session::get().network_enable_state().lock().unwrap() {
-        NetworkEnableState::Enabled => true,
-        NetworkEnableState::BeingEnabled(_) => true,
-        NetworkEnableState::Disabled => false,
-    }
+    session::get().bind_network(vec![]);
 }
 
 /// Enables port forwarding (UPnP)

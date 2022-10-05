@@ -42,8 +42,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, repository::RepositoryId, state_monitor::StateMonitor, store::Store,
-    sync::uninitialized_watch,
+    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle,
+    state_monitor::StateMonitor, store::Store, sync::uninitialized_watch,
 };
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
@@ -51,8 +51,8 @@ use slab::Slab;
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
-    io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    io, mem,
+    net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
 };
 use thiserror::Error;
@@ -72,14 +72,9 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(bind: &[PeerAddr], config: ConfigStore, monitor: StateMonitor) -> Self {
+    pub fn new(config: ConfigStore, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(
-            bind,
-            config,
-            monitor.clone(), // using the root monitor to avoid unnecessary nesting
-            incoming_tx,
-        );
+        let gateway = Gateway::new(config, incoming_tx);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -90,6 +85,11 @@ impl Network {
         let dht_discovery = {
             let monitor = monitor.make_child("DhtDiscovery");
             DhtDiscovery::new(None, None, monitor)
+        };
+
+        let port_forwarder = {
+            let monitor = monitor.make_child("UPnP");
+            upnp::PortForwarder::new(monitor)
         };
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
@@ -110,8 +110,12 @@ impl Network {
                 message_brokers: HashMap::new(),
                 registry: Slab::new(),
             }),
-            local_discovery_state: BlockingMutex::new(LocalDiscoveryState::disabled(
-                DisableReason::Implicit,
+            port_forwarder,
+            port_forwarder_state: BlockingMutex::new(ComponentState::disabled(
+                DisableReason::Explicit,
+            )),
+            local_discovery_state: BlockingMutex::new(ComponentState::disabled(
+                DisableReason::Explicit,
             )),
             dht_discovery,
             dht_discovery_tx,
@@ -135,19 +139,6 @@ impl Network {
         }
     }
 
-    /// Create a `Network` with the listeners bound to the default addresses:
-    /// quic/0.0.0.0:0 and quic/[::]:0
-    pub fn with_default_bind_addrs(config: ConfigStore, monitor: StateMonitor) -> Self {
-        Self::new(
-            &[
-                PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()),
-                PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()),
-            ],
-            config,
-            monitor,
-        )
-    }
-
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.inner.gateway.tcp_listener_local_addr_v4()
     }
@@ -165,26 +156,24 @@ impl Network {
     }
 
     pub fn enable_port_forwarding(&self) {
-        self.inner.gateway.enable_port_forwarding()
+        self.inner.enable_port_forwarding()
     }
 
     pub fn disable_port_forwarding(&self) {
-        self.inner.gateway.disable_port_forwarding()
+        self.inner.disable_port_forwarding()
     }
 
     pub fn is_port_forwarding_enabled(&self) -> bool {
-        self.inner.gateway.is_port_forwarding_enabled()
+        self.inner.is_port_forwarding_enabled()
     }
 
     pub fn enable_local_discovery(&self) {
         let mut state = self.inner.local_discovery_state.lock().unwrap();
 
-        if state.is_enabled() {
-            return;
-        }
-
         if let Some(handle) = self.inner.spawn_local_discovery() {
-            state.enable(handle);
+            state.enable(handle.into());
+        } else {
+            state.disable(DisableReason::Implicit);
         }
     }
 
@@ -268,7 +257,7 @@ impl Handle {
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
-            dht: DhtLookupState::new(),
+            dht: None,
             pex,
         });
 
@@ -278,19 +267,15 @@ impl Handle {
         }
     }
 
-    /// Disable whole network
-    pub fn disable(&self) {
-        self.inner.disable()
-    }
-
-    /// Enable whole network
-    pub async fn enable(&self) {
-        self.inner.enable().await
+    /// Binds the network to the specified addresses.
+    /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
+    pub async fn bind(&self, addrs: &[PeerAddr]) {
+        self.inner.bind(addrs).await
     }
 
     /// Is the network enabled
-    pub fn is_enabled(&self) -> bool {
-        self.inner.is_enabled()
+    pub fn is_bound(&self) -> bool {
+        self.inner.gateway.is_bound()
     }
 }
 
@@ -303,7 +288,7 @@ impl Registration {
     pub fn enable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht.enable(
+        holder.dht = Some(
             self.inner
                 .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
         );
@@ -311,9 +296,7 @@ impl Registration {
 
     pub fn disable_dht(&self) {
         let mut state = self.inner.state.lock().unwrap();
-        state.registry[self.key]
-            .dht
-            .disable(DisableReason::Explicit);
+        state.registry[self.key].dht = None;
     }
 
     /// This function provides the information to the user whether DHT is enabled for this
@@ -322,8 +305,7 @@ impl Registration {
     /// is disabled.
     pub fn is_dht_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        let dht = &state.registry[self.key].dht;
-        dht.is_enabled() || dht.is_implicitly_disabled()
+        state.registry[self.key].dht.is_some()
     }
 
     pub fn enable_pex(&self) {
@@ -359,7 +341,7 @@ impl Drop for Registration {
 
 struct RegistrationHolder {
     store: Store,
-    dht: DhtLookupState,
+    dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
 }
 
@@ -368,7 +350,9 @@ struct Inner {
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
-    local_discovery_state: BlockingMutex<LocalDiscoveryState>,
+    port_forwarder: upnp::PortForwarder,
+    port_forwarder_state: BlockingMutex<ComponentState<PortMappings>>,
+    local_discovery_state: BlockingMutex<ComponentState<ScopedAbortHandle>>,
     dht_discovery: DhtDiscovery,
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
@@ -397,62 +381,89 @@ impl State {
 }
 
 impl Inner {
-    // Disable whole network
-    fn disable(&self) {
-        // disable gateway
-        self.gateway.disable();
-        self.dht_discovery.rebind(None, None); // needed to make sure we drop the UDP sockets
+    async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
+        let conn = Connectivity::infer(bind);
 
-        // disable local discovery
-        self.local_discovery_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Implicit);
+        // Gateway
+        let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
+            Connectivity::Full => self.gateway.bind(bind).await,
+            Connectivity::LocalOnly => {
+                self.gateway.bind(bind).await;
+                (None, None)
+            }
+            Connectivity::Disabled => {
+                self.gateway.unbind();
+                (None, None)
+            }
+        };
 
-        // disable DHT
-        for (_, registration) in &mut self.state.lock().unwrap().registry {
-            registration.dht.disable(DisableReason::Implicit);
+        // DHT
+        self.dht_discovery
+            .rebind(side_channel_maker_v4, side_channel_maker_v6);
+
+        // Port forwarding
+        match conn {
+            Connectivity::Full => {
+                let mut state = self.port_forwarder_state.lock().unwrap();
+                if !state.is_disabled(DisableReason::Explicit) {
+                    state.enable(PortMappings::new(&self.port_forwarder, &self.gateway));
+                }
+            }
+            Connectivity::LocalOnly | Connectivity::Disabled => {
+                self.port_forwarder_state
+                    .lock()
+                    .unwrap()
+                    .disable_if_enabled(DisableReason::Implicit);
+            }
         }
 
-        // drop all connections
-        self.disconnect_all();
-    }
-
-    // Enable whole network
-    async fn enable(self: &Arc<Self>) {
-        // enable gateway
-        if !self.gateway.is_enabled() {
-            let (side_channel_maker_v4, side_channel_maker_v6) = self.gateway.enable().await;
-            self.dht_discovery
-                .rebind(side_channel_maker_v4, side_channel_maker_v6);
-        }
-
-        // enable local discovery
+        // Local discovery
+        //
+        // Note: no need to check the Connectivity because local discovery depends only on whether
+        // Gateway is bound.
         {
-            let mut local_discovery_state = self.local_discovery_state.lock().unwrap();
-            if local_discovery_state.is_implicitly_disabled() {
+            let mut state = self.local_discovery_state.lock().unwrap();
+            if !state.is_disabled(DisableReason::Explicit) {
                 if let Some(handle) = self.spawn_local_discovery() {
-                    local_discovery_state.enable(handle);
+                    state.enable(handle.into());
+                } else {
+                    state.disable(DisableReason::Implicit);
                 }
             }
         }
 
-        // enable DHT
-        for (_, registration) in &mut self.state.lock().unwrap().registry {
-            if registration.dht.is_implicitly_disabled() {
-                let info_hash = repository_info_hash(registration.store.index.repository_id());
-                registration.dht.enable(self.start_dht_lookup(info_hash));
-            }
+        // - If we are disabling connectivity, disconnect from all existing peers.
+        // - If we are going from `Full` -> `LocalOnly`, also disconnect from all with the
+        //   assumption that the local ones will be subsequently re-established. Ideally we would
+        //   disconnect only the non-local ones to avoid the reconnect overhead, but the
+        //   implementation is simpler this way and the trade-off doesn't seem to be too bad.
+        // - If we are going to `Full`, keep all existing connections.
+        if matches!(conn, Connectivity::LocalOnly | Connectivity::Disabled) {
+            self.disconnect_all();
         }
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.gateway.is_enabled()
     }
 
     // Disconnect from all currently connected peers, regardless of their source.
     fn disconnect_all(&self) {
         self.state.lock().unwrap().message_brokers.clear();
+    }
+
+    fn enable_port_forwarding(&self) {
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .enable(PortMappings::new(&self.port_forwarder, &self.gateway));
+    }
+
+    fn disable_port_forwarding(&self) {
+        self.port_forwarder_state
+            .lock()
+            .unwrap()
+            .disable(DisableReason::Explicit);
+    }
+
+    fn is_port_forwarding_enabled(&self) -> bool {
+        self.port_forwarder_state.lock().unwrap().is_enabled()
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
@@ -573,6 +584,8 @@ impl Inner {
                     continue;
                 }
             };
+
+            tracing::trace!(?addr, ?source, "peer found");
 
             permit.mark_as_connecting();
 
@@ -758,12 +771,45 @@ impl Drop for MessageBrokerEntryGuard<'_> {
     }
 }
 
-enum LocalDiscoveryState {
-    Enabled(AbortHandle),
+struct PortMappings {
+    _tcp_v4: Option<upnp::Mapping>,
+    _quic_v4: Option<upnp::Mapping>,
+}
+
+impl PortMappings {
+    fn new(forwarder: &upnp::PortForwarder, gateway: &Gateway) -> Self {
+        let tcp_v4 = gateway.tcp_listener_local_addr_v4().map(|addr| {
+            forwarder.add_mapping(
+                addr.port(), // internal
+                addr.port(), // external
+                ip::Protocol::Tcp,
+            )
+        });
+
+        let quic_v4 = gateway.quic_listener_local_addr_v4().map(|addr| {
+            forwarder.add_mapping(
+                addr.port(), // internal
+                addr.port(), // external
+                ip::Protocol::Udp,
+            )
+        });
+
+        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
+        // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+
+        Self {
+            _tcp_v4: tcp_v4,
+            _quic_v4: quic_v4,
+        }
+    }
+}
+
+enum ComponentState<T> {
+    Enabled(T),
     Disabled(DisableReason),
 }
 
-impl LocalDiscoveryState {
+impl<T> ComponentState<T> {
     fn disabled(reason: DisableReason) -> Self {
         Self::Disabled(reason)
     }
@@ -772,65 +818,69 @@ impl LocalDiscoveryState {
         matches!(self, Self::Enabled(_))
     }
 
-    fn is_implicitly_disabled(&self) -> bool {
-        matches!(self, Self::Disabled(DisableReason::Implicit))
-    }
-
-    fn disable(&mut self, reason: DisableReason) {
+    fn is_disabled(&self, reason: DisableReason) -> bool {
         match self {
-            Self::Enabled(handle) => {
-                handle.abort();
-                *self = Self::Disabled(reason);
-            }
-            Self::Disabled(DisableReason::Explicit) => (),
-            Self::Disabled(DisableReason::Implicit) => *self = Self::Disabled(reason),
+            Self::Disabled(current_reason) if *current_reason == reason => true,
+            Self::Disabled(_) | Self::Enabled(_) => false,
         }
     }
 
-    // Panics if already enabled.
-    fn enable(&mut self, handle: AbortHandle) {
-        assert!(!self.is_enabled());
-        *self = Self::Enabled(handle);
-    }
-}
-
-enum DhtLookupState {
-    Enabled(dht_discovery::LookupRequest),
-    Disabled(DisableReason),
-}
-
-impl DhtLookupState {
-    fn new() -> Self {
-        Self::Disabled(DisableReason::Explicit)
-    }
-
-    fn is_enabled(&self) -> bool {
-        matches!(self, Self::Enabled(_))
-    }
-
-    fn is_implicitly_disabled(&self) -> bool {
-        matches!(self, Self::Disabled(DisableReason::Implicit))
-    }
-
-    fn disable(&mut self, reason: DisableReason) {
-        match self {
-            Self::Enabled(_) | Self::Disabled(DisableReason::Implicit) => {
-                *self = Self::Disabled(reason);
-            }
-            Self::Disabled(DisableReason::Explicit) => (),
+    fn disable(&mut self, reason: DisableReason) -> Option<T> {
+        match mem::replace(self, Self::Disabled(reason)) {
+            Self::Enabled(payload) => Some(payload),
+            Self::Disabled(_) => None,
         }
     }
 
-    fn enable(&mut self, lookup: dht_discovery::LookupRequest) {
-        *self = Self::Enabled(lookup)
+    fn disable_if_enabled(&mut self, reason: DisableReason) -> Option<T> {
+        match self {
+            Self::Enabled(_) => match mem::replace(self, Self::Disabled(reason)) {
+                Self::Enabled(payload) => Some(payload),
+                Self::Disabled(_) => unreachable!(),
+            },
+            Self::Disabled(_) => None,
+        }
+    }
+
+    fn enable(&mut self, payload: T) -> Option<T> {
+        match mem::replace(self, Self::Enabled(payload)) {
+            Self::Enabled(payload) => Some(payload),
+            Self::Disabled(_) => None,
+        }
     }
 }
 
+#[derive(Eq, PartialEq)]
 enum DisableReason {
     // Disabled implicitly because `Network` was disabled
     Implicit,
     // Disabled explicitly
     Explicit,
+}
+
+enum Connectivity {
+    Disabled,
+    LocalOnly,
+    Full,
+}
+
+impl Connectivity {
+    fn infer(addrs: &[PeerAddr]) -> Self {
+        if addrs.is_empty() {
+            return Self::Disabled;
+        }
+
+        let global = addrs
+            .iter()
+            .map(|addr| addr.ip())
+            .any(|ip| ip.is_unspecified() || ip::is_global(&ip));
+
+        if global {
+            Self::Full
+        } else {
+            Self::LocalOnly
+        }
+    }
 }
 
 pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
