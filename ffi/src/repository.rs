@@ -348,6 +348,7 @@ pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
 
 /// Return the RepositoryId of the repository corresponding to the share token in the low hex format.
 /// User is responsible for deallocating the returned string.
+#[deprecated = "use share_token_info_hash instead"]
 #[no_mangle]
 pub unsafe extern "C" fn share_token_repository_low_hex_id(token: *const c_char) -> *const c_char {
     let token = if let Ok(token) = utils::ptr_to_str(token) {
@@ -363,6 +364,28 @@ pub unsafe extern "C" fn share_token_repository_low_hex_id(token: *const c_char)
     };
 
     utils::str_to_ptr(&hex::encode(token.id().as_ref()))
+}
+
+/// Returns the info-hash of the repository corresponding to the share token formatted as hex
+/// string.
+/// User is responsible for deallocating the returned string.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_info_hash(token: *const c_char) -> *const c_char {
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    let token: ShareToken = if let Ok(token) = token.parse() {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    utils::str_to_ptr(&hex::encode(
+        network::repository_info_hash(token.id()).as_ref(),
+    ))
 }
 
 /// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
