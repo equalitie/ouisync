@@ -184,12 +184,12 @@ async fn local_discovery() {
                 .network
                 .collect_peer_info()
                 .into_iter()
-                .map(|info| info.port);
+                .map(|info| info.addr.port());
             let mut peer_ports_b = node_b
                 .network
                 .collect_peer_info()
                 .into_iter()
-                .map(|info| info.port);
+                .map(|info| info.addr.port());
 
             if peer_ports_a.any(|port| port == port_b) && peer_ports_b.any(|port| port == port_a) {
                 break;

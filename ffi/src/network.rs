@@ -224,6 +224,15 @@ pub unsafe extern "C" fn network_connected_peers() -> Bytes {
     Bytes::from_vec(bytes)
 }
 
+/// Returns our runtime id formatted as a hex string.
+/// The caller is responsible for deallocating it.
+#[no_mangle]
+pub unsafe extern "C" fn network_this_runtime_id() -> *const c_char {
+    utils::str_to_ptr(&hex::encode(
+        session::get().network().this_runtime_id().as_ref(),
+    ))
+}
+
 /// Return our currently used protocol version number.
 #[no_mangle]
 pub unsafe extern "C" fn network_current_protocol_version() -> u32 {

@@ -1,6 +1,7 @@
+use serde::Serialize;
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub enum PeerSource {
     UserProvided,
     Listener,

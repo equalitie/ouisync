@@ -207,6 +207,10 @@ impl Network {
         }
     }
 
+    pub fn this_runtime_id(&self) -> PublicRuntimeId {
+        self.inner.this_runtime_id.public()
+    }
+
     pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
         self.inner.connection_deduplicator.collect_peer_info()
     }
@@ -634,7 +638,7 @@ impl Inner {
             return false;
         }
 
-        permit.mark_as_active();
+        permit.mark_as_active(that_runtime_id);
 
         let released = permit.released();
 

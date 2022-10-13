@@ -1,8 +1,8 @@
-use super::{peer_addr::PeerAddr, peer_source::PeerSource};
-use serde::{Serialize, Serializer};
+use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
+use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    net::IpAddr,
+    net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as SyncMutex,
@@ -21,12 +21,23 @@ use std::{
 //   https://github.com/tokio-rs/tokio/issues/3757
 use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum PeerState {
     Known,
     Connecting,
     Handshaking,
-    Active,
+    Active(PublicRuntimeId),
+}
+
+impl PeerState {
+    pub(super) fn name(&self) -> &'static str {
+        match self {
+            Self::Known => "Known",
+            Self::Connecting => "Connecting",
+            Self::Handshaking => "Handshaking",
+            Self::Active(_) => "Active",
+        }
+    }
 }
 
 /// Prevents establishing duplicate connections.
@@ -87,18 +98,16 @@ impl ConnectionDeduplicator {
 
     // Sorted by the IP, so the user sees similar IPs together.
     pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
-        let connections = self.connections.lock().unwrap();
-        let mut infos: Vec<_> = connections
+        self.connections
+            .lock()
+            .unwrap()
             .iter()
             .map(|(key, peer)| PeerInfo {
-                ip: key.addr.ip(),
-                port: key.addr.port(),
-                direction: key.dir,
+                addr: *key.addr.socket_addr(),
+                source: peer.source,
                 state: peer.state,
             })
-            .collect();
-        infos.sort();
-        infos
+            .collect()
     }
 
     pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
@@ -127,20 +136,37 @@ pub(super) enum ReserveResult {
 }
 
 /// Information about a peer.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
 pub struct PeerInfo {
-    #[serde(serialize_with = "serialize_ip_as_string")]
-    pub ip: IpAddr,
-    pub port: u16,
-    pub direction: ConnectionDirection,
+    pub addr: SocketAddr,
+    pub source: PeerSource,
     pub state: PeerState,
 }
 
-fn serialize_ip_as_string<S>(ip: &IpAddr, s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    ip.to_string().serialize(s)
+impl Serialize for PeerInfo {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let runtime_id = match self.state {
+            PeerState::Known | PeerState::Connecting | PeerState::Handshaking => None,
+            PeerState::Active(runtime_id) => Some(runtime_id),
+        };
+
+        let len = runtime_id.map(|_| 5).unwrap_or(4);
+
+        let mut seq = s.serialize_seq(Some(len))?;
+        seq.serialize_element(&self.addr.ip().to_string())?;
+        seq.serialize_element(&self.addr.port())?;
+        seq.serialize_element(&self.source)?;
+        seq.serialize_element(self.state.name())?;
+
+        if let Some(runtime_id) = runtime_id {
+            seq.serialize_element(&hex::encode(runtime_id.as_ref()))?;
+        }
+
+        seq.end()
+    }
 }
 
 struct Peer {
@@ -205,8 +231,8 @@ impl ConnectionPermit {
         self.set_state(PeerState::Handshaking);
     }
 
-    pub fn mark_as_active(&self) {
-        self.set_state(PeerState::Active);
+    pub fn mark_as_active(&self, runtime_id: PublicRuntimeId) {
+        self.set_state(PeerState::Active(runtime_id));
     }
 
     fn set_state(&self, new_state: PeerState) {
