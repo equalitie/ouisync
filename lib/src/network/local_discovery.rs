@@ -126,10 +126,22 @@ impl LocalDiscoveryInner {
     fn remove(&mut self, removed_interfaces: HashSet<Ipv4Addr>) {
         for interface in removed_interfaces {
             if self.per_interface_discovery.remove(&interface).is_some() {
-                tracing::info!("Removed local discovery from interface {:?}", interface);
+                log_stop(interface);
             }
         }
     }
+}
+
+impl Drop for LocalDiscoveryInner {
+    fn drop(&mut self) {
+        for interface in self.per_interface_discovery.keys() {
+            log_stop(*interface);
+        }
+    }
+}
+
+fn log_stop(addr: Ipv4Addr) {
+    tracing::info!("Stopped local discovery on interface {:?}", addr);
 }
 
 struct PerInterfaceLocalDiscovery {

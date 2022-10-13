@@ -287,6 +287,13 @@ pub(crate) struct Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
+        tracing::info!(
+            "UPnP stopping port forwarding EXT:{} -> INT:{} ({})",
+            self.data.external,
+            self.data.internal,
+            self.data.protocol,
+        );
+
         let mut mappings = self.mappings.lock().unwrap();
 
         match mappings.entry(self.data) {

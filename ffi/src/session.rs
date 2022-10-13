@@ -87,11 +87,7 @@ pub unsafe extern "C" fn session_open(
         let network_monitor = root_monitor.make_child("Network");
 
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-
         let network = Network::new(config, network_monitor);
-
-        network.enable_port_forwarding();
-        network.enable_local_discovery();
 
         let session = Session {
             runtime,
