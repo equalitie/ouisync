@@ -3,8 +3,10 @@ use super::{
     utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
 use ouisync_lib::{
-    crypto::Password, network::Registration, path, AccessMode, AccessSecrets, EntryType, Error,
-    MasterSecret, Repository, Result, ShareToken,
+    crypto::Password,
+    network::{self, Registration},
+    path, AccessMode, AccessSecrets, EntryType, Error, MasterSecret, Repository, Result,
+    ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
@@ -139,12 +141,26 @@ pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>
 
 /// Return the RepositoryId of the repository in the low hex format.
 /// User is responsible for deallocating the returned string.
+#[deprecated = "use repository_info_hash instead"]
 #[no_mangle]
 pub unsafe extern "C" fn repository_low_hex_id(
     handle: SharedHandle<RepositoryHolder>,
 ) -> *const c_char {
     let holder = handle.get();
     utils::str_to_ptr(&hex::encode(holder.repository.secrets().id().as_ref()))
+}
+
+/// Return the info-hash of the repository formatted as hex string. This can be used as a globally
+/// unique, non-secret identifier of the repository.
+/// User is responsible for deallocating the returned string.
+#[no_mangle]
+pub unsafe extern "C" fn repository_info_hash(
+    handle: SharedHandle<RepositoryHolder>,
+) -> *const c_char {
+    let holder = handle.get();
+    utils::str_to_ptr(&hex::encode(
+        network::repository_info_hash(holder.repository.secrets().id()).as_ref(),
+    ))
 }
 
 /// Returns the type of repository entry (file, directory, ...).
