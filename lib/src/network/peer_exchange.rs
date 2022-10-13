@@ -185,7 +185,11 @@ impl PexController {
 
     /// Enable/Disable PEX for the current repository.
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled_tx.send(enabled).ok();
+        // Using `send_modify` instead of `send` so that the values is changed even if there are
+        // currently no receivers.
+        self.enabled_tx.send_modify(|value| {
+            *value = enabled;
+        });
     }
 }
 
