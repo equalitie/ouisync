@@ -6,7 +6,7 @@ use ndk_sys::{
 };
 use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
-use ouisync_lib::StateMonitor;
+use ouisync_lib::{MonitoredValue, StateMonitor, TracingLayer};
 use std::{
     ffi::{CStr, CString},
     io::{self, BufRead, BufReader, Write},
@@ -31,9 +31,12 @@ pub(crate) struct Logger {
 }
 
 impl Logger {
-    pub fn new(monitor: StateMonitor) -> Result<Self, io::Error> {
-        panic::set_hook(Box::new(panic_hook(monitor)));
-        setup_logger();
+    pub fn new(
+        panic_counter: MonitoredValue<u32>,
+        trace_monitor: StateMonitor,
+    ) -> Result<Self, io::Error> {
+        panic::set_hook(Box::new(panic_hook(panic_counter)));
+        setup_logger(trace_monitor);
 
         Ok(Self {
             _stdout: StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?,
@@ -147,7 +150,7 @@ fn print_cstr(priority: LogPriority, message: &CStr) {
     }
 }
 
-fn setup_logger() {
+fn setup_logger(trace_monitor: StateMonitor) {
     use paranoid_android::{AndroidLogMakeWriter, Buffer};
     use tracing_subscriber::{
         filter::{LevelFilter, Targets},
@@ -157,6 +160,7 @@ fn setup_logger() {
     };
 
     tracing_subscriber::registry()
+        .with(TracingLayer::new(trace_monitor))
         .with(
             fmt::layer()
                 .pretty()
@@ -183,9 +187,7 @@ fn setup_logger() {
 }
 
 // Print panic messages to the andoid log as well.
-fn panic_hook(monitor: StateMonitor) -> impl Fn(&PanicInfo) {
-    let panic_counter = monitor.make_value::<u32>("panic_counter".into(), 0);
-
+fn panic_hook(panic_counter: MonitoredValue<u32>) -> impl Fn(&PanicInfo) {
     move |info: &PanicInfo| {
         *panic_counter.get() += 1;
 

@@ -1,3 +1,5 @@
+pub mod tracing_layer;
+
 use crate::sync::uninitialized_watch;
 use serde::{
     ser::{SerializeMap, SerializeStruct},
