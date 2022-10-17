@@ -13,6 +13,28 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, Weak},
 };
 
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
+pub struct MonitorId {
+    name: String,
+    disambiguator: u64,
+}
+
+impl MonitorId {
+    fn root() -> Self {
+        Self {
+            name: "".into(),
+            disambiguator: 0,
+        }
+    }
+
+    pub fn new(name: String, disambiguator: u64) -> Self {
+        Self {
+            name,
+            disambiguator,
+        }
+    }
+}
+
 // --- StateMonitor
 
 #[derive(Clone)]
@@ -21,7 +43,7 @@ pub struct StateMonitor {
 }
 
 struct StateMonitorShared {
-    name: String,
+    id: MonitorId,
     parent: Option<Arc<StateMonitorShared>>,
     inner: Mutex<StateMonitorInner>,
 }
@@ -31,7 +53,7 @@ struct StateMonitorInner {
     // changed.
     version: u64,
     values: BTreeMap<String, MonitoredValueHandle>,
-    children: BTreeMap<String, Weak<StateMonitorShared>>,
+    children: BTreeMap<MonitorId, Weak<StateMonitorShared>>,
     on_change: uninitialized_watch::Sender<()>,
 }
 
@@ -43,12 +65,29 @@ impl StateMonitor {
     }
 
     pub fn make_child<S: Into<String>>(&self, name: S) -> Self {
+        let child_id = MonitorId {
+            name: name.into(),
+            disambiguator: 0,
+        };
+
         Self {
-            shared: self.shared.make_child(name),
+            shared: self.shared.make_child(child_id),
         }
     }
 
-    pub fn locate(&self, path: &[String]) -> Option<Self> {
+    /// Use if we want to allow nodes of the same name.
+    pub fn make_non_unique_child<S: Into<String>>(&self, name: S, disambiguator: u64) -> Self {
+        let child_id = MonitorId {
+            name: name.into(),
+            disambiguator,
+        };
+
+        Self {
+            shared: self.shared.make_child(child_id),
+        }
+    }
+
+    pub fn locate<I: Iterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {
         self.shared.locate(path).map(|shared| Self { shared })
     }
 
@@ -75,7 +114,7 @@ impl StateMonitor {
 impl StateMonitorShared {
     fn make_root() -> Arc<Self> {
         Arc::new(StateMonitorShared {
-            name: "".into(),
+            id: MonitorId::root(),
             parent: None,
             inner: Mutex::new(StateMonitorInner {
                 version: 0,
@@ -86,8 +125,7 @@ impl StateMonitorShared {
         })
     }
 
-    fn make_child<S: Into<String>>(self: &Arc<Self>, name: S) -> Arc<Self> {
-        let name = name.into();
+    fn make_child(self: &Arc<Self>, child_id: MonitorId) -> Arc<Self> {
         let mut lock = self.lock();
         let mut is_new = false;
 
@@ -97,12 +135,15 @@ impl StateMonitorShared {
         //
         // *) because `Arc` decrements the refcount before running the destructor of the contained
         //    value.
-        let child_weak = lock.children.entry(name.clone()).or_insert_with(Weak::new);
+        let child_weak = lock
+            .children
+            .entry(child_id.clone())
+            .or_insert_with(Weak::new);
         let child = if let Some(child) = child_weak.upgrade() {
             child
         } else {
             let child = Arc::new(Self {
-                name,
+                id: child_id,
                 parent: Some(self.clone()),
                 inner: Mutex::new(StateMonitorInner {
                     version: 0,
@@ -125,19 +166,19 @@ impl StateMonitorShared {
         child
     }
 
-    fn locate(self: &Arc<Self>, path: &[String]) -> Option<Arc<Self>> {
-        let (child, rest) = match path {
-            [] => return Some(self.clone()),
-            [child, rest @ ..] => (child, rest),
+    fn locate<I: Iterator<Item = MonitorId>>(self: &Arc<Self>, mut path: I) -> Option<Arc<Self>> {
+        let child = match path.next() {
+            Some(child) => child,
+            None => return Some(self.clone()),
         };
 
         // Note: it can still happen that an entry exists in the map but it's refcount is zero.
         // See the comment in `make_child` for more details.
         self.lock()
             .children
-            .get(child)
+            .get(&child)
             .and_then(|child| child.upgrade())
-            .and_then(|child| child.locate(rest))
+            .and_then(|child| child.locate(path))
     }
 
     fn make_value<T: 'static + fmt::Debug + Sync + Send>(
@@ -199,9 +240,14 @@ impl StateMonitorShared {
 
     fn path(&self) -> String {
         if let Some(parent) = self.parent.as_ref() {
-            format!("{}/{}", parent.path(), self.name)
+            format!(
+                "{}/({},{})",
+                parent.path(),
+                self.id.name,
+                self.id.disambiguator
+            )
         } else {
-            format!("/{}", self.name)
+            format!("/({},{})", self.id.name, self.id.disambiguator)
         }
     }
 }
@@ -209,10 +255,10 @@ impl StateMonitorShared {
 impl Drop for StateMonitorShared {
     fn drop(&mut self) {
         if let Some(parent) = &self.parent {
-            let name = self.name.clone();
+            let id = self.id.clone();
             let mut parent_lock = parent.lock();
 
-            if let map::Entry::Occupied(e) = parent_lock.children.entry(name) {
+            if let map::Entry::Occupied(e) = parent_lock.children.entry(id) {
                 if e.get().strong_count() == 0 {
                     e.remove();
                     parent.changed(parent_lock);
@@ -329,7 +375,7 @@ impl Serialize for StateMonitor {
 }
 
 struct ValuesSerializer<'a>(&'a BTreeMap<String, MonitoredValueHandle>);
-struct ChildrenSerializer<'a>(&'a BTreeMap<String, Weak<StateMonitorShared>>);
+struct ChildrenSerializer<'a>(&'a BTreeMap<MonitorId, Weak<StateMonitorShared>>);
 
 impl<'a> Serialize for ValuesSerializer<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -351,10 +397,13 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
         S: Serializer,
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (name, child) in self.0.iter() {
+        for (id, child) in self.0.iter() {
             // Unwrap OK because children are responsible for removing themselves from the map on
             // Drop.
-            map.serialize_entry(name, &child.upgrade().unwrap().lock().version)?;
+            map.serialize_entry(
+                &format!("{}:{}", id.disambiguator, id.name),
+                &child.upgrade().unwrap().lock().version,
+            )?;
         }
         map.end()
     }
