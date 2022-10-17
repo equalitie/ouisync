@@ -111,19 +111,20 @@ pub unsafe extern "C" fn session_open(
 /// Retrieve a serialized state monitor corresponding to the `path`.  The path is in the form
 /// "a:b:c". An empty string returns the "root" state monitor.
 #[no_mangle]
-pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes {
-    let path = match utils::ptr_to_str(path) {
-        Ok(s) => s,
+pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char, path_len: u64) -> Bytes {
+    let path = std::slice::from_raw_parts(path, path_len as usize);
+    let path: Vec<String> = match rmp_serde::from_slice(&path) {
+        Ok(path) => path,
         Err(e) => {
             tracing::error!(
-                "Failed to parse input in session_get_state_monitor: {:?}",
+                "Failed to parse input in session_get_state_monitor as MessagePack: {:?}",
                 e
             );
             return Bytes::NULL;
         }
     };
 
-    if let Some(monitor) = get().root_monitor.locate(path) {
+    if let Some(monitor) = get().root_monitor.locate(&path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
         Bytes::from_vec(bytes)
     } else {
@@ -136,13 +137,15 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_subscribe(
     path: *const c_char,
+    path_len: u64,
     port: Port<()>,
 ) -> UniqueNullableHandle<JoinHandle<()>> {
-    let path = match utils::ptr_to_str(path) {
-        Ok(s) => s,
+    let path = std::slice::from_raw_parts(path, path_len as usize);
+    let path: Vec<String> = match rmp_serde::from_slice(&path) {
+        Ok(path) => path,
         Err(e) => {
             tracing::error!(
-                "Failed to parse input in session_get_state_monitor: {:?}",
+                "Failed to parse input in session_state_monitor_subscribe as MessagePack: {:?}",
                 e
             );
             return UniqueNullableHandle::NULL;
@@ -152,7 +155,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
     let session = get();
     let sender = session.sender();
 
-    if let Some(monitor) = get().root_monitor.locate(path) {
+    if let Some(monitor) = get().root_monitor.locate(&path) {
         let mut rx = monitor.subscribe();
 
         let handle = session.runtime().spawn(async move {

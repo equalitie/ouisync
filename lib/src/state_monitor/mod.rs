@@ -48,7 +48,7 @@ impl StateMonitor {
         }
     }
 
-    pub fn locate(&self, path: &str) -> Option<Self> {
+    pub fn locate(&self, path: &[String]) -> Option<Self> {
         self.shared.locate(path).map(|shared| Self { shared })
     }
 
@@ -125,17 +125,10 @@ impl StateMonitorShared {
         child
     }
 
-    fn locate(self: &Arc<Self>, path: &str) -> Option<Arc<Self>> {
-        if path.is_empty() {
-            return Some(self.clone());
-        }
-
-        let (child, rest) = match path.find(':') {
-            Some(split_at) => {
-                let (child, rest) = path.split_at(split_at);
-                (child, Some(&rest[1..]))
-            }
-            None => (path, None),
+    fn locate(self: &Arc<Self>, path: &[String]) -> Option<Arc<Self>> {
+        let (child, rest) = match path {
+            [] => return Some(self.clone()),
+            [child, rest @ ..] => (child, rest),
         };
 
         // Note: it can still happen that an entry exists in the map but it's refcount is zero.
@@ -144,10 +137,7 @@ impl StateMonitorShared {
             .children
             .get(child)
             .and_then(|child| child.upgrade())
-            .and_then(|child| match rest {
-                Some(rest) => child.locate(rest),
-                None => Some(child),
-            })
+            .and_then(|child| child.locate(rest))
     }
 
     fn make_value<T: 'static + fmt::Debug + Sync + Send>(
