@@ -41,8 +41,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
         // There is no guarantee that the span shall have a unique name, so we need to disambiguate
         // it somehow. TODO: Maybe modify the `StateMonitor` class to include some `u64`
         // disambiguator that is not presented to the user.
-        let span_monitor =
-            parent_monitor.make_non_unique_child(span.name(), id.into_u64());
+        let span_monitor = parent_monitor.make_non_unique_child(span.name(), id.into_u64());
 
         assert!(inner.spans.insert(id.into_u64(), span_monitor).is_none());
     }

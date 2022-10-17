@@ -7,7 +7,7 @@ use super::{
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::Network,
-    ConfigStore, Error, Result, StateMonitor, MonitorId,
+    ConfigStore, Error, MonitorId, Result, StateMonitor,
 };
 use std::{
     future::Future,
@@ -110,9 +110,9 @@ pub unsafe extern "C" fn session_open(
 
 /// Retrieve a serialized state monitor corresponding to the `path`.
 #[no_mangle]
-pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char, path_len: u64) -> Bytes {
+pub unsafe extern "C" fn session_get_state_monitor(path: *const u8, path_len: u64) -> Bytes {
     let path = std::slice::from_raw_parts(path, path_len as usize);
-    let path: Vec<(String, u64)> = match rmp_serde::from_slice(&path) {
+    let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(
@@ -122,7 +122,9 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char, path_len
             return Bytes::NULL;
         }
     };
-    let path = path.into_iter().map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
+    let path = path
+        .into_iter()
+        .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
     if let Some(monitor) = get().root_monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
@@ -135,12 +137,12 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char, path_len
 /// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_subscribe(
-    path: *const c_char,
+    path: *const u8,
     path_len: u64,
     port: Port<()>,
 ) -> UniqueNullableHandle<JoinHandle<()>> {
     let path = std::slice::from_raw_parts(path, path_len as usize);
-    let path: Vec<(String, u64)> = match rmp_serde::from_slice(&path) {
+    let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(
@@ -150,7 +152,9 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
             return UniqueNullableHandle::NULL;
         }
     };
-    let path = path.into_iter().map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
+    let path = path
+        .into_iter()
+        .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
     let session = get();
     let sender = session.sender();
