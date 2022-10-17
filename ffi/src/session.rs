@@ -7,7 +7,7 @@ use super::{
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::Network,
-    ConfigStore, Error, Result, StateMonitor,
+    ConfigStore, Error, Result, StateMonitor, MonitorId,
 };
 use std::{
     future::Future,
@@ -44,8 +44,10 @@ pub unsafe extern "C" fn session_open(
     let root_monitor = StateMonitor::make_root();
     let session_monitor = root_monitor.make_child("Session");
 
+    let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
+
     // Init logger
-    let logger = match Logger::new(session_monitor) {
+    let logger = match Logger::new(panic_counter, root_monitor.make_child("Trace")) {
         Ok(logger) => logger,
         Err(error) => {
             sender.send_result(port, Err(Error::InitializeLogger(error)));
@@ -106,20 +108,21 @@ pub unsafe extern "C" fn session_open(
     });
 }
 
-/// Retrieve a serialized state monitor corresponding to the `path`.  The path is in the form
-/// "a:b:c". An empty string returns the "root" state monitor.
+/// Retrieve a serialized state monitor corresponding to the `path`.
 #[no_mangle]
-pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes {
-    let path = match utils::ptr_to_str(path) {
-        Ok(s) => s,
+pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char, path_len: u64) -> Bytes {
+    let path = std::slice::from_raw_parts(path, path_len as usize);
+    let path: Vec<(String, u64)> = match rmp_serde::from_slice(&path) {
+        Ok(path) => path,
         Err(e) => {
             tracing::error!(
-                "Failed to parse input in session_get_state_monitor: {:?}",
+                "Failed to parse input in session_get_state_monitor as MessagePack: {:?}",
                 e
             );
             return Bytes::NULL;
         }
     };
+    let path = path.into_iter().map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
     if let Some(monitor) = get().root_monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
@@ -129,27 +132,28 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const c_char) -> Bytes
     }
 }
 
-/// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.  The
-/// path is in the form "a:b:c" and an empty string represents the "root" state monitor.
+/// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_subscribe(
     path: *const c_char,
+    path_len: u64,
     port: Port<()>,
 ) -> UniqueNullableHandle<JoinHandle<()>> {
-    let path = match utils::ptr_to_str(path) {
-        Ok(s) => s,
+    let path = std::slice::from_raw_parts(path, path_len as usize);
+    let path: Vec<(String, u64)> = match rmp_serde::from_slice(&path) {
+        Ok(path) => path,
         Err(e) => {
             tracing::error!(
-                "Failed to parse input in session_get_state_monitor: {:?}",
+                "Failed to parse input in session_state_monitor_subscribe as MessagePack: {:?}",
                 e
             );
             return UniqueNullableHandle::NULL;
         }
     };
+    let path = path.into_iter().map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
     let session = get();
     let sender = session.sender();
-
     if let Some(monitor) = get().root_monitor.locate(path) {
         let mut rx = monitor.subscribe();
 

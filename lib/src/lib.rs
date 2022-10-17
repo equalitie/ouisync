@@ -56,6 +56,6 @@ pub use self::{
     joint_entry::JointEntry,
     network::peer_addr::PeerAddr,
     repository::Repository,
-    state_monitor::StateMonitor,
+    state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };
