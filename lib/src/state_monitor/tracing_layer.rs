@@ -1,7 +1,9 @@
 use super::StateMonitor;
-use std::collections::HashMap;
-use std::sync::Mutex;
-use tracing::span::{self, Attributes};
+use std::{collections::HashMap, fmt, sync::Mutex};
+use tracing::{
+    field::{Field, Visit},
+    span::{self, Attributes},
+};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 
 pub struct TracingLayer {
@@ -27,7 +29,7 @@ struct TraceLayerInner {
 type SpanId = u64;
 
 impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for TracingLayer {
-    fn on_new_span(&self, _attrs: &Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
         let mut inner = self.inner.lock().unwrap();
         // Unwrap should be OK since I assume the span has just been created (given the name of
         // this function).
@@ -38,10 +40,14 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             None => &mut inner.root_monitor,
         };
 
+        let mut visitor = Visitor::new();
+        attrs.values().record(&mut visitor);
+        let title = format!("{}({})", span.name(), visitor.to_str());
+
         // There is no guarantee that the span shall have a unique name, so we need to disambiguate
         // it somehow. TODO: Maybe modify the `StateMonitor` class to include some `u64`
         // disambiguator that is not presented to the user.
-        let span_monitor = parent_monitor.make_non_unique_child(span.name(), id.into_u64());
+        let span_monitor = parent_monitor.make_non_unique_child(title, id.into_u64());
 
         assert!(inner.spans.insert(id.into_u64(), span_monitor).is_none());
     }
@@ -49,5 +55,25 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
     fn on_close(&self, id: span::Id, _ctx: Context<'_, S>) {
         let mut inner = self.inner.lock().unwrap();
         inner.spans.remove(&id.into_u64());
+    }
+}
+
+struct Visitor {
+    vec: Vec<String>,
+}
+
+impl Visitor {
+    fn new() -> Self {
+        Self { vec: Vec::new() }
+    }
+
+    fn to_str(&self) -> String {
+        self.vec.join(", ")
+    }
+}
+
+impl Visit for Visitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.vec.push(format!("{}={:?}", field.name(), value));
     }
 }
