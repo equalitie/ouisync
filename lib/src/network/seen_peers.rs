@@ -158,7 +158,11 @@ pub(crate) struct SeenPeer {
 }
 
 impl SeenPeer {
-    pub(crate) fn addr(&self) -> Option<&PeerAddr> {
+    pub(crate) fn initial_addr(&self) -> &PeerAddr {
+        &self.addr
+    }
+
+    pub(crate) fn addr_if_seen(&self) -> Option<&PeerAddr> {
         let lock = self.seen_peers.read().unwrap();
         lock.peers.get(&self.addr).and_then(|(_rc, rounds)| {
             if rounds.is_empty() {
@@ -233,11 +237,11 @@ mod tests {
         let peer = seen_peers.insert(peer_addr).unwrap();
 
         for _ in 0..(REMOVE_AFTER_ROUND_COUNT + 1) {
-            assert!(peer.addr().is_some());
+            assert!(peer.addr_if_seen().is_some());
             seen_peers.start_new_round();
         }
 
-        assert!(peer.addr().is_none());
+        assert!(peer.addr_if_seen().is_none());
 
         let peer = seen_peers.insert(peer_addr).unwrap();
 
@@ -246,13 +250,13 @@ mod tests {
         assert!(seen_peers.insert(peer_addr).is_none());
 
         seen_peers.start_new_round();
-        assert!(peer.addr().is_some());
+        assert!(peer.addr_if_seen().is_some());
 
         seen_peers.start_new_round();
-        assert!(peer.addr().is_some());
+        assert!(peer.addr_if_seen().is_some());
 
         seen_peers.start_new_round();
-        assert!(peer.addr().is_none());
+        assert!(peer.addr_if_seen().is_none());
 
         let _peer = seen_peers.insert(peer_addr).unwrap();
     }

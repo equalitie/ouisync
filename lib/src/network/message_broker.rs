@@ -51,9 +51,10 @@ impl MessageBroker {
         permit: ConnectionPermit,
     ) -> Self {
         let span = tracing::info_span!(
+            parent: None, // We don't want to search where this originated from.
             "message_broker",
-            this_runtime_id = ?this_runtime_id.as_public_key(),
-            that_runtime_id = ?that_runtime_id.as_public_key()
+            that_runtime_id = ?that_runtime_id.as_public_key(),
+            permit_id = permit.id()
         );
 
         let this = Self {
