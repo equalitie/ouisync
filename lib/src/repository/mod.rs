@@ -27,6 +27,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
+    scoped_task::{self, ScopedJoinHandle},
     state_monitor::{MonitoredValue, StateMonitor},
     store::Store,
     sync::broadcast::ThrottleReceiver,
@@ -44,6 +45,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
+    _progress_reporter_handle: ScopedJoinHandle<()>,
 }
 
 impl Repository {
@@ -254,11 +256,15 @@ impl Repository {
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
         task::spawn(worker.run().instrument(background_span.clone()));
-        task::spawn(report_sync_progress(shared.store.clone()).instrument(background_span));
+
+        let _progress_reporter_handle = scoped_task::spawn(
+            report_sync_progress(shared.store.clone()).instrument(background_span),
+        );
 
         Ok(Self {
             shared,
             worker_handle,
+            _progress_reporter_handle,
         })
     }
 

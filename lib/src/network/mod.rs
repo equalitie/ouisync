@@ -128,9 +128,18 @@ impl Network {
             our_addresses: BlockingMutex::new(HashSet::new()),
         });
 
-        inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
-        inner.spawn(inner.clone().run_dht(dht_discovery_rx));
-        inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
+        inner.spawn_in(
+            inner.clone().handle_incoming_connections(incoming_rx),
+            tracing::trace_span!("incoming"),
+        );
+        inner.spawn_in(
+            inner.clone().run_dht(dht_discovery_rx),
+            tracing::trace_span!("dht"),
+        );
+        inner.spawn_in(
+            inner.clone().run_peer_exchange(pex_discovery_rx),
+            tracing::trace_span!("peer_exchange"),
+        );
 
         Self {
             inner,
@@ -480,7 +489,10 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            Some(self.spawn(self.clone().run_local_discovery(port)))
+            Some(self.spawn_in(
+                self.clone().run_local_discovery(port),
+                tracing::trace_span!("local_discovery"),
+            ))
         } else {
             tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
             None
@@ -494,10 +506,12 @@ impl Inner {
 
         loop {
             let peer = discovery.recv().await;
+            let addr = *peer.initial_addr();
 
-            self.spawn(
+            self.spawn_in(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
+                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -509,7 +523,11 @@ impl Inner {
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
         while let Some(seen_peer) = discovery_rx.recv().await {
-            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
+            let addr = *seen_peer.initial_addr();
+            self.spawn_in(
+                self.clone().handle_peer_found(seen_peer, PeerSource::Dht),
+                tracing::trace_span!("spawn", ?addr),
+            );
         }
     }
 
@@ -517,9 +535,12 @@ impl Inner {
         let mut discovery = PexDiscovery::new(discovery_rx);
 
         while let Some(peer) = discovery.recv().await {
-            self.spawn(
+            let addr = *peer.initial_addr();
+
+            self.spawn_in(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::PeerExchange),
+                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -531,9 +552,12 @@ impl Inner {
             None => return,
         };
 
-        self.spawn(
+        let addr = *peer.initial_addr();
+
+        self.spawn_in(
             self.clone()
                 .handle_peer_found(peer, PeerSource::UserProvided),
+            tracing::trace_span!("spawn", ?addr),
         );
     }
 
@@ -546,18 +570,22 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
-                self.spawn(
+                let permit_id = permit.id();
+
+                self.spawn_in(
                     self.clone()
                         .handle_new_connection(stream, permit)
                         .map(|_| ()),
+                    tracing::trace_span!("spawn", addr = format!("{:?}", addr), permit_id),
                 );
             }
         }
     }
 
+    #[instrument(skip_all, fields(?source, addr = ?peer.initial_addr(), state, permit))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
         loop {
-            let addr = match peer.addr() {
+            let addr = match peer.addr_if_seen() {
                 Some(addr) => *addr,
                 None => return,
             };
@@ -575,6 +603,8 @@ impl Inner {
                         return;
                     }
 
+                    Span::current().record("state", &field::display("awaiting permit"));
+
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
                     on_release.recv().await;
@@ -586,10 +616,15 @@ impl Inner {
 
             permit.mark_as_connecting();
 
+            Span::current().record("permit", &field::display(permit.id()));
+            Span::current().record("state", &field::display("connecting"));
+
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
+
+            Span::current().record("state", &field::display("handling"));
 
             if !self.clone().handle_new_connection(socket, permit).await {
                 break;
@@ -611,7 +646,17 @@ impl Inner {
     }
 
     /// Return true iff the peer is suitable for reconnection.
-    #[instrument(name = "connection", skip_all, fields(addr = ?permit.addr()))]
+    #[instrument(
+        name = "connection",
+        parent = None,
+        skip_all,
+        fields(
+            addr = ?permit.addr(),
+            permit_id = permit.id(),
+            state,
+            that_runtime_id
+        )
+    )]
     async fn handle_new_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
@@ -620,6 +665,8 @@ impl Inner {
         tracing::info!("connection established");
 
         permit.mark_as_handshaking();
+
+        Span::current().record("state", &field::display("handshaking"));
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
@@ -630,6 +677,11 @@ impl Inner {
                 }
                 Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return false,
             };
+
+        Span::current().record(
+            "that_runtime_id",
+            &field::debug(that_runtime_id.as_public_key()),
+        );
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
@@ -673,13 +725,14 @@ impl Inner {
             that_runtime_id,
         };
 
+        Span::current().record("state", &field::display("awaiting message broker release"));
         released.recv().await;
         tracing::info!("connection lost");
 
         true
     }
 
-    fn spawn<Fut>(&self, f: Fut) -> AbortHandle
+    fn spawn_in<Fut>(&self, f: Fut, span: Span) -> AbortHandle
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
@@ -690,7 +743,7 @@ impl Inner {
             .unwrap()
             .lock()
             .unwrap()
-            .spawn(instrument_task(f))
+            .spawn(f.instrument(span))
     }
 }
 

@@ -24,7 +24,7 @@ use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task,
 };
-use tracing::{instrument::Instrument, Span};
+use tracing::{field, instrument::Instrument, Span};
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
@@ -51,9 +51,10 @@ impl MessageBroker {
         permit: ConnectionPermit,
     ) -> Self {
         let span = tracing::info_span!(
+            parent: None, // We don't want to search where this originated from.
             "message_broker",
-            this_runtime_id = ?this_runtime_id.as_public_key(),
-            that_runtime_id = ?that_runtime_id.as_public_key()
+            that_runtime_id = ?that_runtime_id.as_public_key(),
+            permit_id = permit.id()
         );
 
         let this = Self {
@@ -85,7 +86,13 @@ impl MessageBroker {
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
     pub fn create_link(&mut self, store: Store, pex: &PexController) {
-        let span = tracing::info_span!(parent: &self.span, "link", local_id = %store.local_id);
+        let span = tracing::info_span!(
+            parent: &self.span,
+            "link",
+            local_id = %store.local_id,
+            state = field::Empty
+        );
+
         let span_enter = span.enter();
 
         let channel = MessageChannel::from(store.index.repository_id());
@@ -176,10 +183,13 @@ async fn maintain_link(
 
     loop {
         if let Some(sleep) = next_sleep {
+            Span::current().record("state", &field::display(format!("sleeping {:?}", sleep)));
             tokio::time::sleep(sleep).await;
         }
 
         next_sleep = backoff.next_backoff();
+
+        Span::current().record("state", &field::display("awaiting barrier"));
 
         match Barrier::new(&mut stream, &mut sink).run().await {
             Ok(()) => (),
@@ -187,12 +197,16 @@ async fn maintain_link(
             Err(BarrierError::ChannelClosed) => break,
         }
 
+        Span::current().record("state", &field::display("establishing channel"));
+
         let (crypto_stream, crypto_sink) =
             match establish_channel(role, &mut stream, &mut sink, &store.index).await {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
             };
+
+        Span::current().record("state", &field::display("running"));
 
         match run_link(
             crypto_stream,

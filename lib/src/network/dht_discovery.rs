@@ -404,7 +404,7 @@ impl Lookup {
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
-                        tracing::debug!("found peer {:?}", peer.addr());
+                        tracing::debug!("found peer {:?}", peer.initial_addr());
 
                         for tx in requests.lock().unwrap().values() {
                             tx.send(peer.clone()).unwrap_or(());

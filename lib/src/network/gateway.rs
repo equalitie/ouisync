@@ -245,7 +245,7 @@ impl Stacks {
         peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
-        if !ok_to_connect(peer.addr()?.socket_addr(), source) {
+        if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
             return None;
         }
 
@@ -256,13 +256,13 @@ impl Stacks {
             .with_max_elapsed_time(None)
             .build();
 
-        let _hole_punching_task = self.start_punching_holes(*peer.addr()?);
+        let _hole_punching_task = self.start_punching_holes(*peer.addr_if_seen()?);
 
         loop {
             // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
             // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
             // found it is no longer seeing it.
-            let addr = *peer.addr()?;
+            let addr = *peer.addr_if_seen()?;
 
             match self.connect(addr).await {
                 Ok(socket) => {

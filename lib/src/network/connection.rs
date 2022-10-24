@@ -256,6 +256,10 @@ impl ConnectionPermit {
         self.info.addr
     }
 
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Dummy connection permit for tests.
     #[cfg(test)]
     pub fn dummy() -> Self {
