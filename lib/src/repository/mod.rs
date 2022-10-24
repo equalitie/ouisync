@@ -38,7 +38,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
 };
-use tracing::{field, instrument, instrument::Instrument, Span};
+use tracing::{instrument, instrument::Instrument};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 

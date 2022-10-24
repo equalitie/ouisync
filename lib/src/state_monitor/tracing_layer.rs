@@ -34,6 +34,7 @@ struct TraceLayerInner {
 
 type SpanId = u64;
 
+// https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/trait.Layer.html
 impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for TracingLayer {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
         let mut inner = self.inner.lock().unwrap();
