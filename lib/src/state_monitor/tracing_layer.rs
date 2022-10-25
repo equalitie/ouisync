@@ -5,6 +5,7 @@ use std::{
     sync::Mutex,
 };
 use tracing::{
+    event::Event,
     field::{Field, Visit},
     span::{self, Attributes, Record},
 };
@@ -62,6 +63,20 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             .is_some();
 
         assert!(!overwritten);
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        let mut inner = self.inner.lock().unwrap();
+
+        let span_id = match ctx.current_span().id() {
+            Some(span_id) => span_id.into_u64(),
+            // TODO: Is this a reachable state in this function?
+            None => return,
+        };
+
+        if let Some((monitor, values)) = inner.spans.get_mut(&span_id) {
+            event.record(&mut RecordVisitor { monitor, values });
+        }
     }
 
     fn on_close(&self, id: span::Id, _ctx: Context<'_, S>) {
