@@ -73,6 +73,9 @@ pub struct Network {
 
 impl Network {
     pub fn new(config: ConfigStore, monitor: StateMonitor) -> Self {
+        let span = tracing::info_span!("network");
+        let span_enter = span.enter();
+
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(config, incoming_tx);
 
@@ -102,7 +105,10 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
+        drop(span_enter);
+
         let inner = Arc::new(Inner {
+            span,
             monitor: monitor.clone(),
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
@@ -350,6 +356,7 @@ struct RegistrationHolder {
 }
 
 struct Inner {
+    span: Span,
     monitor: StateMonitor,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -546,16 +553,12 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
-                self.spawn(
-                    self.clone()
-                        .handle_new_connection(stream, permit)
-                        .map(|_| ()),
-                );
+                self.spawn(self.clone().handle_connection(stream, permit).map(|_| ()));
             }
         }
     }
 
-    #[instrument(skip_all, fields(?source, addr = ?peer.initial_addr()))]
+    #[instrument(parent = &self.span, skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
         loop {
             let addr = match peer.addr_if_seen() {
@@ -598,29 +601,15 @@ impl Inner {
 
             tracing::trace!(state = "handling");
 
-            if !self.clone().handle_new_connection(socket, permit).await {
+            if !self.clone().handle_connection(socket, permit).await {
                 break;
             }
         }
     }
 
-    fn on_protocol_mismatch(&self, their_version: Version) {
-        // We know that `their_version` is higher than our version because otherwise this function
-        // wouldn't get called, but let's double check.
-        assert!(VERSION < their_version);
-
-        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
-
-        if *highest < their_version {
-            *highest = their_version;
-            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
-        }
-    }
-
     /// Return true iff the peer is suitable for reconnection.
     #[instrument(
-        name = "connection",
-        parent = None,
+        parent = &self.span,
         skip_all,
         fields(
             addr = ?permit.addr(),
@@ -628,7 +617,7 @@ impl Inner {
             permit_id = permit.id(),
         )
     )]
-    async fn handle_new_connection(
+    async fn handle_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
         permit: ConnectionPermit,
@@ -701,6 +690,19 @@ impl Inner {
         true
     }
 
+    fn on_protocol_mismatch(&self, their_version: Version) {
+        // We know that `their_version` is higher than our version because otherwise this function
+        // wouldn't get called, but let's double check.
+        assert!(VERSION < their_version);
+
+        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
+
+        if *highest < their_version {
+            *highest = their_version;
+            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
+        }
+    }
+
     fn spawn<Fut>(&self, f: Fut) -> AbortHandle
     where
         Fut: Future<Output = ()> + Send + 'static,
@@ -712,8 +714,7 @@ impl Inner {
             .unwrap()
             .lock()
             .unwrap()
-            // Preserve the current span across spawns to track the parent-child relation.
-            .spawn(f.instrument(Span::current()))
+            .spawn(f)
     }
 }
 
