@@ -61,7 +61,7 @@ use tokio::{
     sync::mpsc,
     task::{AbortHandle, JoinSet},
 };
-use tracing::{field, instrument, Instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -720,16 +720,7 @@ impl Inner {
 //------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
-#[instrument(
-    skip_all,
-    fields(
-        this_version = ?this_version,
-        that_version,
-        this_runtime_id = ?this_runtime_id.as_public_key(),
-        that_runtime_id
-    ),
-    err(Debug)
-)]
+#[instrument(skip_all, err(Debug))]
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -747,19 +738,11 @@ async fn perform_handshake(
     }
 
     let that_version = Version::read_from(stream).await?;
-    Span::current().record("that_version", &field::debug(&that_version));
-
     if that_version > this_version {
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
     let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
-    Span::current().record(
-        "that_runtime_id",
-        &field::debug(that_runtime_id.as_public_key()),
-    );
-
-    tracing::trace!("handshake complete");
 
     Ok(that_runtime_id)
 }
