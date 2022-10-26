@@ -61,7 +61,7 @@ use tokio::{
     sync::mpsc,
     task::{AbortHandle, JoinSet},
 };
-use tracing::{instrument, Instrument, Span};
+use tracing::{instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -85,10 +85,7 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = {
-            let monitor = monitor.make_child("DhtDiscovery");
-            DhtDiscovery::new(None, None, monitor)
-        };
+        let dht_discovery = DhtDiscovery::new(None, None);
 
         let port_forwarder = {
             let monitor = monitor.make_child("UPnP");
@@ -895,11 +892,4 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
         .unwrap()
-}
-
-fn instrument_task<F>(task: F) -> tracing::instrument::Instrumented<F>
-where
-    F: Future,
-{
-    task.instrument(tracing::info_span!("spawn"))
 }
