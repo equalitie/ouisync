@@ -1,5 +1,4 @@
 use super::{
-    instrument_task,
     interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
@@ -50,7 +49,7 @@ impl LocalDiscovery {
     pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> Self {
         let (peer_tx, peer_rx) = mpsc::channel(1);
 
-        let work_handle = scoped_task::spawn(instrument_task(async move {
+        let work_handle = scoped_task::spawn(async move {
             let mut inner = LocalDiscoveryInner {
                 listener_port,
                 monitor,
@@ -66,7 +65,7 @@ impl LocalDiscovery {
                     InterfaceChange::Removed(set) => inner.remove(set),
                 }
             }
-        }));
+        });
 
         Self {
             peer_rx,

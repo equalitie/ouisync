@@ -658,12 +658,14 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    let mut broker = MessageBroker::new(
-                        self.this_runtime_id.public(),
-                        that_runtime_id,
-                        stream,
-                        permit,
-                    );
+                    let mut broker = self.span.in_scope(|| {
+                        MessageBroker::new(
+                            self.this_runtime_id.public(),
+                            that_runtime_id,
+                            stream,
+                            permit,
+                        )
+                    });
 
                     // TODO: for DHT connection we should only link the repository for which we did the
                     // lookup but make sure we correctly handle edge cases, for example, when we have
