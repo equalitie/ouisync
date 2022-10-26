@@ -174,11 +174,9 @@ impl Index {
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
-        let updated: Vec<_> = self
-            .find_leaf_nodes_with_new_blocks(&mut tx, &parent_hash, &nodes)
-            .await?
-            .map(|node| node.block_id)
-            .collect();
+        let updated = self
+            .find_leaf_nodes_with_new_blocks(&mut tx, &nodes)
+            .await?;
 
         nodes
             .into_inner()
@@ -235,17 +233,20 @@ impl Index {
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     // `remote_nodes`.
-    async fn find_leaf_nodes_with_new_blocks<'a>(
+    async fn find_leaf_nodes_with_new_blocks(
         &self,
         conn: &mut db::Connection,
-        parent_hash: &Hash,
-        remote_nodes: &'a LeafNodeSet,
-    ) -> Result<impl Iterator<Item = &'a LeafNode>> {
-        let local_nodes = LeafNode::load_children(conn, parent_hash).await?;
+        remote_nodes: &LeafNodeSet,
+    ) -> Result<Vec<BlockId>> {
+        let mut output = Vec::new();
 
-        Ok(remote_nodes
-            .present()
-            .filter(move |node| local_nodes.is_missing(node.locator())))
+        for remote_node in remote_nodes.present() {
+            if !LeafNode::is_present(conn, &remote_node.block_id).await? {
+                output.push(remote_node.block_id);
+            }
+        }
+
+        Ok(output)
     }
 
     // Updates summaries of the specified nodes and all their ancestors, commits the transaction

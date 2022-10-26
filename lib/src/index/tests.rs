@@ -391,7 +391,7 @@ async fn check_all_blocks_exist(
     snapshot: &Snapshot,
 ) {
     for node in snapshot.leaf_sets().flat_map(|(_, nodes)| nodes) {
-        let block_id = branch.get(conn, node.locator()).await.unwrap();
+        let block_id = branch.get(conn, &node.locator).await.unwrap();
         assert!(block::exists(conn, &block_id).await.unwrap());
     }
 }

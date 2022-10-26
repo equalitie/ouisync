@@ -13,7 +13,7 @@ use std::{iter::FromIterator, mem, slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct LeafNode {
-    locator: Hash,
+    pub locator: Hash,
     pub block_id: BlockId,
     pub is_missing: bool,
 }
@@ -41,10 +41,6 @@ impl LeafNode {
         }
     }
 
-    pub fn locator(&self) -> &Hash {
-        &self.locator
-    }
-
     /// Saves the node to the db unless it already exists.
     pub async fn save(&self, conn: &mut db::Connection, parent: &Hash) -> Result<()> {
         sqlx::query(
@@ -70,7 +66,7 @@ impl LeafNode {
         )
         .bind(parent)
         .fetch(conn)
-        .map_ok(|row| LeafNode {
+        .map_ok(|row| Self {
             locator: row.get(0),
             block_id: row.get(1),
             is_missing: row.get(2),
@@ -115,6 +111,17 @@ impl LeafNode {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Checks whether the block with the specified id is present.
+    pub async fn is_present(conn: &mut db::Connection, block_id: &BlockId) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? AND is_missing = 0")
+                .bind(block_id)
+                .fetch_optional(conn)
+                .await?
+                .is_some(),
+        )
     }
 }
 
@@ -211,14 +218,6 @@ impl LeafNodeSet {
     /// Returns all nodes from this set whose `is_missing` flag is `false`.
     pub fn present(&self) -> impl Iterator<Item = &LeafNode> {
         self.iter().filter(|node| !node.is_missing)
-    }
-
-    /// Returns whether node at `locator` has `is_missing` set to `true` or if there is no such
-    /// node in this set.
-    pub fn is_missing(&self, locator: &Hash) -> bool {
-        self.get(locator)
-            .map(|node| node.is_missing)
-            .unwrap_or(true)
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {

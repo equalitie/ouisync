@@ -44,9 +44,9 @@ impl Snapshot {
 
             let node = LeafNode::present(locator, id);
             leaves
-                .entry(BucketPath::new(node.locator(), INNER_LAYER_COUNT - 1))
+                .entry(BucketPath::new(&node.locator, INNER_LAYER_COUNT - 1))
                 .or_insert_with(LeafNodeSet::default)
-                .modify(node.locator(), &node.block_id, true);
+                .modify(&node.locator, &node.block_id, true);
         }
 
         let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();
