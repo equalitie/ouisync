@@ -50,7 +50,11 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
 
         let mut visitor = AttrsVisitor::new();
         attrs.values().record(&mut visitor);
-        let title = format!("{}({})", span.name(), visitor.to_str());
+        let title = if visitor.is_empty() {
+            span.name().to_owned()
+        } else {
+            format!("{}({})", span.name(), visitor)
+        };
 
         // There is no guarantee that the span shall have a unique name, so we need to disambiguate
         // it somehow. TODO: Maybe modify the `StateMonitor` class to include some `u64`
@@ -104,14 +108,24 @@ impl AttrsVisitor {
         Self { vec: Vec::new() }
     }
 
-    fn to_str(&self) -> String {
-        self.vec.join(", ")
+    fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 }
 
 impl Visit for AttrsVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.vec.push(format!("{}={:?}", field.name(), value));
+    }
+}
+
+impl fmt::Display for AttrsVisitor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for (index, item) in self.vec.iter().enumerate() {
+            write!(f, "{}{}", if index > 0 { ", " } else { "" }, item)?;
+        }
+
+        Ok(())
     }
 }
 
