@@ -152,7 +152,7 @@ impl Index {
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
         let updated = self
-            .find_inner_nodes_with_new_blocks(&mut tx, &parent_hash, &nodes, receive_filter)
+            .find_inner_nodes_with_new_blocks(&mut tx, &nodes, receive_filter)
             .await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
@@ -174,11 +174,9 @@ impl Index {
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
-        let updated: Vec<_> = self
-            .find_leaf_nodes_with_new_blocks(&mut tx, &parent_hash, &nodes)
-            .await?
-            .map(|node| node.block_id)
-            .collect();
+        let updated = self
+            .find_leaf_nodes_with_new_blocks(&mut tx, &nodes)
+            .await?;
 
         nodes
             .into_inner()
@@ -197,14 +195,12 @@ impl Index {
     async fn find_inner_nodes_with_new_blocks(
         &self,
         conn: &mut db::Connection,
-        parent_hash: &Hash,
         remote_nodes: &InnerNodeMap,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
-        let local_nodes = InnerNode::load_children(conn, parent_hash).await?;
         let mut output = Vec::with_capacity(remote_nodes.len());
 
-        for (bucket, remote_node) in remote_nodes {
+        for (_, remote_node) in remote_nodes {
             if !receive_filter
                 .check(conn, &remote_node.hash, &remote_node.summary)
                 .await?
@@ -212,7 +208,8 @@ impl Index {
                 continue;
             }
 
-            let insert = if let Some(local_node) = local_nodes.get(bucket) {
+            let local_node = InnerNode::load(conn, &remote_node.hash).await?;
+            let insert = if let Some(local_node) = local_node {
                 !local_node
                     .summary
                     .is_up_to_date_with(&remote_node.summary)
@@ -236,17 +233,20 @@ impl Index {
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
     // `remote_nodes`.
-    async fn find_leaf_nodes_with_new_blocks<'a>(
+    async fn find_leaf_nodes_with_new_blocks(
         &self,
         conn: &mut db::Connection,
-        parent_hash: &Hash,
-        remote_nodes: &'a LeafNodeSet,
-    ) -> Result<impl Iterator<Item = &'a LeafNode>> {
-        let local_nodes = LeafNode::load_children(conn, parent_hash).await?;
+        remote_nodes: &LeafNodeSet,
+    ) -> Result<Vec<BlockId>> {
+        let mut output = Vec::new();
 
-        Ok(remote_nodes
-            .present()
-            .filter(move |node| local_nodes.is_missing(node.locator())))
+        for remote_node in remote_nodes.present() {
+            if !LeafNode::is_present(conn, &remote_node.block_id).await? {
+                output.push(remote_node.block_id);
+            }
+        }
+
+        Ok(output)
     }
 
     // Updates summaries of the specified nodes and all their ancestors, commits the transaction

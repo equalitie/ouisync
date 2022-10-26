@@ -68,6 +68,29 @@ impl InnerNode {
         .map_err(From::from)
     }
 
+    /// Load the inner node with the specified hash
+    pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>> {
+        let node = sqlx::query(
+            "SELECT
+                 bucket, is_complete, missing_blocks_count, missing_blocks_checksum
+             FROM snapshot_inner_nodes
+             WHERE hash = ?",
+        )
+        .bind(hash)
+        .fetch_optional(conn)
+        .await?
+        .map(|row| Self {
+            hash: *hash,
+            summary: Summary {
+                is_complete: row.get(1),
+                missing_blocks_count: db::decode_u64(row.get(2)),
+                missing_blocks_checksum: db::decode_u64(row.get(3)),
+            },
+        });
+
+        Ok(node)
+    }
+
     /// Loads parent hashes of all inner nodes with the specifed hash.
     pub fn load_parent_hashes<'a>(
         conn: &'a mut db::Connection,

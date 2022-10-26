@@ -172,7 +172,7 @@ async fn save_new_present_leaf_node() {
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
-    assert_eq!(node.locator(), &encoded_locator);
+    assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
     assert!(!node.is_missing);
 }
@@ -194,7 +194,7 @@ async fn save_new_missing_leaf_node() {
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
-    assert_eq!(node.locator(), &encoded_locator);
+    assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
     assert!(node.is_missing);
 }
@@ -219,7 +219,7 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
-    assert_eq!(node.locator(), &encoded_locator);
+    assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
     assert!(node.is_missing);
 }
@@ -242,7 +242,7 @@ async fn save_missing_leaf_node_over_existing_present_one() {
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
-    assert_eq!(node.locator(), &encoded_locator);
+    assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
     assert!(!node.is_missing);
 }
