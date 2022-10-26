@@ -624,6 +624,7 @@ impl Inner {
         skip_all,
         fields(
             addr = ?permit.addr(),
+            source = ?permit.source(),
             permit_id = permit.id(),
         )
     )]

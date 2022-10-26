@@ -238,7 +238,7 @@ impl ConnectionPermit {
     fn set_state(&self, new_state: PeerState) {
         let mut lock = self.connections.lock().unwrap();
 
-        // Unwrap because if `self` exists, then the entry should exist as well.
+        // unwrap is ok because if `self` exists then the entry should exists as well.
         let peer = lock.get_mut(&self.info).unwrap();
 
         if peer.state != new_state {
@@ -258,6 +258,16 @@ impl ConnectionPermit {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    pub fn source(&self) -> PeerSource {
+        self.connections
+            .lock()
+            .unwrap()
+            .get(&self.info)
+            // unwrap is ok because if `self` exists then the entry should exists as well.
+            .unwrap()
+            .source
     }
 
     /// Dummy connection permit for tests.
