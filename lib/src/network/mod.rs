@@ -555,7 +555,7 @@ impl Inner {
         }
     }
 
-    #[instrument(skip_all, fields(?source, addr = ?peer.initial_addr(), state, permit))]
+    #[instrument(skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
         loop {
             let addr = match peer.addr_if_seen() {
@@ -576,7 +576,7 @@ impl Inner {
                         return;
                     }
 
-                    Span::current().record("state", &field::display("awaiting permit"));
+                    tracing::trace!(state = "awaiting permit");
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
@@ -589,15 +589,14 @@ impl Inner {
 
             permit.mark_as_connecting();
 
-            Span::current().record("permit", &field::display(permit.id()));
-            Span::current().record("state", &field::display("connecting"));
+            tracing::trace!(state = "connecting", permit_id = permit.id());
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
 
-            Span::current().record("state", &field::display("handling"));
+            tracing::trace!(state = "handling");
 
             if !self.clone().handle_new_connection(socket, permit).await {
                 break;
@@ -626,8 +625,6 @@ impl Inner {
         fields(
             addr = ?permit.addr(),
             permit_id = permit.id(),
-            state,
-            that_runtime_id
         )
     )]
     async fn handle_new_connection(
@@ -639,7 +636,7 @@ impl Inner {
 
         permit.mark_as_handshaking();
 
-        Span::current().record("state", &field::display("handshaking"));
+        tracing::trace!(state = "handshaking");
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
@@ -651,10 +648,7 @@ impl Inner {
                 Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return false,
             };
 
-        Span::current().record(
-            "that_runtime_id",
-            &field::debug(that_runtime_id.as_public_key()),
-        );
+        tracing::trace!(that_runtime_id = ?that_runtime_id.as_public_key());
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
@@ -698,7 +692,8 @@ impl Inner {
             that_runtime_id,
         };
 
-        Span::current().record("state", &field::display("awaiting message broker release"));
+        tracing::trace!(state = "awaiting message broker release");
+
         released.recv().await;
         tracing::info!("connection lost");
 
