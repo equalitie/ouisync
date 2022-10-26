@@ -179,6 +179,8 @@ impl Client {
         if updated {
             tracing::trace!("received updated root node");
             self.send_queue.push_front(Request::ChildNodes(hash));
+        } else {
+            tracing::trace!("received outdated root node");
         }
 
         Ok(())
@@ -189,15 +191,14 @@ impl Client {
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
     ) -> Result<(), ReceiveError> {
+        let total = nodes.len();
         let updated = self
             .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
 
-        if !updated.is_empty() {
-            tracing::trace!("received {} updated inner nodes", updated.len());
-        }
+        tracing::trace!("received {}/{} inner nodes", updated.len(), total);
 
         for hash in updated {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -211,11 +212,10 @@ impl Client {
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<(), ReceiveError> {
+        let total = nodes.len();
         let updated = self.store.index.receive_leaf_nodes(nodes).await?;
 
-        if !updated.is_empty() {
-            tracing::trace!("received {} updated leaf nodes", updated.len());
-        }
+        tracing::trace!("received {}/{} leaf nodes", updated.len(), total);
 
         for block_id in updated {
             self.block_tracker.offer(block_id);
