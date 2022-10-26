@@ -25,10 +25,6 @@ impl SecretRuntimeId {
             public: self.public,
         }
     }
-
-    pub fn as_public_key(&self) -> &PublicKey {
-        &self.public
-    }
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Hash, Clone, Copy, Deserialize, Serialize, Debug)]

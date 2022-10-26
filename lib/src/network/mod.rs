@@ -61,7 +61,7 @@ use tokio::{
     sync::mpsc,
     task::{AbortHandle, JoinSet},
 };
-use tracing::{field, instrument, Instrument, Span};
+use tracing::{instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -73,6 +73,9 @@ pub struct Network {
 
 impl Network {
     pub fn new(config: ConfigStore, monitor: StateMonitor) -> Self {
+        let span = tracing::info_span!("network");
+        let span_enter = span.enter();
+
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(config, incoming_tx);
 
@@ -82,10 +85,7 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = {
-            let monitor = monitor.make_child("DhtDiscovery");
-            DhtDiscovery::new(None, None, monitor)
-        };
+        let dht_discovery = DhtDiscovery::new(None, None);
 
         let port_forwarder = {
             let monitor = monitor.make_child("UPnP");
@@ -102,7 +102,10 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
+        drop(span_enter);
+
         let inner = Arc::new(Inner {
+            span,
             monitor: monitor.clone(),
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
@@ -128,18 +131,9 @@ impl Network {
             our_addresses: BlockingMutex::new(HashSet::new()),
         });
 
-        inner.spawn_in(
-            inner.clone().handle_incoming_connections(incoming_rx),
-            tracing::trace_span!("incoming"),
-        );
-        inner.spawn_in(
-            inner.clone().run_dht(dht_discovery_rx),
-            tracing::trace_span!("dht"),
-        );
-        inner.spawn_in(
-            inner.clone().run_peer_exchange(pex_discovery_rx),
-            tracing::trace_span!("peer_exchange"),
-        );
+        inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
+        inner.spawn(inner.clone().run_dht(dht_discovery_rx));
+        inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
         Self {
             inner,
@@ -359,6 +353,7 @@ struct RegistrationHolder {
 }
 
 struct Inner {
+    span: Span,
     monitor: StateMonitor,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -489,10 +484,7 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            Some(self.spawn_in(
-                self.clone().run_local_discovery(port),
-                tracing::trace_span!("local_discovery"),
-            ))
+            Some(self.spawn(self.clone().run_local_discovery(port)))
         } else {
             tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
             None
@@ -506,12 +498,10 @@ impl Inner {
 
         loop {
             let peer = discovery.recv().await;
-            let addr = *peer.initial_addr();
 
-            self.spawn_in(
+            self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
-                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -523,11 +513,7 @@ impl Inner {
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
         while let Some(seen_peer) = discovery_rx.recv().await {
-            let addr = *seen_peer.initial_addr();
-            self.spawn_in(
-                self.clone().handle_peer_found(seen_peer, PeerSource::Dht),
-                tracing::trace_span!("spawn", ?addr),
-            );
+            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
         }
     }
 
@@ -535,12 +521,9 @@ impl Inner {
         let mut discovery = PexDiscovery::new(discovery_rx);
 
         while let Some(peer) = discovery.recv().await {
-            let addr = *peer.initial_addr();
-
-            self.spawn_in(
+            self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::PeerExchange),
-                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -552,12 +535,9 @@ impl Inner {
             None => return,
         };
 
-        let addr = *peer.initial_addr();
-
-        self.spawn_in(
+        self.spawn(
             self.clone()
                 .handle_peer_found(peer, PeerSource::UserProvided),
-            tracing::trace_span!("spawn", ?addr),
         );
     }
 
@@ -570,19 +550,12 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
-                let permit_id = permit.id();
-
-                self.spawn_in(
-                    self.clone()
-                        .handle_new_connection(stream, permit)
-                        .map(|_| ()),
-                    tracing::trace_span!("spawn", addr = format!("{:?}", addr), permit_id),
-                );
+                self.spawn(self.clone().handle_connection(stream, permit).map(|_| ()));
             }
         }
     }
 
-    #[instrument(skip_all, fields(?source, addr = ?peer.initial_addr(), state, permit))]
+    #[instrument(parent = &self.span, skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
         loop {
             let addr = match peer.addr_if_seen() {
@@ -603,7 +576,7 @@ impl Inner {
                         return;
                     }
 
-                    Span::current().record("state", &field::display("awaiting permit"));
+                    tracing::trace!(state = "awaiting permit");
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
@@ -616,48 +589,32 @@ impl Inner {
 
             permit.mark_as_connecting();
 
-            Span::current().record("permit", &field::display(permit.id()));
-            Span::current().record("state", &field::display("connecting"));
+            tracing::trace!(state = "connecting", permit_id = permit.id());
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
 
-            Span::current().record("state", &field::display("handling"));
+            tracing::trace!(state = "handling");
 
-            if !self.clone().handle_new_connection(socket, permit).await {
+            if !self.clone().handle_connection(socket, permit).await {
                 break;
             }
         }
     }
 
-    fn on_protocol_mismatch(&self, their_version: Version) {
-        // We know that `their_version` is higher than our version because otherwise this function
-        // wouldn't get called, but let's double check.
-        assert!(VERSION < their_version);
-
-        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
-
-        if *highest < their_version {
-            *highest = their_version;
-            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
-        }
-    }
-
     /// Return true iff the peer is suitable for reconnection.
     #[instrument(
-        name = "connection",
-        parent = None,
+        parent = &self.span,
         skip_all,
         fields(
             addr = ?permit.addr(),
+            source = ?permit.source(),
             permit_id = permit.id(),
-            state,
-            that_runtime_id
         )
     )]
-    async fn handle_new_connection(
+    async fn handle_connection(
         self: Arc<Self>,
         mut stream: raw::Stream,
         permit: ConnectionPermit,
@@ -666,7 +623,7 @@ impl Inner {
 
         permit.mark_as_handshaking();
 
-        Span::current().record("state", &field::display("handshaking"));
+        tracing::trace!(state = "handshaking");
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
@@ -678,10 +635,7 @@ impl Inner {
                 Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return false,
             };
 
-        Span::current().record(
-            "that_runtime_id",
-            &field::debug(that_runtime_id.as_public_key()),
-        );
+        tracing::trace!(that_runtime_id = ?that_runtime_id.as_public_key());
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
@@ -701,12 +655,14 @@ impl Inner {
             match state.message_brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
-                    let mut broker = MessageBroker::new(
-                        self.this_runtime_id.public(),
-                        that_runtime_id,
-                        stream,
-                        permit,
-                    );
+                    let mut broker = self.span.in_scope(|| {
+                        MessageBroker::new(
+                            self.this_runtime_id.public(),
+                            that_runtime_id,
+                            stream,
+                            permit,
+                        )
+                    });
 
                     // TODO: for DHT connection we should only link the repository for which we did the
                     // lookup but make sure we correctly handle edge cases, for example, when we have
@@ -725,14 +681,28 @@ impl Inner {
             that_runtime_id,
         };
 
-        Span::current().record("state", &field::display("awaiting message broker release"));
+        tracing::trace!(state = "awaiting message broker release");
+
         released.recv().await;
         tracing::info!("connection lost");
 
         true
     }
 
-    fn spawn_in<Fut>(&self, f: Fut, span: Span) -> AbortHandle
+    fn on_protocol_mismatch(&self, their_version: Version) {
+        // We know that `their_version` is higher than our version because otherwise this function
+        // wouldn't get called, but let's double check.
+        assert!(VERSION < their_version);
+
+        let mut highest = self.highest_seen_protocol_version.lock().unwrap();
+
+        if *highest < their_version {
+            *highest = their_version;
+            self.on_protocol_mismatch_tx.send(()).unwrap_or(());
+        }
+    }
+
+    fn spawn<Fut>(&self, f: Fut) -> AbortHandle
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
@@ -743,23 +713,14 @@ impl Inner {
             .unwrap()
             .lock()
             .unwrap()
-            .spawn(f.instrument(span))
+            .spawn(f)
     }
 }
 
 //------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
-#[instrument(
-    skip_all,
-    fields(
-        this_version = ?this_version,
-        that_version,
-        this_runtime_id = ?this_runtime_id.as_public_key(),
-        that_runtime_id
-    ),
-    err(Debug)
-)]
+#[instrument(skip_all, err(Debug))]
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -777,19 +738,11 @@ async fn perform_handshake(
     }
 
     let that_version = Version::read_from(stream).await?;
-    Span::current().record("that_version", &field::debug(&that_version));
-
     if that_version > this_version {
         return Err(HandshakeError::ProtocolVersionMismatch(that_version));
     }
 
     let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
-    Span::current().record(
-        "that_runtime_id",
-        &field::debug(that_runtime_id.as_public_key()),
-    );
-
-    tracing::trace!("handshake complete");
 
     Ok(that_runtime_id)
 }
@@ -939,11 +892,4 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
         .unwrap()
-}
-
-fn instrument_task<F>(task: F) -> tracing::instrument::Instrumented<F>
-where
-    F: Future,
-{
-    task.instrument(tracing::info_span!("spawn"))
 }
