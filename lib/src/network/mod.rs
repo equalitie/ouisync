@@ -128,18 +128,9 @@ impl Network {
             our_addresses: BlockingMutex::new(HashSet::new()),
         });
 
-        inner.spawn_in(
-            inner.clone().handle_incoming_connections(incoming_rx),
-            tracing::trace_span!("incoming"),
-        );
-        inner.spawn_in(
-            inner.clone().run_dht(dht_discovery_rx),
-            tracing::trace_span!("dht"),
-        );
-        inner.spawn_in(
-            inner.clone().run_peer_exchange(pex_discovery_rx),
-            tracing::trace_span!("peer_exchange"),
-        );
+        inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
+        inner.spawn(inner.clone().run_dht(dht_discovery_rx));
+        inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
 
         Self {
             inner,
@@ -489,10 +480,7 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            Some(self.spawn_in(
-                self.clone().run_local_discovery(port),
-                tracing::trace_span!("local_discovery"),
-            ))
+            Some(self.spawn(self.clone().run_local_discovery(port)))
         } else {
             tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
             None
@@ -506,12 +494,10 @@ impl Inner {
 
         loop {
             let peer = discovery.recv().await;
-            let addr = *peer.initial_addr();
 
-            self.spawn_in(
+            self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
-                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -523,11 +509,7 @@ impl Inner {
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
         while let Some(seen_peer) = discovery_rx.recv().await {
-            let addr = *seen_peer.initial_addr();
-            self.spawn_in(
-                self.clone().handle_peer_found(seen_peer, PeerSource::Dht),
-                tracing::trace_span!("spawn", ?addr),
-            );
+            self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
         }
     }
 
@@ -535,12 +517,9 @@ impl Inner {
         let mut discovery = PexDiscovery::new(discovery_rx);
 
         while let Some(peer) = discovery.recv().await {
-            let addr = *peer.initial_addr();
-
-            self.spawn_in(
+            self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::PeerExchange),
-                tracing::trace_span!("spawn", ?addr),
             );
         }
     }
@@ -552,12 +531,9 @@ impl Inner {
             None => return,
         };
 
-        let addr = *peer.initial_addr();
-
-        self.spawn_in(
+        self.spawn(
             self.clone()
                 .handle_peer_found(peer, PeerSource::UserProvided),
-            tracing::trace_span!("spawn", ?addr),
         );
     }
 
@@ -570,13 +546,10 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
-                let permit_id = permit.id();
-
-                self.spawn_in(
+                self.spawn(
                     self.clone()
                         .handle_new_connection(stream, permit)
                         .map(|_| ()),
-                    tracing::trace_span!("spawn", addr = format!("{:?}", addr), permit_id),
                 );
             }
         }
@@ -732,7 +705,7 @@ impl Inner {
         true
     }
 
-    fn spawn_in<Fut>(&self, f: Fut, span: Span) -> AbortHandle
+    fn spawn<Fut>(&self, f: Fut) -> AbortHandle
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
@@ -743,7 +716,8 @@ impl Inner {
             .unwrap()
             .lock()
             .unwrap()
-            .spawn(f.instrument(span))
+            // Preserve the current span across spawns to track the parent-child relation.
+            .spawn(f.instrument(Span::current()))
     }
 }
 
