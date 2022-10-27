@@ -72,7 +72,7 @@ pub struct Network {
 
 impl Network {
     pub fn new(config: ConfigStore) -> Self {
-        let span = tracing::info_span!("network");
+        let span = tracing::info_span!("Network");
         let span_enter = span.enter();
 
         let (incoming_tx, incoming_rx) = mpsc::channel(1);

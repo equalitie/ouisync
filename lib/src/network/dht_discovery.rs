@@ -55,7 +55,7 @@ impl DhtDiscovery {
         let v4 = Mutex::new(RestartableDht::new(socket_maker_v4));
         let v6 = Mutex::new(RestartableDht::new(socket_maker_v6));
         let lookups = Arc::new(Mutex::new(HashMap::default()));
-        let span = tracing::info_span!("dht");
+        let span = tracing::info_span!("DHT");
 
         Self {
             v4,
