@@ -87,10 +87,7 @@ impl Network {
         // these approaches.
         let dht_discovery = DhtDiscovery::new(None, None);
 
-        let port_forwarder = {
-            let monitor = monitor.make_child("UPnP");
-            upnp::PortForwarder::new(monitor)
-        };
+        let port_forwarder = upnp::PortForwarder::new();
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
