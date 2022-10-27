@@ -43,11 +43,10 @@ pub unsafe extern "C" fn session_open(
 
     let root_monitor = StateMonitor::make_root();
     let session_monitor = root_monitor.make_child("Session");
-
     let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
 
     // Init logger
-    let logger = match Logger::new(panic_counter, root_monitor.make_child("Trace")) {
+    let logger = match Logger::new(panic_counter, root_monitor.clone()) {
         Ok(logger) => logger,
         Err(error) => {
             sender.send_result(port, Err(Error::InitializeLogger(error)));
@@ -86,10 +85,9 @@ pub unsafe extern "C" fn session_open(
         };
 
         let repos_monitor = root_monitor.make_child("Repositories");
-        let network_monitor = root_monitor.make_child("Network");
 
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-        let network = Network::new(config, network_monitor);
+        let network = Network::new(config);
 
         let session = Session {
             runtime,

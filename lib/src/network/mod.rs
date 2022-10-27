@@ -42,8 +42,8 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle,
-    state_monitor::StateMonitor, store::Store, sync::uninitialized_watch,
+    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle, store::Store,
+    sync::uninitialized_watch,
 };
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
@@ -61,19 +61,18 @@ use tokio::{
     sync::mpsc,
     task::{AbortHandle, JoinSet},
 };
-use tracing::{instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
-    pub monitor: StateMonitor,
     // We keep tasks here instead of in Inner because we want them to be
     // destroyed when Network is Dropped.
     _tasks: Arc<BlockingMutex<JoinSet<()>>>,
 }
 
 impl Network {
-    pub fn new(config: ConfigStore, monitor: StateMonitor) -> Self {
-        let span = tracing::info_span!("network");
+    pub fn new(config: ConfigStore) -> Self {
+        let span = tracing::info_span!("Network");
         let span_enter = span.enter();
 
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
@@ -87,10 +86,7 @@ impl Network {
         // these approaches.
         let dht_discovery = DhtDiscovery::new(None, None);
 
-        let port_forwarder = {
-            let monitor = monitor.make_child("UPnP");
-            upnp::PortForwarder::new(monitor)
-        };
+        let port_forwarder = upnp::PortForwarder::new();
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
@@ -106,7 +102,6 @@ impl Network {
 
         let inner = Arc::new(Inner {
             span,
-            monitor: monitor.clone(),
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
@@ -137,7 +132,6 @@ impl Network {
 
         Self {
             inner,
-            monitor,
             _tasks: tasks,
         }
     }
@@ -354,7 +348,6 @@ struct RegistrationHolder {
 
 struct Inner {
     span: Span,
-    monitor: StateMonitor,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
     state: BlockingMutex<State>,
@@ -393,7 +386,7 @@ impl Inner {
         let conn = Connectivity::infer(bind);
 
         // Gateway
-        let side_channel_makers = self.gateway.bind(bind).await;
+        let side_channel_makers = self.gateway.bind(bind).instrument(self.span.clone()).await;
 
         // DHT
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
@@ -484,7 +477,13 @@ impl Inner {
         let port = tcp_port.or(quic_port);
 
         if let Some(port) = port {
-            Some(self.spawn(self.clone().run_local_discovery(port)))
+            Some(
+                self.spawn(
+                    self.clone()
+                        .run_local_discovery(port)
+                        .instrument(self.span.clone()),
+                ),
+            )
         } else {
             tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
             None
@@ -492,9 +491,7 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
-        let monitor = self.monitor.make_child("LocalDiscovery");
-
-        let mut discovery = LocalDiscovery::new(listener_port, monitor);
+        let mut discovery = LocalDiscovery::new(listener_port);
 
         loop {
             let peer = discovery.recv().await;
