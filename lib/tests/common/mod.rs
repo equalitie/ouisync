@@ -96,10 +96,7 @@ impl Node {
 
         let network = {
             let _enter = span.enter();
-            Network::new(
-                ConfigStore::new(config_store.path()),
-                StateMonitor::make_root(),
-            )
+            Network::new(ConfigStore::new(config_store.path()))
         };
 
         network.handle().bind(&[bind]).instrument(span).await;

@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
     }
 
     // Start the network
-    let network = Network::new(config, root_monitor.make_child("Network"));
+    let network = Network::new(config);
     let network_handle = network.handle();
 
     network_handle.bind(&options.bind).await;
