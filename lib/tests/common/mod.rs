@@ -1,6 +1,6 @@
 use ouisync::{
     network::Network, AccessSecrets, BranchChangedReceiver, ConfigStore, MasterSecret, PeerAddr,
-    Repository, StateMonitor,
+    Repository,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -62,7 +62,6 @@ impl Env {
             MasterSecret::generate(&mut self.rng),
             secrets,
             true,
-            &StateMonitor::make_root(),
         )
         .await
         .unwrap()

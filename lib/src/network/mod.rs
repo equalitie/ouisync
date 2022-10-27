@@ -19,6 +19,7 @@ mod peer_source;
 mod protocol;
 mod quic;
 mod raw;
+mod repository_stats;
 mod request;
 mod runtime_id;
 mod seen_peers;
@@ -38,6 +39,7 @@ use self::{
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     peer_source::PeerSource,
     protocol::{Version, MAGIC, VERSION},
+    repository_stats::RepositoryStats,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     seen_peers::{SeenPeer, SeenPeers},
 };
@@ -247,19 +249,26 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub fn register(&self, store: Store) -> Registration {
+        store.span.in_scope(
+            || tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id())),
+        );
+
         let pex = PexController::new(
             self.inner.connection_deduplicator.on_change(),
             self.inner.pex_discovery_tx.clone(),
         );
 
+        let stats = Arc::new(BlockingMutex::new(RepositoryStats::new(store.span.clone())));
+
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(store.clone(), &pex);
+        network_state.create_link(store.clone(), &pex, stats.clone());
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
             dht: None,
             pex,
+            stats,
         });
 
         Registration {
@@ -344,6 +353,7 @@ struct RegistrationHolder {
     store: Store,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
+    stats: Arc<BlockingMutex<RepositoryStats>>,
 }
 
 struct Inner {
@@ -374,9 +384,14 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, store: Store, pex: &PexController) {
+    fn create_link(
+        &mut self,
+        store: Store,
+        pex: &PexController,
+        stats: Arc<BlockingMutex<RepositoryStats>>,
+    ) {
         for broker in self.message_brokers.values_mut() {
-            broker.create_link(store.clone(), pex)
+            broker.create_link(store.clone(), pex, stats.clone())
         }
     }
 }
@@ -665,7 +680,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.store.clone(), &holder.pex);
+                        broker.create_link(holder.store.clone(), &holder.pex, holder.stats.clone());
                     }
 
                     entry.insert(broker);

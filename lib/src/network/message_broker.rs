@@ -7,6 +7,7 @@ use super::{
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
+    repository_stats::RepositoryStats,
     request::MAX_PENDING_REQUESTS,
     runtime_id::PublicRuntimeId,
     server::Server,
@@ -16,7 +17,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -84,7 +85,12 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(&mut self, store: Store, pex: &PexController) {
+    pub fn create_link(
+        &mut self,
+        store: Store,
+        pex: &PexController,
+        stats: Arc<Mutex<RepositoryStats>>,
+    ) {
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
@@ -138,6 +144,7 @@ impl MessageBroker {
                     request_limiter,
                     pex_discovery_tx,
                     pex_announcer,
+                    stats,
                 ) => (),
                 _ = abort_rx => (),
             }
@@ -163,6 +170,8 @@ impl Drop for MessageBroker {
 }
 
 // Repeatedly establish and run the link until it's explicitly destroyed by calling `destroy_link()`.
+// TODO: Consider consolidating the arguments somehow
+#[allow(clippy::too_many_arguments)]
 async fn maintain_link(
     role: Role,
     mut stream: ContentStream,
@@ -171,6 +180,7 @@ async fn maintain_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
+    stats: Arc<Mutex<RepositoryStats>>,
 ) {
     let mut backoff = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
@@ -214,6 +224,7 @@ async fn maintain_link(
             request_limiter.clone(),
             pex_discovery_tx.clone(),
             &mut pex_announcer,
+            stats.clone(),
         )
         .await
         {
@@ -254,6 +265,7 @@ async fn run_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     pex_announcer: &mut PexAnnouncer,
+    stats: Arc<Mutex<RepositoryStats>>,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
@@ -261,7 +273,7 @@ async fn run_link(
 
     // Run everything in parallel:
     select! {
-        flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
+        flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter, stats) => flow,
         flow = run_server(store.index.clone(), content_tx.clone(), request_rx ) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_discovery_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
@@ -345,8 +357,9 @@ async fn run_client(
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
+    stats: Arc<Mutex<RepositoryStats>>,
 ) -> ControlFlow {
-    let mut client = Client::new(store, content_tx, response_rx, request_limiter);
+    let mut client = Client::new(store, content_tx, response_rx, request_limiter, stats);
 
     match client.run().await {
         Ok(()) => forever().await,

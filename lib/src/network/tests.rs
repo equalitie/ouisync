@@ -1,6 +1,7 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
+    repository_stats::RepositoryStats,
     request::MAX_PENDING_REQUESTS,
     server::Server,
 };
@@ -23,7 +24,7 @@ use rand::prelude::*;
 use std::{
     fmt,
     future::Future,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tempfile::TempDir;
@@ -36,7 +37,7 @@ use tokio::{
     },
     time,
 };
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -374,10 +375,10 @@ async fn create_store<R: Rng + CryptoRng>(
     // index.create_branch(writer_id, write_keys).await.unwrap();
 
     let store = Store {
-        monitored: Weak::new(),
         index,
         block_tracker: BlockTracker::greedy(),
         local_id: LocalId::new(),
+        span: Span::none(),
     };
 
     (base_dir, store, writer_id)
@@ -575,6 +576,7 @@ fn create_client(store: Store) -> ClientData {
         send_tx,
         recv_rx,
         Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
+        Arc::new(Mutex::new(RepositoryStats::new(Span::none()))),
     );
 
     (client, send_rx, recv_tx)

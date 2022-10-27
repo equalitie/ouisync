@@ -28,7 +28,6 @@ use crate::{
     metadata, path,
     progress::Progress,
     scoped_task::{self, ScopedJoinHandle},
-    state_monitor::{MonitoredValue, StateMonitor},
     store::Store,
     sync::broadcast::ThrottleReceiver,
 };
@@ -38,7 +37,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
 };
-use tracing::{instrument, instrument::Instrument};
+use tracing::{instrument, instrument::Instrument, Span};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -50,23 +49,23 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    #[instrument(skip_all, fields(store = ?store.as_ref()), err)]
     pub async fn create(
         store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
+        let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::create(store).await?;
+
         Self::create_in(
             pool,
             device_id,
             master_secret,
             access_secrets,
             enable_merger,
-            parent_monitor,
+            span,
         )
         .await
     }
@@ -78,7 +77,7 @@ impl Repository {
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
+        span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
@@ -88,14 +87,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(
-            pool,
-            this_writer_id,
-            access_secrets,
-            enable_merger,
-            parent_monitor,
-        )
-        .await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger, span).await
     }
 
     /// Opens an existing repository.
@@ -109,7 +101,6 @@ impl Repository {
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         Self::open_with_mode(
             store,
@@ -117,30 +108,29 @@ impl Repository {
             master_secret,
             AccessMode::Write,
             enable_merger,
-            parent_monitor,
         )
         .await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
     /// access mode the repository was created with.
-    #[instrument(skip_all, fields(store = ?store.as_ref(), ?max_access_mode), err)]
     pub async fn open_with_mode(
         store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         max_access_mode: AccessMode,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
+        let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::open(store).await?;
+
         Self::open_in(
             pool,
             device_id,
             master_secret,
             max_access_mode,
             enable_merger,
-            parent_monitor,
+            span,
         )
         .await
     }
@@ -154,7 +144,7 @@ impl Repository {
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
+        span: Span,
     ) -> Result<Self> {
         let mut conn = pool.acquire().await?;
 
@@ -192,14 +182,7 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(
-            pool,
-            this_writer_id,
-            access_secrets,
-            enable_merger,
-            parent_monitor,
-        )
-        .await
+        Self::new(pool, this_writer_id, access_secrets, enable_merger, span).await
     }
 
     async fn new(
@@ -207,7 +190,7 @@ impl Repository {
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         enable_merger: bool,
-        parent_monitor: &StateMonitor,
+        span: Span,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
@@ -220,22 +203,13 @@ impl Repository {
             BlockTracker::greedy()
         };
 
-        let monitor = parent_monitor.make_child(hex::encode(index.repository_id().as_ref()));
-
-        let monitored = Arc::new(MonitoredValues {
-            index_requests_inflight: monitor.make_value("index_requests_inflight".into(), 0),
-            block_requests_inflight: monitor.make_value("block_requests_inflight".into(), 0),
-            total_request_cummulative: monitor.make_value("total_request_cummulative".into(), 0),
-        });
-
-        let local_id = LocalId::new();
-        tracing::debug!(%local_id);
+        span.in_scope(|| tracing::trace!(access = ?secrets.access_mode()));
 
         let store = Store {
-            monitored: Arc::downgrade(&monitored),
             index,
             block_tracker,
-            local_id,
+            local_id: LocalId::new(),
+            span: span.clone(),
         };
 
         let shared = Arc::new(Shared {
@@ -243,7 +217,6 @@ impl Repository {
             this_writer_id,
             secrets,
             blob_cache: Arc::new(BlobCache::new(event_tx)),
-            _monitored: monitored,
         });
 
         let local_branch = if shared.secrets.can_write() && enable_merger {
@@ -252,14 +225,11 @@ impl Repository {
             None
         };
 
-        let background_span = tracing::debug_span!("background", local_id = %shared.store.local_id);
-
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(background_span.clone()));
+        task::spawn(worker.run().instrument(span.clone()));
 
-        let _progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.store.clone()).instrument(background_span),
-        );
+        let _progress_reporter_handle =
+            scoped_task::spawn(report_sync_progress(shared.store.clone()).instrument(span));
 
         Ok(Self {
             shared,
@@ -628,21 +598,12 @@ impl fmt::Debug for Repository {
     }
 }
 
-pub(crate) struct MonitoredValues {
-    // This indicates how many requests for index nodes are currently in flight.  It is used by the
-    // UI to indicate that the index is being synchronized.
-    pub index_requests_inflight: MonitoredValue<usize>,
-    pub block_requests_inflight: MonitoredValue<usize>,
-    pub total_request_cummulative: MonitoredValue<usize>,
-}
-
 struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
     // Cache for open blobs to track multiple instances of the same blob.
     blob_cache: Arc<BlobCache>,
-    _monitored: Arc<MonitoredValues>,
 }
 
 impl Shared {

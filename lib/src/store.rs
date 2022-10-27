@@ -6,20 +6,17 @@ use crate::{
     error::{Error, Result},
     index::{self, Index},
     progress::Progress,
-    repository::{LocalId, MonitoredValues},
+    repository::LocalId,
 };
 use sqlx::Row;
-use std::sync::Weak;
+use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
-    // This is `Weak` because `Store` can outlive `Repository` and if we wanted to recreate the
-    // repository again while the previous `Store` is still alive, we would create "ambiguous"
-    // monitored values.
-    pub(crate) monitored: Weak<MonitoredValues>,
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
     pub(crate) local_id: LocalId,
+    pub(crate) span: Span,
 }
 
 impl Store {
@@ -232,10 +229,10 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
-            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
             local_id: LocalId::new(),
+            span: Span::none(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
@@ -270,10 +267,10 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
-            monitored: Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
             local_id: LocalId::new(),
+            span: Span::none(),
         };
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -309,10 +306,10 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let index = Index::new(pool.clone(), repository_id, event_tx);
         let store = Store {
-            monitored: std::sync::Weak::new(),
             index,
             block_tracker: BlockTracker::lazy(),
             local_id: LocalId::new(),
+            span: Span::none(),
         };
 
         let all_blocks: Vec<(Block, Hash)> =

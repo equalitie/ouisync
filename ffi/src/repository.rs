@@ -10,6 +10,7 @@ use ouisync_lib::{
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
+use tracing::Instrument;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
@@ -51,32 +52,34 @@ pub unsafe extern "C" fn repository_create(
             share_token.into_secrets()
         };
 
-        let repos_monitor = ctx.repos_monitor().clone();
+        let span = ctx.repos_span().clone();
 
-        ctx.spawn(async move {
-            let repository = Repository::create(
-                store.into_std_path_buf(),
-                device_id,
-                MasterSecret::Password(master_password),
-                access_secrets,
-                ENABLE_MERGER,
-                &repos_monitor,
-            )
-            .await?;
+        ctx.spawn(
+            async move {
+                let repository = Repository::create(
+                    store.into_std_path_buf(),
+                    device_id,
+                    MasterSecret::Password(master_password),
+                    access_secrets,
+                    ENABLE_MERGER,
+                )
+                .await?;
 
-            let registration = network_handle.register(repository.store().clone());
+                let registration = network_handle.register(repository.store().clone());
 
-            // TODO: consider leaving the decision to enable DHT, PEX to the app.
-            registration.enable_dht();
-            registration.enable_pex();
+                // TODO: consider leaving the decision to enable DHT, PEX to the app.
+                registration.enable_dht();
+                registration.enable_pex();
 
-            let holder = Arc::new(RepositoryHolder {
-                repository,
-                registration,
-            });
+                let holder = Arc::new(RepositoryHolder {
+                    repository,
+                    registration,
+                });
 
-            Ok(SharedHandle::new(holder))
-        })
+                Ok(SharedHandle::new(holder))
+            }
+            .instrument(span),
+        )
     })
 }
 
@@ -98,31 +101,33 @@ pub unsafe extern "C" fn repository_open(
             Some(Password::new(utils::ptr_to_str(master_password)?))
         };
 
-        let repos_monitor = ctx.repos_monitor().clone();
+        let span = ctx.repos_span().clone();
 
-        ctx.spawn(async move {
-            let repository = Repository::open(
-                store.into_std_path_buf(),
-                device_id,
-                master_password.map(MasterSecret::Password),
-                ENABLE_MERGER,
-                &repos_monitor,
-            )
-            .await?;
+        ctx.spawn(
+            async move {
+                let repository = Repository::open(
+                    store.into_std_path_buf(),
+                    device_id,
+                    master_password.map(MasterSecret::Password),
+                    ENABLE_MERGER,
+                )
+                .await?;
 
-            let registration = network_handle.register(repository.store().clone());
+                let registration = network_handle.register(repository.store().clone());
 
-            // TODO: consider leaving the decision to enable DHT, PEX to the app.
-            registration.enable_dht();
-            registration.enable_pex();
+                // TODO: consider leaving the decision to enable DHT, PEX to the app.
+                registration.enable_dht();
+                registration.enable_pex();
 
-            let holder = Arc::new(RepositoryHolder {
-                repository,
-                registration,
-            });
+                let holder = Arc::new(RepositoryHolder {
+                    repository,
+                    registration,
+                });
 
-            Ok(SharedHandle::new(holder))
-        })
+                Ok(SharedHandle::new(holder))
+            }
+            .instrument(span),
+        )
     })
 }
 
