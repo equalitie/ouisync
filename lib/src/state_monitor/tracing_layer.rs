@@ -154,9 +154,6 @@ impl<'a> Visit for RecordVisitor<'a> {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.set_value(field.name(), format!("{:?}", value));
     }
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.set_value(field.name(), value.into());
-    }
 }
 
 //--------------------------------------------------------------------
