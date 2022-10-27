@@ -61,7 +61,7 @@ use tokio::{
     sync::mpsc,
     task::{AbortHandle, JoinSet},
 };
-use tracing::{instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 pub struct Network {
     inner: Arc<Inner>,
@@ -390,7 +390,7 @@ impl Inner {
         let conn = Connectivity::infer(bind);
 
         // Gateway
-        let side_channel_makers = self.gateway.bind(bind).await;
+        let side_channel_makers = self.gateway.bind(bind).instrument(self.span.clone()).await;
 
         // DHT
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
