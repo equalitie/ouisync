@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{AccessSecrets, MasterSecret, Repository, StateMonitor};
+use ouisync_lib::{AccessSecrets, MasterSecret, Repository};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -236,7 +236,6 @@ async fn setup() -> (TempDir, MountGuard) {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         true,
-        &StateMonitor::make_root(),
     )
     .instrument(span)
     .await

@@ -1,9 +1,8 @@
-use super::message::Request;
-use crate::repository;
+use super::{message::Request, repository_stats::RepositoryStats};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
-    sync::Weak,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::{sync::OwnedSemaphorePermit, time};
@@ -19,14 +18,14 @@ pub(super) const MAX_PENDING_REQUESTS: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct PendingRequests {
-    monitored: Weak<repository::MonitoredValues>,
+    stats: Arc<Mutex<RepositoryStats>>,
     map: HashMap<Request, RequestData>,
 }
 
 impl PendingRequests {
-    pub fn new(monitored: Weak<repository::MonitoredValues>) -> Self {
+    pub fn new(stats: Arc<Mutex<RepositoryStats>>) -> Self {
         Self {
-            monitored,
+            stats,
             map: HashMap::new(),
         }
     }
@@ -76,20 +75,20 @@ impl PendingRequests {
     }
 
     fn request_added(&self, request: &Request) {
-        if let Some(monitored) = self.monitored.upgrade() {
-            match request {
-                Request::ChildNodes(_) => *monitored.index_requests_inflight.get() += 1,
-                Request::Block(_) => *monitored.block_requests_inflight.get() += 1,
+        match request {
+            Request::ChildNodes(_) => {
+                self.stats.lock().unwrap().write().index_requests_inflight += 1
             }
+            Request::Block(_) => self.stats.lock().unwrap().write().block_requests_inflight += 1,
         }
     }
 
     fn request_removed(&self, request: &Request) {
-        if let Some(monitored) = self.monitored.upgrade() {
-            match request {
-                Request::ChildNodes(_) => *monitored.index_requests_inflight.get() -= 1,
-                Request::Block(_) => *monitored.block_requests_inflight.get() -= 1,
+        match request {
+            Request::ChildNodes(_) => {
+                self.stats.lock().unwrap().write().index_requests_inflight -= 1
             }
+            Request::Block(_) => self.stats.lock().unwrap().write().block_requests_inflight -= 1,
         }
     }
 }

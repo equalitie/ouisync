@@ -21,6 +21,7 @@ use tokio::{
     task::JoinHandle,
     time,
 };
+use tracing::Span;
 
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
 /// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
@@ -84,10 +85,9 @@ pub unsafe extern "C" fn session_open(
             }
         };
 
-        let repos_monitor = root_monitor.make_child("Repositories");
-
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
         let network = Network::new(config);
+        let repos_span = tracing::info_span!("Repositories");
 
         let session = Session {
             runtime,
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn session_open(
             network,
             sender,
             root_monitor,
-            repos_monitor,
+            repos_span,
             _logger: logger,
         };
 
@@ -232,7 +232,7 @@ pub(super) struct Session {
     network: Network,
     sender: Sender,
     root_monitor: StateMonitor,
-    repos_monitor: StateMonitor,
+    repos_span: Span,
     _logger: Logger,
 }
 
@@ -249,8 +249,8 @@ impl Session {
         &self.network
     }
 
-    pub(super) fn repos_monitor(&self) -> &StateMonitor {
-        &self.repos_monitor
+    pub(super) fn repos_span(&self) -> &Span {
+        &self.repos_span
     }
 }
 
@@ -281,8 +281,8 @@ where
         &self.session.device_id
     }
 
-    pub(super) fn repos_monitor(&self) -> &StateMonitor {
-        self.session.repos_monitor()
+    pub(super) fn repos_span(&self) -> &Span {
+        self.session.repos_span()
     }
 }
 

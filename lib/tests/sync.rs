@@ -7,7 +7,7 @@ use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey, db, AccessMode, AccessSecrets, EntryType, Error, File, MasterSecret,
-    Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc, time::Duration};
@@ -467,7 +467,6 @@ async fn recreate_local_branch() {
         master_secret_a.clone(),
         access_secrets.clone(),
         true,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -497,7 +496,6 @@ async fn recreate_local_branch() {
         Some(master_secret_a.clone()),
         AccessMode::Read,
         true,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -540,15 +538,9 @@ async fn recreate_local_branch() {
 
     // A: Reopen in write mode
     drop(repo_a);
-    let repo_a = Repository::open(
-        &store_a,
-        device_id_a,
-        Some(master_secret_a),
-        true,
-        &StateMonitor::make_root(),
-    )
-    .await
-    .unwrap();
+    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a), true)
+        .await
+        .unwrap();
 
     // A: Modify the repo
     repo_a.create_file("bar.txt").await.unwrap();

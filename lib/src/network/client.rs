@@ -1,5 +1,6 @@
 use super::{
     message::{Content, Request, Response},
+    repository_stats::RepositoryStats,
     request::PendingRequests,
 };
 use crate::{
@@ -7,12 +8,11 @@ use crate::{
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
-    repository::MonitoredValues,
     store::Store,
 };
 use std::{
     collections::VecDeque,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex},
 };
 use tokio::{
     select,
@@ -20,7 +20,7 @@ use tokio::{
 };
 use tracing::instrument;
 
-pub(crate) struct Client {
+pub(super) struct Client {
     store: Store,
     tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
@@ -30,7 +30,7 @@ pub(crate) struct Client {
     recv_queue: VecDeque<Success>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
-    monitored: Weak<MonitoredValues>,
+    stats: Arc<Mutex<RepositoryStats>>,
 }
 
 impl Client {
@@ -39,22 +39,22 @@ impl Client {
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
+        stats: Arc<Mutex<RepositoryStats>>,
     ) -> Self {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
-        let monitored = store.monitored.clone();
 
         Self {
             store,
             tx,
             rx,
             request_limiter,
-            pending_requests: PendingRequests::new(monitored.clone()),
+            pending_requests: PendingRequests::new(stats.clone()),
             send_queue: VecDeque::new(),
             recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
             block_tracker,
-            monitored,
+            stats,
         }
     }
 
@@ -104,9 +104,11 @@ impl Client {
             return;
         }
 
-        if let Some(monitored) = self.monitored.upgrade() {
-            *monitored.total_request_cummulative.get() += 1;
-        }
+        self.stats
+            .lock()
+            .unwrap()
+            .write()
+            .total_requests_cummulative += 1;
 
         self.tx.send(Content::Request(request)).await.unwrap_or(());
     }

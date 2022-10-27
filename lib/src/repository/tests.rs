@@ -16,7 +16,6 @@ async fn root_directory_always_exists() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -42,7 +41,6 @@ async fn count_leaf_nodes_sanity_checks() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -95,7 +93,6 @@ async fn merge() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         true,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -139,7 +136,6 @@ async fn recreate_previously_deleted_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -183,7 +179,6 @@ async fn recreate_previously_deleted_directory() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -216,7 +211,6 @@ async fn concurrent_read_and_create_dir() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -270,7 +264,6 @@ async fn concurrent_write_and_read_file() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
@@ -390,7 +383,6 @@ async fn interleaved_flush() {
             MasterSecret::random(),
             AccessSecrets::random_write(),
             false,
-            &StateMonitor::make_root(),
         )
         .await
         .unwrap();
@@ -478,7 +470,7 @@ async fn blind_access_non_empty_repo() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -505,7 +497,7 @@ async fn blind_access_non_empty_repo() {
             master_secret,
             access_mode,
             false,
-            &StateMonitor::make_root(),
+            Span::none(),
         )
         .await
         .unwrap();
@@ -545,7 +537,7 @@ async fn blind_access_empty_repo() {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -557,7 +549,7 @@ async fn blind_access_empty_repo() {
         Some(MasterSecret::random()),
         AccessMode::Read,
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -578,7 +570,7 @@ async fn read_access_same_replica() {
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -599,7 +591,7 @@ async fn read_access_same_replica() {
         Some(master_secret),
         AccessMode::Read,
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -647,7 +639,7 @@ async fn read_access_different_replica() {
         master_secret.clone(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -667,7 +659,7 @@ async fn read_access_different_replica() {
         Some(master_secret),
         AccessMode::Read,
         false,
-        &StateMonitor::make_root(),
+        Span::none(),
     )
     .await
     .unwrap();
@@ -1146,7 +1138,6 @@ async fn setup() -> (TempDir, Repository) {
         MasterSecret::random(),
         AccessSecrets::random_write(),
         false,
-        &StateMonitor::make_root(),
     )
     .await
     .unwrap();
