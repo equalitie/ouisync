@@ -50,11 +50,23 @@ struct StdRedirect {
     handle: Option<JoinHandle<()>>,
     active: Arc<AtomicBool>,
     writer: PipeWriter,
+    old_fd: libc::c_int,
+    old_fd_dup: libc::c_int,
 }
 
 impl StdRedirect {
     fn new<T: AsRawFd>(stream: T, priority: LogPriority) -> Result<Self, io::Error> {
         let (reader, writer) = os_pipe::pipe()?;
+
+        // Remember these so we can point the old stream FD to where it pointed before.
+        //
+        // SAFETY: The file descriptor should be valid because it was obtained using
+        // `as_raw_fd` from a valid rust io object.
+        let (old_fd, old_fd_dup) = unsafe {
+            let old_fd = stream.as_raw_fd();
+            let old_fd_dup = libc::dup(old_fd);
+            (old_fd, old_fd_dup)
+        };
 
         // SAFETY: Both file descriptors should be valid because they are obtained using
         // `as_raw_fd` from valid rust io objects.
@@ -74,6 +86,8 @@ impl StdRedirect {
             handle: Some(handle),
             active,
             writer,
+            old_fd,
+            old_fd_dup,
         })
     }
 }
@@ -86,6 +100,21 @@ impl Drop for StdRedirect {
         // Write empty line to the pipe to wake up the reader
         self.writer.write_all(b"\n").unwrap_or(());
         self.writer.flush().unwrap_or(());
+
+        unsafe {
+            // Point the original FD to it's previous target.
+            let r = libc::dup2(self.old_fd_dup, self.old_fd);
+            if r < 0 {
+                print(
+                    ANDROID_LOG_FATAL,
+                    format!(
+                        "Failed to point the redirected file descriptor \
+                            to its original target (error code:{})",
+                        r
+                    ),
+                );
+            }
+        }
 
         if let Some(handle) = self.handle.take() {
             handle.join().unwrap_or(());
