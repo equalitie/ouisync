@@ -34,6 +34,7 @@ impl TracingLayer {
             Some(trace_monitor) => {
                 *inner = Some(TraceLayerInner {
                     root_monitor: trace_monitor,
+                    root_values: MonitoredValues::new(),
                     spans: HashMap::new(),
                 })
             }
@@ -62,16 +63,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             Some(inner) => inner,
             None => panic!("Tracing started prior to setting a monitor"),
         };
-        let span_id = match ctx.current_span().id() {
-            Some(span_id) => span_id.into_u64(),
-            None => {
-                println!("TracingLayer !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                println!("TracingLayer Received an event without a current span:");
-                println!("TracingLayer {:?}", event);
-                println!("TracingLayer !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                return;
-            }
-        };
+        let span_id = ctx.current_span().id().map(|id| id.into_u64());
         inner.on_event(event, span_id);
     }
 
@@ -100,6 +92,7 @@ type MonitoredValues = HashMap<&'static str, MonitoredValue<String>>;
 
 struct TraceLayerInner {
     root_monitor: StateMonitor,
+    root_values: MonitoredValues,
     spans: HashMap<SpanId, (StateMonitor, MonitoredValues)>,
 }
 
@@ -134,10 +127,17 @@ impl TraceLayerInner {
         assert!(!overwritten);
     }
 
-    fn on_event(&mut self, event: &Event<'_>, span_id: u64) {
-        if let Some((monitor, values)) = self.spans.get_mut(&span_id) {
-            event.record(&mut RecordVisitor { monitor, values });
-        }
+    fn on_event(&mut self, event: &Event<'_>, span_id: Option<u64>) {
+        // It sometimes happens that we get an event that doesn't have a span. We shove it all into
+        // the root monitor, although this may not be 100% correct.
+        let (monitor, values) = match span_id {
+            Some(span_id) => match self.spans.get_mut(&span_id) {
+                Some((monitor, values)) => (monitor, values),
+                None => (&mut self.root_monitor, &mut self.root_values),
+            },
+            None => (&mut self.root_monitor, &mut self.root_values),
+        };
+        event.record(&mut RecordVisitor { monitor, values });
     }
 
     fn on_close(&mut self, span_id: u64) {
