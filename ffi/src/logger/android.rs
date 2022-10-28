@@ -194,6 +194,7 @@ fn setup_logger(trace_monitor: StateMonitor) {
         fmt,
         layer::SubscriberExt,
         util::SubscriberInitExt,
+        Layer,
     };
 
     TRACING_LAYER.set_monitor(Some(trace_monitor));
@@ -209,7 +210,8 @@ fn setup_logger(trace_monitor: StateMonitor) {
                 ))
                 .with_target(false)
                 .with_file(true)
-                .with_line_number(true),
+                .with_line_number(true)
+                .with_filter(LevelFilter::DEBUG),
         )
         .with(
             Targets::new()
