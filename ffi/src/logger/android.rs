@@ -25,6 +25,8 @@ use std::{
 // release mode.
 const TAG: &str = "flutter-ouisync";
 
+static TRACING_LAYER: Lazy<TracingLayer> = Lazy::new(|| TracingLayer::new());
+
 pub(crate) struct Logger {
     _stdout: StdRedirect,
     _stderr: StdRedirect,
@@ -42,6 +44,12 @@ impl Logger {
             _stdout: StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?,
             _stderr: StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?,
         })
+    }
+}
+
+impl Drop for Logger {
+    fn drop(&mut self) {
+        TRACING_LAYER.set_monitor(None);
     }
 }
 
@@ -186,10 +194,13 @@ fn setup_logger(trace_monitor: StateMonitor) {
         fmt,
         layer::SubscriberExt,
         util::SubscriberInitExt,
+        Layer,
     };
 
+    TRACING_LAYER.set_monitor(Some(trace_monitor));
+
     tracing_subscriber::registry()
-        .with(TracingLayer::new(trace_monitor))
+        .with(TRACING_LAYER.clone())
         .with(
             fmt::layer()
                 .pretty()
@@ -199,7 +210,8 @@ fn setup_logger(trace_monitor: StateMonitor) {
                 ))
                 .with_target(false)
                 .with_file(true)
-                .with_line_number(true),
+                .with_line_number(true)
+                .with_filter(LevelFilter::DEBUG),
         )
         .with(
             Targets::new()
