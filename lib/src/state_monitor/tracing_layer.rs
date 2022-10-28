@@ -2,7 +2,7 @@ use super::{MonitoredValue, StateMonitor};
 use std::{
     collections::{hash_map, HashMap},
     fmt,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use tracing::{
     event::Event,
@@ -15,17 +15,29 @@ use tracing_subscriber::{
     Layer,
 };
 
+#[derive(Clone)]
 pub struct TracingLayer {
-    inner: Mutex<TraceLayerInner>,
+    inner: Arc<Mutex<Option<TraceLayerInner>>>,
 }
 
 impl TracingLayer {
-    pub fn new(trace_monitor: StateMonitor) -> Self {
+    pub fn new() -> Self {
         Self {
-            inner: Mutex::new(TraceLayerInner {
-                root_monitor: trace_monitor,
-                spans: HashMap::new(),
-            }),
+            inner: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_monitor(&self, trace_monitor: Option<StateMonitor>) {
+        let mut inner = self.inner.lock().unwrap();
+
+        match trace_monitor {
+            Some(trace_monitor) => {
+                *inner = Some(TraceLayerInner {
+                    root_monitor: trace_monitor,
+                    spans: HashMap::new(),
+                })
+            }
+            None => *inner = None,
         }
     }
 }
@@ -33,7 +45,11 @@ impl TracingLayer {
 // https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/trait.Layer.html
 impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for TracingLayer {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap();
+        let inner = match guard.as_mut() {
+            Some(inner) => inner,
+            None => panic!("Tracing started prior to setting a monitor"),
+        };
         // Unwrap should be OK since I assume the span has just been created (given the name of
         // this function).
         let span = ctx.span(id).unwrap();
@@ -41,20 +57,39 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
-        // Unwrap should be OK since I assume the span has just been created (given the name of
-        // this function).
-        let span_id = ctx.current_span().id().unwrap().into_u64();
+        let mut guard = self.inner.lock().unwrap();
+        let inner = match guard.as_mut() {
+            Some(inner) => inner,
+            None => panic!("Tracing started prior to setting a monitor"),
+        };
+        let span_id = match ctx.current_span().id() {
+            Some(span_id) => span_id.into_u64(),
+            None => {
+                println!("TracingLayer !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                println!("TracingLayer Received an event without a current span:");
+                println!("TracingLayer {:?}", event);
+                println!("TracingLayer !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                return;
+            }
+        };
         inner.on_event(event, span_id);
     }
 
     fn on_close(&self, id: span::Id, _ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap();
+        let inner = match guard.as_mut() {
+            Some(inner) => inner,
+            None => panic!("Tracing started prior to setting a monitor"),
+        };
         inner.on_close(id.into_u64());
     }
 
     fn on_record(&self, id: &span::Id, record: &Record<'_>, _ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap();
+        let inner = match guard.as_mut() {
+            Some(inner) => inner,
+            None => panic!("Tracing started prior to setting a monitor"),
+        };
         inner.on_record(id.into_u64(), record);
     }
 }
