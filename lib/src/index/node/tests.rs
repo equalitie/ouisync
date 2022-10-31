@@ -256,7 +256,7 @@ async fn compute_summary_from_empty_leaf_nodes() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, BlockPresence::NONE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -284,7 +284,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, BlockPresence::NONE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -301,7 +301,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Some);
+    assert!(summary.block_presence.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -317,7 +317,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Full);
+    assert_eq!(summary.block_presence, BlockPresence::FULL);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -328,7 +328,7 @@ async fn compute_summary_from_empty_inner_nodes() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, BlockPresence::NONE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -366,7 +366,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, BlockPresence::NONE);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -412,7 +412,7 @@ async fn compute_summary_from_complete_inner_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Some);
+    assert!(summary.block_presence.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -438,7 +438,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Full);
+    assert_eq!(summary.block_presence, BlockPresence::FULL);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -628,7 +628,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Check that initially all blocks are missing
     root_node.reload(&mut tx).await.unwrap();
 
-    assert_eq!(root_node.summary.block_presence, BlockPresence::None);
+    assert_eq!(root_node.summary.block_presence, BlockPresence::NONE);
 
     let mut received_blocks = 0;
 
@@ -639,9 +639,15 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
         root_node.reload(&mut tx).await.unwrap();
 
         if received_blocks < snapshot.blocks().len() {
-            assert_eq!(root_node.summary.block_presence, BlockPresence::Some);
+            assert!(
+                root_node.summary.block_presence.is_some(),
+                "expected BlockPresence::some(_) after {}/{} received blocks, got {:?}",
+                received_blocks,
+                snapshot.blocks().len(),
+                root_node.summary.block_presence
+            );
         } else {
-            assert_eq!(root_node.summary.block_presence, BlockPresence::Full);
+            assert_eq!(root_node.summary.block_presence, BlockPresence::FULL);
         }
 
         // TODO: check also inner and leaf nodes

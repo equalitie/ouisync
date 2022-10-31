@@ -39,8 +39,7 @@ impl InnerNode {
                  bucket,
                  hash,
                  is_complete,
-                 block_presence,
-                 block_presence_checksum
+                 block_presence
              FROM snapshot_inner_nodes
              WHERE parent = ?",
         )
@@ -53,7 +52,6 @@ impl InnerNode {
                 summary: Summary {
                     is_complete: row.get(2),
                     block_presence: row.get(3),
-                    block_presence_checksum: db::decode_u64(row.get(4)),
                 },
             };
 
@@ -71,8 +69,7 @@ impl InnerNode {
     /// Load the inner node with the specified hash
     pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>> {
         let node = sqlx::query(
-            "SELECT
-                 bucket, is_complete, block_presence, block_presence_checksum
+            "SELECT is_complete, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
@@ -82,9 +79,8 @@ impl InnerNode {
         .map(|row| Self {
             hash: *hash,
             summary: Summary {
-                is_complete: row.get(1),
-                block_presence: row.get(2),
-                block_presence_checksum: db::decode_u64(row.get(3)),
+                is_complete: row.get(0),
+                block_presence: row.get(1),
             },
         });
 
@@ -111,10 +107,9 @@ impl InnerNode {
                  bucket,
                  hash,
                  is_complete,
-                 block_presence,
-                 block_presence_checksum
+                 block_presence
              )
-             VALUES (?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (parent, bucket) DO NOTHING",
         )
         .bind(parent)
@@ -122,7 +117,6 @@ impl InnerNode {
         .bind(&self.hash)
         .bind(self.summary.is_complete)
         .bind(self.summary.block_presence)
-        .bind(db::encode_u64(self.summary.block_presence_checksum))
         .execute(conn)
         .await?;
 
@@ -135,15 +129,11 @@ impl InnerNode {
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
-             SET
-                 is_complete = ?,
-                 block_presence = ?,
-                 block_presence_checksum = ?
+             SET is_complete = ?, block_presence = ?
              WHERE hash = ?",
         )
         .bind(summary.is_complete)
         .bind(summary.block_presence)
-        .bind(db::encode_u64(summary.block_presence_checksum))
         .bind(hash)
         .execute(conn)
         .await?;
@@ -206,10 +196,7 @@ impl InnerNode {
         }
 
         let summary = sqlx::query(
-            "SELECT
-                 is_complete,
-                 block_presence,
-                 block_presence_checksum
+            "SELECT is_complete, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
@@ -219,7 +206,6 @@ impl InnerNode {
         .map(|row| Summary {
             is_complete: row.get(0),
             block_presence: row.get(1),
-            block_presence_checksum: db::decode_u64(row.get(2)),
         });
 
         if let Some(summary) = summary {

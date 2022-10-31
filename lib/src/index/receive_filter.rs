@@ -61,7 +61,7 @@ async fn load(
     hash: &Hash,
 ) -> Result<Option<(u64, Summary)>> {
     let row = sqlx::query(
-        "SELECT rowid, block_presence, block_presence_checksum
+        "SELECT rowid, block_presence
          FROM received_inner_nodes
          WHERE client_id = ? AND hash = ?",
     )
@@ -80,7 +80,6 @@ async fn load(
     let summary = Summary {
         is_complete: true,
         block_presence: row.get(1),
-        block_presence_checksum: db::decode_u64(row.get(2)),
     };
 
     Ok(Some((id, summary)))
@@ -94,13 +93,12 @@ async fn insert(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO received_inner_nodes
-         (client_id, hash, block_presence, block_presence_checksum)
-         VALUES (?, ?, ?, ?)",
+         (client_id, hash, block_presence)
+         VALUES (?, ?, ?)",
     )
     .bind(db::encode_u64(client_id))
     .bind(hash)
     .bind(summary.block_presence)
-    .bind(db::encode_u64(summary.block_presence_checksum))
     .execute(conn)
     .await?;
 
@@ -110,11 +108,10 @@ async fn insert(
 async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Result<()> {
     sqlx::query(
         "UPDATE received_inner_nodes
-         SET block_presence = ?, block_presence_checksum = ?
+         SET block_presence = ?
          WHERE rowid = ?",
     )
     .bind(summary.block_presence)
-    .bind(db::encode_u64(summary.block_presence_checksum))
     .bind(db::encode_u64(row_id))
     .execute(conn)
     .await?;
