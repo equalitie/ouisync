@@ -160,7 +160,7 @@ impl Client {
             writer_id = ?proof.writer_id,
             vv = ?proof.version_vector,
             hash = ?proof.hash,
-            missing_blocks = summary.missing_blocks_count(),
+            block_presence = ?summary.block_presence,
         ),
     )]
     async fn handle_root_node(

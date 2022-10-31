@@ -219,7 +219,7 @@ impl<'a> Monitor<'a> {
             branch_id = ?root_node.proof.writer_id,
             hash = ?root_node.proof.hash,
             vv = ?root_node.proof.version_vector,
-            missing_blocks = root_node.summary.missing_blocks_count(),
+            block_presence = ?root_node.summary.block_presence,
             "handle_branch_changed",
         );
 

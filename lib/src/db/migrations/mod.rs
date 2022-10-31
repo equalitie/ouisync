@@ -4,6 +4,7 @@ use super::{get_pragma, set_pragma, Connection, Error};
 pub(super) async fn run(conn: &mut Connection) -> Result<(), Error> {
     apply(conn, 1, include_str!("v1.sql")).await?;
     apply(conn, 2, include_str!("v2.sql")).await?;
+    apply(conn, 3, include_str!("v3.sql")).await?;
 
     Ok(())
 }

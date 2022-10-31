@@ -1,108 +1,185 @@
 use super::{InnerNodeMap, LeafNodeSet};
 use crc::{Crc, CRC_64_XZ};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, Sqlite, Type,
+};
+use thiserror::Error;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct Summary {
-    pub(in super::super) is_complete: bool,
-    pub(in super::super) missing_blocks_count: u64,
-    // Checksum is used to disambiguate the situation where two replicas have exactly the same
-    // missing blocks (both count and checksum would be the same) or they just happen to have the
-    // same number of missing blocks, but those blocks are different (counts would be the same but
-    // checksums would differ (unless there is a collision which should be rare)).
-    pub(in super::super) missing_blocks_checksum: u64,
+    pub is_complete: bool,
+    pub block_presence: BlockPresence,
+    // Checksum is used to determine whether two nodes with the same `block_presence` have also the
+    // same set of present blocks. Only used if `block_presence` is `Some`, otherwise it's zero.
+    pub block_presence_checksum: u64,
 }
 
 impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
-    // TODO: consider renaming this to `UNKNOWN`, `UNDECIDED`, `UNDEFINED`, etc...
     pub const INCOMPLETE: Self = Self {
         is_complete: false,
-        missing_blocks_count: u64::MAX,
-        missing_blocks_checksum: 0,
+        block_presence: BlockPresence::None,
+        block_presence_checksum: 0,
     };
 
     /// Summary indicating that the whole subtree is complete and all its blocks present.
     pub const FULL: Self = Self {
         is_complete: true,
-        missing_blocks_count: 0,
-        missing_blocks_checksum: 0,
+        block_presence: BlockPresence::Full,
+        block_presence_checksum: 0,
     };
 
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
         let crc = Crc::<u64>::new(&CRC_64_XZ);
         let mut digest = crc.digest();
-        let mut missing_blocks_count = 0;
+        let mut present = 0;
 
         for node in nodes {
             if node.is_missing {
-                missing_blocks_count += 1;
-                digest.update(&[1])
+                digest.update(&[BlockPresence::None as u8])
             } else {
-                digest.update(&[0])
+                digest.update(&[BlockPresence::Full as u8]);
+                present += 1;
             }
         }
 
+        let (block_presence, block_presence_checksum) = if present == 0 {
+            (BlockPresence::None, 0)
+        } else if present < nodes.len() {
+            (BlockPresence::Some, digest.finalize())
+        } else {
+            (BlockPresence::Full, 0)
+        };
+
         Self {
             is_complete: true,
-            missing_blocks_count,
-            missing_blocks_checksum: digest.finalize(),
+            block_presence,
+            block_presence_checksum,
         }
     }
 
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
         let crc = Crc::<u64>::new(&CRC_64_XZ);
         let mut digest = crc.digest();
-        let mut missing_blocks_count = 0u64;
+        let mut block_presence = BlockPresence::None;
         let mut is_complete = true;
 
-        for (_, node) in nodes {
+        for (index, (_, node)) in nodes.into_iter().enumerate() {
             // We should never store empty nodes, but in case someone sends us one anyway, ignore
             // it.
             if node.is_empty() {
                 continue;
             }
 
-            // If at least one node is incomplete the whole collection is incomplete as well.
-            if node.summary == Self::INCOMPLETE {
-                return Self::INCOMPLETE;
-            }
+            block_presence = match (index, block_presence, node.summary.block_presence) {
+                (0, _, _) => node.summary.block_presence,
+                (_, BlockPresence::None, BlockPresence::None) => BlockPresence::None,
+                (_, BlockPresence::None, BlockPresence::Some | BlockPresence::Full) => {
+                    BlockPresence::Some
+                }
+                (_, BlockPresence::Some, _) => BlockPresence::Some,
+                (_, BlockPresence::Full, BlockPresence::None | BlockPresence::Some) => {
+                    BlockPresence::Some
+                }
+                (_, BlockPresence::Full, BlockPresence::Full) => BlockPresence::Full,
+            };
 
             is_complete = is_complete && node.summary.is_complete;
-            missing_blocks_count =
-                missing_blocks_count.saturating_add(node.summary.missing_blocks_count);
-            digest.update(&node.summary.missing_blocks_count.to_le_bytes());
-            digest.update(&node.summary.missing_blocks_checksum.to_le_bytes());
+            digest.update(&[node.summary.block_presence as u8]);
+            digest.update(&node.summary.block_presence_checksum.to_le_bytes());
         }
+
+        let block_presence_checksum = match block_presence {
+            BlockPresence::Some => digest.finalize(),
+            BlockPresence::None | BlockPresence::Full => 0,
+        };
 
         Self {
             is_complete,
-            missing_blocks_count,
-            missing_blocks_checksum: digest.finalize(),
+            block_presence,
+            block_presence_checksum,
         }
     }
 
-    /// Checks whether the subtree at `self` has potentially more missing blocks than the one at
-    /// `other`.
+    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in
+    /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
+    /// missing.
     pub fn is_outdated(&self, other: &Self) -> bool {
-        if self.missing_blocks_count == 0 {
-            return false;
-        }
-
-        match self.missing_blocks_count.cmp(&other.missing_blocks_count) {
-            Ordering::Less | Ordering::Greater => true,
-            Ordering::Equal => self.missing_blocks_checksum != other.missing_blocks_checksum,
+        match (self.block_presence, other.block_presence) {
+            (_, BlockPresence::None) | (BlockPresence::Full, _) => false,
+            (BlockPresence::None, BlockPresence::Some)
+            | (BlockPresence::None, BlockPresence::Full)
+            | (BlockPresence::Some, BlockPresence::Full) => true,
+            (BlockPresence::Some, BlockPresence::Some) => {
+                self.block_presence_checksum != other.block_presence_checksum
+            }
         }
     }
 
     pub fn is_complete(&self) -> bool {
         self.is_complete
     }
+}
 
-    pub fn missing_blocks_count(&self) -> u64 {
-        self.missing_blocks_count
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[repr(u8)]
+pub(crate) enum BlockPresence {
+    /// No blocks are present / all are missing
+    None = 0,
+    /// Some blocks are present / some are missing
+    Some = 1,
+    /// All blocks are present / none are missing
+    Full = 2,
+}
+
+impl From<BlockPresence> for u8 {
+    fn from(block_presence: BlockPresence) -> Self {
+        block_presence as u8
+    }
+}
+
+impl TryFrom<u8> for BlockPresence {
+    type Error = OutOfRange;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        const NONE: u8 = BlockPresence::None as u8;
+        const SOME: u8 = BlockPresence::Some as u8;
+        const FULL: u8 = BlockPresence::Full as u8;
+
+        match value {
+            NONE => Ok(Self::None),
+            SOME => Ok(Self::Some),
+            FULL => Ok(Self::Full),
+            _ => Err(OutOfRange),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("value out of range")]
+pub(crate) struct OutOfRange;
+
+impl Type<Sqlite> for BlockPresence {
+    fn type_info() -> SqliteTypeInfo {
+        <u8 as Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for BlockPresence {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        Encode::<Sqlite>::encode_by_ref(&(*self as u8), args)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for BlockPresence {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let num = <u8 as Decode<Sqlite>>::decode(value)?;
+        Ok(num.try_into()?)
     }
 }
