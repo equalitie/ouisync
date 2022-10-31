@@ -85,42 +85,16 @@ impl Summary {
         }
     }
 
-    /// Check whether the replica with `self` is up to date with the replica with `other` in terms
-    /// of the blocks they have:
-    ///
-    /// - `Some(true)` means this replica has all the blocks that the other replica has (and
-    ///   possibly some more) which means it's up to date and no further action needs to be taken.
-    /// - `Some(false)` means that there are some blocks that the other replica has that this
-    ///   replica is missing and it needs to request the child nodes to learn which are they.
-    /// - `None` means it's not possible to tell which replica is more up to date and this replica
-    ///   must wait for the other one to make progress first.
-    ///
-    /// Note that if `a.is_up_to_date_with(b)` returns `None` then `b.is_up_to_date_with(a)` is
-    /// guaranteed to return `Some` which means that at least one replica is always able to make
-    /// progress.
-    pub fn is_up_to_date_with(&self, other: &Self) -> Option<bool> {
-        use Ordering::*;
-
-        // | checksum   | count      | outcome     |
-        // +------------+------------+-------------+
-        // | lhs == rhs | lhs == rhs | Some(true)  |
-        // | lhs == rhs | lhs >  rhs | Some(false) | unlikely (CRC collision)
-        // | lhs == rhs | lhs <  rhs | None        | unlikely (CRC collision)
-        // | lhs != rhs | lhs == rhs | Some(false) |
-        // | lhs != rhs | lhs >  rhs | Some(false) |
-        // | lhs != rhs | lhs <  rhs | None        |
-
+    /// Checks whether the subtree at `self` has potentially more missing blocks than the one at
+    /// `other`.
+    pub fn is_outdated(&self, other: &Self) -> bool {
         if self.missing_blocks_count == 0 {
-            return Some(true);
+            return false;
         }
 
-        match (
-            self.missing_blocks_checksum == other.missing_blocks_checksum,
-            self.missing_blocks_count.cmp(&other.missing_blocks_count),
-        ) {
-            (true, Equal) => Some(true),
-            (_, Greater) | (false, Equal) => Some(false),
-            (_, Less) => None,
+        match self.missing_blocks_count.cmp(&other.missing_blocks_count) {
+            Ordering::Less | Ordering::Greater => true,
+            Ordering::Equal => self.missing_blocks_checksum != other.missing_blocks_checksum,
         }
     }
 

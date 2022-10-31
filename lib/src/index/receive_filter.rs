@@ -34,7 +34,7 @@ impl ReceiveFilter {
         let mut tx = conn.begin().await?;
 
         if let Some((row_id, old_summary)) = load(&mut tx, self.id, hash).await? {
-            if old_summary.is_up_to_date_with(new_summary).unwrap_or(false) {
+            if !old_summary.is_outdated(new_summary) {
                 return Ok(false);
             }
 
