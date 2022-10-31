@@ -15,16 +15,14 @@ use tracing_subscriber::{
     Layer,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TracingLayer {
     inner: Arc<Mutex<Option<TraceLayerInner>>>,
 }
 
 impl TracingLayer {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(None)),
-        }
+        Self::default()
     }
 
     pub fn set_monitor(&self, trace_monitor: Option<StateMonitor>) {

@@ -10,10 +10,7 @@ use crate::{
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     store::Store,
 };
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::{collections::VecDeque, sync::Arc};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -30,7 +27,7 @@ pub(super) struct Client {
     recv_queue: VecDeque<Success>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
-    stats: Arc<Mutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
 }
 
 impl Client {
@@ -39,7 +36,7 @@ impl Client {
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
         request_limiter: Arc<Semaphore>,
-        stats: Arc<Mutex<RepositoryStats>>,
+        stats: Arc<RepositoryStats>,
     ) -> Self {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
@@ -104,11 +101,7 @@ impl Client {
             return;
         }
 
-        self.stats
-            .lock()
-            .unwrap()
-            .write()
-            .total_requests_cummulative += 1;
+        self.stats.write().total_requests_cummulative += 1;
 
         self.tx.send(Content::Request(request)).await.unwrap_or(());
     }

@@ -258,7 +258,7 @@ impl Handle {
             self.inner.pex_discovery_tx.clone(),
         );
 
-        let stats = Arc::new(BlockingMutex::new(RepositoryStats::new(store.span.clone())));
+        let stats = Arc::new(RepositoryStats::new(store.span.clone()));
 
         let mut network_state = self.inner.state.lock().unwrap();
 
@@ -353,7 +353,7 @@ struct RegistrationHolder {
     store: Store,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
-    stats: Arc<BlockingMutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
 }
 
 struct Inner {
@@ -384,12 +384,7 @@ struct State {
 }
 
 impl State {
-    fn create_link(
-        &mut self,
-        store: Store,
-        pex: &PexController,
-        stats: Arc<BlockingMutex<RepositoryStats>>,
-    ) {
+    fn create_link(&mut self, store: Store, pex: &PexController, stats: Arc<RepositoryStats>) {
         for broker in self.message_brokers.values_mut() {
             broker.create_link(store.clone(), pex, stats.clone())
         }

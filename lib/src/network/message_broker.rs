@@ -17,7 +17,7 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
@@ -85,12 +85,7 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(
-        &mut self,
-        store: Store,
-        pex: &PexController,
-        stats: Arc<Mutex<RepositoryStats>>,
-    ) {
+    pub fn create_link(&mut self, store: Store, pex: &PexController, stats: Arc<RepositoryStats>) {
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
@@ -180,7 +175,7 @@ async fn maintain_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
-    stats: Arc<Mutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
 ) {
     let mut backoff = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
@@ -265,7 +260,7 @@ async fn run_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     pex_announcer: &mut PexAnnouncer,
-    stats: Arc<Mutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
 ) -> ControlFlow {
     let (request_tx, request_rx) = mpsc::channel(1);
     let (response_tx, response_rx) = mpsc::channel(1);
@@ -357,7 +352,7 @@ async fn run_client(
     content_tx: mpsc::Sender<Content>,
     response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
-    stats: Arc<Mutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
 ) -> ControlFlow {
     let mut client = Client::new(store, content_tx, response_rx, request_limiter, stats);
 

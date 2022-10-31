@@ -2,7 +2,7 @@ use super::{message::Request, repository_stats::RepositoryStats};
 use std::{
     collections::{hash_map::Entry, HashMap},
     future,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{sync::OwnedSemaphorePermit, time};
@@ -18,12 +18,12 @@ pub(super) const MAX_PENDING_REQUESTS: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct PendingRequests {
-    stats: Arc<Mutex<RepositoryStats>>,
+    stats: Arc<RepositoryStats>,
     map: HashMap<Request, RequestData>,
 }
 
 impl PendingRequests {
-    pub fn new(stats: Arc<Mutex<RepositoryStats>>) -> Self {
+    pub fn new(stats: Arc<RepositoryStats>) -> Self {
         Self {
             stats,
             map: HashMap::new(),
@@ -76,19 +76,15 @@ impl PendingRequests {
 
     fn request_added(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => {
-                self.stats.lock().unwrap().write().index_requests_inflight += 1
-            }
-            Request::Block(_) => self.stats.lock().unwrap().write().block_requests_inflight += 1,
+            Request::ChildNodes(_) => self.stats.write().index_requests_inflight += 1,
+            Request::Block(_) => self.stats.write().block_requests_inflight += 1,
         }
     }
 
     fn request_removed(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => {
-                self.stats.lock().unwrap().write().index_requests_inflight -= 1
-            }
-            Request::Block(_) => self.stats.lock().unwrap().write().block_requests_inflight -= 1,
+            Request::ChildNodes(_) => self.stats.write().index_requests_inflight -= 1,
+            Request::Block(_) => self.stats.write().block_requests_inflight -= 1,
         }
     }
 }

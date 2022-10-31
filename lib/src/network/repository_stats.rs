@@ -1,22 +1,25 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Mutex,
+};
 use tracing::Span;
 
 pub(super) struct RepositoryStats {
-    values: Values,
+    values: Mutex<Values>,
     span: Span,
 }
 
 impl RepositoryStats {
     pub fn new(span: Span) -> Self {
         Self {
-            values: Values::default(),
+            values: Mutex::new(Values::default()),
             span,
         }
     }
 
-    pub fn write(&mut self) -> Writer {
-        let new = self.values;
-        let old = &mut self.values;
+    pub fn write(&self) -> Writer {
+        let new = *self.values.lock().unwrap();
+        let old = &self.values;
 
         Writer {
             old,
@@ -27,7 +30,7 @@ impl RepositoryStats {
 }
 
 pub(super) struct Writer<'a> {
-    old: &'a mut Values,
+    old: &'a Mutex<Values>,
     new: Values,
     span: &'a Span,
 }
@@ -48,19 +51,21 @@ impl<'a> DerefMut for Writer<'a> {
 
 impl<'a> Drop for Writer<'a> {
     fn drop(&mut self) {
-        if self.new.index_requests_inflight != self.old.index_requests_inflight {
+        let mut old = self.old.lock().unwrap();
+
+        if self.new.index_requests_inflight != old.index_requests_inflight {
             tracing::trace!(parent: self.span, index_requests_inflight = self.new.index_requests_inflight);
         }
 
-        if self.new.block_requests_inflight != self.old.block_requests_inflight {
+        if self.new.block_requests_inflight != old.block_requests_inflight {
             tracing::trace!(parent: self.span, block_requests_inflight = self.new.block_requests_inflight);
         }
 
-        if self.new.total_requests_cummulative != self.old.total_requests_cummulative {
+        if self.new.total_requests_cummulative != old.total_requests_cummulative {
             tracing::trace!(parent: self.span, total_requests_cummulative = self.new.total_requests_cummulative);
         }
 
-        *self.old = self.new;
+        *old = self.new;
     }
 }
 

@@ -21,12 +21,7 @@ use crate::{
 };
 use futures_util::future;
 use rand::prelude::*;
-use std::{
-    fmt,
-    future::Future,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
@@ -576,7 +571,7 @@ fn create_client(store: Store) -> ClientData {
         send_tx,
         recv_rx,
         Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
-        Arc::new(Mutex::new(RepositoryStats::new(Span::none()))),
+        Arc::new(RepositoryStats::new(Span::none())),
     );
 
     (client, send_rx, recv_tx)
