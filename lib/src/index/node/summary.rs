@@ -1,5 +1,4 @@
 use super::{InnerNodeMap, LeafNodeSet};
-use crc::{Crc, Digest, CRC_64_XZ};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
@@ -7,6 +6,8 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
+use std::hash::Hasher;
+use twox_hash::xxh3::{Hash128, HasherExt};
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
@@ -86,9 +87,14 @@ pub(crate) enum BlockPresence {
     Full,
 }
 
-type Checksum = [u8; 8];
-const NONE: Checksum = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-const FULL: Checksum = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+type Checksum = [u8; 16];
+
+const NONE: Checksum = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+const FULL: Checksum = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+];
 
 impl BlockPresence {
     pub fn is_outdated(&self, other: &Self) -> bool {
@@ -135,7 +141,7 @@ impl<'r> Decode<'r, Sqlite> for BlockPresence {
 
 struct BlockPresenceBuilder {
     state: BuilderState,
-    digest: Digest<'static, u64>,
+    hasher: Hash128,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -148,16 +154,14 @@ enum BuilderState {
 
 impl BlockPresenceBuilder {
     fn new() -> Self {
-        const CRC: Crc<u64> = Crc::<u64>::new(&CRC_64_XZ);
-
         Self {
             state: BuilderState::Init,
-            digest: CRC.digest(),
+            hasher: Hash128::default(),
         }
     }
 
     fn update(&mut self, p: BlockPresence) {
-        self.digest.update(p.checksum());
+        self.hasher.write(p.checksum());
 
         self.state = match (self.state, p) {
             (BuilderState::Init, BlockPresence::None) => BuilderState::None,
@@ -177,20 +181,20 @@ impl BlockPresenceBuilder {
         match self.state {
             BuilderState::Init | BuilderState::None => BlockPresence::None,
             BuilderState::Some => {
-                BlockPresence::Some(sanitize_digest(self.digest.finalize()).to_le_bytes())
+                BlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
             }
             BuilderState::Full => BlockPresence::Full,
         }
     }
 }
 
-// Make sure the checksum is never 0 or u64::MAX as those are special values that indicate None or
+// Make sure the checksum is never 0 or u128::MAX as those are special values that indicate None or
 // Full respectively.
-const fn sanitize_digest(s: u64) -> u64 {
+const fn clamp(s: u128) -> u128 {
     if s == 0 {
         1
-    } else if s == u64::MAX {
-        u64::MAX - 1
+    } else if s == u128::MAX {
+        u128::MAX - 1
     } else {
         s
     }
