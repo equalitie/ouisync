@@ -50,10 +50,9 @@ impl RootNode {
                  hash,
                  signature,
                  is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
+                 block_presence
              )
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (writer_id, hash) DO NOTHING
              RETURNING snapshot_id",
         )
@@ -62,8 +61,7 @@ impl RootNode {
         .bind(&proof.hash)
         .bind(&proof.signature)
         .bind(summary.is_complete)
-        .bind(db::encode_u64(summary.missing_blocks_count))
-        .bind(db::encode_u64(summary.missing_blocks_checksum))
+        .bind(&summary.block_presence)
         .fetch_optional(conn)
         .await?
         .ok_or(Error::EntryExists)?
@@ -88,8 +86,7 @@ impl RootNode {
                  versions,
                  hash,
                  signature,
-                 missing_blocks_count,
-                 missing_blocks_checksum
+                 block_presence
              FROM
                  snapshot_root_nodes
              WHERE
@@ -108,8 +105,7 @@ impl RootNode {
             proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
             summary: Summary {
                 is_complete: true,
-                missing_blocks_count: db::decode_u64(row.get(4)),
-                missing_blocks_checksum: db::decode_u64(row.get(5)),
+                block_presence: row.get(4),
             },
         })
         .ok_or(Error::EntryNotFound)
@@ -126,8 +122,7 @@ impl RootNode {
                  versions,
                  hash,
                  signature,
-                 missing_blocks_count,
-                 missing_blocks_checksum
+                 block_presence
              FROM
                  snapshot_root_nodes
              WHERE
@@ -144,8 +139,7 @@ impl RootNode {
             proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
             summary: Summary {
                 is_complete: true,
-                missing_blocks_count: db::decode_u64(row.get(5)),
-                missing_blocks_checksum: db::decode_u64(row.get(6)),
+                block_presence: row.get(5),
             },
         })
         .err_into()
@@ -166,8 +160,7 @@ impl RootNode {
                  hash,
                  signature,
                  is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum
+                 block_presence
              FROM snapshot_root_nodes
              WHERE writer_id = ?
              ORDER BY snapshot_id DESC
@@ -181,8 +174,7 @@ impl RootNode {
             proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
             summary: Summary {
                 is_complete: row.get(4),
-                missing_blocks_count: db::decode_u64(row.get(5)),
-                missing_blocks_checksum: db::decode_u64(row.get(6)),
+                block_presence: row.get(5),
             },
         })
         .err_into()
@@ -247,7 +239,7 @@ impl RootNode {
     #[cfg(test)]
     pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<()> {
         let row = sqlx::query(
-            "SELECT is_complete, missing_blocks_count, missing_blocks_checksum
+            "SELECT is_complete, block_presence
              FROM snapshot_root_nodes
              WHERE snapshot_id = ?",
         )
@@ -256,8 +248,7 @@ impl RootNode {
         .await?;
 
         self.summary.is_complete = row.get(0);
-        self.summary.missing_blocks_count = db::decode_u64(row.get(1));
-        self.summary.missing_blocks_checksum = db::decode_u64(row.get(2));
+        self.summary.block_presence = row.get(1);
 
         Ok(())
     }
@@ -279,15 +270,11 @@ impl RootNode {
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
-             SET
-                 is_complete = ?,
-                 missing_blocks_count = ?,
-                 missing_blocks_checksum = ?
+             SET is_complete = ?, block_presence = ?
              WHERE hash = ?",
         )
         .bind(summary.is_complete)
-        .bind(db::encode_u64(summary.missing_blocks_count))
-        .bind(db::encode_u64(summary.missing_blocks_checksum))
+        .bind(&summary.block_presence)
         .bind(hash)
         .execute(conn)
         .await?;
@@ -327,8 +314,7 @@ impl RootNode {
                  hash,
                  signature,
                  is_complete,
-                 missing_blocks_count,
-                 missing_blocks_checksum,
+                 block_presence,
                  writer_id
              FROM snapshot_root_nodes
              ORDER BY snapshot_id DESC",
@@ -336,11 +322,10 @@ impl RootNode {
         .fetch(conn)
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(row.get(7), row.get(1), row.get(2), row.get(3)),
+            proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
             summary: Summary {
                 is_complete: row.get(4),
-                missing_blocks_count: db::decode_u64(row.get(5)),
-                missing_blocks_checksum: db::decode_u64(row.get(6)),
+                block_presence: row.get(5),
             },
         });
 

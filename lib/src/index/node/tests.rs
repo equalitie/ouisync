@@ -8,6 +8,7 @@ use crate::{
     },
     db,
     error::Error,
+    index::node::summary::BlockPresence,
     test_utils,
     version_vector::VersionVector,
 };
@@ -248,18 +249,18 @@ async fn save_missing_leaf_node_over_existing_present_one() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_empty_leaf_nodes() {
+async fn compute_summary_from_empty_leaf_nodes() {
     let (_base_dir, mut conn) = setup().await;
 
     let hash = *EMPTY_LEAF_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 0);
+    assert_eq!(summary.block_presence, BlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_incomplete_leaf_nodes() {
+async fn compute_summary_from_incomplete_leaf_nodes() {
     let (_base_dir, mut conn) = setup().await;
 
     let node = LeafNode::missing(rand::random(), rand::random());
@@ -272,7 +273,7 @@ async fn compute_status_from_incomplete_leaf_nodes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
+async fn compute_summary_from_complete_leaf_nodes_with_all_missing_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     let node = LeafNode::missing(rand::random(), rand::random());
@@ -283,11 +284,11 @@ async fn compute_status_from_complete_leaf_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 1);
+    assert_eq!(summary.block_presence, BlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
+async fn compute_summary_from_complete_leaf_nodes_with_some_present_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     let node0 = LeafNode::present(rand::random(), rand::random());
@@ -300,11 +301,11 @@ async fn compute_status_from_complete_leaf_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 2);
+    assert_matches!(summary.block_presence, BlockPresence::Some(_));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
+async fn compute_summary_from_complete_leaf_nodes_with_all_present_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     let node0 = LeafNode::present(rand::random(), rand::random());
@@ -316,22 +317,22 @@ async fn compute_status_from_complete_leaf_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 0);
+    assert_eq!(summary.block_presence, BlockPresence::Full);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_empty_inner_nodes() {
+async fn compute_summary_from_empty_inner_nodes() {
     let (_base_dir, mut conn) = setup().await;
 
     let hash = *EMPTY_INNER_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 0);
+    assert_eq!(summary.block_presence, BlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_incomplete_inner_nodes() {
+async fn compute_summary_from_incomplete_inner_nodes() {
     let (_base_dir, mut conn) = setup().await;
 
     let node = InnerNode::new(rand::random(), Summary::INCOMPLETE);
@@ -344,7 +345,7 @@ async fn compute_status_from_incomplete_inner_nodes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
+async fn compute_summary_from_complete_inner_nodes_with_all_missing_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     let inners: InnerNodeMap = (0..2)
@@ -365,11 +366,11 @@ async fn compute_status_from_complete_inner_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 2);
+    assert_eq!(summary.block_presence, BlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
+async fn compute_summary_from_complete_inner_nodes_with_some_present_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     // all missing
@@ -411,11 +412,11 @@ async fn compute_status_from_complete_inner_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 3);
+    assert_matches!(summary.block_presence, BlockPresence::Some(_));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
+async fn compute_summary_from_complete_inner_nodes_with_all_present_blocks() {
     let (_base_dir, mut conn) = setup().await;
 
     let inners: InnerNodeMap = (0..2)
@@ -437,7 +438,7 @@ async fn compute_status_from_complete_inner_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.missing_blocks_count, 0);
+    assert_eq!(summary.block_presence, BlockPresence::Full);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -624,28 +625,24 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .unwrap();
     }
 
-    let mut expected_missing_blocks_count = snapshot.leaf_count() as u64;
-
     // Check that initially all blocks are missing
     root_node.reload(&mut tx).await.unwrap();
 
-    assert_eq!(
-        root_node.summary.missing_blocks_count,
-        expected_missing_blocks_count
-    );
+    assert_eq!(root_node.summary.block_presence, BlockPresence::None);
 
-    // Keep receiving the blocks one by one and verify the missing blocks summaries get updated
-    // accordingly.
+    let mut received_blocks = 0;
+
     for block_id in snapshot.blocks().keys() {
         super::receive_block(&mut tx, block_id).await.unwrap();
-
-        expected_missing_blocks_count -= 1;
+        received_blocks += 1;
 
         root_node.reload(&mut tx).await.unwrap();
-        assert_eq!(
-            root_node.summary.missing_blocks_count,
-            expected_missing_blocks_count
-        );
+
+        if received_blocks < snapshot.blocks().len() {
+            assert_matches!(root_node.summary.block_presence, BlockPresence::Some(_));
+        } else {
+            assert_eq!(root_node.summary.block_presence, BlockPresence::Full);
+        }
 
         // TODO: check also inner and leaf nodes
     }

@@ -1,62 +1,54 @@
 use super::{InnerNodeMap, LeafNodeSet};
-use crc::{Crc, CRC_64_XZ};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use sqlx::{
+    encode::IsNull,
+    error::BoxDynError,
+    sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
+    Decode, Encode, Sqlite, Type,
+};
+use std::hash::Hasher;
+use twox_hash::xxh3::{Hash128, HasherExt};
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct Summary {
-    pub(in super::super) is_complete: bool,
-    pub(in super::super) missing_blocks_count: u64,
-    // Checksum is used to disambiguate the situation where two replicas have exactly the same
-    // missing blocks (both count and checksum would be the same) or they just happen to have the
-    // same number of missing blocks, but those blocks are different (counts would be the same but
-    // checksums would differ (unless there is a collision which should be rare)).
-    pub(in super::super) missing_blocks_checksum: u64,
+    pub is_complete: bool,
+    pub block_presence: BlockPresence,
 }
 
 impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
-    // TODO: consider renaming this to `UNKNOWN`, `UNDECIDED`, `UNDEFINED`, etc...
     pub const INCOMPLETE: Self = Self {
         is_complete: false,
-        missing_blocks_count: u64::MAX,
-        missing_blocks_checksum: 0,
+        block_presence: BlockPresence::None,
     };
 
     /// Summary indicating that the whole subtree is complete and all its blocks present.
     pub const FULL: Self = Self {
         is_complete: true,
-        missing_blocks_count: 0,
-        missing_blocks_checksum: 0,
+        block_presence: BlockPresence::Full,
     };
 
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
-        let crc = Crc::<u64>::new(&CRC_64_XZ);
-        let mut digest = crc.digest();
-        let mut missing_blocks_count = 0;
+        let mut block_presence_builder = BlockPresenceBuilder::new();
 
         for node in nodes {
             if node.is_missing {
-                missing_blocks_count += 1;
-                digest.update(&[1])
+                block_presence_builder.update(BlockPresence::None);
             } else {
-                digest.update(&[0])
+                block_presence_builder.update(BlockPresence::Full);
             }
         }
 
         Self {
             is_complete: true,
-            missing_blocks_count,
-            missing_blocks_checksum: digest.finalize(),
+            block_presence: block_presence_builder.build(),
         }
     }
 
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
-        let crc = Crc::<u64>::new(&CRC_64_XZ);
-        let mut digest = crc.digest();
-        let mut missing_blocks_count = 0u64;
+        let mut block_presence_builder = BlockPresenceBuilder::new();
         let mut is_complete = true;
 
         for (_, node) in nodes {
@@ -66,69 +58,144 @@ impl Summary {
                 continue;
             }
 
-            // If at least one node is incomplete the whole collection is incomplete as well.
-            if node.summary == Self::INCOMPLETE {
-                return Self::INCOMPLETE;
-            }
-
+            block_presence_builder.update(node.summary.block_presence);
             is_complete = is_complete && node.summary.is_complete;
-            missing_blocks_count =
-                missing_blocks_count.saturating_add(node.summary.missing_blocks_count);
-            digest.update(&node.summary.missing_blocks_count.to_le_bytes());
-            digest.update(&node.summary.missing_blocks_checksum.to_le_bytes());
         }
 
         Self {
             is_complete,
-            missing_blocks_count,
-            missing_blocks_checksum: digest.finalize(),
+            block_presence: block_presence_builder.build(),
         }
     }
 
-    /// Check whether the replica with `self` is up to date with the replica with `other` in terms
-    /// of the blocks they have:
-    ///
-    /// - `Some(true)` means this replica has all the blocks that the other replica has (and
-    ///   possibly some more) which means it's up to date and no further action needs to be taken.
-    /// - `Some(false)` means that there are some blocks that the other replica has that this
-    ///   replica is missing and it needs to request the child nodes to learn which are they.
-    /// - `None` means it's not possible to tell which replica is more up to date and this replica
-    ///   must wait for the other one to make progress first.
-    ///
-    /// Note that if `a.is_up_to_date_with(b)` returns `None` then `b.is_up_to_date_with(a)` is
-    /// guaranteed to return `Some` which means that at least one replica is always able to make
-    /// progress.
-    pub fn is_up_to_date_with(&self, other: &Self) -> Option<bool> {
-        use Ordering::*;
-
-        // | checksum   | count      | outcome     |
-        // +------------+------------+-------------+
-        // | lhs == rhs | lhs == rhs | Some(true)  |
-        // | lhs == rhs | lhs >  rhs | Some(false) | unlikely (CRC collision)
-        // | lhs == rhs | lhs <  rhs | None        | unlikely (CRC collision)
-        // | lhs != rhs | lhs == rhs | Some(false) |
-        // | lhs != rhs | lhs >  rhs | Some(false) |
-        // | lhs != rhs | lhs <  rhs | None        |
-
-        if self.missing_blocks_count == 0 {
-            return Some(true);
-        }
-
-        match (
-            self.missing_blocks_checksum == other.missing_blocks_checksum,
-            self.missing_blocks_count.cmp(&other.missing_blocks_count),
-        ) {
-            (true, Equal) => Some(true),
-            (_, Greater) | (false, Equal) => Some(false),
-            (_, Less) => None,
-        }
+    /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in
+    /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
+    /// missing.
+    pub fn is_outdated(&self, other: &Self) -> bool {
+        self.block_presence.is_outdated(&other.block_presence)
     }
 
     pub fn is_complete(&self) -> bool {
         self.is_complete
     }
+}
 
-    pub fn missing_blocks_count(&self) -> u64 {
-        self.missing_blocks_count
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub(crate) enum BlockPresence {
+    None,
+    Some(Checksum),
+    Full,
+}
+
+type Checksum = [u8; 16];
+
+const NONE: Checksum = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+const FULL: Checksum = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+];
+
+impl BlockPresence {
+    pub fn is_outdated(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Some(lhs), Self::Some(rhs)) => lhs != rhs,
+            (Self::Full, _) | (_, Self::None) => false,
+            (Self::None, _) | (_, Self::Full) => true,
+        }
+    }
+
+    fn checksum(&self) -> &[u8] {
+        match self {
+            Self::None => NONE.as_slice(),
+            Self::Some(checksum) => checksum.as_slice(),
+            Self::Full => FULL.as_slice(),
+        }
+    }
+}
+
+impl Type<Sqlite> for BlockPresence {
+    fn type_info() -> SqliteTypeInfo {
+        <&[u8] as Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for &'q BlockPresence {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        Encode::<Sqlite>::encode(self.checksum(), args)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for BlockPresence {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        let slice = <&[u8] as Decode<Sqlite>>::decode(value)?;
+        let array = slice.try_into()?;
+
+        match array {
+            NONE => Ok(Self::None),
+            FULL => Ok(Self::Full),
+            _ => Ok(Self::Some(array)),
+        }
+    }
+}
+
+struct BlockPresenceBuilder {
+    state: BuilderState,
+    hasher: Hash128,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum BuilderState {
+    Init,
+    None,
+    Some,
+    Full,
+}
+
+impl BlockPresenceBuilder {
+    fn new() -> Self {
+        Self {
+            state: BuilderState::Init,
+            hasher: Hash128::default(),
+        }
+    }
+
+    fn update(&mut self, p: BlockPresence) {
+        self.hasher.write(p.checksum());
+
+        self.state = match (self.state, p) {
+            (BuilderState::Init, BlockPresence::None) => BuilderState::None,
+            (BuilderState::Init, BlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Init, BlockPresence::Full) => BuilderState::Full,
+            (BuilderState::None, BlockPresence::None) => BuilderState::None,
+            (BuilderState::None, BlockPresence::Some(_))
+            | (BuilderState::None, BlockPresence::Full)
+            | (BuilderState::Some, _)
+            | (BuilderState::Full, BlockPresence::None)
+            | (BuilderState::Full, BlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Full, BlockPresence::Full) => BuilderState::Full,
+        }
+    }
+
+    fn build(self) -> BlockPresence {
+        match self.state {
+            BuilderState::Init | BuilderState::None => BlockPresence::None,
+            BuilderState::Some => {
+                BlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
+            }
+            BuilderState::Full => BlockPresence::Full,
+        }
+    }
+}
+
+// Make sure the checksum is never 0 or u128::MAX as those are special values that indicate None or
+// Full respectively.
+const fn clamp(s: u128) -> u128 {
+    if s == 0 {
+        1
+    } else if s == u128::MAX {
+        u128::MAX - 1
+    } else {
+        s
     }
 }

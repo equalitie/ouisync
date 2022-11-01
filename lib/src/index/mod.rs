@@ -114,10 +114,7 @@ impl Index {
                 .partial_cmp(&old_node.proof.version_vector)
             {
                 Some(Ordering::Greater) => true,
-                Some(Ordering::Equal) => !old_node
-                    .summary
-                    .is_up_to_date_with(&summary)
-                    .unwrap_or(true),
+                Some(Ordering::Equal) => old_node.summary.is_outdated(&summary),
                 Some(Ordering::Less) => false,
                 None => proof.writer_id != old_node.proof.writer_id,
             }
@@ -210,10 +207,7 @@ impl Index {
 
             let local_node = InnerNode::load(conn, &remote_node.hash).await?;
             let insert = if let Some(local_node) = local_node {
-                !local_node
-                    .summary
-                    .is_up_to_date_with(&remote_node.summary)
-                    .unwrap_or(true)
+                local_node.summary.is_outdated(&remote_node.summary)
             } else {
                 // node not present locally - we implicitly treat this as if the local replica
                 // had zero blocks under this node unless the remote node is empty, in that

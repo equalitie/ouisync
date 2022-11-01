@@ -34,7 +34,7 @@ impl ReceiveFilter {
         let mut tx = conn.begin().await?;
 
         if let Some((row_id, old_summary)) = load(&mut tx, self.id, hash).await? {
-            if old_summary.is_up_to_date_with(new_summary).unwrap_or(false) {
+            if !old_summary.is_outdated(new_summary) {
                 return Ok(false);
             }
 
@@ -61,7 +61,7 @@ async fn load(
     hash: &Hash,
 ) -> Result<Option<(u64, Summary)>> {
     let row = sqlx::query(
-        "SELECT rowid, missing_blocks_count, missing_blocks_checksum
+        "SELECT rowid, block_presence
          FROM received_inner_nodes
          WHERE client_id = ? AND hash = ?",
     )
@@ -79,8 +79,7 @@ async fn load(
     let id = db::decode_u64(row.get(0));
     let summary = Summary {
         is_complete: true,
-        missing_blocks_count: db::decode_u64(row.get(1)),
-        missing_blocks_checksum: db::decode_u64(row.get(2)),
+        block_presence: row.get(1),
     };
 
     Ok(Some((id, summary)))
@@ -94,13 +93,12 @@ async fn insert(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO received_inner_nodes
-         (client_id, hash, missing_blocks_count, missing_blocks_checksum)
-         VALUES (?, ?, ?, ?)",
+         (client_id, hash, block_presence)
+         VALUES (?, ?, ?)",
     )
     .bind(db::encode_u64(client_id))
     .bind(hash)
-    .bind(db::encode_u64(summary.missing_blocks_count))
-    .bind(db::encode_u64(summary.missing_blocks_checksum))
+    .bind(&summary.block_presence)
     .execute(conn)
     .await?;
 
@@ -110,11 +108,10 @@ async fn insert(
 async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Result<()> {
     sqlx::query(
         "UPDATE received_inner_nodes
-         SET missing_blocks_count = ?, missing_blocks_checksum = ?
+         SET block_presence = ?
          WHERE rowid = ?",
     )
-    .bind(db::encode_u64(summary.missing_blocks_count))
-    .bind(db::encode_u64(summary.missing_blocks_checksum))
+    .bind(&summary.block_presence)
     .bind(db::encode_u64(row_id))
     .execute(conn)
     .await?;
