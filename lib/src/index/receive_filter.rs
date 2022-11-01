@@ -98,7 +98,7 @@ async fn insert(
     )
     .bind(db::encode_u64(client_id))
     .bind(hash)
-    .bind(summary.block_presence)
+    .bind(&summary.block_presence)
     .execute(conn)
     .await?;
 
@@ -111,7 +111,7 @@ async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Re
          SET block_presence = ?
          WHERE rowid = ?",
     )
-    .bind(summary.block_presence)
+    .bind(&summary.block_presence)
     .bind(db::encode_u64(row_id))
     .execute(conn)
     .await?;

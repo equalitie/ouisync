@@ -1,12 +1,11 @@
 use super::{InnerNodeMap, LeafNodeSet};
-use crate::db;
 use crc::{Crc, Digest, CRC_64_XZ};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,
     error::BoxDynError,
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
-    Database, Decode, Encode, Sqlite, Type,
+    Decode, Encode, Sqlite, Type,
 };
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
@@ -83,9 +82,13 @@ impl Summary {
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) enum BlockPresence {
     None,
-    Some(u64), // contains checksum
+    Some(Checksum),
     Full,
 }
+
+type Checksum = [u8; 8];
+const NONE: Checksum = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+const FULL: Checksum = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 
 impl BlockPresence {
     pub fn is_outdated(&self, other: &Self) -> bool {
@@ -96,45 +99,37 @@ impl BlockPresence {
         }
     }
 
-    fn checksum(&self) -> u64 {
+    fn checksum(&self) -> &[u8] {
         match self {
-            Self::None => 0,
-            Self::Some(checksum) => *checksum,
-            Self::Full => u64::MAX,
+            Self::None => NONE.as_slice(),
+            Self::Some(checksum) => checksum.as_slice(),
+            Self::Full => FULL.as_slice(),
         }
     }
 }
 
 impl Type<Sqlite> for BlockPresence {
     fn type_info() -> SqliteTypeInfo {
-        <i64 as Type<Sqlite>>::type_info()
-    }
-
-    fn compatible(ty: &<Sqlite as Database>::TypeInfo) -> bool {
-        // NOTE: i64 is internally `DataType::Int64` but an INTEGER column is `DataType::Int`
-        // (`i32` is also `DataType::Int`) so we need to declare compatibility with both otherwise
-        // we get error on decoding. No idea why sqlx even distinguishes these two type when sqlite
-        // itself doesn't.
-        ty == &Self::type_info() || ty == &<i32 as Type<Sqlite>>::type_info()
+        <&[u8] as Type<Sqlite>>::type_info()
     }
 }
 
-impl<'q> Encode<'q, Sqlite> for BlockPresence {
+impl<'q> Encode<'q, Sqlite> for &'q BlockPresence {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode_by_ref(&db::encode_u64(self.checksum()), args)
+        Encode::<Sqlite>::encode(self.checksum(), args)
     }
 }
 
 impl<'r> Decode<'r, Sqlite> for BlockPresence {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let checksum = <i64 as Decode<Sqlite>>::decode(value)?;
-        let checksum = db::decode_u64(checksum);
+        let slice = <&[u8] as Decode<Sqlite>>::decode(value)?;
+        let array = slice.try_into()?;
 
-        Ok(match checksum {
-            0 => Self::None,
-            u64::MAX => Self::Full,
-            checksum => Self::Some(checksum),
-        })
+        match array {
+            NONE => Ok(Self::None),
+            FULL => Ok(Self::Full),
+            _ => Ok(Self::Some(array)),
+        }
     }
 }
 
@@ -162,7 +157,7 @@ impl BlockPresenceBuilder {
     }
 
     fn update(&mut self, p: BlockPresence) {
-        self.digest.update(&p.checksum().to_le_bytes());
+        self.digest.update(p.checksum());
 
         self.state = match (self.state, p) {
             (BuilderState::Init, BlockPresence::None) => BuilderState::None,
@@ -181,7 +176,9 @@ impl BlockPresenceBuilder {
     fn build(self) -> BlockPresence {
         match self.state {
             BuilderState::Init | BuilderState::None => BlockPresence::None,
-            BuilderState::Some => BlockPresence::Some(sanitize_digest(self.digest.finalize())),
+            BuilderState::Some => {
+                BlockPresence::Some(sanitize_digest(self.digest.finalize()).to_le_bytes())
+            }
             BuilderState::Full => BlockPresence::Full,
         }
     }

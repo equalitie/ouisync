@@ -61,7 +61,7 @@ impl RootNode {
         .bind(&proof.hash)
         .bind(&proof.signature)
         .bind(summary.is_complete)
-        .bind(summary.block_presence)
+        .bind(&summary.block_presence)
         .fetch_optional(conn)
         .await?
         .ok_or(Error::EntryExists)?
@@ -274,7 +274,7 @@ impl RootNode {
              WHERE hash = ?",
         )
         .bind(summary.is_complete)
-        .bind(summary.block_presence)
+        .bind(&summary.block_presence)
         .bind(hash)
         .execute(conn)
         .await?;

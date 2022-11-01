@@ -116,7 +116,7 @@ impl InnerNode {
         .bind(bucket)
         .bind(&self.hash)
         .bind(self.summary.is_complete)
-        .bind(self.summary.block_presence)
+        .bind(&self.summary.block_presence)
         .execute(conn)
         .await?;
 
@@ -133,7 +133,7 @@ impl InnerNode {
              WHERE hash = ?",
         )
         .bind(summary.is_complete)
-        .bind(summary.block_presence)
+        .bind(&summary.block_presence)
         .bind(hash)
         .execute(conn)
         .await?;
