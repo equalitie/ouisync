@@ -8,7 +8,6 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Database, Decode, Encode, Sqlite, Type,
 };
-use std::fmt;
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
@@ -22,13 +21,13 @@ impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
     pub const INCOMPLETE: Self = Self {
         is_complete: false,
-        block_presence: BlockPresence::NONE,
+        block_presence: BlockPresence::None,
     };
 
     /// Summary indicating that the whole subtree is complete and all its blocks present.
     pub const FULL: Self = Self {
         is_complete: true,
-        block_presence: BlockPresence::FULL,
+        block_presence: BlockPresence::Full,
     };
 
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
@@ -36,9 +35,9 @@ impl Summary {
 
         for node in nodes {
             if node.is_missing {
-                block_presence_builder.update(BlockPresence::NONE);
+                block_presence_builder.update(BlockPresence::None);
             } else {
-                block_presence_builder.update(BlockPresence::FULL);
+                block_presence_builder.update(BlockPresence::Full);
             }
         }
 
@@ -73,7 +72,7 @@ impl Summary {
     /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
     /// missing.
     pub fn is_outdated(&self, other: &Self) -> bool {
-        self.block_presence.is_outdated(other.block_presence)
+        self.block_presence.is_outdated(&other.block_presence)
     }
 
     pub fn is_complete(&self) -> bool {
@@ -81,39 +80,27 @@ impl Summary {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct BlockPresence {
-    checksum: u64,
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub(crate) enum BlockPresence {
+    None,
+    Some(u64), // contains checksum
+    Full,
 }
 
 impl BlockPresence {
-    pub const NONE: Self = Self { checksum: 0 };
-    pub const FULL: Self = Self { checksum: u64::MAX };
-
-    const fn some(checksum: u64) -> Self {
-        Self { checksum }
+    pub fn is_outdated(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Some(lhs), Self::Some(rhs)) => lhs != rhs,
+            (Self::Full, _) | (_, Self::None) => false,
+            (Self::None, _) | (_, Self::Full) => true,
+        }
     }
 
-    #[cfg(test)]
-    pub fn is_some(self) -> bool {
-        self != Self::NONE && self != Self::FULL
-    }
-
-    pub fn is_outdated(self, them: Self) -> bool {
-        self.checksum != them.checksum
-            && self.checksum != BlockPresence::FULL.checksum
-            && them.checksum != BlockPresence::NONE.checksum
-    }
-}
-
-impl fmt::Debug for BlockPresence {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self == &Self::NONE {
-            write!(f, "BlockPresence::NONE")
-        } else if self == &Self::FULL {
-            write!(f, "BlockPresence::FULL")
-        } else {
-            write!(f, "BlockPresence::some({})", self.checksum)
+    fn checksum(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Some(checksum) => *checksum,
+            Self::Full => u64::MAX,
         }
     }
 }
@@ -134,16 +121,19 @@ impl Type<Sqlite> for BlockPresence {
 
 impl<'q> Encode<'q, Sqlite> for BlockPresence {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode_by_ref(&db::encode_u64(self.checksum), args)
+        Encode::<Sqlite>::encode_by_ref(&db::encode_u64(self.checksum()), args)
     }
 }
 
 impl<'r> Decode<'r, Sqlite> for BlockPresence {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
         let checksum = <i64 as Decode<Sqlite>>::decode(value)?;
+        let checksum = db::decode_u64(checksum);
 
-        Ok(Self {
-            checksum: db::decode_u64(checksum),
+        Ok(match checksum {
+            0 => Self::None,
+            u64::MAX => Self::Full,
+            checksum => Self::Some(checksum),
         })
     }
 }
@@ -172,33 +162,33 @@ impl BlockPresenceBuilder {
     }
 
     fn update(&mut self, p: BlockPresence) {
-        self.digest.update(&p.checksum.to_le_bytes());
+        self.digest.update(&p.checksum().to_le_bytes());
 
         self.state = match (self.state, p) {
-            (BuilderState::Init, BlockPresence::NONE) => BuilderState::None,
-            (BuilderState::Init, BlockPresence::FULL) => BuilderState::Full,
-            (BuilderState::Init, _ /* some        */) => BuilderState::Some,
-            (BuilderState::None, BlockPresence::NONE) => BuilderState::None,
-            (BuilderState::None, BlockPresence::FULL) => BuilderState::Some,
-            (BuilderState::None, _ /* some        */) => BuilderState::Some,
-            (BuilderState::Some, _) => BuilderState::Some,
-            (BuilderState::Full, BlockPresence::NONE) => BuilderState::Some,
-            (BuilderState::Full, BlockPresence::FULL) => BuilderState::Full,
-            (BuilderState::Full, _ /* some        */) => BuilderState::Some,
+            (BuilderState::Init, BlockPresence::None) => BuilderState::None,
+            (BuilderState::Init, BlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Init, BlockPresence::Full) => BuilderState::Full,
+            (BuilderState::None, BlockPresence::None) => BuilderState::None,
+            (BuilderState::None, BlockPresence::Some(_))
+            | (BuilderState::None, BlockPresence::Full)
+            | (BuilderState::Some, _)
+            | (BuilderState::Full, BlockPresence::None)
+            | (BuilderState::Full, BlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Full, BlockPresence::Full) => BuilderState::Full,
         }
     }
 
     fn build(self) -> BlockPresence {
         match self.state {
-            BuilderState::Init | BuilderState::None => BlockPresence::NONE,
-            BuilderState::Some => BlockPresence::some(sanitize_digest(self.digest.finalize())),
-            BuilderState::Full => BlockPresence::FULL,
+            BuilderState::Init | BuilderState::None => BlockPresence::None,
+            BuilderState::Some => BlockPresence::Some(sanitize_digest(self.digest.finalize())),
+            BuilderState::Full => BlockPresence::Full,
         }
     }
 }
 
-// Make sure the checksum is never 0 or u64::MAX as those are special values that indicate NONE or
-// FULL respectively.
+// Make sure the checksum is never 0 or u64::MAX as those are special values that indicate None or
+// Full respectively.
 const fn sanitize_digest(s: u64) -> u64 {
     if s == 0 {
         1
