@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 // First string in a handshake, helps with weeding out connections with completely different
 // protocols on the other end.
 pub(super) const MAGIC: &[u8; 7] = b"OUISYNC";
-pub(super) const VERSION: Version = Version(4);
+pub(super) const VERSION: Version = Version(5);
 
 /// Protocol version
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Debug)]
