@@ -37,12 +37,17 @@ impl Logger {
         panic_counter: MonitoredValue<u32>,
         trace_monitor: StateMonitor,
     ) -> Result<Self, io::Error> {
+        // This should be set up before `setup_logger` is called, otherwise we won't see
+        // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
+        let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;
+        let stderr = StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?;
+
         panic::set_hook(Box::new(panic_hook(panic_counter)));
         setup_logger(trace_monitor);
 
         Ok(Self {
-            _stdout: StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?,
-            _stderr: StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?,
+            _stdout: stdout,
+            _stderr: stderr,
         })
     }
 }
