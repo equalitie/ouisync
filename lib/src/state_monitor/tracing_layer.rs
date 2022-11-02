@@ -31,8 +31,11 @@ impl TracingLayer {
         match trace_monitor {
             Some(trace_monitor) => {
                 *inner = Some(TraceLayerInner {
-                    root_monitor: trace_monitor,
-                    root_values: MonitoredValues::new(),
+                    root_span: Span {
+                        monitor: trace_monitor,
+                        values: MonitoredValues::new(),
+                    },
+                    root_message: None,
                     spans: HashMap::new(),
                 })
             }
@@ -88,10 +91,20 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
 
 type MonitoredValues = HashMap<&'static str, MonitoredValue<String>>;
 
+struct Span {
+    monitor: StateMonitor,
+    values: MonitoredValues,
+}
+
+struct Message {
+    _monitor: StateMonitor,
+    _values: MonitoredValues,
+}
+
 struct TraceLayerInner {
-    root_monitor: StateMonitor,
-    root_values: MonitoredValues,
-    spans: HashMap<SpanId, (StateMonitor, MonitoredValues)>,
+    root_span: Span,
+    root_message: Option<Message>,
+    spans: HashMap<SpanId, (Span, Option<Message>)>,
 }
 
 impl TraceLayerInner {
@@ -100,8 +113,15 @@ impl TraceLayerInner {
         S: for<'a> LookupSpan<'a>,
     {
         let parent_monitor = match span.parent() {
-            Some(parent_span) => &mut self.spans.get_mut(&parent_span.id().into_u64()).unwrap().0,
-            None => &mut self.root_monitor,
+            Some(parent_span) => {
+                &mut self
+                    .spans
+                    .get_mut(&parent_span.id().into_u64())
+                    .unwrap()
+                    .0
+                    .monitor
+            }
+            None => &mut self.root_span.monitor,
         };
 
         let mut visitor = AttrsVisitor::new();
@@ -119,7 +139,16 @@ impl TraceLayerInner {
 
         let overwritten = self
             .spans
-            .insert(id.into_u64(), (span_monitor, MonitoredValues::new()))
+            .insert(
+                id.into_u64(),
+                (
+                    Span {
+                        monitor: span_monitor,
+                        values: MonitoredValues::new(),
+                    },
+                    None,
+                ),
+            )
             .is_some();
 
         assert!(!overwritten);
@@ -128,14 +157,43 @@ impl TraceLayerInner {
     fn on_event(&mut self, event: &Event<'_>, span_id: Option<u64>) {
         // It sometimes happens that we get an event that doesn't have a span. We shove it all into
         // the root monitor, although this may not be 100% correct.
-        let (monitor, values) = match span_id {
+        let (span, message) = match span_id {
             Some(span_id) => match self.spans.get_mut(&span_id) {
-                Some((monitor, values)) => (monitor, values),
-                None => (&mut self.root_monitor, &mut self.root_values),
+                Some((span, message)) => (span, message),
+                None => (&mut self.root_span, &mut self.root_message),
             },
-            None => (&mut self.root_monitor, &mut self.root_values),
+            None => (&mut self.root_span, &mut self.root_message),
         };
-        event.record(&mut RecordVisitor { monitor, values });
+
+        let msg = message_string(event);
+
+        if let Some(msg) = msg {
+            // Admittedly a bit hacky: if the event is a message event, then instead of showing
+            // each field as `MonitoredValue` we create a new `StateMonitor` with the message as
+            // its name and if there are any other fields we show them as `MonitoredValues` of this
+            // newly created `StateMonitor`.
+            message.take();
+            let monitor = span.monitor.make_child(format!("MSG: {}", msg));
+            let mut values = MonitoredValues::new();
+            for_each_field(event, |field, value| {
+                if field.name() != "message" {
+                    let value = format!("{:?}", value);
+                    match values.entry(field.name()) {
+                        hash_map::Entry::Occupied(entry) => *(entry.get().get()) = value,
+                        hash_map::Entry::Vacant(entry) => {
+                            let value = monitor.make_value::<String>(field.name().into(), value);
+                            entry.insert(value);
+                        }
+                    }
+                }
+            });
+            *message = Some(Message {
+                _monitor: monitor,
+                _values: values,
+            });
+        } else {
+            event.record(&mut RecordVisitor { span });
+        }
     }
 
     fn on_close(&mut self, span_id: u64) {
@@ -143,13 +201,51 @@ impl TraceLayerInner {
     }
 
     fn on_record(&mut self, span_id: u64, record: &Record<'_>) {
-        if let Some((monitor, values)) = self.spans.get_mut(&span_id) {
-            record.record(&mut RecordVisitor { monitor, values });
-        }
+        let span = match self.spans.get_mut(&span_id) {
+            Some((span, _message)) => span,
+            None => return,
+        };
+
+        record.record(&mut RecordVisitor { span });
     }
 }
 
 type SpanId = u64;
+
+//--------------------------------------------------------------------
+struct ForEachField<F> {
+    func: F,
+}
+
+impl<F> ForEachField<F> {
+    fn new(func: F) -> Self {
+        Self { func }
+    }
+}
+
+impl<F: FnMut(&Field, &dyn fmt::Debug)> Visit for ForEachField<F> {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        (self.func)(field, value);
+    }
+}
+
+fn for_each_field<F>(event: &Event<'_>, func: F)
+where
+    F: FnMut(&Field, &dyn fmt::Debug),
+{
+    let mut visitor = ForEachField::new(func);
+    event.record(&mut visitor);
+}
+
+fn message_string(event: &Event<'_>) -> Option<String> {
+    let mut ret = None;
+    for_each_field(event, |field, value| {
+        if field.name() == "message" {
+            ret = Some(format!("{:?}", value));
+        }
+    });
+    ret
+}
 
 //--------------------------------------------------------------------
 
@@ -186,18 +282,17 @@ impl fmt::Display for AttrsVisitor {
 //--------------------------------------------------------------------
 
 struct RecordVisitor<'a> {
-    monitor: &'a mut StateMonitor,
-    values: &'a mut MonitoredValues,
+    span: &'a mut Span,
 }
 
 impl<'a> RecordVisitor<'a> {
     fn set_value(&mut self, name: &'static str, value: String) {
-        match self.values.entry(name) {
+        match self.span.values.entry(name) {
             hash_map::Entry::Occupied(mut entry) => {
                 *entry.get_mut().get() = value;
             }
             hash_map::Entry::Vacant(entry) => {
-                let value = self.monitor.make_value::<String>(name.into(), value);
+                let value = self.span.monitor.make_value::<String>(name.into(), value);
                 entry.insert(value);
             }
         }
