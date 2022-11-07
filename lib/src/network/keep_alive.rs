@@ -182,7 +182,7 @@ async fn sink_worker<W>(
             _ = time::sleep(interval) => {
                 // Send keep-alive message (empty message on the default channel)
                 inner
-                    .send(Message::new_keep_alive())
+                    .send(Message::default())
                     .await
                     .unwrap_or(());
             }
@@ -196,7 +196,7 @@ fn make_send_error(command_tx_error: PollSendError<SinkCommand>, source: io::Err
         message: command_tx_error
             .into_inner()
             .map(|command| command.message)
-            .unwrap_or_else(|| Message::new_keep_alive()),
+            .unwrap_or_else(|| Message::default()),
     }
 }
 

@@ -5,7 +5,7 @@ use crate::iterator::IntoIntersection;
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{Message, MessageChannel},
+    message::{AckData, Message, MessageChannel},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
@@ -14,7 +14,10 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     future::Future,
     pin::Pin,
-    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -184,6 +187,7 @@ impl ContentSink {
         self.state
             .send(Message {
                 seq_num,
+                ack_data: AckData::LastSeen(0),
                 channel: self.channel,
                 content,
             })

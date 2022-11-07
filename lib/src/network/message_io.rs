@@ -1,4 +1,4 @@
-use super::message::{Message, MessageChannel};
+use super::message::{Header, Message};
 use futures_util::{ready, Sink, Stream};
 use std::{
     fmt, io, mem,
@@ -14,7 +14,7 @@ const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
 // Messages are encoded like this:
 //
-// [ header: `Message::HEADER_SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
+// [ header: `Header::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
 //
 
 /// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message`.
@@ -204,7 +204,7 @@ impl Encoder {
                         match ready!(poll_write_all(
                             io.as_mut(),
                             cx,
-                            message.header().as_ref(),
+                            &message.header().serialize(),
                             &mut self.offset
                         )) {
                             Ok(true) => {
@@ -254,7 +254,7 @@ impl Encoder {
 
     fn switch_to_idle_on_error(&mut self, source: io::Error) -> Poll<Result<(), SendError>> {
         let message = match mem::replace(&mut self.state, EncodeState::Idle) {
-            EncodeState::Idle => Message::new_keep_alive(),
+            EncodeState::Idle => Message::default(),
             EncodeState::Sending { message, .. } => message,
         };
 
@@ -304,15 +304,15 @@ struct Decoder {
 #[derive(Clone, Copy)]
 enum DecodePhase {
     Header,
-    Len { seq_num: u64, channel: MessageChannel },
-    Content { seq_num: u64, channel: MessageChannel },
+    Len { header: Header },
+    Content { header: Header },
 }
 
 impl Default for Decoder {
     fn default() -> Self {
         Self {
             phase: DecodePhase::Header,
-            buffer: vec![0; Message::HEADER_SIZE],
+            buffer: vec![0; Header::SIZE],
             offset: 0,
         }
     }
@@ -328,17 +328,26 @@ impl Decoder {
 
             match self.phase {
                 DecodePhase::Header => {
-                    let header: [u8; Message::HEADER_SIZE] = self
+                    let header: [u8; Header::SIZE] = self
                         .filled()
                         .try_into()
                         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                    let (seq_num, channel) = Message::parse_header(&header);
 
-                    self.phase = DecodePhase::Len { seq_num, channel };
+                    let header = match Header::deserialize(&header) {
+                        Some(header) => header,
+                        None => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                BadHeader,
+                            )))
+                        }
+                    };
+
+                    self.phase = DecodePhase::Len { header };
                     self.buffer.resize(2, 0);
                     self.offset = 0;
                 }
-                DecodePhase::Len { seq_num, channel } => {
+                DecodePhase::Len { header } => {
                     let len = u16::from_be_bytes(
                         self.filled()
                             .try_into()
@@ -353,25 +362,25 @@ impl Decoder {
                     }
 
                     if len > 0 {
-                        self.phase = DecodePhase::Content { seq_num, channel };
+                        self.phase = DecodePhase::Content { header };
                         self.buffer.resize(len as usize, 0);
                         self.offset = 0;
                     } else {
                         self.phase = DecodePhase::Header;
-                        self.buffer.resize(Message::HEADER_SIZE, 0);
+                        self.buffer.resize(Header::SIZE, 0);
                         self.offset = 0;
 
-                        return Poll::Ready(Ok(Message::new_keep_alive()));
+                        return Poll::Ready(Ok(Message::default()));
                     }
                 }
-                DecodePhase::Content { seq_num, channel } => {
+                DecodePhase::Content { header } => {
                     let content = mem::take(&mut self.buffer);
 
                     self.phase = DecodePhase::Header;
-                    self.buffer.resize(Message::HEADER_SIZE, 0);
+                    self.buffer.resize(Header::SIZE, 0);
                     self.offset = 0;
 
-                    return Poll::Ready(Ok(Message { seq_num, channel, content }));
+                    return Poll::Ready(Ok((header, content).into()));
                 }
             }
         }
@@ -406,3 +415,7 @@ impl Decoder {
 #[derive(Debug, Error)]
 #[error("message too big")]
 struct LengthError;
+
+#[derive(Debug, Error)]
+#[error("bad header")]
+struct BadHeader;
