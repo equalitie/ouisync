@@ -98,12 +98,35 @@ impl Drop for MessageDispatcher {
 }
 
 pub(super) struct ContentStream {
+    unordered_stream: UnorderedContentStream,
+}
+
+impl ContentStream {
+    fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
+        Self {
+            unordered_stream: UnorderedContentStream::new(channel, state),
+        }
+    }
+
+    pub fn channel(&self) -> &MessageChannel {
+        &self.unordered_stream.channel
+    }
+
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+        Ok(self.unordered_stream.recv().await?.content)
+    }
+}
+
+// Messages received through this stream may come unordered, some may be dropped and some
+// duplicated. This is due to the fact that we're receiving from multiple connections at once and
+// when the other end fails to send a message it may or may not be received here.
+pub(super) struct UnorderedContentStream {
     channel: MessageChannel,
     state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
-impl ContentStream {
+impl UnorderedContentStream {
     fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
         let queues_changed_rx = state.queues_changed_tx.subscribe();
 
@@ -114,8 +137,8 @@ impl ContentStream {
         }
     }
 
-    /// Receive the next message content.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+    // Receive a message from any of the available connections.
+    async fn recv(&mut self) -> Result<SequencedContent, ChannelClosed> {
         let mut closed = false;
 
         loop {
@@ -131,7 +154,7 @@ impl ContentStream {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return Ok(message.content);
+                            return Ok(message.into());
                         } else {
                             self.state.push(message)
                         }
@@ -144,10 +167,6 @@ impl ContentStream {
                 _ = self.queues_changed_rx.changed() => ()
             }
         }
-    }
-
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
     }
 }
 
@@ -201,13 +220,13 @@ impl LiveConnectionInfoSet {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<MessageChannel, VecDeque<Vec<u8>>>>,
+    queues: Mutex<HashMap<MessageChannel, VecDeque<SequencedContent>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     // Pops a message from the corresponding queue.
-    fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
+    fn pop(&self, channel: &MessageChannel) -> Option<SequencedContent> {
         self.queues.lock().unwrap().get_mut(channel)?.pop_back()
     }
 
@@ -219,7 +238,7 @@ impl RecvState {
             .unwrap()
             .entry(message.channel)
             .or_default()
-            .push_front(message.content);
+            .push_front(message.into());
         self.queues_changed_tx.send(()).unwrap_or(());
     }
 }
@@ -659,5 +678,19 @@ mod tests {
         let (server, _) = listener.accept().await.unwrap();
 
         (raw::Stream::Tcp(client), raw::Stream::Tcp(server))
+    }
+}
+
+struct SequencedContent {
+    seq_num: u64,
+    content: Vec<u8>,
+}
+
+impl From<Message> for SequencedContent {
+    fn from(message: Message) -> Self {
+        Self {
+            seq_num: message.seq_num,
+            content: message.content,
+        }
     }
 }
