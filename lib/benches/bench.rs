@@ -1,9 +1,7 @@
 mod utils;
 
 use camino::Utf8Path;
-use criterion::{
-    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
-};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::{rngs::StdRng, SeedableRng};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -19,6 +17,7 @@ fn write_file(c: &mut Criterion) {
     let buffer_size = 4096;
 
     let mut group = c.benchmark_group("write_file");
+    group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(BenchmarkId::from_parameter(file_size), |b| {
         b.to_async(&runtime).iter_custom(|iters| async move {
@@ -26,8 +25,9 @@ fn write_file(c: &mut Criterion) {
 
             for _ in 0..iters {
                 // Setup is not measured
-                let mut rng = StdRng::seed_from_u64(0);
-                let base_dir = TempDir::new().unwrap();
+                // let mut rng = StdRng::seed_from_u64(0);
+                let mut rng = StdRng::from_entropy();
+                let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
                 let repo = utils::create_repo(&mut rng, &base_dir.path().join("repo.db")).await;
 
                 // Only this part is measured
