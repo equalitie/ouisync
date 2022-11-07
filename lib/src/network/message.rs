@@ -64,10 +64,39 @@ impl fmt::Debug for Response {
     }
 }
 
+type SeqNum = u64;
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub(crate) struct Message {
+    pub seq_num: SeqNum,
     pub channel: MessageChannel,
     pub content: Vec<u8>,
+}
+
+impl Message {
+    pub(crate) const HEADER_SIZE: usize = Hash::SIZE + std::mem::size_of::<SeqNum>();
+
+    pub(crate) fn new_keep_alive() -> Self {
+        Self {
+            seq_num: 0,
+            channel: MessageChannel::default(),
+            content: Vec::new(),
+        }
+    }
+
+    pub(crate) fn header(&self) -> [u8; Self::HEADER_SIZE] {
+        let mut hdr = [0; Self::HEADER_SIZE];
+        hdr.copy_from_slice(&self.channel.0);
+        hdr[Hash::SIZE..].copy_from_slice(&self.seq_num.to_le_bytes());
+        hdr
+    }
+
+    pub(crate) fn parse_header(hdr: &[u8; Self::HEADER_SIZE]) -> (SeqNum, MessageChannel) {
+        // Unwraps OK because sizes are know at compile time.
+        let channel = hdr[0..Hash::SIZE].try_into().unwrap();
+        let seq_num = SeqNum::from_le_bytes(hdr[Hash::SIZE..].try_into().unwrap());
+        (seq_num, MessageChannel(channel))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]

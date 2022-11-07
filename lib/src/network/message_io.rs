@@ -14,7 +14,7 @@ const MAX_MESSAGE_SIZE: u16 = u16::MAX - 1;
 
 // Messages are encoded like this:
 //
-// [ channel: `MessageChannel::SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
+// [ header: `Message::HEADER_SIZE` bytes ][ len: 2 bytes ][ content: `len` bytes ]
 //
 
 /// Wrapper that turns a reader (`AsyncRead`) into a `Stream` of `Message`.
@@ -142,7 +142,7 @@ enum EncodeState {
 }
 
 enum SendingPhase {
-    Channel,
+    Header,
     Len,
     Content,
     Done,
@@ -181,7 +181,7 @@ impl Encoder {
 
         self.state = EncodeState::Sending {
             message,
-            phase: SendingPhase::Channel,
+            phase: SendingPhase::Header,
         };
         self.offset = 0;
 
@@ -200,11 +200,11 @@ impl Encoder {
             match &mut self.state {
                 EncodeState::Idle => return Poll::Ready(Ok(())),
                 EncodeState::Sending { message, phase } => match phase {
-                    SendingPhase::Channel => {
+                    SendingPhase::Header => {
                         match ready!(poll_write_all(
                             io.as_mut(),
                             cx,
-                            message.channel.as_ref(),
+                            message.header().as_ref(),
                             &mut self.offset
                         )) {
                             Ok(true) => {
@@ -254,10 +254,7 @@ impl Encoder {
 
     fn switch_to_idle_on_error(&mut self, source: io::Error) -> Poll<Result<(), SendError>> {
         let message = match mem::replace(&mut self.state, EncodeState::Idle) {
-            EncodeState::Idle => Message {
-                channel: MessageChannel::default(),
-                content: vec![],
-            },
+            EncodeState::Idle => Message::new_keep_alive(),
             EncodeState::Sending { message, .. } => message,
         };
 
@@ -306,16 +303,16 @@ struct Decoder {
 
 #[derive(Clone, Copy)]
 enum DecodePhase {
-    Channel,
-    Len { channel: MessageChannel },
-    Content { channel: MessageChannel },
+    Header,
+    Len { seq_num: u64, channel: MessageChannel },
+    Content { seq_num: u64, channel: MessageChannel },
 }
 
 impl Default for Decoder {
     fn default() -> Self {
         Self {
-            phase: DecodePhase::Channel,
-            buffer: vec![0; MessageChannel::SIZE],
+            phase: DecodePhase::Header,
+            buffer: vec![0; Message::HEADER_SIZE],
             offset: 0,
         }
     }
@@ -330,18 +327,18 @@ impl Decoder {
             ready!(self.poll_read_exact(io.as_mut(), cx))?;
 
             match self.phase {
-                DecodePhase::Channel => {
-                    let channel: [u8; MessageChannel::SIZE] = self
+                DecodePhase::Header => {
+                    let header: [u8; Message::HEADER_SIZE] = self
                         .filled()
                         .try_into()
                         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                    let channel = MessageChannel::from(channel);
+                    let (seq_num, channel) = Message::parse_header(&header);
 
-                    self.phase = DecodePhase::Len { channel };
+                    self.phase = DecodePhase::Len { seq_num, channel };
                     self.buffer.resize(2, 0);
                     self.offset = 0;
                 }
-                DecodePhase::Len { channel } => {
+                DecodePhase::Len { seq_num, channel } => {
                     let len = u16::from_be_bytes(
                         self.filled()
                             .try_into()
@@ -356,28 +353,25 @@ impl Decoder {
                     }
 
                     if len > 0 {
-                        self.phase = DecodePhase::Content { channel };
+                        self.phase = DecodePhase::Content { seq_num, channel };
                         self.buffer.resize(len as usize, 0);
                         self.offset = 0;
                     } else {
-                        self.phase = DecodePhase::Channel;
-                        self.buffer.resize(MessageChannel::SIZE, 0);
+                        self.phase = DecodePhase::Header;
+                        self.buffer.resize(Message::HEADER_SIZE, 0);
                         self.offset = 0;
 
-                        return Poll::Ready(Ok(Message {
-                            channel,
-                            content: vec![],
-                        }));
+                        return Poll::Ready(Ok(Message::new_keep_alive()));
                     }
                 }
-                DecodePhase::Content { channel } => {
+                DecodePhase::Content { seq_num, channel } => {
                     let content = mem::take(&mut self.buffer);
 
-                    self.phase = DecodePhase::Channel;
-                    self.buffer.resize(MessageChannel::SIZE, 0);
+                    self.phase = DecodePhase::Header;
+                    self.buffer.resize(Message::HEADER_SIZE, 0);
                     self.offset = 0;
 
-                    return Poll::Ready(Ok(Message { channel, content }));
+                    return Poll::Ready(Ok(Message { seq_num, channel, content }));
                 }
             }
         }

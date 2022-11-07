@@ -14,7 +14,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -67,6 +67,7 @@ impl MessageDispatcher {
     /// Opens a sink for sending messages with the given id.
     pub fn open_send(&self, channel: MessageChannel) -> ContentSink {
         ContentSink {
+            next_seq_num: Arc::new(AtomicU64::new(0)),
             channel,
             state: self.send.clone(),
         }
@@ -152,6 +153,7 @@ impl ContentStream {
 
 #[derive(Clone)]
 pub(super) struct ContentSink {
+    next_seq_num: Arc<AtomicU64>,
     channel: MessageChannel,
     state: Arc<MultiSink>,
 }
@@ -159,8 +161,10 @@ pub(super) struct ContentSink {
 impl ContentSink {
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
+        let seq_num = self.next_seq_num.fetch_add(1, Ordering::SeqCst);
         self.state
             .send(Message {
+                seq_num,
                 channel: self.channel,
                 content,
             })
