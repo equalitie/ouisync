@@ -66,15 +66,18 @@ impl fmt::Debug for Response {
 type SeqNum = u64;
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub(crate) struct Resend {
-    first_missing: SeqNum,
-    up_to_exclusive: SeqNum,
+pub(crate) enum AckData {
+    HighestSeen(Option<SeqNum>),
+    Resend {
+        first_missing: SeqNum,
+        up_to_exclusive: SeqNum,
+    }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub(crate) enum AckData {
-    LastSeen(SeqNum),
-    Resend(Resend),
+impl Default for AckData {
+    fn default() -> Self {
+        Self::HighestSeen(None)
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Debug)]
@@ -91,55 +94,65 @@ impl Header {
         Hash::SIZE; // Channel
 
     pub(crate) fn serialize(&self) -> [u8; Self::SIZE] {
-        // Unwraps are OK because all sizes are known at compile time.
-
         let mut hdr = [0; Self::SIZE];
+        let mut w = ArrayWriter { array: &mut hdr };
+
+        w.write_u64(self.seq_num);
 
         match self.ack_data {
-            AckData::LastSeen(last_seen) => {
-                hdr[0] = 1;
-                hdr[1..9].copy_from_slice(&self.seq_num.to_le_bytes());
-                hdr[9..17].copy_from_slice(&last_seen.to_le_bytes());
-                hdr[17..25].copy_from_slice(&0u64.to_le_bytes());
+            AckData::HighestSeen(highest) => {
+                w.write_u8(0);
+                if let Some(highest) = highest {
+                    w.write_u64(1);
+                    w.write_u64(highest);
+                }
+                else {
+                    w.write_u64(0);
+                    w.write_u64(0);
+                }
             }
-            AckData::Resend(Resend {
+            AckData::Resend{
                 first_missing,
                 up_to_exclusive,
-            }) => {
-                hdr[0] = 0;
-                hdr[1..9].copy_from_slice(&self.seq_num.to_le_bytes());
-                hdr[9..17].copy_from_slice(&first_missing.to_le_bytes());
-                hdr[17..25].copy_from_slice(&up_to_exclusive.to_le_bytes());
+            } => {
+                w.write_u8(1);
+                w.write_u64(first_missing);
+                w.write_u64(up_to_exclusive);
             }
         };
 
-        hdr[25..(25 + Hash::SIZE)].copy_from_slice(self.channel.as_ref());
+        w.write_channel(&self.channel);
 
         hdr
     }
 
     pub(crate) fn deserialize(hdr: &[u8; Self::SIZE]) -> Option<Header> {
-        // Unwraps are OK because all sizes are known at compile time.
+        let mut r = ArrayReader{ array: &hdr[..] };
 
-        let flag = hdr[0];
-
-        let seq_num = SeqNum::from_le_bytes(hdr[1..9].try_into().unwrap());
+        let seq_num = r.read_u64();
+        let flag = r.read_u8();
 
         let ack_data = match flag {
-            0 => AckData::LastSeen(SeqNum::from_le_bytes(hdr[9..17].try_into().unwrap())),
-            1 => AckData::Resend(Resend {
-                first_missing: SeqNum::from_le_bytes(hdr[9..17].try_into().unwrap()),
-                up_to_exclusive: SeqNum::from_le_bytes(hdr[17..25].try_into().unwrap()),
-            }),
+            0 => {
+                let is_some = r.read_u64() != 0;
+                let highest_seen = r.read_u64();
+                if is_some {
+                    AckData::HighestSeen(Some(highest_seen))
+                } else {
+                    AckData::HighestSeen(None)
+                }
+            },
+            1 => AckData::Resend{
+                first_missing: r.read_u64(),
+                up_to_exclusive: r.read_u64(),
+            },
             _ => return None,
         };
-
-        let channel: [u8; Hash::SIZE] = hdr[25..(25 + Hash::SIZE)].try_into().unwrap();
 
         Some(Header {
             seq_num,
             ack_data,
-            channel: channel.into(),
+            channel: r.read_channel(),
         })
     }
 }
@@ -148,10 +161,10 @@ impl Default for Header {
     fn default() -> Self {
         Self {
             seq_num: 0,
-            ack_data: AckData::Resend(Resend {
+            ack_data: AckData::Resend {
                 first_missing: 0,
                 up_to_exclusive: 0,
-            }),
+            },
             channel: ChannelId::default(),
         }
     }
@@ -192,6 +205,52 @@ impl From<(Header, Vec<u8>)> for Message {
             channel: hdr.channel,
             content: content,
         }
+    }
+}
+
+struct ArrayReader<'a> {
+    array: &'a [u8],
+}
+
+impl ArrayReader<'_> {
+    // Unwraps are OK because all sizes are known at compile time.
+
+    fn read_u8(&mut self) -> u8 {
+        let n = u8::from_le_bytes(self.array[..1].try_into().unwrap());
+        self.array = &self.array[1..];
+        n
+    }
+
+    fn read_u64(&mut self) -> u64 {
+        let n = u64::from_le_bytes(self.array[..8].try_into().unwrap());
+        self.array = &self.array[8..];
+        n
+    }
+
+    fn read_channel(&mut self) -> ChannelId {
+        let hash: [u8; Hash::SIZE] = self.array[..Hash::SIZE].try_into().unwrap();
+        self.array = &self.array[Hash::SIZE..];
+        hash.into()
+    }
+}
+
+struct ArrayWriter<'a> {
+    array: &'a mut [u8],
+}
+
+impl ArrayWriter<'_> {
+    // Unwraps are OK because all sizes are known at compile time.
+
+    fn write_u8(&mut self, n: u8) {
+        self.array.write(&n.to_le_bytes()).unwrap();
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.array.write(&n.to_le_bytes()).unwrap();
+    }
+
+    fn write_channel(&mut self, channel: &ChannelId) {
+        self.array.write(channel.as_ref()).unwrap();
     }
 }
 
