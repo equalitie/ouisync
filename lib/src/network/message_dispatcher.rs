@@ -3,10 +3,11 @@
 use crate::iterator::IntoIntersection;
 
 use super::{
+    channel_id::ChannelId,
     content_channel::{ContentStream, ContentSink},
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{AckData, Message, MessageChannel},
+    message::{AckData, Message},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
@@ -64,12 +65,12 @@ impl MessageDispatcher {
     }
 
     /// Opens a stream for receiving messages with the given id.
-    pub fn open_recv(&self, channel: MessageChannel) -> ContentStream {
+    pub fn open_recv(&self, channel: ChannelId) -> ContentStream {
         ContentStream::new(UnreliableContentStream::new(channel, self.recv.clone()))
     }
 
     /// Opens a sink for sending messages with the given id.
-    pub fn open_send(&self, channel: MessageChannel) -> ContentSink {
+    pub fn open_send(&self, channel: ChannelId) -> ContentSink {
         ContentSink::new(
             UnreliableContentSink {
                 next_seq_num: Arc::new(AtomicU64::new(0)),
@@ -107,13 +108,13 @@ impl Drop for MessageDispatcher {
 // duplicated. This is due to the fact that we're receiving from multiple connections at once and
 // when the other end fails to send a message it may or may not be received here.
 pub(super) struct UnreliableContentStream {
-    channel: MessageChannel,
+    channel: ChannelId,
     state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
 impl UnreliableContentStream {
-    fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
+    fn new(channel: ChannelId, state: Arc<RecvState>) -> Self {
         let queues_changed_rx = state.queues_changed_tx.subscribe();
 
         Self {
@@ -155,7 +156,7 @@ impl UnreliableContentStream {
         }
     }
 
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &ChannelId {
         &self.channel
     }
 }
@@ -163,7 +164,7 @@ impl UnreliableContentStream {
 #[derive(Clone)]
 pub(super) struct UnreliableContentSink {
     next_seq_num: Arc<AtomicU64>,
-    channel: MessageChannel,
+    channel: ChannelId,
     state: Arc<MultiSink>,
 }
 
@@ -181,7 +182,7 @@ impl UnreliableContentSink {
             .await
     }
 
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &ChannelId {
         &self.channel
     }
 }
@@ -211,13 +212,13 @@ impl LiveConnectionInfoSet {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<MessageChannel, VecDeque<SequencedContent>>>,
+    queues: Mutex<HashMap<ChannelId, VecDeque<SequencedContent>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     // Pops a message from the corresponding queue.
-    fn pop(&self, channel: &MessageChannel) -> Option<SequencedContent> {
+    fn pop(&self, channel: &ChannelId) -> Option<SequencedContent> {
         self.queues.lock().unwrap().get_mut(channel)?.pop_back()
     }
 
@@ -533,7 +534,7 @@ mod tests {
     async fn recv_on_stream() {
         let (mut client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = ChannelId::random();
         let send_content = b"hello world";
 
         client
@@ -554,8 +555,8 @@ mod tests {
     async fn recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
-        let channel0 = MessageChannel::random();
-        let channel1 = MessageChannel::random();
+        let channel0 = ChannelId::random();
+        let channel1 = ChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
@@ -586,7 +587,7 @@ mod tests {
     async fn drop_stream() {
         let (mut client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = ChannelId::random();
 
         let send_content0 = b"one two three";
         let send_content1 = b"four five six";
@@ -617,7 +618,7 @@ mod tests {
     async fn drop_dispatcher() {
         let (_client, server) = setup().await;
 
-        let channel = MessageChannel::random();
+        let channel = ChannelId::random();
 
         let mut server_stream = server.open_recv(channel);
 
@@ -640,7 +641,7 @@ mod tests {
         let mut client = MessageSink::new(client);
         client
             .send(Message {
-                channel: MessageChannel::random(),
+                channel: ChannelId::random(),
                 content: b"hello world".to_vec(),
             })
             .await

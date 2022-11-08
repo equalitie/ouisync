@@ -1,5 +1,6 @@
 use super::{
-    message::{Message, MessageChannel},
+    channel_id::ChannelId,
+    message::Message,
     message_io::{MessageSink, MessageStream, SendError},
 };
 use futures_util::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt};
@@ -69,7 +70,7 @@ where
 }
 
 fn is_keep_alive(message: &Message) -> bool {
-    message.channel == MessageChannel::default() && message.content.is_empty()
+    message.channel == ChannelId::default() && message.content.is_empty()
 }
 
 /// Adapter for `MessageSink` which periodically sends keep-alive messages if no regular messages
@@ -224,7 +225,7 @@ mod tests {
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
             Message {
-                channel: MessageChannel::default(),
+                channel: ChannelId::default(),
                 content: Vec::new()
             }
         );
@@ -240,7 +241,7 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
-            channel: MessageChannel::random(),
+            channel: ChannelId::random(),
             content: b"hello".to_vec(),
         };
 
@@ -280,7 +281,7 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
-            channel: MessageChannel::random(),
+            channel: ChannelId::random(),
             content: b"hello".to_vec(),
         };
 

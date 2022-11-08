@@ -1,10 +1,11 @@
 use super::{
     barrier::{Barrier, BarrierError},
+    channel_id::ChannelId,
     client::Client,
     connection::ConnectionPermit,
     content_channel::{ContentSink, ContentStream},
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
-    message::{Content, MessageChannel, Request, Response},
+    message::{Content, Request, Response},
     message_dispatcher::MessageDispatcher,
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
@@ -96,7 +97,7 @@ impl MessageBroker {
 
         let span_enter = span.enter();
 
-        let channel = MessageChannel::from(store.index.repository_id());
+        let channel = ChannelId::from(store.index.repository_id());
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(store.local_id) {

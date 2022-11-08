@@ -1,5 +1,5 @@
 use super::{
-    message::{MessageChannel},
+    channel_id::ChannelId,
     message_dispatcher::{ChannelClosed, UnreliableContentSink, UnreliableContentStream}
 };
 
@@ -14,7 +14,7 @@ impl ContentStream {
         }
     }
 
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &ChannelId {
         &self.unreliable_stream.channel()
     }
 
@@ -40,7 +40,7 @@ impl ContentSink {
         self.unreliable_sink.send(content).await
     }
 
-    pub fn channel(&self) -> &MessageChannel {
+    pub fn channel(&self) -> &ChannelId {
         self.unreliable_sink.channel()
     }
 }

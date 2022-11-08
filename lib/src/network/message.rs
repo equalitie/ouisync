@@ -1,10 +1,12 @@
-use super::peer_exchange::PexPayload;
+use super::{
+    channel_id::ChannelId,
+    peer_exchange::PexPayload
+};
 use crate::{
     block::{BlockId, BlockNonce},
     crypto::Hash,
     format::Hex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
-    repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
 use std::{fmt, mem};
@@ -82,7 +84,7 @@ pub(crate) enum AckData {
 pub(crate) struct Header {
     pub seq_num: SeqNum,
     pub ack_data: AckData,
-    pub channel: MessageChannel,
+    pub channel: ChannelId,
 }
 
 impl Header {
@@ -153,7 +155,7 @@ impl Default for Header {
                 first_missing: 0,
                 up_to_exclusive: 0,
             }),
-            channel: MessageChannel::default(),
+            channel: ChannelId::default(),
         }
     }
 }
@@ -162,7 +164,7 @@ impl Default for Header {
 pub(crate) struct Message {
     pub seq_num: SeqNum,
     pub ack_data: AckData,
-    pub channel: MessageChannel,
+    pub channel: ChannelId,
     pub content: Vec<u8>,
 }
 
@@ -202,53 +204,4 @@ pub(crate) enum Content {
     Response(Response),
     // Peer exchange
     Pex(PexPayload),
-}
-
-define_byte_array_wrapper! {
-    // TODO: consider lower size (truncate the hash) which should still be enough to be unique
-    // while reducing the message size.
-    pub(crate) struct MessageChannel([u8; Hash::SIZE]);
-}
-
-impl MessageChannel {
-    #[cfg(test)]
-    pub(crate) fn random() -> Self {
-        Self(rand::random())
-    }
-}
-
-impl<'a> From<&'a RepositoryId> for MessageChannel {
-    fn from(id: &'a RepositoryId) -> Self {
-        Self(id.salted_hash(b"ouisync message channel").into())
-    }
-}
-
-impl Default for MessageChannel {
-    fn default() -> Self {
-        Self([0; Self::SIZE])
-    }
-}
-
-#[cfg(test)]
-impl From<Content> for Request {
-    fn from(content: Content) -> Self {
-        match content {
-            Content::Request(request) => request,
-            Content::Response(_) | Content::Pex(_) => {
-                panic!("not a request: {:?}", content)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-impl From<Content> for Response {
-    fn from(content: Content) -> Self {
-        match content {
-            Content::Response(response) => response,
-            Content::Request(_) | Content::Pex(_) => {
-                panic!("not a response: {:?}", content)
-            }
-        }
-    }
 }

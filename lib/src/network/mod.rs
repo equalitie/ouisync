@@ -1,4 +1,5 @@
 mod barrier;
+mod channel_id;
 mod client;
 mod config_keys;
 mod connection;
