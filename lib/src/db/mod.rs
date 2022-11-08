@@ -5,7 +5,7 @@ use futures_util::Stream;
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
-        Sqlite, SqliteConnectOptions, SqliteConnection, SqlitePoolOptions,
+        Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
         SqliteTransactionBehavior,
     },
     Acquire, Database, Either, Execute, Executor, Row, SqlitePool,
@@ -224,7 +224,9 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
     let connect_options = SqliteConnectOptions::new()
         .filename(path)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal);
+
     let pool = create_pool(connect_options).await?;
 
     let mut conn = pool.acquire().await?;
