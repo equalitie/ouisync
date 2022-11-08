@@ -8,7 +8,8 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
+    content_channel::{ContentSink, ContentStream},
+    message_dispatcher::ChannelClosed,
     runtime_id::PublicRuntimeId,
 };
 use crate::repository::RepositoryId;

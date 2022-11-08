@@ -1,4 +1,5 @@
-use super::message_dispatcher::{ChannelClosed, ContentSink, ContentStream};
+use super::message_dispatcher::ChannelClosed;
+use super::content_channel::{ContentSink, ContentStream};
 
 type BarrierId = u64;
 type Round = u32;

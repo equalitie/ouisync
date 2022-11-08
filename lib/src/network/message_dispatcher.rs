@@ -3,6 +3,7 @@
 use crate::iterator::IntoIntersection;
 
 use super::{
+    content_channel::{ContentStream, ContentSink},
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{AckData, Message, MessageChannel},
@@ -64,16 +65,18 @@ impl MessageDispatcher {
 
     /// Opens a stream for receiving messages with the given id.
     pub fn open_recv(&self, channel: MessageChannel) -> ContentStream {
-        ContentStream::new(channel, self.recv.clone())
+        ContentStream::new(UnreliableContentStream::new(channel, self.recv.clone()))
     }
 
     /// Opens a sink for sending messages with the given id.
     pub fn open_send(&self, channel: MessageChannel) -> ContentSink {
-        ContentSink {
-            next_seq_num: Arc::new(AtomicU64::new(0)),
-            channel,
-            state: self.send.clone(),
-        }
+        ContentSink::new(
+            UnreliableContentSink {
+                next_seq_num: Arc::new(AtomicU64::new(0)),
+                channel,
+                state: self.send.clone(),
+            }
+        )
     }
 
     /// Returns the active connections of this dispatcher.
@@ -100,36 +103,16 @@ impl Drop for MessageDispatcher {
     }
 }
 
-pub(super) struct ContentStream {
-    unordered_stream: UnorderedContentStream,
-}
-
-impl ContentStream {
-    fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
-        Self {
-            unordered_stream: UnorderedContentStream::new(channel, state),
-        }
-    }
-
-    pub fn channel(&self) -> &MessageChannel {
-        &self.unordered_stream.channel
-    }
-
-    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
-        Ok(self.unordered_stream.recv().await?.content)
-    }
-}
-
 // Messages received through this stream may come unordered, some may be dropped and some
 // duplicated. This is due to the fact that we're receiving from multiple connections at once and
 // when the other end fails to send a message it may or may not be received here.
-pub(super) struct UnorderedContentStream {
+pub(super) struct UnreliableContentStream {
     channel: MessageChannel,
     state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
 }
 
-impl UnorderedContentStream {
+impl UnreliableContentStream {
     fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
         let queues_changed_rx = state.queues_changed_tx.subscribe();
 
@@ -141,7 +124,7 @@ impl UnorderedContentStream {
     }
 
     // Receive a message from any of the available connections.
-    async fn recv(&mut self) -> Result<SequencedContent, ChannelClosed> {
+    pub async fn recv(&mut self) -> Result<SequencedContent, ChannelClosed> {
         let mut closed = false;
 
         loop {
@@ -171,16 +154,20 @@ impl UnorderedContentStream {
             }
         }
     }
+
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
+    }
 }
 
 #[derive(Clone)]
-pub(super) struct ContentSink {
+pub(super) struct UnreliableContentSink {
     next_seq_num: Arc<AtomicU64>,
     channel: MessageChannel,
     state: Arc<MultiSink>,
 }
 
-impl ContentSink {
+impl UnreliableContentSink {
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         let seq_num = self.next_seq_num.fetch_add(1, Ordering::SeqCst);
@@ -685,9 +672,9 @@ mod tests {
     }
 }
 
-struct SequencedContent {
-    seq_num: u64,
-    content: Vec<u8>,
+pub(crate) struct SequencedContent {
+    pub seq_num: u64,
+    pub content: Vec<u8>,
 }
 
 impl From<Message> for SequencedContent {
