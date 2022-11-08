@@ -6,7 +6,7 @@ use crate::{
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt, mem};
+use std::{fmt, mem, io::Write};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -283,5 +283,31 @@ impl From<Content> for Response {
                 panic!("not a response: {:?}", content)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_serialization() {
+        let header = Header {
+            seq_num: 891,
+            ack_data: AckData::HighestSeen(Some(1)),
+            channel: ChannelId::random(),
+        };
+
+        let serialized = header.serialize();
+        assert_eq!(Header::deserialize(&serialized), Some(header));
+
+        let header = Header {
+            seq_num: 49201,
+            ack_data: AckData::Resend{first_missing: 123, up_to_exclusive: 456},
+            channel: ChannelId::random(),
+        };
+
+        let serialized = header.serialize();
+        assert_eq!(Header::deserialize(&serialized), Some(header));
     }
 }
