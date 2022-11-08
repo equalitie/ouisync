@@ -2,25 +2,24 @@
 
 use crate::iterator::IntoIntersection;
 
-use async_trait::async_trait;
 use super::{
     channel_id::ChannelId,
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
-    content_channel::{self, ContentSink, ContentStream, UnreliableContentSinkTrait, UnreliableContentStreamTrait},
+    content_channel::{
+        self, ContentSink, ContentStream, UnreliableContentSinkTrait, UnreliableContentStreamTrait,
+    },
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{AckData, Message},
+    message::Message,
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
+use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     future::Future,
     pin::Pin,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -70,7 +69,6 @@ impl MessageDispatcher {
         let stream = UnreliableContentStream::new(channel, self.recv.clone());
 
         let sink = UnreliableContentSink {
-            next_seq_num: Arc::new(AtomicU64::new(0)),
             channel,
             state: self.send.clone(),
         };
@@ -164,7 +162,6 @@ impl UnreliableContentStreamTrait for UnreliableContentStream {
 
 #[derive(Clone)]
 pub(super) struct UnreliableContentSink {
-    next_seq_num: Arc<AtomicU64>,
     channel: ChannelId,
     state: Arc<MultiSink>,
 }
@@ -172,16 +169,8 @@ pub(super) struct UnreliableContentSink {
 #[async_trait]
 impl UnreliableContentSinkTrait for UnreliableContentSink {
     /// Returns whether the send succeeded.
-    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
-        let seq_num = self.next_seq_num.fetch_add(1, Ordering::SeqCst);
-        self.state
-            .send(Message {
-                seq_num,
-                ack_data: AckData::LastSeen(0),
-                channel: self.channel,
-                content,
-            })
-            .await
+    async fn send(&self, message: Message) -> Result<(), ChannelClosed> {
+        self.state.send(message).await
     }
 
     fn channel(&self) -> &ChannelId {
@@ -527,10 +516,22 @@ impl Future for Send<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        *,
+        super::message::AckData,
+    };
     use assert_matches::assert_matches;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
+
+    fn msg(channel: ChannelId, content: Vec<u8>) -> Message {
+        Message {
+            seq_num: 0,
+            ack_data: AckData::default(),
+            channel,
+            content,
+        }
+    }
 
     #[tokio::test]
     async fn recv_on_stream() {
@@ -540,14 +541,11 @@ mod tests {
         let send_content = b"hello world";
 
         client
-            .send(Message {
-                channel,
-                content: send_content.to_vec(),
-            })
+            .send(msg(channel, send_content.to_vec()))
             .await
             .unwrap();
 
-        let mut server_stream = server.open_recv(channel);
+        let mut server_stream = server.open(channel).1;
 
         let recv_content = server_stream.recv().await.unwrap();
         assert_eq!(recv_content, send_content);
@@ -564,17 +562,11 @@ mod tests {
         let send_content1 = b"four five six";
 
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
-            client
-                .send(Message {
-                    channel,
-                    content: content.to_vec(),
-                })
-                .await
-                .unwrap();
+            client.send(msg(channel, content.to_vec())).await.unwrap();
         }
 
-        let server_stream0 = server.open_recv(channel0);
-        let server_stream1 = server.open_recv(channel1);
+        let server_stream0 = server.open(channel0).1;
+        let server_stream1 = server.open(channel1).1;
 
         for (mut server_stream, send_content) in [
             (server_stream0, send_content0),
@@ -595,17 +587,11 @@ mod tests {
         let send_content1 = b"four five six";
 
         for content in [send_content0, send_content1] {
-            client
-                .send(Message {
-                    channel,
-                    content: content.to_vec(),
-                })
-                .await
-                .unwrap();
+            client.send(msg(channel, content.to_vec())).await.unwrap();
         }
 
-        let mut server_stream0 = server.open_recv(channel);
-        let mut server_stream1 = server.open_recv(channel);
+        let mut server_stream0 = server.open(channel).1;
+        let mut server_stream1 = server.open(channel).1;
 
         let recv_content = server_stream0.recv().await.unwrap();
         assert_eq!(recv_content, send_content0);
@@ -622,7 +608,7 @@ mod tests {
 
         let channel = ChannelId::random();
 
-        let mut server_stream = server.open_recv(channel);
+        let mut server_stream = server.open(channel).1;
 
         drop(server);
 
@@ -642,10 +628,7 @@ mod tests {
 
         let mut client = MessageSink::new(client);
         client
-            .send(Message {
-                channel: ChannelId::random(),
-                content: b"hello world".to_vec(),
-            })
+            .send(msg(ChannelId::random(), b"hello world".to_vec()))
             .await
             .unwrap();
 

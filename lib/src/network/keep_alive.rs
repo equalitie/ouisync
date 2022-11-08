@@ -210,6 +210,7 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
+    use super::super::message::AckData;
 
     #[tokio::test]
     async fn sink_keep_alive_if_no_send() {
@@ -222,13 +223,7 @@ mod tests {
 
         sink.close().await.unwrap();
 
-        assert_eq!(
-            stream.next().await.unwrap().unwrap(),
-            Message {
-                channel: ChannelId::default(),
-                content: Vec::new()
-            }
-        );
+        assert_eq!(stream.next().await.unwrap().unwrap(), Message::default(),);
     }
 
     #[tokio::test]
@@ -241,6 +236,8 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
+            seq_num: 0,
+            ack_data: AckData::default(),
             channel: ChannelId::random(),
             content: b"hello".to_vec(),
         };
@@ -281,6 +278,8 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
+            seq_num: 0,
+            ack_data: AckData::default(),
             channel: ChannelId::random(),
             content: b"hello".to_vec(),
         };

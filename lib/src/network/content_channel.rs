@@ -1,10 +1,13 @@
 use super::{
     channel_id::ChannelId,
+    message::{AckData, Message},
     message_dispatcher::{ChannelClosed, UnreliableContentSink, UnreliableContentStream},
-    message::Message,
 };
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 pub(super) type ContentSink = ContentSinkT<UnreliableContentSink>;
 pub(super) type ContentStream = ContentStreamT<UnreliableContentStream>;
@@ -27,13 +30,21 @@ impl<Stream: UnreliableContentStreamTrait> ContentStreamT<Stream> {
 #[derive(Clone)]
 pub(super) struct ContentSinkT<Sink> {
     shared: Arc<Shared>,
+    //next_seq_num: Arc::new(AtomicU64::new(0)),
     unreliable_sink: Sink,
 }
 
 impl<T: UnreliableContentSinkTrait> ContentSinkT<T> {
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
-        self.unreliable_sink.send(content).await
+        let message = Message {
+            seq_num: 0,
+            ack_data: AckData::default(),
+            channel: *self.channel(),
+            content,
+        };
+
+        self.unreliable_sink.send(message).await
     }
 
     pub fn channel(&self) -> &ChannelId {
@@ -69,6 +80,78 @@ pub(super) trait UnreliableContentStreamTrait {
 
 #[async_trait]
 pub(super) trait UnreliableContentSinkTrait {
-    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed>;
+    async fn send(&self, _: Message) -> Result<(), ChannelClosed>;
     fn channel(&self) -> &ChannelId;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    // --- Sink ---------------------------------------------------------------
+    struct TestSink {
+        tx: mpsc::Sender<Message>,
+        channel: ChannelId,
+    }
+
+    #[async_trait]
+    impl UnreliableContentSinkTrait for TestSink {
+        async fn send(&self, message: Message) -> Result<(), ChannelClosed> {
+            self.tx.send(message).await.map_err(|_| ChannelClosed)
+        }
+
+        fn channel(&self) -> &ChannelId {
+            &self.channel
+        }
+    }
+
+    // --- Stream --------------------------------------------------------------
+    struct TestStream {
+        rx: mpsc::Receiver<Message>,
+        channel: ChannelId,
+    }
+
+    #[async_trait]
+    impl UnreliableContentStreamTrait for TestStream {
+        async fn recv(&mut self) -> Result<Message, ChannelClosed> {
+            self.rx.recv().await.ok_or(ChannelClosed)
+        }
+
+        fn channel(&self) -> &ChannelId {
+            &self.channel
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    fn new_test_channel() -> (ContentSinkT<TestSink>, ContentStreamT<TestStream>) {
+        let shared = Arc::new(Shared {});
+        let (tx, rx) = mpsc::channel(1);
+
+        (
+            ContentSinkT {
+                shared: shared.clone(),
+                unreliable_sink: TestSink {
+                    tx,
+                    channel: ChannelId::default(),
+                },
+            },
+            ContentStreamT {
+                shared,
+                unreliable_stream: TestStream {
+                    rx,
+                    channel: ChannelId::default(),
+                },
+            },
+        )
+    }
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn recv_on_stream() {
+        let (tx, mut rx) = new_test_channel();
+
+        tx.send(Vec::new()).await.unwrap();
+        rx.recv().await.unwrap();
+    }
 }
