@@ -202,3 +202,27 @@ pub(crate) enum Content {
     // Peer exchange
     Pex(PexPayload),
 }
+
+#[cfg(test)]
+impl From<Content> for Request {
+    fn from(content: Content) -> Self {
+        match content {
+            Content::Request(request) => request,
+            Content::Response(_) | Content::Pex(_) => {
+                panic!("not a request: {:?}", content)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<Content> for Response {
+    fn from(content: Content) -> Self {
+        match content {
+            Content::Response(response) => response,
+            Content::Request(_) | Content::Pex(_) => {
+                panic!("not a response: {:?}", content)
+            }
+        }
+    }
+}
