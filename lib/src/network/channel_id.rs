@@ -1,7 +1,4 @@
-use crate::{
-    crypto::Hash,
-    repository::RepositoryId,
-};
+use crate::{crypto::Hash, repository::RepositoryId};
 
 define_byte_array_wrapper! {
     // TODO: consider lower size (truncate the hash) which should still be enough to be unique

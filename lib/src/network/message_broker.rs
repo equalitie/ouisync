@@ -122,8 +122,7 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        let stream = self.dispatcher.open_recv(channel);
-        let sink = self.dispatcher.open_send(channel);
+        let (sink, stream) = self.dispatcher.open(channel);
         let request_limiter = self.request_limiter.clone();
 
         let pex_discovery_tx = pex.discovery_sender();

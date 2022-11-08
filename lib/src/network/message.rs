@@ -1,7 +1,4 @@
-use super::{
-    channel_id::ChannelId,
-    peer_exchange::PexPayload
-};
+use super::{channel_id::ChannelId, peer_exchange::PexPayload};
 use crate::{
     block::{BlockId, BlockNonce},
     crypto::Hash,

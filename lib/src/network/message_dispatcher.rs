@@ -2,10 +2,11 @@
 
 use crate::iterator::IntoIntersection;
 
+use async_trait::async_trait;
 use super::{
     channel_id::ChannelId,
-    content_channel::{ContentStream, ContentSink},
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
+    content_channel::{self, ContentSink, ContentStream, UnreliableContentSinkTrait, UnreliableContentStreamTrait},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{AckData, Message},
     message_io::{MessageSink, MessageStream, SendError},
@@ -64,20 +65,17 @@ impl MessageDispatcher {
         self.send.add(PermittedSink::new(writer, writer_permit));
     }
 
-    /// Opens a stream for receiving messages with the given id.
-    pub fn open_recv(&self, channel: ChannelId) -> ContentStream {
-        ContentStream::new(UnreliableContentStream::new(channel, self.recv.clone()))
-    }
+    /// Opens a sink and a stream for receiving messages with the given id.
+    pub fn open(&self, channel: ChannelId) -> (ContentSink, ContentStream) {
+        let stream = UnreliableContentStream::new(channel, self.recv.clone());
 
-    /// Opens a sink for sending messages with the given id.
-    pub fn open_send(&self, channel: ChannelId) -> ContentSink {
-        ContentSink::new(
-            UnreliableContentSink {
-                next_seq_num: Arc::new(AtomicU64::new(0)),
-                channel,
-                state: self.send.clone(),
-            }
-        )
+        let sink = UnreliableContentSink {
+            next_seq_num: Arc::new(AtomicU64::new(0)),
+            channel,
+            state: self.send.clone(),
+        };
+
+        content_channel::new(sink, stream)
     }
 
     /// Returns the active connections of this dispatcher.
@@ -123,9 +121,12 @@ impl UnreliableContentStream {
             queues_changed_rx,
         }
     }
+}
 
+#[async_trait]
+impl UnreliableContentStreamTrait for UnreliableContentStream {
     // Receive a message from any of the available connections.
-    pub async fn recv(&mut self) -> Result<SequencedContent, ChannelClosed> {
+    async fn recv(&mut self) -> Result<Message, ChannelClosed> {
         let mut closed = false;
 
         loop {
@@ -141,7 +142,7 @@ impl UnreliableContentStream {
                 message = self.state.reader.recv() => {
                     if let Some(message) = message {
                         if message.channel == self.channel {
-                            return Ok(message.into());
+                            return Ok(message);
                         } else {
                             self.state.push(message)
                         }
@@ -156,7 +157,7 @@ impl UnreliableContentStream {
         }
     }
 
-    pub fn channel(&self) -> &ChannelId {
+    fn channel(&self) -> &ChannelId {
         &self.channel
     }
 }
@@ -168,9 +169,10 @@ pub(super) struct UnreliableContentSink {
     state: Arc<MultiSink>,
 }
 
-impl UnreliableContentSink {
+#[async_trait]
+impl UnreliableContentSinkTrait for UnreliableContentSink {
     /// Returns whether the send succeeded.
-    pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
+    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         let seq_num = self.next_seq_num.fetch_add(1, Ordering::SeqCst);
         self.state
             .send(Message {
@@ -182,7 +184,7 @@ impl UnreliableContentSink {
             .await
     }
 
-    pub fn channel(&self) -> &ChannelId {
+    fn channel(&self) -> &ChannelId {
         &self.channel
     }
 }
@@ -212,13 +214,13 @@ impl LiveConnectionInfoSet {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<ChannelId, VecDeque<SequencedContent>>>,
+    queues: Mutex<HashMap<ChannelId, VecDeque<Message>>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     // Pops a message from the corresponding queue.
-    fn pop(&self, channel: &ChannelId) -> Option<SequencedContent> {
+    fn pop(&self, channel: &ChannelId) -> Option<Message> {
         self.queues.lock().unwrap().get_mut(channel)?.pop_back()
     }
 
@@ -230,7 +232,7 @@ impl RecvState {
             .unwrap()
             .entry(message.channel)
             .or_default()
-            .push_front(message.into());
+            .push_front(message);
         self.queues_changed_tx.send(()).unwrap_or(());
     }
 }
@@ -670,19 +672,5 @@ mod tests {
         let (server, _) = listener.accept().await.unwrap();
 
         (raw::Stream::Tcp(client), raw::Stream::Tcp(server))
-    }
-}
-
-pub(crate) struct SequencedContent {
-    pub seq_num: u64,
-    pub content: Vec<u8>,
-}
-
-impl From<Message> for SequencedContent {
-    fn from(message: Message) -> Self {
-        Self {
-            seq_num: message.seq_num,
-            content: message.content,
-        }
     }
 }
