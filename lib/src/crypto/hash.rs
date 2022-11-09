@@ -160,13 +160,13 @@ impl Hashable for u8 {
 
 impl Hashable for u32 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        state.update(&self.to_le_bytes())
+        state.update(self.to_le_bytes())
     }
 }
 
 impl Hashable for u64 {
     fn update_hash<S: Digest>(&self, state: &mut S) {
-        state.update(&self.to_le_bytes())
+        state.update(self.to_le_bytes())
     }
 }
 

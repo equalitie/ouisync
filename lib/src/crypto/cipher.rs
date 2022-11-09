@@ -37,7 +37,7 @@ impl SecretKey {
     /// Parse secret key from hexadecimal string of size 2*SIZE.
     pub fn parse_hex(hex_str: &str) -> Result<Self, hex::FromHexError> {
         let mut bytes = [0; Self::SIZE];
-        hex::decode_to_slice(&hex_str, &mut bytes)?;
+        hex::decode_to_slice(hex_str, &mut bytes)?;
 
         let mut key = Self::zero();
         key.as_mut().copy_from_slice(&bytes);
@@ -132,7 +132,7 @@ impl TryFrom<&[u8]> for SecretKey {
 /// can be copied or revealed.
 impl AsRef<[u8; Self::SIZE]> for SecretKey {
     fn as_ref(&self) -> &[u8; Self::SIZE] {
-        &**self.0
+        &self.0
     }
 }
 

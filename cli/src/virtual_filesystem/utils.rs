@@ -71,7 +71,7 @@ impl<'a, T> Deref for MaybeOwnedMut<'a, T> {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(v) => v,
-            Self::Borrowed(r) => *r,
+            Self::Borrowed(r) => r,
         }
     }
 }
@@ -80,7 +80,7 @@ impl<'a, T> DerefMut for MaybeOwnedMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Owned(v) => v,
-            Self::Borrowed(r) => *r,
+            Self::Borrowed(r) => r,
         }
     }
 }

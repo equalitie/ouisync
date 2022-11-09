@@ -909,7 +909,7 @@ async fn version_vector_empty_directory() {
 
     let dir = repo.create_directory("stuff").await.unwrap();
     assert_eq!(
-        dir.version_vector(&mut *repo.db().acquire().await.unwrap())
+        dir.version_vector(&mut repo.db().acquire().await.unwrap())
             .await
             .unwrap(),
         vv![local_id => 1]

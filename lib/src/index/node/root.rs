@@ -228,7 +228,7 @@ impl RootNode {
         )
         .bind(&new_proof.version_vector)
         .bind(&new_proof.signature)
-        .bind(&self.snapshot_id)
+        .bind(self.snapshot_id)
         .execute(conn)
         .await?;
 

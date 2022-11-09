@@ -223,7 +223,7 @@ mod tests {
                 |entries| {
                     for (a, b) in PairCombinations::new(entries) {
                         if a.branch_id == b.branch_id
-                            && a.version_vector.partial_cmp(&b.version_vector) == None
+                            && a.version_vector.partial_cmp(&b.version_vector).is_none()
                         {
                             return false;
                         }

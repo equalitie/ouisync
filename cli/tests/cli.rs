@@ -72,7 +72,7 @@ fn sequential_write_to_the_same_file() {
     let content_b = "hello from B";
 
     // A writes first
-    fs::write(a.root().join(file_name), &content_a).unwrap();
+    fs::write(a.root().join(file_name), content_a).unwrap();
 
     // B reads what A wrote
     eventually(|| {
@@ -81,7 +81,7 @@ fn sequential_write_to_the_same_file() {
     });
 
     // B writes
-    fs::write(b.root().join(file_name), &content_b).unwrap();
+    fs::write(b.root().join(file_name), content_b).unwrap();
 
     // A reads what B wrote
     eventually(|| {

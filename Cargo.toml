@@ -7,7 +7,7 @@ authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
 edition = "2021"
-rust-version = "1.64.0"
+rust-version = "1.65.0"
 
 [workspace.dependencies]
 tokio = { version = "1.21.0", default-features = false }

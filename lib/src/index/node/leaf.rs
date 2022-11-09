@@ -51,7 +51,7 @@ impl LeafNode {
         .bind(parent)
         .bind(&self.locator)
         .bind(&self.block_id)
-        .bind(&self.is_missing)
+        .bind(self.is_missing)
         .execute(conn)
         .await?;
 

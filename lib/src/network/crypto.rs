@@ -213,7 +213,7 @@ fn build_handshake_state(role: Role, repo_id: &RepositoryId) -> HandshakeState {
     let mut state = HandshakeState::new(
         patterns::noise_nn_psk0(),
         role == Role::Initiator,
-        &[],
+        [],
         None,
         None,
         None,
