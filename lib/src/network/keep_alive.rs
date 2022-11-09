@@ -207,10 +207,10 @@ fn sink_closed_error() -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use super::super::message::AckData;
     use super::*;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
-    use super::super::message::AckData;
 
     #[tokio::test]
     async fn sink_keep_alive_if_no_send() {

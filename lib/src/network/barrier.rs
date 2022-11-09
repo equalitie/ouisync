@@ -7,8 +7,15 @@ type Msg = (MsgType, Round, BarrierId);
 
 use std::mem::size_of;
 
-enum Step { One, Two }
-enum MsgType { Step1, Step2, Reset }
+enum Step {
+    One,
+    Two,
+}
+enum MsgType {
+    Step1,
+    Step2,
+    Reset,
+}
 
 const MSG_TYPE_SIZE: usize = size_of::<u8>();
 const MSG_ID_SIZE: usize = size_of::<BarrierId>();
@@ -88,8 +95,9 @@ impl<'a> Barrier<'a> {
                 return Err(BarrierError::Failure);
             }
 
-            let (msg_type, their_round, their_barrier_id) =
-                self.exchange(Step::One, this_round, self.barrier_id).await?;
+            let (msg_type, their_round, their_barrier_id) = self
+                .exchange(Step::One, this_round, self.barrier_id)
+                .await?;
 
             // Ensure we end at the same time.
             if this_round != their_round {
@@ -108,8 +116,9 @@ impl<'a> Barrier<'a> {
                 }
             }
 
-            let (msg_type, their_round, our_barrier_id) =
-                self.exchange(Step::Two, this_round, their_barrier_id).await?;
+            let (msg_type, their_round, our_barrier_id) = self
+                .exchange(Step::Two, this_round, their_barrier_id)
+                .await?;
 
             // Ensure we end at the same time.
             if this_round != their_round {

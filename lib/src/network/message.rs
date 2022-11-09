@@ -6,7 +6,7 @@ use crate::{
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt, mem, io::Write};
+use std::{fmt, io::Write, mem};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
@@ -71,7 +71,7 @@ pub(crate) enum AckData {
     Resend {
         first_missing: SeqNum,
         up_to_exclusive: SeqNum,
-    }
+    },
 }
 
 impl Default for AckData {
@@ -105,13 +105,12 @@ impl Header {
                 if let Some(highest) = highest {
                     w.write_u64(1);
                     w.write_u64(highest);
-                }
-                else {
+                } else {
                     w.write_u64(0);
                     w.write_u64(0);
                 }
             }
-            AckData::Resend{
+            AckData::Resend {
                 first_missing,
                 up_to_exclusive,
             } => {
@@ -127,7 +126,7 @@ impl Header {
     }
 
     pub(crate) fn deserialize(hdr: &[u8; Self::SIZE]) -> Option<Header> {
-        let mut r = ArrayReader{ array: &hdr[..] };
+        let mut r = ArrayReader { array: &hdr[..] };
 
         let seq_num = r.read_u64();
         let flag = r.read_u8();
@@ -141,8 +140,8 @@ impl Header {
                 } else {
                     AckData::HighestSeen(None)
                 }
-            },
-            1 => AckData::Resend{
+            }
+            1 => AckData::Resend {
                 first_missing: r.read_u64(),
                 up_to_exclusive: r.read_u64(),
             },
@@ -303,7 +302,10 @@ mod tests {
 
         let header = Header {
             seq_num: 49201,
-            ack_data: AckData::Resend{first_missing: 123, up_to_exclusive: 456},
+            ack_data: AckData::Resend {
+                first_missing: 123,
+                up_to_exclusive: 456,
+            },
             channel: ChannelId::random(),
         };
 

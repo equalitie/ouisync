@@ -516,10 +516,7 @@ impl Future for Send<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        *,
-        super::message::AckData,
-    };
+    use super::{super::message::AckData, *};
     use assert_matches::assert_matches;
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
