@@ -1,9 +1,9 @@
 //! Utilities for deadlock detection
 
 use crate::debug;
-use backtrace::Backtrace;
 use slab::Slab;
 use std::{
+    backtrace::Backtrace,
     fmt,
     future::Future,
     ops::{Deref, DerefMut},
@@ -83,7 +83,7 @@ impl DeadlockTracker {
     #[track_caller]
     fn acquire(&self) -> Acquire {
         let file_and_line = Location::caller();
-        let backtrace = Backtrace::new_unresolved();
+        let backtrace = Backtrace::capture();
 
         let key = self.locations.lock().unwrap().insert(LockLocation {
             file_and_line,
@@ -102,7 +102,6 @@ impl fmt::Display for DeadlockTracker {
         let mut locations = self.locations.lock().unwrap();
 
         for (_, location) in &mut *locations {
-            location.backtrace.resolve();
             write!(f, "\n{}\n{:?}", location.file_and_line, location.backtrace)?;
         }
 
