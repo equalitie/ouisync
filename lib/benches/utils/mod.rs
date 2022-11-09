@@ -44,3 +44,24 @@ pub async fn write_file(
 
     file.flush(&mut conn).await.unwrap();
 }
+
+/// Read the whole content of the file at `path` in `buffer_size` bytes at a time. Returns the
+/// total size of the content.
+pub async fn read_file(repo: &Repository, path: &Utf8Path, buffer_size: usize) -> usize {
+    let mut file = repo.open_file(path).await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    let mut buffer = vec![0; buffer_size];
+    let mut size = 0;
+
+    loop {
+        let len = file.read(&mut conn, &mut buffer[..]).await.unwrap();
+
+        if len == 0 {
+            break;
+        }
+
+        size += len;
+    }
+
+    size
+}
