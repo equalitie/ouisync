@@ -10,6 +10,7 @@ use ouisync_lib::{
     ConfigStore, Error, MonitorId, Result, StateMonitor,
 };
 use std::{
+    ffi::CString,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
@@ -199,6 +200,22 @@ pub unsafe extern "C" fn session_close() {
 #[no_mangle]
 pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
     handle.release().abort();
+}
+
+/// Deallocate string that has been allocated on the rust side
+#[no_mangle]
+pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let _ = CString::from_raw(ptr);
+}
+
+/// Deallocate Bytes that has been allocated on the rust side
+#[no_mangle]
+pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
+    let _ = bytes.into_vec();
 }
 
 pub(super) unsafe fn with<T, F>(port: Port<Result<T>>, f: F)
