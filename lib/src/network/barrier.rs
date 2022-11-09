@@ -3,12 +3,14 @@ use super::message_dispatcher::ChannelClosed;
 
 type BarrierId = u64;
 type Round = u32;
-type Step = u8;
-type Msg = (BarrierId, Round, Step);
+type Msg = (MsgType, Round, BarrierId);
 
 use std::mem::size_of;
 
-const MSG_STEP_SIZE: usize = size_of::<Step>();
+enum Step { One, Two }
+enum MsgType { Step1, Step2, Reset }
+
+const MSG_TYPE_SIZE: usize = size_of::<u8>();
 const MSG_ID_SIZE: usize = size_of::<BarrierId>();
 const MSG_ROUND_SIZE: usize = size_of::<Round>();
 const MSG_PREFIX: &[u8; 13] = b"barrier-start";
@@ -16,7 +18,7 @@ const MSG_SUFFIX: &[u8; 11] = b"barrier-end";
 const MSG_PREFIX_SIZE: usize = MSG_PREFIX.len();
 const MSG_SUFFIX_SIZE: usize = MSG_SUFFIX.len();
 const MSG_SIZE: usize =
-    MSG_PREFIX_SIZE + MSG_ID_SIZE + MSG_ROUND_SIZE + MSG_STEP_SIZE + MSG_SUFFIX_SIZE;
+    MSG_PREFIX_SIZE + MSG_ID_SIZE + MSG_ROUND_SIZE + MSG_TYPE_SIZE + MSG_SUFFIX_SIZE;
 
 type MsgData = [u8; MSG_SIZE];
 
@@ -86,13 +88,8 @@ impl<'a> Barrier<'a> {
                 return Err(BarrierError::Failure);
             }
 
-            let (their_barrier_id, their_round, their_step) =
-                self.exchange(self.barrier_id, this_round, 0).await?;
-
-            if their_step != 0 {
-                this_round = max(this_round, their_round) + 1;
-                continue;
-            }
+            let (msg_type, their_round, their_barrier_id) =
+                self.exchange(Step::One, this_round, self.barrier_id).await?;
 
             // Ensure we end at the same time.
             if this_round != their_round {
@@ -100,22 +97,41 @@ impl<'a> Barrier<'a> {
                 continue;
             }
 
-            let (our_barrier_id, their_round, their_step) =
-                self.exchange(their_barrier_id, this_round, 1).await?;
+            match msg_type {
+                MsgType::Reset => {
+                    continue;
+                }
+                MsgType::Step1 => (),
+                MsgType::Step2 => {
+                    self.send_reset(this_round).await?;
+                    continue;
+                }
+            }
 
-            if their_step != 1 {
+            let (msg_type, their_round, our_barrier_id) =
+                self.exchange(Step::Two, this_round, their_barrier_id).await?;
+
+            // Ensure we end at the same time.
+            if this_round != their_round {
                 this_round = max(this_round, their_round) + 1;
                 continue;
+            }
+
+            match msg_type {
+                MsgType::Reset => {
+                    this_round = max(this_round + 1, their_round);
+                    continue;
+                }
+                MsgType::Step1 => {
+                    this_round = max(this_round, their_round) + 1;
+                    self.send_reset(this_round).await?;
+                    continue;
+                }
+                MsgType::Step2 => (),
             }
 
             if our_barrier_id != self.barrier_id {
                 // Peer was communicating with our previous barrier, ignoring that.
-                this_round = max(this_round, their_round) + 1;
-                continue;
-            }
-
-            // Ensure we end at the same time.
-            if this_round != their_round {
                 this_round = max(this_round, their_round) + 1;
                 continue;
             }
@@ -128,55 +144,56 @@ impl<'a> Barrier<'a> {
 
     async fn exchange(
         &mut self,
-        barrier_id: BarrierId,
+        step: Step,
         our_round: Round,
-        our_step: Step,
+        barrier_id: BarrierId,
     ) -> Result<Msg, ChannelClosed> {
+        let msg_type = match step {
+            Step::One => MsgType::Step1,
+            Step::Two => MsgType::Step2,
+        };
+
         self.sink
-            .send(construct_message(barrier_id, our_round, our_step).to_vec())
+            .send(construct_message(msg_type, our_round, barrier_id).to_vec())
             .await?;
 
         loop {
-            let msg = self.stream.recv().await?;
-
-            let (barrier_id, their_round, their_step) = match parse_message(&msg) {
-                Some(msg) => msg,
-                // Ignore messages that belonged to whatever communication was going on prior us
-                // starting this barrier process.
-                None => continue,
-            };
-
-            if their_step > our_step {
-                // We have a miss-step in `exchange`, we just sent them that our step is 0 so
-                // they'll see that and start a new round. Note that the next round will fail
-                // because then they'll receive our message from step 1. But at least we'll have a
-                // sync on `exchange` even though we'll not have a sync on "step". Sync on "step"
-                // will then happen in the logic of the `run` function.
-                continue;
+            if let Some(msg) = parse_message(&self.stream.recv().await?) {
+                return Ok(msg);
             }
-
-            return Ok((barrier_id, their_round, their_step));
         }
+    }
+
+    async fn send_reset(&mut self, round: Round) -> Result<(), ChannelClosed> {
+        self.sink
+            .send(construct_message(MsgType::Reset, round, 0).to_vec())
+            .await
     }
 }
 
-fn construct_message(barrier_id: BarrierId, round: Round, step: Step) -> MsgData {
+fn construct_message(msg_type: MsgType, round: Round, barrier_id: BarrierId) -> MsgData {
     let mut msg = [0u8; size_of::<MsgData>()];
     let s = &mut msg[..];
 
-    s[0..MSG_PREFIX_SIZE].clone_from_slice(MSG_PREFIX);
+    s[..MSG_PREFIX_SIZE].clone_from_slice(MSG_PREFIX);
     let s = &mut s[MSG_PREFIX_SIZE..];
 
-    s[0..MSG_ID_SIZE].clone_from_slice(&barrier_id.to_le_bytes());
-    let s = &mut s[MSG_ID_SIZE..];
+    let msg_type: u8 = match msg_type {
+        MsgType::Reset => 0,
+        MsgType::Step1 => 1,
+        MsgType::Step2 => 2,
+    };
 
-    s[0..MSG_ROUND_SIZE].clone_from_slice(&round.to_le_bytes());
+    s[..MSG_TYPE_SIZE].clone_from_slice(&msg_type.to_le_bytes());
+    let s = &mut s[MSG_TYPE_SIZE..];
+
+    s[..MSG_ROUND_SIZE].clone_from_slice(&round.to_le_bytes());
     let s = &mut s[MSG_ROUND_SIZE..];
 
-    s[0..MSG_STEP_SIZE].clone_from_slice(&step.to_le_bytes());
-    let s = &mut s[MSG_STEP_SIZE..];
+    s[..MSG_ID_SIZE].clone_from_slice(&barrier_id.to_le_bytes());
+    let s = &mut s[MSG_ID_SIZE..];
 
-    s[0..MSG_SUFFIX_SIZE].clone_from_slice(MSG_SUFFIX);
+    s[..MSG_SUFFIX_SIZE].clone_from_slice(MSG_SUFFIX);
 
     msg
 }
@@ -192,19 +209,28 @@ fn parse_message(data: &[u8]) -> Option<Msg> {
         return None;
     }
 
-    let (id_data, rest) = rest.split_at(MSG_ID_SIZE);
+    let (msg_type, rest) = rest.split_at(MSG_TYPE_SIZE);
+
+    let msg_type = match u8::from_le_bytes(msg_type.try_into().unwrap()) {
+        0 => MsgType::Reset,
+        1 => MsgType::Step1,
+        2 => MsgType::Step2,
+        _ => return None,
+    };
+
     let (round_data, rest) = rest.split_at(MSG_ROUND_SIZE);
-    let (step_data, suffix) = rest.split_at(MSG_STEP_SIZE);
+    let (id_data, suffix) = rest.split_at(MSG_ID_SIZE);
 
     if suffix != MSG_SUFFIX {
+        tracing::error!("Barrier: bad suffix");
         return None;
     }
 
     // Unwraps OK because we know the sizes at compile time.
     Some((
-        BarrierId::from_le_bytes(id_data.try_into().unwrap()),
+        msg_type,
         Round::from_le_bytes(round_data.try_into().unwrap()),
-        Step::from_le_bytes(step_data.try_into().unwrap()),
+        BarrierId::from_le_bytes(id_data.try_into().unwrap()),
     ))
 }
 
