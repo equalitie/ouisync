@@ -9,6 +9,7 @@ use super::{
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
+use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -157,6 +158,10 @@ pub(super) struct ContentSink {
 }
 
 impl ContentSink {
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
+    }
+
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.state
@@ -167,11 +172,36 @@ impl ContentSink {
             })
             .await
     }
+}
 
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
+//------------------------------------------------------------------------
+// These traits are useful for testing.
+
+#[async_trait]
+pub(super) trait ContentSinkTrait {
+    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed>;
+}
+
+#[async_trait]
+pub(super) trait ContentStreamTrait {
+    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed>;
+}
+
+#[async_trait]
+impl ContentSinkTrait for ContentSink {
+    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
+        self.send(content).await
     }
 }
+
+#[async_trait]
+impl ContentStreamTrait for ContentStream {
+    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+        self.recv().await
+    }
+}
+
+//------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub(super) struct ChannelClosed;

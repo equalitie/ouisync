@@ -1,4 +1,4 @@
-use super::message_dispatcher::{ChannelClosed, ContentSink, ContentStream};
+use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
 
 type BarrierId = u64;
 type Round = u32;
@@ -57,12 +57,16 @@ pub(super) struct Barrier<'a> {
     // Barrier ID is used to ensure that the other peer is communicating with this instance of
     // Barrier by sending us the ID back.
     barrier_id: BarrierId,
-    stream: &'a mut ContentStream,
-    sink: &'a mut ContentSink,
+    stream: &'a mut (dyn ContentStreamTrait + Send + Sync + 'a),
+    sink: &'a (dyn ContentSinkTrait + Send + Sync + 'a),
 }
 
 impl<'a> Barrier<'a> {
-    pub fn new(stream: &'a mut ContentStream, sink: &'a mut ContentSink) -> Self {
+    pub fn new<Stream, Sink>(stream: &'a mut Stream, sink: &'a Sink) -> Self
+    where
+        Stream: ContentStreamTrait + Send + Sync,
+        Sink: ContentSinkTrait + Send + Sync,
+    {
         Self {
             barrier_id: rand::random(),
             stream,
