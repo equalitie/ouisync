@@ -5,7 +5,7 @@ use crate::iterator::IntoIntersection;
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{Message, MessageChannel},
+    message::{Message, MessageChannel, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
@@ -161,6 +161,7 @@ impl ContentSink {
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.state
             .send(Message {
+                tag: Type::Content,
                 channel: self.channel,
                 content,
             })
@@ -524,6 +525,7 @@ mod tests {
 
         client
             .send(Message {
+                tag: Type::Content,
                 channel,
                 content: send_content.to_vec(),
             })
@@ -549,6 +551,7 @@ mod tests {
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client
                 .send(Message {
+                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -580,6 +583,7 @@ mod tests {
         for content in [send_content0, send_content1] {
             client
                 .send(Message {
+                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -626,6 +630,7 @@ mod tests {
         let mut client = MessageSink::new(client);
         client
             .send(Message {
+                tag: Type::Content,
                 channel: MessageChannel::random(),
                 content: b"hello world".to_vec(),
             })
