@@ -1,21 +1,17 @@
 mod migrations;
 
 use crate::debug;
-use futures_util::Stream;
-use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
         SqliteTransactionBehavior,
     },
-    Acquire, Database, Either, Execute, Executor, Row, SqlitePool,
+    Acquire, Row, SqlitePool,
 };
 use std::{
-    future::Future,
     io,
     ops::{Deref, DerefMut},
     path::Path,
-    pin::Pin,
     time::Duration,
 };
 #[cfg(test)]
@@ -48,109 +44,28 @@ impl Pool {
 }
 
 /// Database connection
-#[derive(Debug, RefCast)]
-#[repr(transparent)]
-pub struct Connection(SqliteConnection);
+pub type Connection = SqliteConnection;
 
-impl Connection {
+/// Database connection from pool
+pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
+
+impl PoolConnection {
     pub async fn begin(&mut self) -> Result<Transaction<'_>, sqlx::Error> {
         Transaction::begin(&mut self.0).await
     }
 }
 
-// Delegate the `Executor` impl to the inner type (what a trait!)
-impl<'c> Executor<'c> for &'c mut Connection {
-    type Database = Sqlite;
-
-    fn fetch_many<'e, 'q: 'e, E: 'q>(
-        self,
-        query: E,
-    ) -> Pin<
-        Box<
-            dyn Stream<
-                    Item = Result<
-                        Either<
-                            <Self::Database as Database>::QueryResult,
-                            <Self::Database as Database>::Row,
-                        >,
-                        sqlx::Error,
-                    >,
-                > + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-        E: Execute<'q, Self::Database>,
-    {
-        self.0.fetch_many(query)
-    }
-
-    fn fetch_optional<'e, 'q: 'e, E: 'q>(
-        self,
-        query: E,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Option<<Self::Database as Database>::Row>, sqlx::Error>>
-                + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-        E: Execute<'q, Self::Database>,
-    {
-        self.0.fetch_optional(query)
-    }
-
-    fn prepare_with<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-        parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        <Self::Database as sqlx::database::HasStatement<'q>>::Statement,
-                        sqlx::Error,
-                    >,
-                > + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-    {
-        self.0.prepare_with(sql, parameters)
-    }
-
-    fn describe<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<sqlx::Describe<Self::Database>, sqlx::Error>> + Send + 'e>,
-    >
-    where
-        'c: 'e,
-    {
-        self.0.describe(sql)
-    }
-}
-
-/// Database connection from pool
-pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
-
 impl Deref for PoolConnection {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        self.0.deref()
     }
 }
 
 impl DerefMut for PoolConnection {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        self.0.deref_mut()
     }
 }
 
@@ -202,13 +117,13 @@ impl Deref for Transaction<'_> {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        self.0.deref()
     }
 }
 
 impl DerefMut for Transaction<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        self.0.deref_mut()
     }
 }
 
@@ -229,8 +144,7 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
     let pool = create_pool(connect_options).await?;
 
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
+    migrations::run(&pool).await?;
 
     Ok(pool)
 }
@@ -249,8 +163,7 @@ pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
     let connect_options = SqliteConnectOptions::new().filename(path);
     let pool = create_pool(connect_options).await?;
 
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
+    migrations::run(&pool).await?;
 
     Ok(pool)
 }

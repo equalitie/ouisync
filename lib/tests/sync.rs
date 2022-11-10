@@ -985,7 +985,7 @@ async fn expect_entry_not_found(repo: &Repository, path: &str) {
 }
 
 async fn write_in_chunks(
-    conn: &mut db::Connection,
+    conn: &mut db::PoolConnection,
     file: &mut File,
     content: &[u8],
     chunk_size: usize,

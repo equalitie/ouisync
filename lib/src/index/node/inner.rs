@@ -252,12 +252,10 @@ impl InnerNodeMap {
     }
 
     /// Atomically saves all nodes in this map to the db.
-    pub async fn save(&self, conn: &'_ mut db::Connection, parent: &'_ Hash) -> Result<()> {
-        let mut tx = conn.begin().await?;
+    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
         for (bucket, node) in self {
-            node.save(&mut tx, parent, bucket).await?;
+            node.save(tx, parent, bucket).await?;
         }
-        tx.commit().await?;
 
         Ok(())
     }

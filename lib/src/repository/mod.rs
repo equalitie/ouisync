@@ -80,9 +80,9 @@ impl Repository {
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
-        let this_writer_id = generate_writer_id(&device_id, &master_key, &mut tx).await?;
-        metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
+        let master_key = metadata::secret_to_key(&mut tx, master_secret).await?;
+        let this_writer_id = generate_writer_id(&mut tx, &device_id, &master_key).await?;
+        metadata::set_access_secrets(&mut tx, &access_secrets, &master_key).await?;
 
         tx.commit().await?;
 
@@ -145,18 +145,18 @@ impl Repository {
         enable_merger: bool,
         span: Span,
     ) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
+        let mut tx = pool.begin().await?;
 
         let master_key = if let Some(master_secret) = master_secret {
-            Some(metadata::secret_to_key(master_secret, &mut conn).await?)
+            Some(metadata::secret_to_key(&mut tx, master_secret).await?)
         } else {
             None
         };
 
         let access_secrets = if let Some(master_key) = &master_key {
-            metadata::get_access_secrets(master_key, &mut conn).await?
+            metadata::get_access_secrets(&mut tx, master_key).await?
         } else {
-            let id = metadata::get_repository_id(&mut conn).await?;
+            let id = metadata::get_repository_id(&mut tx).await?;
             AccessSecrets::Blind { id }
         };
 
@@ -167,17 +167,17 @@ impl Repository {
             // master secret.
             let master_key = master_key.as_ref().unwrap();
 
-            if metadata::check_device_id(&device_id, &mut conn).await? {
-                metadata::get_writer_id(master_key, &mut conn).await?
+            if metadata::check_device_id(&mut tx, &device_id).await? {
+                metadata::get_writer_id(&mut tx, master_key).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&device_id, master_key, &mut conn).await?
+                generate_writer_id(&mut tx, &device_id, master_key).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
         };
 
-        drop(conn);
+        tx.commit().await?;
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
@@ -636,14 +636,14 @@ impl Shared {
 }
 
 async fn generate_writer_id(
+    tx: &mut db::Transaction<'_>,
     device_id: &DeviceId,
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<sign::PublicKey> {
     // TODO: we should be storing the SK in the db, not the PK.
     let writer_id = sign::SecretKey::random();
     let writer_id = PublicKey::from(&writer_id);
-    metadata::set_writer_id(&writer_id, device_id, master_key, conn).await?;
+    metadata::set_writer_id(tx, &writer_id, device_id, master_key).await?;
 
     Ok(writer_id)
 }

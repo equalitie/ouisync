@@ -99,13 +99,14 @@ impl Index {
             return Ok(false);
         }
 
-        let mut conn = self.pool.acquire().await?;
-
         // Load latest complete root nodes of all known branches.
-        let nodes: HashMap<_, _> = RootNode::load_all_latest_complete(&mut conn)
-            .map_ok(|node| (node.proof.writer_id, node))
-            .try_collect()
-            .await?;
+        let nodes: HashMap<_, _> = {
+            let mut conn = self.pool.acquire().await?;
+            RootNode::load_all_latest_complete(&mut conn)
+                .map_ok(|node| (node.proof.writer_id, node))
+                .try_collect()
+                .await?
+        };
 
         // If the received node is outdated relative to any branch we have, ignore it.
         let uptodate = nodes.values().all(|old_node| {
@@ -121,7 +122,7 @@ impl Index {
         });
 
         if uptodate {
-            let mut tx = conn.begin().await?;
+            let mut tx = self.pool.begin().await?;
             let hash = proof.hash;
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
@@ -191,7 +192,7 @@ impl Index {
     // `remote_nodes`.
     async fn find_inner_nodes_with_new_blocks(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         remote_nodes: &InnerNodeMap,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
@@ -199,13 +200,13 @@ impl Index {
 
         for (_, remote_node) in remote_nodes {
             if !receive_filter
-                .check(conn, &remote_node.hash, &remote_node.summary)
+                .check(tx, &remote_node.hash, &remote_node.summary)
                 .await?
             {
                 continue;
             }
 
-            let local_node = InnerNode::load(conn, &remote_node.hash).await?;
+            let local_node = InnerNode::load(tx, &remote_node.hash).await?;
             let insert = if let Some(local_node) = local_node {
                 local_node.summary.is_outdated(&remote_node.summary)
             } else {

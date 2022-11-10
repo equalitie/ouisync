@@ -60,14 +60,12 @@ impl ParentContext {
     ///
     pub async fn fork(
         &self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         entry_blob: &Blob,
         src_branch: Branch,
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let mut tx = conn.begin().await?;
-
-        let directory = self.directory(&mut tx, src_branch).await?;
+        let directory = self.directory(conn, src_branch).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
 
         assert_eq!(
@@ -75,9 +73,11 @@ impl ParentContext {
             Some(entry_blob.locator().blob_id())
         );
 
-        let mut directory = directory.fork(&mut tx, &dst_branch).await?;
+        let mut directory = directory.fork(conn, &dst_branch).await?;
         let mut content = directory.entries.clone();
         let src_vv = src_entry_data.version_vector().clone();
+
+        let mut tx = conn.begin().await?;
 
         let new_blob =
             match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {

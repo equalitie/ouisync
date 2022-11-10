@@ -173,7 +173,7 @@ impl JointDirectory {
 
     /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
     /// be empty. Use [Self::remove_entry_recursively] to remove non-empty subdirectories.
-    pub async fn remove_entry(&mut self, conn: &mut db::Connection, name: &str) -> Result<()> {
+    pub async fn remove_entry(&mut self, conn: &mut db::PoolConnection, name: &str) -> Result<()> {
         self.remove_entries(conn, Pattern::Unique(name)).await
     }
 
@@ -181,7 +181,7 @@ impl JointDirectory {
     /// subdirectory.
     pub async fn remove_entry_recursively(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         name: &str,
     ) -> Result<()> {
         self.remove_entries_recursively(conn, Pattern::Unique(name))
@@ -190,7 +190,7 @@ impl JointDirectory {
 
     async fn remove_entries(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         pattern: Pattern<'_>,
     ) -> Result<()> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
@@ -223,7 +223,7 @@ impl JointDirectory {
     #[async_recursion]
     async fn remove_entries_recursively<'a>(
         &'a mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         pattern: Pattern<'a>,
     ) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
@@ -245,7 +245,7 @@ impl JointDirectory {
     ///
     /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
-    pub async fn merge(&mut self, conn: &mut db::Connection) -> Result<Directory> {
+    pub async fn merge(&mut self, conn: &mut db::PoolConnection) -> Result<Directory> {
         let local_version = self.fork(conn).await?;
         let local_branch = local_version.branch().clone();
 
@@ -326,7 +326,7 @@ impl JointDirectory {
         Ok(outcome)
     }
 
-    async fn fork(&mut self, conn: &'_ mut db::Connection) -> Result<&mut Directory> {
+    async fn fork(&mut self, conn: &'_ mut db::PoolConnection) -> Result<&mut Directory> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
 
         // Note the triple lookup (`contains_key`, `insert` and `get_mut`) is unfortunate but
@@ -334,13 +334,9 @@ impl JointDirectory {
 
         if !self.versions.contains_key(local_branch.id()) {
             // Grab any version and fork it to create the local one.
-            let version = self
-                .versions
-                .values()
-                .next()
-                .ok_or(Error::EntryNotFound)?
-                .fork(conn, local_branch)
-                .await?;
+            let version = self.versions.values().next().ok_or(Error::EntryNotFound)?;
+            let version = version.fork(conn, local_branch).await?;
+
             self.versions.insert(*local_branch.id(), version);
         }
 

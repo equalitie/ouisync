@@ -66,19 +66,17 @@ impl Blob {
 
     /// Removes a blob.
     pub async fn remove(
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         branch: &Branch,
         head_locator: Locator,
     ) -> Result<()> {
-        let mut tx = conn.begin().await?;
-        match remove_blocks(&mut tx, branch, head_locator.sequence()).await {
+        match remove_blocks(tx, branch, head_locator.sequence()).await {
             // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
             // we should never get `Ok` because the locator sequence we are passing to
             // `remove_blocks` is unbounded).
             Ok(()) | Err(Error::EntryNotFound) => (),
             Err(error) => return Err(error),
         }
-        tx.commit().await?;
 
         Ok(())
     }
@@ -159,9 +157,7 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, conn: &mut db::Connection, mut buffer: &[u8]) -> Result<()> {
-        let mut tx = conn.begin().await?;
-
+    pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
         loop {
             let len = self.current_block.content.write(buffer);
 
@@ -185,22 +181,14 @@ impl Blob {
 
             let locator = self.current_block.locator.next();
             let (id, content) = if locator.number() < self.block_count() {
-                read_block(
-                    &mut tx,
-                    self.branch.data(),
-                    self.branch.keys().read(),
-                    &locator,
-                )
-                .await?
+                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?
             } else {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
-            self.write_current_block(&mut tx).await?;
+            self.write_current_block(tx).await?;
             self.replace_current_block(locator, id, content)?;
         }
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -277,18 +265,14 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
 
-        let mut tx = conn.begin().await?;
-
-        self.write_len(&mut tx).await?;
-        self.write_current_block(&mut tx).await?;
-        self.trim(&mut tx).await?;
-
-        tx.commit().await?;
+        self.write_len(tx).await?;
+        self.write_current_block(tx).await?;
+        self.trim(tx).await?;
 
         Ok(true)
     }

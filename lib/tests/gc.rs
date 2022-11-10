@@ -257,7 +257,12 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
     .await
 }
 
-async fn write_to_file(rng: &mut StdRng, conn: &mut db::Connection, file: &mut File, size: usize) {
+async fn write_to_file(
+    rng: &mut StdRng,
+    conn: &mut db::PoolConnection,
+    file: &mut File,
+    size: usize,
+) {
     let mut buffer = vec![0; size];
     rng.fill(&mut buffer[..]);
     file.write(conn, &buffer).await.unwrap();

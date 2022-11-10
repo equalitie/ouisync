@@ -151,11 +151,10 @@ pub unsafe extern "C" fn file_write(
 
             let local_branch = g.repo.local_branch()?;
 
-            let mut tx = g.repo.db().begin().await?;
-            g.file.seek(&mut tx, SeekFrom::Start(offset)).await?;
-            g.file.fork(&mut tx, local_branch).await?;
-            g.file.write(&mut tx, buffer).await?;
-            tx.commit().await?;
+            let mut conn = g.repo.db().acquire().await?;
+            g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+            g.file.fork(&mut conn, local_branch).await?;
+            g.file.write(&mut conn, buffer).await?;
 
             Ok(())
         })
@@ -176,10 +175,9 @@ pub unsafe extern "C" fn file_truncate(
 
             let local_branch = g.repo.local_branch()?;
 
-            let mut tx = g.repo.db().begin().await?;
-            g.file.fork(&mut tx, local_branch).await?;
-            g.file.truncate(&mut tx, len).await?;
-            tx.commit().await?;
+            let mut conn = g.repo.db().acquire().await?;
+            g.file.fork(&mut conn, local_branch).await?;
+            g.file.truncate(&mut conn, len).await?;
 
             Ok(())
         })

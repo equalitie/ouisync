@@ -27,23 +27,19 @@ impl ReceiveFilter {
 
     pub async fn check(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         hash: &Hash,
         new_summary: &Summary,
     ) -> Result<bool> {
-        let mut tx = conn.begin().await?;
-
-        if let Some((row_id, old_summary)) = load(&mut tx, self.id, hash).await? {
+        if let Some((row_id, old_summary)) = load(tx, self.id, hash).await? {
             if !old_summary.is_outdated(new_summary) {
                 return Ok(false);
             }
 
-            update(&mut tx, row_id, new_summary).await?;
+            update(tx, row_id, new_summary).await?;
         } else {
-            insert(&mut tx, self.id, hash, new_summary).await?;
+            insert(tx, self.id, hash, new_summary).await?;
         }
-
-        tx.commit().await?;
 
         Ok(true)
     }

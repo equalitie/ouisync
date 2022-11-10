@@ -99,7 +99,11 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub async fn create_file(&mut self, conn: &mut db::Connection, name: String) -> Result<File> {
+    pub async fn create_file(
+        &mut self,
+        conn: &mut db::PoolConnection,
+        name: String,
+    ) -> Result<File> {
         let mut tx = conn.begin().await?;
         let mut content = self.load(&mut tx).await?;
 
@@ -126,7 +130,7 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         name: String,
     ) -> Result<Self> {
         self.create_directory_with_version_vector_op(conn, name, &VersionVectorOp::IncrementLocal)
@@ -135,7 +139,7 @@ impl Directory {
 
     async fn create_directory_with_version_vector_op(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         name: String,
         op: &VersionVectorOp,
     ) -> Result<Self> {
@@ -173,7 +177,7 @@ impl Directory {
     /// tombstone is created.
     pub(crate) async fn remove_entry(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         name: &str,
         branch_id: &PublicKey,
         tombstone: EntryTombstoneData,
@@ -218,7 +222,7 @@ impl Directory {
     /// those operations happen.
     pub(crate) async fn move_entry(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         src_name: &str,
         src_data: EntryData,
         dst_dir: &mut Directory,
@@ -259,7 +263,7 @@ impl Directory {
     #[async_recursion]
     pub(crate) async fn fork(
         &self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         local_branch: &Branch,
     ) -> Result<Directory> {
         if local_branch.id() == self.branch().id() {
@@ -311,7 +315,7 @@ impl Directory {
     /// Updates the version vector of this directory by merging it with `vv`.
     pub(crate) async fn merge_version_vector(
         &mut self,
-        conn: &mut db::Connection,
+        conn: &mut db::PoolConnection,
         vv: VersionVector,
     ) -> Result<()> {
         let tx = conn.begin().await?;

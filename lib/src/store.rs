@@ -121,7 +121,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
         let (_base_dir, pool) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
@@ -133,7 +132,7 @@ mod tests {
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
 
-        let mut tx = conn.begin().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
         block::write(&mut tx, &block_id, &buffer, &BlockNonce::default())
             .await
@@ -171,7 +170,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn overwrite_block() {
         let (_base_dir, pool) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
         let mut rng = rand::thread_rng();
 
         let read_key = SecretKey::random();
@@ -188,7 +186,8 @@ mod tests {
         rng.fill(&mut buffer[..]);
         let id0 = BlockId::from_content(&buffer);
 
-        let mut tx = conn.begin().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
         block::write(&mut tx, &id0, &buffer, &rng.gen())
             .await
             .unwrap();
@@ -196,15 +195,13 @@ mod tests {
             .insert(&mut tx, &id0, &locator, &write_keys)
             .await
             .unwrap();
-        tx.commit().await.unwrap();
 
-        assert!(block::exists(&mut conn, &id0).await.unwrap());
-        assert_eq!(block::count(&mut conn).await.unwrap(), 1);
+        assert!(block::exists(&mut tx, &id0).await.unwrap());
+        assert_eq!(block::count(&mut tx).await.unwrap(), 1);
 
         rng.fill(&mut buffer[..]);
         let id1 = BlockId::from_content(&buffer);
 
-        let mut tx = conn.begin().await.unwrap();
         block::write(&mut tx, &id1, &buffer, &rng.gen())
             .await
             .unwrap();
@@ -212,11 +209,10 @@ mod tests {
             .insert(&mut tx, &id1, &locator, &write_keys)
             .await
             .unwrap();
-        tx.commit().await.unwrap();
 
-        assert!(!block::exists(&mut conn, &id0).await.unwrap());
-        assert!(block::exists(&mut conn, &id1).await.unwrap());
-        assert_eq!(block::count(&mut conn).await.unwrap(), 1);
+        assert!(!block::exists(&mut tx, &id0).await.unwrap());
+        assert!(block::exists(&mut tx, &id1).await.unwrap());
+        assert_eq!(block::count(&mut tx).await.unwrap(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

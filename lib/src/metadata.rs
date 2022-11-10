@@ -33,13 +33,13 @@ const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
 pub(crate) async fn secret_to_key(
+    tx: &mut db::Transaction<'_>,
     secret: MasterSecret,
-    conn: &mut db::Connection,
 ) -> Result<cipher::SecretKey> {
     let key = match secret {
         MasterSecret::SecretKey(key) => key,
         MasterSecret::Password(pwd) => {
-            let salt = get_or_generate_password_salt(conn).await?;
+            let salt = get_or_generate_password_salt(tx).await?;
             cipher::SecretKey::derive_from_password(pwd.as_ref(), &salt)
         }
     };
@@ -50,20 +50,16 @@ pub(crate) async fn secret_to_key(
 // -------------------------------------------------------------------
 // Salt
 // -------------------------------------------------------------------
-async fn get_or_generate_password_salt(conn: &mut db::Connection) -> Result<PasswordSalt> {
-    let mut tx = conn.begin().await?;
-
-    let salt = match get_public(PASSWORD_SALT, &mut tx).await {
+async fn get_or_generate_password_salt(tx: &mut db::Transaction<'_>) -> Result<PasswordSalt> {
+    let salt = match get_public(tx, PASSWORD_SALT).await {
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
             let salt: PasswordSalt = OsRng.gen();
-            set_public(PASSWORD_SALT, &salt, &mut tx).await?;
+            set_public(tx, PASSWORD_SALT, &salt).await?;
             salt
         }
         Err(error) => return Err(error),
     };
-
-    tx.commit().await?;
 
     Ok(salt)
 }
@@ -72,31 +68,27 @@ async fn get_or_generate_password_salt(conn: &mut db::Connection) -> Result<Pass
 // Repository Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_repository_id(conn: &mut db::Connection) -> Result<RepositoryId> {
-    get_public(REPOSITORY_ID, conn).await
+    get_public(conn, REPOSITORY_ID).await
 }
 
 // -------------------------------------------------------------------
 // Writer Id
 // -------------------------------------------------------------------
 pub(crate) async fn get_writer_id(
-    master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
+    master_key: &cipher::SecretKey,
 ) -> Result<sign::PublicKey> {
-    get_secret(WRITER_ID, master_key, conn).await
+    get_secret(conn, WRITER_ID, master_key).await
 }
 
 pub(crate) async fn set_writer_id(
+    tx: &mut db::Transaction<'_>,
     writer_id: &sign::PublicKey,
     device_id: &DeviceId,
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<()> {
-    let mut tx = conn.begin().await?;
-
-    set_secret(WRITER_ID, writer_id.as_ref(), master_key, &mut tx).await?;
-    set_public(DEVICE_ID, device_id.as_ref(), &mut tx).await?;
-
-    tx.commit().await?;
+    set_secret(tx, WRITER_ID, writer_id.as_ref(), master_key).await?;
+    set_public(tx, DEVICE_ID, device_id.as_ref()).await?;
 
     Ok(())
 }
@@ -107,10 +99,10 @@ pub(crate) async fn set_writer_id(
 
 // Checks whether the stored device id is the same as the specified one.
 pub(crate) async fn check_device_id(
-    device_id: &DeviceId,
     conn: &mut db::Connection,
+    device_id: &DeviceId,
 ) -> Result<bool> {
-    let old_device_id: DeviceId = get_public(DEVICE_ID, conn).await?;
+    let old_device_id: DeviceId = get_public(conn, DEVICE_ID).await?;
     Ok(old_device_id == *device_id)
 }
 
@@ -118,13 +110,11 @@ pub(crate) async fn check_device_id(
 // Access secrets
 // -------------------------------------------------------------------
 pub(crate) async fn set_access_secrets(
+    tx: &mut db::Transaction<'_>,
     secrets: &AccessSecrets,
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<()> {
-    let mut tx = conn.begin().await?;
-
-    set_public(REPOSITORY_ID, secrets.id().as_ref(), &mut tx).await?;
+    set_public(tx, REPOSITORY_ID, secrets.id().as_ref()).await?;
 
     // Insert a dummy key for plausible deniability.
     let dummy_write_key = sign::SecretKey::random();
@@ -132,63 +122,61 @@ pub(crate) async fn set_access_secrets(
 
     match secrets {
         AccessSecrets::Blind { id } => {
-            set_secret(READ_KEY, dummy_read_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(tx, READ_KEY, dummy_read_key.as_ref(), master_key).await?;
             set_secret(
+                tx,
                 READ_KEY_VALIDATOR,
                 read_key_validator(id).as_ref(),
                 &dummy_read_key,
-                &mut tx,
             )
             .await?;
-            set_secret(WRITE_KEY, dummy_write_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), master_key).await?;
         }
         AccessSecrets::Read { id, read_key } => {
-            set_secret(READ_KEY, read_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(tx, READ_KEY, read_key.as_ref(), master_key).await?;
             set_secret(
+                tx,
                 READ_KEY_VALIDATOR,
                 read_key_validator(id).as_ref(),
                 read_key,
-                &mut tx,
             )
             .await?;
-            set_secret(WRITE_KEY, dummy_write_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), master_key).await?;
         }
         AccessSecrets::Write(secrets) => {
-            set_secret(READ_KEY, secrets.read_key.as_ref(), master_key, &mut tx).await?;
+            set_secret(tx, READ_KEY, secrets.read_key.as_ref(), master_key).await?;
             set_secret(
+                tx,
                 READ_KEY_VALIDATOR,
                 read_key_validator(&secrets.id).as_ref(),
                 &secrets.read_key,
-                &mut tx,
             )
             .await?;
             set_secret(
+                tx,
                 WRITE_KEY,
                 secrets.write_keys.secret.as_ref(),
                 master_key,
-                &mut tx,
             )
             .await?;
         }
     }
-
-    tx.commit().await?;
 
     Ok(())
 }
 
 pub(crate) async fn get_access_secrets(
-    master_key: &cipher::SecretKey,
     conn: &mut db::Connection,
+    master_key: &cipher::SecretKey,
 ) -> Result<AccessSecrets> {
-    let id = get_public(REPOSITORY_ID, conn).await?;
+    let id = get_public(conn, REPOSITORY_ID).await?;
 
-    if let Some(write_keys) = get_write_key(master_key, &id, conn).await? {
+    if let Some(write_keys) = get_write_key(conn, master_key, &id).await? {
         return Ok(AccessSecrets::Write(WriteSecrets::from(write_keys)));
     }
 
     // No match. Maybe there's the read key?
-    if let Some(read_key) = get_read_key(master_key, &id, conn).await? {
+    if let Some(read_key) = get_read_key(conn, master_key, &id).await? {
         return Ok(AccessSecrets::Read { id, read_key });
     }
 
@@ -197,17 +185,17 @@ pub(crate) async fn get_access_secrets(
 }
 
 async fn get_write_key(
+    conn: &mut db::Connection,
     master_key: &cipher::SecretKey,
     id: &RepositoryId,
-    conn: &mut db::Connection,
 ) -> Result<Option<sign::Keypair>> {
     // Try to interpret it first as the write key.
-    let write_key: sign::SecretKey = match get_secret(WRITE_KEY, master_key, conn).await {
+    let write_key: sign::SecretKey = match get_secret(conn, WRITE_KEY, master_key).await {
         Ok(write_key) => write_key,
         Err(Error::EntryNotFound) =>
         // Let's be backward compatible.
         {
-            get_secret(DEPRECATED_ACCESS_KEY, master_key, conn).await?
+            get_secret(conn, DEPRECATED_ACCESS_KEY, master_key).await?
         }
         Err(error) => return Err(error),
     };
@@ -224,21 +212,21 @@ async fn get_write_key(
 }
 
 async fn get_read_key(
+    conn: &mut db::Connection,
     master_key: &cipher::SecretKey,
     id: &RepositoryId,
-    conn: &mut db::Connection,
 ) -> Result<Option<cipher::SecretKey>> {
-    let read_key: cipher::SecretKey = match get_secret(READ_KEY, master_key, conn).await {
+    let read_key: cipher::SecretKey = match get_secret(conn, READ_KEY, master_key).await {
         Ok(read_key) => read_key,
         Err(Error::EntryNotFound) => {
             // Let's be backward compatible.
-            get_secret(DEPRECATED_ACCESS_KEY, master_key, conn).await?
+            get_secret(conn, DEPRECATED_ACCESS_KEY, master_key).await?
         }
         Err(error) => return Err(error),
     };
 
     let key_validator_expected = read_key_validator(id);
-    let key_validator_actual: Hash = get_secret(READ_KEY_VALIDATOR, &read_key, conn).await?;
+    let key_validator_actual: Hash = get_secret(conn, READ_KEY_VALIDATOR, &read_key).await?;
 
     if key_validator_actual == key_validator_expected {
         // Match - we have read access.
@@ -251,7 +239,7 @@ async fn get_read_key(
 // -------------------------------------------------------------------
 // Public values
 // -------------------------------------------------------------------
-async fn get_public<T>(id: &[u8], conn: &mut db::Connection) -> Result<T>
+async fn get_public<T>(conn: &mut db::Connection, id: &[u8]) -> Result<T>
 where
     T: for<'a> TryFrom<&'a [u8]>,
 {
@@ -264,7 +252,7 @@ where
     bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
-async fn set_public(id: &[u8], blob: &[u8], conn: &mut db::Connection) -> Result<()> {
+async fn set_public(conn: &mut db::Connection, id: &[u8], blob: &[u8]) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
         .bind(blob)
@@ -278,9 +266,9 @@ async fn set_public(id: &[u8], blob: &[u8], conn: &mut db::Connection) -> Result
 // Secret values
 // -------------------------------------------------------------------
 async fn get_secret<T>(
+    conn: &mut db::Connection,
     id: &[u8],
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<T>
 where
     for<'a> T: TryFrom<&'a [u8]>,
@@ -305,10 +293,10 @@ where
 }
 
 async fn set_secret(
+    conn: &mut db::Connection,
     id: &[u8],
     blob: &[u8],
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<()> {
     let nonce = make_nonce();
 
@@ -358,9 +346,9 @@ mod tests {
     async fn store_plaintext() {
         let (_base_dir, mut conn) = setup().await;
 
-        set_public(b"hello", b"world", &mut conn).await.unwrap();
+        set_public(&mut conn, b"hello", b"world").await.unwrap();
 
-        let v: [u8; 5] = get_public(b"hello", &mut conn).await.unwrap();
+        let v: [u8; 5] = get_public(&mut conn, b"hello").await.unwrap();
 
         assert_eq!(b"world", &v);
     }
@@ -371,11 +359,11 @@ mod tests {
 
         let key = cipher::SecretKey::random();
 
-        set_secret(b"hello", b"world", &key, &mut conn)
+        set_secret(&mut conn, b"hello", b"world", &key)
             .await
             .unwrap();
 
-        let v: [u8; 5] = get_secret(b"hello", &key, &mut conn).await.unwrap();
+        let v: [u8; 5] = get_secret(&mut conn, b"hello", &key).await.unwrap();
 
         assert_eq!(b"world", &v);
     }
@@ -389,11 +377,11 @@ mod tests {
         let good_key = cipher::SecretKey::random();
         let bad_key = cipher::SecretKey::random();
 
-        set_secret(b"hello", b"world", &good_key, &mut conn)
+        set_secret(&mut conn, b"hello", b"world", &good_key)
             .await
             .unwrap();
 
-        let v: [u8; 5] = get_secret(b"hello", &bad_key, &mut conn).await.unwrap();
+        let v: [u8; 5] = get_secret(&mut conn, b"hello", &bad_key).await.unwrap();
 
         assert_ne!(b"world", &v);
     }

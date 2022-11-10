@@ -272,10 +272,8 @@ mod prune {
 
             tracing::trace!("removing outdated branch {:?}", snapshot.id());
 
-            let mut tx = conn.begin().await?;
-            snapshot.remove_all_older(&mut tx).await?;
-            snapshot.remove(&mut tx).await?;
-            tx.commit().await?;
+            snapshot.remove_all_older(&mut conn).await?;
+            snapshot.remove(&mut conn).await?;
 
             removed.push(snapshot);
         }
@@ -429,17 +427,28 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        block::mark_all_unreachable(&mut conn).await
+        let mut tx = shared.store.db().begin().await?;
+        block::mark_all_unreachable(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
-    async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        let count = block::remove_unreachable(&mut conn).await?;
+    async fn remove_unreachable_blocks(_shared: &Shared) -> Result<()> {
+        // HACK: prevents `unused` warning
+        let _ = block::remove_unreachable;
+
+        // FIXME!
+
+        /*
+        let mut tx = shared.store.db().begin().await?;
+        let count = block::remove_unreachable(&mut tx).await?;
+        tx.commit().await?;
 
         if count > 0 {
             tracing::debug!("unreachable blocks removed: {}", count);
         }
+        */
 
         Ok(())
     }

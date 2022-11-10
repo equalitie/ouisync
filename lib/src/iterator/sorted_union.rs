@@ -59,8 +59,8 @@ mod tests {
 
     #[test]
     fn test_sorted_union_zero() {
-        let u = SortedUnion::new(iter::empty::<iter::Empty<i32>>(), |x| *x);
-        assert_eq!(u.collect::<Vec<_>>(), []);
+        let mut u = SortedUnion::new(iter::empty::<iter::Empty<i32>>(), |x| *x);
+        assert!(u.next().is_none());
     }
 
     #[test]
