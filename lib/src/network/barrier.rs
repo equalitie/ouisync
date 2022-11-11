@@ -59,6 +59,8 @@ pub(super) struct Barrier<'a> {
     barrier_id: BarrierId,
     stream: &'a mut (dyn ContentStreamTrait + Send + Sync + 'a),
     sink: &'a (dyn ContentSinkTrait + Send + Sync + 'a),
+    #[cfg(test)]
+    marker: Option<tests::StepMarker>,
 }
 
 impl<'a> Barrier<'a> {
@@ -71,15 +73,23 @@ impl<'a> Barrier<'a> {
             barrier_id: rand::random(),
             stream,
             sink,
+            #[cfg(test)]
+            marker: None,
         }
     }
 
     pub async fn run(&mut self) -> Result<(), BarrierError> {
         use std::cmp::max;
 
+        #[cfg(test)]
+        self.mark_step().await;
+
         // I think we send this empty message in order to break the encryption on the other side and
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
+
+        #[cfg(test)]
+        self.mark_step().await;
 
         let mut this_round: u32 = 0;
 
@@ -126,6 +136,9 @@ impl<'a> Barrier<'a> {
             break;
         }
 
+        #[cfg(test)]
+        self.mark_done().await;
+
         Ok(())
     }
 
@@ -139,8 +152,14 @@ impl<'a> Barrier<'a> {
             .send(construct_message(barrier_id, our_round, our_step).to_vec())
             .await?;
 
+        #[cfg(test)]
+        self.mark_step().await;
+
         loop {
             let msg = self.stream.recv().await?;
+
+            #[cfg(test)]
+            self.mark_step().await;
 
             let (barrier_id, their_round, their_step) = match parse_message(&msg) {
                 Some(msg) => msg,
@@ -159,6 +178,20 @@ impl<'a> Barrier<'a> {
             }
 
             return Ok((barrier_id, their_round, their_step));
+        }
+    }
+
+    #[cfg(test)]
+    async fn mark_step(&mut self) {
+        if let Some(marker) = &mut self.marker {
+            marker.mark_step().await
+        }
+    }
+
+    #[cfg(test)]
+    async fn mark_done(&mut self) {
+        if let Some(marker) = &mut self.marker {
+            marker.mark_done().await
         }
     }
 }
@@ -222,5 +255,171 @@ pub enum BarrierError {
 impl From<ChannelClosed> for BarrierError {
     fn from(_: ChannelClosed) -> Self {
         Self::ChannelClosed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scoped_task::{self, ScopedJoinHandle};
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio::{
+        sync::{mpsc, Mutex},
+        task,
+    };
+
+    struct Stepper {
+        first: bool,
+        pause_rx: mpsc::Receiver<bool>,
+        resume_tx: mpsc::Sender<()>,
+        _barrier_task: ScopedJoinHandle<Result<(), BarrierError>>,
+    }
+
+    impl Stepper {
+        fn new(barrier_id: BarrierId, sink: Sink, mut stream: Stream) -> Stepper {
+            let (pause_tx, pause_rx) = mpsc::channel(1);
+            let (resume_tx, resume_rx) = mpsc::channel(1);
+
+            let barrier_task = scoped_task::spawn(async move {
+                Barrier {
+                    barrier_id,
+                    stream: &mut stream,
+                    sink: &sink,
+                    marker: Some(StepMarker {
+                        pause_tx,
+                        resume_rx,
+                    }),
+                }
+                .run()
+                .await
+            });
+
+            Self {
+                first: true,
+                pause_rx,
+                resume_tx,
+                _barrier_task: barrier_task,
+            }
+        }
+
+        async fn step(&mut self) -> bool {
+            if !self.first {
+                self.resume_tx.send(()).await.unwrap();
+            }
+            self.first = false;
+            self.pause_rx.recv().await.unwrap()
+        }
+    }
+
+    pub(super) struct StepMarker {
+        pause_tx: mpsc::Sender<bool>,
+        resume_rx: mpsc::Receiver<()>,
+    }
+
+    impl StepMarker {
+        pub(super) async fn mark_step(&mut self) {
+            self.pause_tx.send(false).await.unwrap();
+            self.resume_rx.recv().await.unwrap();
+        }
+
+        pub(super) async fn mark_done(&mut self) {
+            self.pause_tx.send(true).await.unwrap();
+            self.resume_rx.recv().await.unwrap();
+        }
+    }
+
+    // --- Sink ---------------------------------------------------------------
+    #[derive(Clone)]
+    struct Sink {
+        tx: mpsc::Sender<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl ContentSinkTrait for Sink {
+        async fn send(&self, message: Vec<u8>) -> Result<(), ChannelClosed> {
+            Ok(self.tx.send(message).await.unwrap())
+        }
+    }
+
+    // --- Stream --------------------------------------------------------------
+    #[derive(Clone)]
+    struct Stream {
+        rx: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+    }
+
+    #[async_trait]
+    impl ContentStreamTrait for Stream {
+        async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+            let mut guard = self.rx.lock().await;
+            let vec = guard.recv().await.unwrap();
+            Ok(vec)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    fn new_test_channel() -> (Sink, Stream) {
+        // Exchanging messages would normally require only a mpsc channel of size one, but at the
+        // beginning of the Barrier algorithm we also send one "reset" message which increases the
+        // channel size requirement by one.
+        let (tx, rx) = mpsc::channel(2);
+        (
+            Sink { tx },
+            Stream {
+                rx: Arc::new(Mutex::new(rx)),
+            },
+        )
+    }
+    // -------------------------------------------------------------------------
+
+    async fn test_case(n: u32) {
+        //println!(">>>>>>>>>>>>>>>>>>> START {} <<<<<<<<<<<<<<<<<<<<<<", n);
+
+        let (ac_to_b, b_from_ac) = new_test_channel();
+        let (b_to_ac, ac_from_b) = new_test_channel();
+
+        let task_a = task::spawn(async move {
+            let mut stepper_c = Stepper::new(0xc, ac_to_b.clone(), ac_from_b.clone());
+
+            for _ in 0..n {
+                if stepper_c.step().await {
+                    return;
+                }
+            }
+
+            drop(stepper_c);
+
+            let mut stepper_a = Stepper::new(0xa, ac_to_b, ac_from_b);
+            while !stepper_a.step().await {}
+        });
+
+        let task_b = task::spawn(async move {
+            let mut stepper = Stepper::new(0xb, b_to_ac, b_from_ac);
+            while !stepper.step().await {}
+        });
+
+        let task_c = task::spawn(async move {
+            task_a.await.unwrap();
+            task_b.await.unwrap();
+        });
+
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        match timeout(Duration::from_secs(5), task_c).await {
+            Err(_) => panic!("Test case n:{} timed out", n),
+            Ok(Err(err)) => panic!("Test case n:{} failed with {:?}", n, err),
+            _ => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test() {
+        test_case(0).await;
+        test_case(1).await;
+        test_case(2).await;
+        test_case(3).await;
+        test_case(4).await;
+        test_case(5).await;
     }
 }
