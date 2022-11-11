@@ -91,53 +91,57 @@ impl<'a> Barrier<'a> {
         #[cfg(test)]
         self.mark_step().await;
 
-        let mut this_round: u32 = 0;
+        let mut next_round: u32 = 0;
 
         loop {
-            if this_round > 256 {
+            let mut round = next_round;
+
+            if round > 64 {
                 tracing::error!("Barrier algorithm failed");
                 return Err(BarrierError::Failure);
             }
 
             let (their_barrier_id, their_round, their_step) =
-                self.exchange(self.barrier_id, this_round, 0).await?;
+                self.exchange(self.barrier_id, round, 0).await?;
 
             if their_step != 0 {
-                this_round = max(this_round, their_round) + 1;
+                next_round = max(round, their_round) + 1;
                 continue;
             }
 
             // Ensure we end at the same time.
-            if this_round != their_round {
-                this_round = max(this_round, their_round) + 1;
-                continue;
+            if round != their_round {
+                if round < their_round {
+                    round = their_round;
+                    self.send(self.barrier_id, round, 0).await?;
+                } else {
+                    next_round = round + 1;
+                    continue;
+                }
             }
 
             let (our_barrier_id, their_round, their_step) =
-                self.exchange(their_barrier_id, this_round, 1).await?;
+                self.exchange(their_barrier_id, round, 1).await?;
 
             if their_step != 1 {
-                this_round = max(this_round, their_round) + 1;
+                next_round = max(round, their_round) + 1;
                 continue;
             }
 
             if our_barrier_id != self.barrier_id {
                 // Peer was communicating with our previous barrier, ignoring that.
-                this_round = max(this_round, their_round) + 1;
+                next_round = max(round, their_round) + 1;
                 continue;
             }
 
             // Ensure we end at the same time.
-            if this_round != their_round {
-                this_round = max(this_round, their_round) + 1;
+            if round != their_round {
+                next_round = max(round, their_round) + 1;
                 continue;
             }
 
             break;
         }
-
-        #[cfg(test)]
-        self.mark_done().await;
 
         Ok(())
     }
@@ -148,25 +152,23 @@ impl<'a> Barrier<'a> {
         our_round: Round,
         our_step: Step,
     ) -> Result<Msg, ChannelClosed> {
-        self.sink
-            .send(construct_message(barrier_id, our_round, our_step).to_vec())
-            .await?;
+        self.send(barrier_id, our_round, our_step).await?;
 
         #[cfg(test)]
         self.mark_step().await;
 
         loop {
-            let msg = self.stream.recv().await?;
+            let (barrier_id, their_round, their_step) = self
+                .recv(
+                    #[cfg(test)]
+                    our_round,
+                    #[cfg(test)]
+                    our_step,
+                )
+                .await?;
 
             #[cfg(test)]
             self.mark_step().await;
-
-            let (barrier_id, their_round, their_step) = match parse_message(&msg) {
-                Some(msg) => msg,
-                // Ignore messages that belonged to whatever communication was going on prior us
-                // starting this barrier process.
-                None => continue,
-            };
 
             if their_step > our_step {
                 // We have a miss-step in `exchange`, we just sent them that our step is 0 so
@@ -181,17 +183,70 @@ impl<'a> Barrier<'a> {
         }
     }
 
+    async fn recv(
+        &mut self,
+        #[cfg(test)] round: Round,
+        #[cfg(test)] our_step: Step,
+    ) -> Result<Msg, ChannelClosed> {
+        loop {
+            let msg = self.stream.recv().await?;
+
+            match parse_message(&msg) {
+                Some((barrier_id, their_round, their_step)) => {
+                    #[cfg(test)]
+                    match their_step {
+                        0 => println!(
+                            "{:x} R{} S{} << their_barrier_id:{:x} their_round:{} their_step:{}",
+                            self.barrier_id, round, our_step, barrier_id, their_round, their_step
+                        ),
+                        1 => println!(
+                            "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
+                            self.barrier_id, round, our_step, barrier_id, their_round, their_step
+                        ),
+                        _ => continue,
+                    }
+                    return Ok((barrier_id, their_round, their_step));
+                }
+                // Ignore messages that belonged to whatever communication was going on prior us
+                // starting this barrier process.
+                None => continue,
+            };
+        }
+    }
+
+    async fn send(
+        &mut self,
+        barrier_id: BarrierId,
+        our_round: Round,
+        our_step: Step,
+    ) -> Result<(), ChannelClosed> {
+        #[cfg(test)]
+        match our_step {
+            0 => {
+                assert_eq!(self.barrier_id, barrier_id);
+                println!(
+                    "{:x} R{} S0 >> self.barrier_id:{:x}",
+                    self.barrier_id, our_round, barrier_id
+                );
+            }
+            1 => {
+                assert_ne!(self.barrier_id, barrier_id);
+                println!(
+                    "{:x} R{} S1 >> their_barrier_id:{:x}",
+                    self.barrier_id, our_round, barrier_id
+                );
+            }
+            _ => unreachable!(),
+        }
+        self.sink
+            .send(construct_message(barrier_id, our_round, our_step).to_vec())
+            .await
+    }
+
     #[cfg(test)]
     async fn mark_step(&mut self) {
         if let Some(marker) = &mut self.marker {
             marker.mark_step().await
-        }
-    }
-
-    #[cfg(test)]
-    async fn mark_done(&mut self) {
-        if let Some(marker) = &mut self.marker {
-            marker.mark_done().await
         }
     }
 }
@@ -271,9 +326,9 @@ mod tests {
 
     struct Stepper {
         first: bool,
-        pause_rx: mpsc::Receiver<bool>,
+        pause_rx: mpsc::Receiver<()>,
         resume_tx: mpsc::Sender<()>,
-        _barrier_task: ScopedJoinHandle<Result<(), BarrierError>>,
+        barrier_task: Option<ScopedJoinHandle<Result<(), BarrierError>>>,
     }
 
     impl Stepper {
@@ -299,32 +354,43 @@ mod tests {
                 first: true,
                 pause_rx,
                 resume_tx,
-                _barrier_task: barrier_task,
+                barrier_task: Some(barrier_task),
             }
         }
 
-        async fn step(&mut self) -> bool {
+        // When the `barrier_task` finishes, this returns `Some(result of the task)`, otherwise it
+        // returns None.
+        async fn step(&mut self) -> Option<Result<(), BarrierError>> {
             if !self.first {
                 self.resume_tx.send(()).await.unwrap();
             }
             self.first = false;
-            self.pause_rx.recv().await.unwrap()
+
+            if self.pause_rx.recv().await.is_some() {
+                None
+            } else {
+                let barrier_task = self.barrier_task.take();
+                Some(barrier_task.unwrap().await.unwrap())
+            }
+        }
+
+        async fn run_to_completion(&mut self) -> Result<(), BarrierError> {
+            loop {
+                if let Some(result) = self.step().await {
+                    break result;
+                }
+            }
         }
     }
 
     pub(super) struct StepMarker {
-        pause_tx: mpsc::Sender<bool>,
+        pause_tx: mpsc::Sender<()>,
         resume_rx: mpsc::Receiver<()>,
     }
 
     impl StepMarker {
         pub(super) async fn mark_step(&mut self) {
-            self.pause_tx.send(false).await.unwrap();
-            self.resume_rx.recv().await.unwrap();
-        }
-
-        pub(super) async fn mark_done(&mut self) {
-            self.pause_tx.send(true).await.unwrap();
+            self.pause_tx.send(()).await.unwrap();
             self.resume_rx.recv().await.unwrap();
         }
     }
@@ -338,7 +404,7 @@ mod tests {
     #[async_trait]
     impl ContentSinkTrait for Sink {
         async fn send(&self, message: Vec<u8>) -> Result<(), ChannelClosed> {
-            Ok(self.tx.send(message).await.unwrap())
+            self.tx.send(message).await.map_err(|_| ChannelClosed)
         }
     }
 
@@ -372,35 +438,56 @@ mod tests {
     }
     // -------------------------------------------------------------------------
 
-    async fn test_case(n: u32) {
-        //println!(">>>>>>>>>>>>>>>>>>> START {} <<<<<<<<<<<<<<<<<<<<<<", n);
+    #[derive(Debug)]
+    enum Task1Result {
+        CFinished,
+        AFinished(Result<(), BarrierError>),
+    }
+
+    // When this returns true, it's no longer needed to test with higher `n`.
+    async fn test_case(n: u32) -> bool {
+        println!(">>>>>>>>>>>>>>>>>>> START n:{} <<<<<<<<<<<<<<<<<<<<<<", n);
 
         let (ac_to_b, b_from_ac) = new_test_channel();
         let (b_to_ac, ac_from_b) = new_test_channel();
 
-        let task_a = task::spawn(async move {
+        let task_1 = task::spawn(async move {
             let mut stepper_c = Stepper::new(0xc, ac_to_b.clone(), ac_from_b.clone());
 
             for _ in 0..n {
-                if stepper_c.step().await {
-                    return;
+                if let Some(result) = stepper_c.step().await {
+                    assert!(result.is_ok());
+                    return Task1Result::CFinished;
                 }
             }
 
             drop(stepper_c);
 
             let mut stepper_a = Stepper::new(0xa, ac_to_b, ac_from_b);
-            while !stepper_a.step().await {}
+            Task1Result::AFinished(stepper_a.run_to_completion().await)
         });
 
-        let task_b = task::spawn(async move {
+        let task_2 = task::spawn(async move {
             let mut stepper = Stepper::new(0xb, b_to_ac, b_from_ac);
-            while !stepper.step().await {}
+            stepper.run_to_completion().await.unwrap()
         });
 
         let task_c = task::spawn(async move {
-            task_a.await.unwrap();
-            task_b.await.unwrap();
+            let r1 = task_1.await.unwrap();
+            task_2.await.unwrap();
+
+            match r1 {
+                Task1Result::CFinished => (),
+                Task1Result::AFinished(Ok(_)) => (),
+                // This is a pathological case where 0xb finished while communicating with 0xc, but
+                // 0xc has been interrupted right before it could finish. Then 0xa starts but 0xb
+                // already moved on. I believe due to the CAP theorem there's nothing that can be
+                // done in this case apart from 0xa restarting the process.
+                Task1Result::AFinished(Err(BarrierError::ChannelClosed)) => (),
+                result => panic!("Invalid result from task '0xa' {:?}", result),
+            }
+
+            matches!(r1, Task1Result::CFinished)
         });
 
         use std::time::Duration;
@@ -409,17 +496,18 @@ mod tests {
         match timeout(Duration::from_secs(5), task_c).await {
             Err(_) => panic!("Test case n:{} timed out", n),
             Ok(Err(err)) => panic!("Test case n:{} failed with {:?}", n, err),
-            _ => (),
+            Ok(Ok(is_done)) => is_done,
         }
     }
 
     #[tokio::test]
     async fn test() {
-        test_case(0).await;
-        test_case(1).await;
-        test_case(2).await;
-        test_case(3).await;
-        test_case(4).await;
-        test_case(5).await;
+        let mut n = 0;
+        loop {
+            if test_case(n).await {
+                break;
+            }
+            n += 1;
+        }
     }
 }
