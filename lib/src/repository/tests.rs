@@ -100,10 +100,7 @@ async fn merge() {
 
     // Open the local root.
     let local_branch = repo.local_branch().unwrap();
-    let mut local_root = {
-        let mut conn = repo.db().acquire().await.unwrap();
-        local_branch.open_or_create_root(&mut conn).await.unwrap()
-    };
+    let mut local_root = local_branch.open_or_create_root().await.unwrap();
 
     repo.force_merge().await.unwrap();
 
@@ -661,7 +658,7 @@ async fn version_vector_deep_hierarchy() {
     let depth = 10;
     let mut conn = repo.db().acquire().await.unwrap();
     let mut dirs = Vec::new();
-    dirs.push(local_branch.open_or_create_root(&mut conn).await.unwrap());
+    dirs.push(local_branch.open_or_create_root().await.unwrap());
 
     for i in 0..depth {
         let dir = dirs
@@ -714,7 +711,7 @@ async fn version_vector_fork() {
 
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
+    let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
     let mut remote_parent = remote_root
         .create_directory(&mut conn, "parent".into())
         .await
@@ -1000,7 +997,7 @@ async fn create_file_in_branch(
     name: &str,
     content: &[u8],
 ) -> File {
-    let mut root = branch.open_or_create_root(conn).await.unwrap();
+    let mut root = branch.open_or_create_root().await.unwrap();
     create_file_in_directory(conn, &mut root, name, content).await
 }
 

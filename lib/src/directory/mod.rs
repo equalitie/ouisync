@@ -308,7 +308,7 @@ impl Directory {
                 Err(error) => Err(error),
             }
         } else {
-            local_branch.open_or_create_root(conn).await
+            local_branch.open_or_create_root().await
         }
     }
 

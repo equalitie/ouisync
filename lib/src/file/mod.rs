@@ -212,10 +212,7 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         // Create a file owned by branch 0
-        let mut file0 = branch0
-            .ensure_file_exists(&mut conn, "/dog.jpg".into())
-            .await
-            .unwrap();
+        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
         file0.write(&mut conn, b"small").await.unwrap();
         file0.flush(&mut conn).await.unwrap();
@@ -276,10 +273,7 @@ mod tests {
         let (_base_dir, pool, [branch0, branch1]) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
-        let mut file0 = branch0
-            .ensure_file_exists(&mut conn, "/pig.jpg".into())
-            .await
-            .unwrap();
+        let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
         file0.flush(&mut conn).await.unwrap();
 
         let mut file1 = branch0
@@ -310,10 +304,7 @@ mod tests {
         let (_base_dir, pool, [branch]) = setup().await;
         let mut conn = pool.acquire().await.unwrap();
 
-        let mut file0 = branch
-            .ensure_file_exists(&mut conn, "fox.txt".into())
-            .await
-            .unwrap();
+        let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
             .open_root()
             .await

@@ -304,10 +304,9 @@ impl Repository {
     /// Creates a new file at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let mut conn = self.db().acquire().await?;
         let file = self
             .local_branch()?
-            .ensure_file_exists(&mut conn, path.as_ref())
+            .ensure_file_exists(path.as_ref())
             .await?;
 
         Ok(file)
@@ -316,10 +315,9 @@ impl Repository {
     /// Creates a new directory at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let mut conn = self.db().acquire().await?;
         let dir = self
             .local_branch()?
-            .ensure_directory_exists(&mut conn, path.as_ref())
+            .ensure_directory_exists(path.as_ref())
             .await?;
 
         Ok(dir)
@@ -417,7 +415,7 @@ impl Repository {
         drop(dst_joint_dir);
 
         let mut dst_dir = local_branch
-            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
+            .ensure_directory_exists(dst_dir_path.as_ref())
             .await?;
         src_dir
             .move_entry(
