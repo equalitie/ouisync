@@ -143,20 +143,13 @@ async fn conflict_forked_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_directories() {
-    let (_base_dir, pool, branches) = setup(2).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let (_base_dir, _pool, branches) = setup(2).await;
 
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0
-        .create_directory(&mut conn, "dir".to_owned())
-        .await
-        .unwrap();
+    root0.create_directory("dir".to_owned()).await.unwrap();
 
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    root1
-        .create_directory(&mut conn, "dir".to_owned())
-        .await
-        .unwrap();
+    root1.create_directory("dir".to_owned()).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
 
@@ -179,10 +172,7 @@ async fn conflict_file_and_single_version_directory() {
     create_file(&mut conn, &mut root0, "config", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    root1
-        .create_directory(&mut conn, "config".to_owned())
-        .await
-        .unwrap();
+    root1.create_directory("config".to_owned()).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
 
@@ -239,16 +229,10 @@ async fn conflict_file_and_multi_version_directory() {
     create_file(&mut conn, &mut root0, "config", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    root1
-        .create_directory(&mut conn, "config".to_owned())
-        .await
-        .unwrap();
+    root1.create_directory("config".to_owned()).await.unwrap();
 
     let mut root2 = branches[2].open_or_create_root().await.unwrap();
-    root2
-        .create_directory(&mut conn, "config".to_owned())
-        .await
-        .unwrap();
+    root2.create_directory("config".to_owned()).await.unwrap();
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1, root2]);
 
@@ -371,17 +355,11 @@ async fn cd_into_concurrent_directory() {
 
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
 
-    let mut dir0 = root0
-        .create_directory(&mut conn, "pics".to_owned())
-        .await
-        .unwrap();
+    let mut dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
     create_file(&mut conn, &mut dir0, "dog.jpg", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    let mut dir1 = root1
-        .create_directory(&mut conn, "pics".to_owned())
-        .await
-        .unwrap();
+    let mut dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
     create_file(&mut conn, &mut dir1, "cat.jpg", &[]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
@@ -869,20 +847,14 @@ async fn merge_concurrent_directories() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut local_dir = local_root
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    let mut local_dir = local_root.create_directory("dir".into()).await.unwrap();
     create_file(&mut conn, &mut local_dir, "dog.jpg", &[]).await;
 
     local_dir.refresh().await.unwrap();
     let local_dir_vv = local_dir.version_vector(&mut conn).await.unwrap();
 
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    let mut remote_dir = remote_root
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    let mut remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
     create_file(&mut conn, &mut remote_dir, "cat.jpg", &[]).await;
 
     remote_dir.refresh().await.unwrap();
@@ -978,7 +950,7 @@ async fn merge_moved_file() {
 
     // Create a new directory in the remote branch
     let mut dir = remote_root
-        .create_directory(&mut conn, dir_name.to_owned())
+        .create_directory(dir_name.to_owned())
         .await
         .unwrap();
 
@@ -1035,28 +1007,16 @@ async fn remove_non_empty_subdirectory() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut local_dir = local_root
-        .create_directory(&mut conn, "dir0".into())
-        .await
-        .unwrap();
+    let mut local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut conn, &mut local_dir, "foo.txt", &[]).await;
 
-    local_root
-        .create_directory(&mut conn, "dir1".into())
-        .await
-        .unwrap();
+    local_root.create_directory("dir1".into()).await.unwrap();
 
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    let mut remote_dir = remote_root
-        .create_directory(&mut conn, "dir0".into())
-        .await
-        .unwrap();
+    let mut remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut conn, &mut remote_dir, "bar.txt", &[]).await;
 
-    remote_root
-        .create_directory(&mut conn, "dir2".into())
-        .await
-        .unwrap();
+    remote_root.create_directory("dir2".into()).await.unwrap();
 
     let mut root =
         JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root]);

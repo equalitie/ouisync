@@ -677,12 +677,8 @@ async fn transfer_directory_with_subdirectory() {
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
-    let mut conn = repo_a.db().acquire().await.unwrap();
-
     let mut dir0 = repo_a.create_directory("food").await.unwrap();
-    dir0.create_directory(&mut conn, "mediterranean".into())
-        .await
-        .unwrap();
+    dir0.create_directory("mediterranean".into()).await.unwrap();
 
     time::timeout(
         DEFAULT_TIMEOUT,

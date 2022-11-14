@@ -43,8 +43,7 @@ impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(branch: Branch) -> Result<Self> {
-        let mut conn = branch.db().acquire().await?;
-        Self::open(&mut conn, branch, Locator::ROOT, None).await
+        Self::open(branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -52,9 +51,8 @@ impl Directory {
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
-        let mut conn = branch.db().acquire().await?;
 
-        match Self::open(&mut conn, branch.clone(), locator, None).await {
+        match Self::open(branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -63,14 +61,11 @@ impl Directory {
 
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
-        let mut conn = self.branch().db().acquire().await?;
-
         let Self {
             blob,
             parent,
             entries,
         } = Self::open(
-            &mut conn,
             self.branch().clone(),
             *self.locator(),
             self.parent.as_ref().cloned(),
@@ -129,13 +124,14 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    pub async fn create_directory(
-        &mut self,
-        conn: &mut db::PoolConnection,
-        name: String,
-    ) -> Result<Self> {
-        self.create_directory_with_version_vector_op(conn, name, &VersionVectorOp::IncrementLocal)
-            .await
+    pub async fn create_directory(&mut self, name: String) -> Result<Self> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.create_directory_with_version_vector_op(
+            &mut conn,
+            name,
+            &VersionVectorOp::IncrementLocal,
+        )
+        .await
     }
 
     async fn create_directory_with_version_vector_op(
@@ -332,19 +328,24 @@ impl Directory {
         }
     }
 
-    async fn open(
+    async fn open_in(
         conn: &mut db::Connection,
-        owner_branch: Branch,
+        branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
     ) -> Result<Self> {
-        let (blob, entries) = load(conn, owner_branch, locator).await?;
+        let (blob, entries) = load(conn, branch, locator).await?;
 
         Ok(Self {
             blob,
             parent,
             entries,
         })
+    }
+
+    async fn open(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Result<Self> {
+        let mut conn = branch.db().acquire().await?;
+        Self::open_in(&mut conn, branch, locator, parent).await
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
@@ -358,13 +359,24 @@ impl Directory {
     }
 
     #[async_recursion]
-    pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
+    pub async fn debug_print(&self, print: DebugPrinter) {
         for (name, entry_data) in &self.entries {
             print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
             match entry_data {
                 EntryData::File(file_data) => {
                     let print = print.indent();
+
+                    let mut conn = match self.branch().db().acquire().await {
+                        Ok(conn) => conn,
+                        Err(error) => {
+                            print.display(&format_args!(
+                                "Failed to acquire db connection: {:?}",
+                                error
+                            ));
+                            continue;
+                        }
+                    };
 
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
@@ -373,7 +385,7 @@ impl Directory {
                     );
 
                     let file = File::open(
-                        conn,
+                        &mut conn,
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
@@ -383,7 +395,7 @@ impl Directory {
                     match file {
                         Ok(mut file) => {
                             let mut buf = [0; 32];
-                            let lenght_result = file.read(conn, &mut buf).await;
+                            let lenght_result = file.read(&mut conn, &mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len();
@@ -414,7 +426,6 @@ impl Directory {
                     );
 
                     let dir = Directory::open(
-                        conn,
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
@@ -423,7 +434,7 @@ impl Directory {
 
                     match dir {
                         Ok(dir) => {
-                            dir.debug_print(conn, print).await;
+                            dir.debug_print(print).await;
                         }
                         Err(e) => {
                             print.display(&format!("Failed to open {:?}", e));

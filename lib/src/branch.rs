@@ -72,7 +72,6 @@ impl Branch {
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
     pub(crate) async fn ensure_directory_exists(&self, path: &Utf8Path) -> Result<Directory> {
-        let mut conn = self.pool.acquire().await?;
         let mut curr = self.open_or_create_root().await?;
 
         for component in path.components() {
@@ -89,7 +88,7 @@ impl Branch {
                     let next = if let Some(next) = next {
                         next
                     } else {
-                        curr.create_directory(&mut conn, name.to_string()).await?
+                        curr.create_directory(name.to_string()).await?
                     };
 
                     curr = next;
@@ -131,19 +130,8 @@ impl Branch {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        let mut conn = match self.pool.acquire().await {
-            Ok(conn) => conn,
-            Err(error) => {
-                print.display(&format_args!(
-                    "failed to acquire db connection: {:?}",
-                    error
-                ));
-                return;
-            }
-        };
-
         match self.open_root().await {
-            Ok(root) => root.debug_print(&mut conn, print).await,
+            Ok(root) => root.debug_print(print).await,
             Err(error) => {
                 print.display(&format_args!("failed to open root directory: {:?}", error))
             }

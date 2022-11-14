@@ -197,10 +197,7 @@ async fn move_file_within_branch() {
 
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
-    let mut aux_dir = root_dir
-        .create_directory(&mut conn, "aux".into())
-        .await
-        .unwrap();
+    let mut aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
 
     let mut file = root_dir
         .create_file(&mut conn, file_name.into())
@@ -313,10 +310,7 @@ async fn move_non_empty_directory() {
 
     // Create a directory with a single file.
     let mut root_dir = branch.open_or_create_root().await.unwrap();
-    let mut dir = root_dir
-        .create_directory(&mut conn, dir_name.into())
-        .await
-        .unwrap();
+    let mut dir = root_dir.create_directory(dir_name.into()).await.unwrap();
 
     let mut file = dir.create_file(&mut conn, file_name.into()).await.unwrap();
     file.write(&mut conn, content).await.unwrap();
@@ -328,7 +322,7 @@ async fn move_non_empty_directory() {
     let file_locator = *file.locator();
 
     let mut dst_dir = root_dir
-        .create_directory(&mut conn, dst_dir_name.into())
+        .create_directory(dst_dir_name.into())
         .await
         .unwrap();
 
@@ -384,10 +378,7 @@ async fn remove_subdirectory() {
 
     // Create a directory with a single subdirectory.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
-    let dir = parent_dir
-        .create_directory(&mut conn, name.into())
-        .await
-        .unwrap();
+    let dir = parent_dir.create_directory(name.into()).await.unwrap();
 
     let dir_locator = *dir.locator();
     let dir_vv = dir.version_vector(&mut conn).await.unwrap();
@@ -423,10 +414,7 @@ async fn fork() {
 
     // Create a nested directory by branch 0
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    root0.create_directory("dir".into()).await.unwrap();
 
     // Fork it by branch 1 and modify it
     let dir0 = {
@@ -493,10 +481,7 @@ async fn fork_over_tombstone() {
 
     // Create a directory in branch 0 and delete it.
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    root0
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    root0.create_directory("dir".into()).await.unwrap();
     let vv = root0.lookup("dir").unwrap().version_vector().clone();
 
     root0
@@ -511,10 +496,7 @@ async fn fork_over_tombstone() {
 
     // Create a directory with the same name in branch 1.
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
-    root1
-        .create_directory(&mut conn, "dir".into())
-        .await
-        .unwrap();
+    root1.create_directory("dir".into()).await.unwrap();
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1].open_root().await.unwrap();
@@ -544,10 +526,7 @@ async fn modify_directory_concurrently() {
     // Obtain two instances of the same directory, create a new file in one of them and verify
     // the file also exists in the other after refresh.
 
-    let mut dir0 = root
-        .create_directory(&mut conn, "dir".to_owned())
-        .await
-        .unwrap();
+    let mut dir0 = root.create_directory("dir".to_owned()).await.unwrap();
     let mut dir1 = root
         .lookup("dir")
         .unwrap()

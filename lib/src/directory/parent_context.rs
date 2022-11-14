@@ -129,7 +129,7 @@ impl ParentContext {
 
     /// Returns the parent directory of this entry.
     pub async fn directory(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
-        Directory::open(
+        Directory::open_in(
             conn,
             branch,
             Locator::head(self.directory_id),

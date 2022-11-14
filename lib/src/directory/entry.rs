@@ -193,7 +193,7 @@ impl<'a> DirectoryRef<'a> {
     }
 
     pub(crate) async fn open_in(&self, conn: &mut db::Connection) -> Result<Directory> {
-        Directory::open(
+        Directory::open_in(
             conn,
             self.branch().clone(),
             self.locator(),
