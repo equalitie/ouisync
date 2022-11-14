@@ -208,7 +208,7 @@ async fn move_file_within_branch() {
         .unwrap();
     file.write(&mut conn, content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
-    root_dir.refresh(&mut conn).await.unwrap();
+    root_dir.refresh().await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -322,8 +322,8 @@ async fn move_non_empty_directory() {
     file.write(&mut conn, content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
-    dir.refresh(&mut conn).await.unwrap();
-    root_dir.refresh(&mut conn).await.unwrap();
+    dir.refresh().await.unwrap();
+    root_dir.refresh().await.unwrap();
 
     let file_locator = *file.locator();
 
@@ -530,7 +530,7 @@ async fn fork_over_tombstone() {
     dir1.fork(&mut conn, &branches[0]).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
-    root0.refresh(&mut conn).await.unwrap();
+    root0.refresh().await.unwrap();
     assert_matches!(root0.lookup("dir"), Ok(EntryRef::Directory(_)));
 }
 
@@ -564,7 +564,7 @@ async fn modify_directory_concurrently() {
     file0.write(&mut conn, b"hello").await.unwrap();
     file0.flush(&mut conn).await.unwrap();
 
-    dir1.refresh(&mut conn).await.unwrap();
+    dir1.refresh().await.unwrap();
     let mut file1 = dir1
         .lookup("file.txt")
         .unwrap()

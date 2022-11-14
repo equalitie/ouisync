@@ -170,15 +170,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
-        let (_base_dir, _pool, branch) = setup().await;
+        let (_base_dir, branch) = setup().await;
         let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
         assert_eq!(dir.locator(), &Locator::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_subdirectory_exists() {
-        let (_base_dir, pool, branch) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let (_base_dir, branch) = setup().await;
 
         let mut root = branch.open_or_create_root().await.unwrap();
 
@@ -187,11 +186,11 @@ mod tests {
             .await
             .unwrap();
 
-        root.refresh(&mut conn).await.unwrap();
+        root.refresh().await.unwrap();
         let _ = root.lookup("dir").unwrap();
     }
 
-    async fn setup() -> (TempDir, db::Pool, Branch) {
+    async fn setup() -> (TempDir, Branch) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
 
         let writer_id = PublicKey::random();
@@ -203,12 +202,12 @@ mod tests {
 
         let branch = index.get_branch(writer_id);
         let branch = Branch::new(
-            pool.clone(),
+            pool,
             branch,
             secrets.into(),
             Arc::new(FileCache::new(event_tx)),
         );
 
-        (base_dir, pool, branch)
+        (base_dir, branch)
     }
 }

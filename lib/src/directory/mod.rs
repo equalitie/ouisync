@@ -62,13 +62,15 @@ impl Directory {
     }
 
     /// Reloads this directory from the db.
-    pub(crate) async fn refresh(&mut self, conn: &mut db::Connection) -> Result<()> {
+    pub(crate) async fn refresh(&mut self) -> Result<()> {
+        let mut conn = self.branch().db().acquire().await?;
+
         let Self {
             blob,
             parent,
             entries,
         } = Self::open(
-            conn,
+            &mut conn,
             self.branch().clone(),
             *self.locator(),
             self.parent.as_ref().cloned(),

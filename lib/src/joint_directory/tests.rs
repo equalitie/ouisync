@@ -337,7 +337,7 @@ async fn conflict_open_file() {
     file1.fork(&mut conn, branches[1].clone()).await.unwrap();
     file1.write(&mut conn, b"foo").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
-    root1.refresh(&mut conn).await.unwrap();
+    root1.refresh().await.unwrap();
 
     let vv1 = file1.version_vector(&mut conn).await.unwrap();
     assert!(vv1 > vv0);
@@ -419,7 +419,7 @@ async fn merge_locally_non_existing_file() {
     .await
     .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     // Verify the file now exists in the local branch.
     let local_content = open_file(&mut conn, &local_root, "cat.jpg")
@@ -460,7 +460,7 @@ async fn merge_locally_older_file() {
     .unwrap();
 
     // Modify the file by the remote branch
-    remote_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh().await.unwrap();
     update_file(&mut conn, &remote_root, "cat.jpg", content_v1, &branches[1]).await;
 
     JointDirectory::new(
@@ -471,7 +471,7 @@ async fn merge_locally_older_file() {
     .await
     .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
     let local_content = local_root
         .lookup("cat.jpg")
         .unwrap()
@@ -514,7 +514,7 @@ async fn merge_locally_newer_file() {
     .unwrap();
 
     // Modify the file by the local branch
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
     update_file(&mut conn, &local_root, "cat.jpg", content_v1, &branches[0]).await;
 
     JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
@@ -554,15 +554,15 @@ async fn attempt_to_merge_concurrent_file() {
     .await
     .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
-    remote_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     // Modify the file by both branches concurrently
     update_file(&mut conn, &local_root, "cat.jpg", b"v1", &branches[0]).await;
     update_file(&mut conn, &remote_root, "cat.jpg", b"v2", &branches[1]).await;
 
-    local_root.refresh(&mut conn).await.unwrap();
-    remote_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     assert_eq!(
         local_root
@@ -582,7 +582,7 @@ async fn attempt_to_merge_concurrent_file() {
     .await
     .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     // The local version is unchanged
     assert_eq!(
@@ -747,7 +747,7 @@ async fn merge_create_and_delete_file_roundtrip() {
     .await
     .unwrap();
 
-    remote_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     // remote: remove the file
     let file_vv = remote_root
@@ -820,7 +820,7 @@ async fn merge_sequential_modifications() {
     // the modification by remote got through.
 
     create_file(&mut conn, &mut local_root, "dog.jpg", b"v0").await;
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     let vv0 = read_version_vector(&local_root, "dog.jpg").await;
 
@@ -832,13 +832,13 @@ async fn merge_sequential_modifications() {
     .await
     .unwrap();
 
-    remote_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     let vv1 = read_version_vector(&remote_root, "dog.jpg").await;
     assert_eq!(vv1, vv0);
 
     update_file(&mut conn, &remote_root, "dog.jpg", b"v1", &branches[1]).await;
-    remote_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     let vv2 = read_version_vector(&remote_root, "dog.jpg").await;
     assert!(vv2 > vv1);
@@ -848,7 +848,7 @@ async fn merge_sequential_modifications() {
         .await
         .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     let entry = local_root.lookup("dog.jpg").unwrap().file().unwrap();
     assert_eq!(entry.version_vector(), &vv2);
@@ -875,7 +875,7 @@ async fn merge_concurrent_directories() {
         .unwrap();
     create_file(&mut conn, &mut local_dir, "dog.jpg", &[]).await;
 
-    local_dir.refresh(&mut conn).await.unwrap();
+    local_dir.refresh().await.unwrap();
     let local_dir_vv = local_dir.version_vector(&mut conn).await.unwrap();
 
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
@@ -885,7 +885,7 @@ async fn merge_concurrent_directories() {
         .unwrap();
     create_file(&mut conn, &mut remote_dir, "cat.jpg", &[]).await;
 
-    remote_dir.refresh(&mut conn).await.unwrap();
+    remote_dir.refresh().await.unwrap();
     let remote_dir_vv = remote_dir.version_vector(&mut conn).await.unwrap();
 
     JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
@@ -893,7 +893,7 @@ async fn merge_concurrent_directories() {
         .await
         .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     assert_eq!(local_root.entries().count(), 1);
 
@@ -943,7 +943,7 @@ async fn merge_file_and_tombstone() {
         .await
         .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     assert_eq!(local_root.entries().count(), 1);
 
@@ -974,7 +974,7 @@ async fn merge_moved_file() {
     // Drop the file otherwise moving it would be blocked (https://github.com/equalitie/ouisync/issues/58)
     drop(file);
 
-    remote_root.refresh(&mut conn).await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     // Create a new directory in the remote branch
     let mut dir = remote_root
@@ -1002,7 +1002,7 @@ async fn merge_moved_file() {
         .await
         .unwrap();
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
 
     // The file is moved from it's original location to the new directory
     assert_matches!(local_root.lookup(file_name), Ok(EntryRef::Tombstone(_)));
@@ -1069,7 +1069,7 @@ async fn remove_non_empty_subdirectory() {
     assert!(root.lookup("dir1").next().is_some());
     assert!(root.lookup("dir2").next().is_some());
 
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
     assert_matches!(local_root.lookup("dir0"), Ok(EntryRef::Tombstone(_)));
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }

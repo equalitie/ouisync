@@ -105,7 +105,7 @@ async fn merge() {
     repo.force_merge().await.unwrap();
 
     let mut conn = repo.db().acquire().await.unwrap();
-    local_root.refresh(&mut conn).await.unwrap();
+    local_root.refresh().await.unwrap();
     let content = local_root
         .lookup("test.txt")
         .unwrap()
@@ -718,7 +718,7 @@ async fn version_vector_fork() {
         .unwrap();
     let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
 
-    remote_parent.refresh(&mut conn).await.unwrap();
+    remote_parent.refresh().await.unwrap();
     let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
@@ -752,7 +752,7 @@ async fn version_vector_fork() {
     file.write(&mut conn, b"hello").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
-    remote_parent.refresh(&mut conn).await.unwrap();
+    remote_parent.refresh().await.unwrap();
     let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
