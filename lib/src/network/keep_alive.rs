@@ -1,5 +1,5 @@
 use super::{
-    message::{Message, MessageChannel},
+    message::Message,
     message_io::{MessageSink, MessageStream, SendError},
 };
 use futures_util::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt};
@@ -49,7 +49,7 @@ where
         loop {
             let item = match ready!(self.inner.poll_next_unpin(cx)) {
                 Some(Ok(Ok(message))) => {
-                    if is_keep_alive(&message) {
+                    if message.is_keep_alive() {
                         continue;
                     } else {
                         Some(Ok(message))
@@ -66,10 +66,6 @@ where
             return Poll::Ready(item);
         }
     }
-}
-
-fn is_keep_alive(message: &Message) -> bool {
-    message.channel == MessageChannel::default() && message.content.is_empty()
 }
 
 /// Adapter for `MessageSink` which periodically sends keep-alive messages if no regular messages
@@ -182,10 +178,7 @@ async fn sink_worker<W>(
             _ = time::sleep(interval) => {
                 // Send keep-alive message (empty message on the default channel)
                 inner
-                    .send(Message {
-                        channel: MessageChannel::default(),
-                        content: Vec::new(),
-                    })
+                    .send(Message::new_keep_alive())
                     .await
                     .unwrap_or(());
             }
@@ -199,10 +192,7 @@ fn make_send_error(command_tx_error: PollSendError<SinkCommand>, source: io::Err
         message: command_tx_error
             .into_inner()
             .map(|command| command.message)
-            .unwrap_or_else(|| Message {
-                channel: MessageChannel::default(),
-                content: Vec::new(),
-            }),
+            .unwrap_or_else(Message::new_keep_alive),
     }
 }
 
@@ -213,6 +203,7 @@ fn sink_closed_error() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::message::{MessageChannel, Type};
     use std::net::Ipv4Addr;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -229,10 +220,7 @@ mod tests {
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
-            Message {
-                channel: MessageChannel::default(),
-                content: Vec::new()
-            }
+            Message::new_keep_alive(),
         );
     }
 
@@ -246,6 +234,7 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
+            tag: Type::Content,
             channel: MessageChannel::random(),
             content: b"hello".to_vec(),
         };
@@ -286,6 +275,7 @@ mod tests {
         time::sleep(Duration::from_millis(80)).await;
 
         let message = Message {
+            tag: Type::Content,
             channel: MessageChannel::random(),
             content: b"hello".to_vec(),
         };

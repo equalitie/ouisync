@@ -5,10 +5,11 @@ use crate::iterator::IntoIntersection;
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
-    message::{Message, MessageChannel},
+    message::{Message, MessageChannel, Type},
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
+use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -157,20 +158,50 @@ pub(super) struct ContentSink {
 }
 
 impl ContentSink {
+    pub fn channel(&self) -> &MessageChannel {
+        &self.channel
+    }
+
     /// Returns whether the send succeeded.
     pub async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
         self.state
             .send(Message {
+                tag: Type::Content,
                 channel: self.channel,
                 content,
             })
             .await
     }
+}
 
-    pub fn channel(&self) -> &MessageChannel {
-        &self.channel
+//------------------------------------------------------------------------
+// These traits are useful for testing.
+
+#[async_trait]
+pub(super) trait ContentSinkTrait {
+    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed>;
+}
+
+#[async_trait]
+pub(super) trait ContentStreamTrait {
+    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed>;
+}
+
+#[async_trait]
+impl ContentSinkTrait for ContentSink {
+    async fn send(&self, content: Vec<u8>) -> Result<(), ChannelClosed> {
+        self.send(content).await
     }
 }
+
+#[async_trait]
+impl ContentStreamTrait for ContentStream {
+    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+        self.recv().await
+    }
+}
+
+//------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub(super) struct ChannelClosed;
@@ -524,6 +555,7 @@ mod tests {
 
         client
             .send(Message {
+                tag: Type::Content,
                 channel,
                 content: send_content.to_vec(),
             })
@@ -549,6 +581,7 @@ mod tests {
         for (channel, content) in [(channel0, send_content0), (channel1, send_content1)] {
             client
                 .send(Message {
+                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -580,6 +613,7 @@ mod tests {
         for content in [send_content0, send_content1] {
             client
                 .send(Message {
+                    tag: Type::Content,
                     channel,
                     content: content.to_vec(),
                 })
@@ -626,6 +660,7 @@ mod tests {
         let mut client = MessageSink::new(client);
         client
             .send(Message {
+                tag: Type::Content,
                 channel: MessageChannel::random(),
                 content: b"hello world".to_vec(),
             })
