@@ -1,4 +1,5 @@
 use super::{
+    repository::RepositoryHolder,
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
@@ -18,17 +19,17 @@ pub struct FileHolder {
 
 #[no_mangle]
 pub unsafe extern "C" fn file_open(
-    repo: SharedHandle<Repository>,
+    repo: SharedHandle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<SharedHandle<FileHolder>>>,
 ) {
     session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
-        let local_branch = repo.local_branch().ok();
+        let local_branch = repo.repository.local_branch().ok();
 
         ctx.spawn(async move {
-            let file = repo.open_file(&path).await?;
+            let file = repo.repository.open_file(&path).await?;
             Ok(SharedHandle::new(Arc::new(FileHolder {
                 file: Mutex::new(file),
                 local_branch,
@@ -39,17 +40,17 @@ pub unsafe extern "C" fn file_open(
 
 #[no_mangle]
 pub unsafe extern "C" fn file_create(
-    repo: SharedHandle<Repository>,
+    repo: SharedHandle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<SharedHandle<FileHolder>>>,
 ) {
     session::with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
-        let local_branch = repo.local_branch()?;
+        let local_branch = repo.repository.local_branch()?;
 
         ctx.spawn(async move {
-            let mut file = repo.create_file(&path).await?;
+            let mut file = repo.repository.create_file(&path).await?;
             file.flush().await?;
 
             Ok(SharedHandle::new(Arc::new(FileHolder {

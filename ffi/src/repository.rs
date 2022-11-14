@@ -25,7 +25,7 @@ pub const ACCESS_MODE_WRITE: u8 = 2;
 const ENABLE_MERGER: bool = true;
 
 pub struct RepositoryHolder {
-    repository: Repository,
+    pub(super) repository: Repository,
     registration: Registration,
 }
 
