@@ -213,9 +213,10 @@ mod merge {
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        let branches = shared.load_branches(&mut conn).await?;
+        let branches = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
+
+        let mut conn = shared.store.db().acquire().await?;
 
         for branch in branches {
             match branch.open_root(&mut conn).await {
@@ -344,8 +345,9 @@ mod scan {
     }
 
     async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
+        let branches = shared.load_branches().await?;
+
         let mut conn = shared.store.db().acquire().await?;
-        let branches = shared.load_branches(&mut conn).await?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();

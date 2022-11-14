@@ -482,7 +482,7 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-        let branches = self.shared.load_branches(conn).await?;
+        let branches = self.shared.load_branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -542,7 +542,7 @@ impl Repository {
             }
         };
 
-        let branches = match self.shared.load_branches(&mut conn).await {
+        let branches = match self.shared.load_branches().await {
             Ok(branches) => branches,
             Err(error) => {
                 print.display(&format_args!("failed to load branches: {:?}", error));
@@ -610,10 +610,11 @@ impl Shared {
         self.inflate(self.store.index.get_branch(self.this_writer_id))
     }
 
-    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Branch>> {
+    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
+        let mut conn = self.store.db().acquire().await?;
         self.store
             .index
-            .load_branches(conn)
+            .load_branches(&mut conn)
             .await?
             .into_iter()
             .map(|data| self.inflate(data))
