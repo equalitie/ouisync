@@ -311,10 +311,7 @@ async fn conflict_open_file() {
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
     let mut root1 = branches[1].open_or_create_root().await.unwrap();
 
-    let file0 = root0
-        .create_file(&mut conn, "file.txt".into())
-        .await
-        .unwrap();
+    let file0 = root0.create_file("file.txt".into()).await.unwrap();
     let vv0 = file0.version_vector().await.unwrap();
 
     let mut file1 = file0;
@@ -1082,7 +1079,7 @@ async fn create_file(
     name: &str,
     content: &[u8],
 ) -> File {
-    let mut file = parent.create_file(conn, name.to_owned()).await.unwrap();
+    let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
         file.write(conn, content).await.unwrap();

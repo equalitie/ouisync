@@ -996,7 +996,7 @@ async fn create_file_in_directory(
     name: &str,
     content: &[u8],
 ) -> File {
-    let mut file = dir.create_file(conn, name.into()).await.unwrap();
+    let mut file = dir.create_file(name.into()).await.unwrap();
     file.write(conn, content).await.unwrap();
     file.flush(conn).await.unwrap();
     file

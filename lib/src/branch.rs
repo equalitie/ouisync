@@ -104,10 +104,10 @@ impl Branch {
 
     pub(crate) async fn ensure_file_exists(&self, path: &Utf8Path) -> Result<File> {
         let (parent, name) = path::decompose(path).ok_or(Error::EntryIsDirectory)?;
-        let mut dir = self.ensure_directory_exists(parent).await?;
-
-        let mut conn = self.pool.acquire().await?;
-        dir.create_file(&mut conn, name.to_string()).await
+        self.ensure_directory_exists(parent)
+            .await?
+            .create_file(name.to_string())
+            .await
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {

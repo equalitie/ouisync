@@ -95,12 +95,8 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    pub async fn create_file(
-        &mut self,
-        conn: &mut db::PoolConnection,
-        name: String,
-    ) -> Result<File> {
-        let mut tx = conn.begin().await?;
+    pub async fn create_file(&mut self, name: String) -> Result<File> {
+        let mut tx = self.branch().db().begin().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();

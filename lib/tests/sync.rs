@@ -653,12 +653,8 @@ async fn transfer_directory_with_file() {
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
-    let mut conn = repo_a.db().acquire().await.unwrap();
-
     let mut dir = repo_a.create_directory("food").await.unwrap();
-    dir.create_file(&mut conn, "pizza.jpg".into())
-        .await
-        .unwrap();
+    dir.create_file("pizza.jpg".into()).await.unwrap();
 
     time::timeout(
         DEFAULT_TIMEOUT,
@@ -766,8 +762,7 @@ async fn remote_rename_non_empty_directory() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     let mut dir = repo_b.create_directory("foo").await.unwrap();
-    let mut conn = repo_b.db().acquire().await.unwrap();
-    dir.create_file(&mut conn, "data.txt".into()).await.unwrap();
+    dir.create_file("data.txt".into()).await.unwrap();
 
     time::timeout(
         DEFAULT_TIMEOUT,
