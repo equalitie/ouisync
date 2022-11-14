@@ -417,14 +417,7 @@ impl Repository {
             .ensure_directory_exists(dst_dir_path.as_ref())
             .await?;
         src_dir
-            .move_entry(
-                &mut conn,
-                &src_name,
-                src_entry,
-                &mut dst_dir,
-                dst_name,
-                dst_vv,
-            )
+            .move_entry(&src_name, src_entry, &mut dst_dir, dst_name, dst_vv)
             .await?;
 
         Ok(())

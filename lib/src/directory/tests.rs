@@ -153,7 +153,6 @@ async fn rename_file() {
 
     parent_dir_src
         .move_entry(
-            &mut conn,
             src_name,
             entry_to_move,
             &mut parent_dir_dst,
@@ -218,7 +217,6 @@ async fn move_file_within_branch() {
 
     root_dir
         .move_entry(
-            &mut conn,
             file_name,
             entry_to_move,
             &mut aux_dir,
@@ -265,7 +263,6 @@ async fn move_file_within_branch() {
 
     aux_dir
         .move_entry(
-            &mut conn,
             file_name,
             entry_to_move,
             &mut root_dir,
@@ -329,7 +326,6 @@ async fn move_non_empty_directory() {
 
     root_dir
         .move_entry(
-            &mut conn,
             dir_name,
             entry_to_move,
             &mut dst_dir,

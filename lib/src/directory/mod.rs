@@ -218,7 +218,6 @@ impl Directory {
     /// those operations happen.
     pub(crate) async fn move_entry(
         &mut self,
-        conn: &mut db::PoolConnection,
         src_name: &str,
         src_data: EntryData,
         dst_dir: &mut Directory,
@@ -228,7 +227,7 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        let mut tx = conn.begin().await?;
+        let mut tx = self.branch().db().begin().await?;
 
         let dst_content = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
