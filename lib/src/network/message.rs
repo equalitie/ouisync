@@ -72,7 +72,7 @@ pub(crate) enum Type {
 }
 
 impl Type {
-    fn to_u8(&self) -> u8 {
+    fn as_u8(&self) -> u8 {
         match self {
             Type::KeepAlive => 0,
             Type::Barrier => 1,
@@ -104,7 +104,7 @@ impl Header {
         let mut hdr = [0; Self::SIZE];
         let mut w = ArrayWriter { array: &mut hdr };
 
-        w.write_u8(self.tag.to_u8());
+        w.write_u8(self.tag.as_u8());
         w.write_channel(&self.channel);
 
         hdr
@@ -161,7 +161,7 @@ impl From<(Header, Vec<u8>)> for Message {
         Self {
             tag: hdr.tag,
             channel: hdr.channel,
-            content: content,
+            content,
         }
     }
 }
@@ -194,11 +194,11 @@ impl ArrayWriter<'_> {
     // Unwraps are OK because all sizes are known at compile time.
 
     fn write_u8(&mut self, n: u8) {
-        self.array.write(&n.to_le_bytes()).unwrap();
+        self.array.write_all(&n.to_le_bytes()).unwrap();
     }
 
     fn write_channel(&mut self, channel: &MessageChannel) {
-        self.array.write(channel.as_ref()).unwrap();
+        self.array.write_all(channel.as_ref()).unwrap();
     }
 }
 

@@ -192,7 +192,7 @@ fn make_send_error(command_tx_error: PollSendError<SinkCommand>, source: io::Err
         message: command_tx_error
             .into_inner()
             .map(|command| command.message)
-            .unwrap_or_else(|| Message::new_keep_alive()),
+            .unwrap_or_else(Message::new_keep_alive),
     }
 }
 
