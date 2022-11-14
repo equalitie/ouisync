@@ -40,7 +40,7 @@ impl ParentContext {
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
-        let mut directory = self.directory(tx, branch).await?;
+        let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.entries.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
         directory
@@ -65,7 +65,7 @@ impl ParentContext {
         src_branch: Branch,
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let directory = self.directory(conn, src_branch).await?;
+        let directory = self.open_in(conn, src_branch).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
 
         assert_eq!(
@@ -127,8 +127,8 @@ impl ParentContext {
         &self.entry_name
     }
 
-    /// Returns the parent directory of this entry.
-    pub async fn directory(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
+    /// Opens the parent directory of this entry.
+    pub async fn open_in(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
         Directory::open_in(
             conn,
             branch,
@@ -150,7 +150,7 @@ impl ParentContext {
         branch: Branch,
     ) -> Result<VersionVector> {
         Ok(self
-            .directory(conn, branch)
+            .open_in(conn, branch)
             .await?
             .lookup(&self.entry_name)?
             .version_vector()

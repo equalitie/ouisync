@@ -56,7 +56,7 @@ impl File {
     }
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.parent.directory(conn, self.branch().clone()).await
+        self.parent.open_in(conn, self.branch().clone()).await
     }
 
     /// Length of this file in bytes.

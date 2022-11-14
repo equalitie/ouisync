@@ -266,7 +266,7 @@ impl Directory {
         }
 
         let parent = if let Some(parent) = &self.parent {
-            let dir = parent.directory(conn, self.branch().clone()).await?;
+            let dir = parent.open_in(conn, self.branch().clone()).await?;
             let entry_name = parent.entry_name();
 
             Some((dir, entry_name))
@@ -316,7 +316,7 @@ impl Directory {
 
     pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
         if let Some(parent) = &self.parent {
-            Ok(Some(parent.directory(conn, self.branch().clone()).await?))
+            Ok(Some(parent.open_in(conn, self.branch().clone()).await?))
         } else {
             Ok(None)
         }
