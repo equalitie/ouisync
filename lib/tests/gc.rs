@@ -3,7 +3,7 @@
 mod common;
 
 use self::common::{Env, Proto, DEFAULT_TIMEOUT};
-use ouisync::{db, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng};
 use std::io::SeekFrom;
 use tokio::time;
@@ -37,13 +37,7 @@ async fn local_delete_remote_file() {
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
-    write_to_file(
-        &mut env.rng,
-        &mut conn,
-        &mut file,
-        2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
-    )
-    .await;
+    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush(&mut conn).await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -91,13 +85,7 @@ async fn local_truncate_local_file() {
 
     let mut file = repo.create_file("test.dat").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    write_to_file(
-        &mut env.rng,
-        &mut conn,
-        &mut file,
-        2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
-    )
-    .await;
+    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush(&mut conn).await.unwrap();
 
     // 2 blocks for the file + 1 block for the root directory
@@ -121,13 +109,7 @@ async fn local_truncate_remote_file() {
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
-    write_to_file(
-        &mut env.rng,
-        &mut conn,
-        &mut file,
-        2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
-    )
-    .await;
+    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush(&mut conn).await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -160,13 +142,7 @@ async fn remote_truncate_remote_file() {
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
-    write_to_file(
-        &mut env.rng,
-        &mut conn,
-        &mut file,
-        2 * BLOCK_SIZE - BLOB_HEADER_SIZE,
-    )
-    .await;
+    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush(&mut conn).await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root
@@ -197,13 +173,7 @@ async fn concurrent_delete_update() {
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     let mut conn = repo_r.db().acquire().await.unwrap();
-    write_to_file(
-        &mut env.rng,
-        &mut conn,
-        &mut file,
-        BLOCK_SIZE - BLOB_HEADER_SIZE,
-    )
-    .await;
+    write_to_file(&mut env.rng, &mut file, BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush(&mut conn).await.unwrap();
 
     // 1 for the remote root + 1 for the file
@@ -225,7 +195,7 @@ async fn concurrent_delete_update() {
     // Remote update. Don't change the length of the file so the first block (where the length it
     // stored) remains unchanged.
     file.seek(&mut conn, SeekFrom::End(-64)).await.unwrap();
-    write_to_file(&mut env.rng, &mut conn, &mut file, 64).await;
+    write_to_file(&mut env.rng, &mut file, 64).await;
     file.flush(&mut conn).await.unwrap();
 
     // Re-connect
@@ -255,13 +225,8 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
     .await
 }
 
-async fn write_to_file(
-    rng: &mut StdRng,
-    conn: &mut db::PoolConnection,
-    file: &mut File,
-    size: usize,
-) {
+async fn write_to_file(rng: &mut StdRng, file: &mut File, size: usize) {
     let mut buffer = vec![0; size];
     rng.fill(&mut buffer[..]);
-    file.write(conn, &buffer).await.unwrap();
+    file.write(&buffer).await.unwrap();
 }

@@ -110,12 +110,12 @@ async fn conflict_forked_files() {
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&root0, "file.txt").await;
     file1.fork(branches[1].clone()).await.unwrap();
-    file1.write(&mut conn, b"two").await.unwrap();
+    file1.write(b"two").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file(&root0, "file.txt").await;
-    file0.write(&mut conn, b"three").await.unwrap();
+    file0.write(b"three").await.unwrap();
     file0.flush(&mut conn).await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
@@ -316,7 +316,7 @@ async fn conflict_open_file() {
 
     let mut file1 = file0;
     file1.fork(branches[1].clone()).await.unwrap();
-    file1.write(&mut conn, b"foo").await.unwrap();
+    file1.write(b"foo").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
     root1.refresh().await.unwrap();
 
@@ -399,7 +399,7 @@ async fn merge_locally_non_existing_file() {
     // Verify the file now exists in the local branch.
     let local_content = open_file(&local_root, "cat.jpg")
         .await
-        .read_to_end(&mut conn)
+        .read_to_end()
         .await
         .unwrap();
     assert_eq!(local_content, content);
@@ -454,7 +454,7 @@ async fn merge_locally_older_file() {
         .open()
         .await
         .unwrap()
-        .read_to_end(&mut conn)
+        .read_to_end()
         .await
         .unwrap();
     assert_eq!(local_content, content_v1);
@@ -503,7 +503,7 @@ async fn merge_locally_newer_file() {
         .open()
         .await
         .unwrap()
-        .read_to_end(&mut conn)
+        .read_to_end()
         .await
         .unwrap();
     assert_eq!(local_content, content_v1);
@@ -561,7 +561,7 @@ async fn attempt_to_merge_concurrent_file() {
     assert_eq!(
         open_file(&local_root, "cat.jpg")
             .await
-            .read_to_end(&mut conn)
+            .read_to_end()
             .await
             .unwrap(),
         b"v1"
@@ -825,13 +825,7 @@ async fn merge_sequential_modifications() {
     let entry = local_root.lookup("dog.jpg").unwrap().file().unwrap();
     assert_eq!(entry.version_vector(), &vv2);
 
-    let content = entry
-        .open()
-        .await
-        .unwrap()
-        .read_to_end(&mut conn)
-        .await
-        .unwrap();
+    let content = entry.open().await.unwrap().read_to_end().await.unwrap();
     assert_eq!(content, b"v1");
 }
 
@@ -988,7 +982,7 @@ async fn merge_moved_file() {
         .await
         .unwrap();
 
-    assert_eq!(file.read_to_end(&mut conn).await.unwrap(), file_content);
+    assert_eq!(file.read_to_end().await.unwrap(), file_content);
 }
 
 // TODO: merge directory with missing blocks
@@ -1082,7 +1076,7 @@ async fn create_file(
     let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
-        file.write(conn, content).await.unwrap();
+        file.write(content).await.unwrap();
     }
 
     file.flush(conn).await.unwrap();
@@ -1102,7 +1096,7 @@ async fn update_file(
     file.fork(local_branch.clone()).await.unwrap();
 
     file.truncate(conn, 0).await.unwrap();
-    file.write(conn, content).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush(conn).await.unwrap();
 }
 

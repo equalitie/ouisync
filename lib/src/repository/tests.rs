@@ -52,7 +52,7 @@ async fn count_leaf_nodes_sanity_checks() {
 
     let mut file = repo.create_file(file_name).await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.write(&mut conn, &random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
+    file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
         .await
         .unwrap();
     file.flush(&mut conn).await.unwrap();
@@ -63,7 +63,7 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
     // Make the file bigger to expand to two blocks
 
-    file.write(&mut conn, &random_bytes(1)).await.unwrap();
+    file.write(&random_bytes(1)).await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     // 3 = one for the root + two for the file.
@@ -104,7 +104,6 @@ async fn merge() {
 
     repo.force_merge().await.unwrap();
 
-    let mut conn = repo.db().acquire().await.unwrap();
     local_root.refresh().await.unwrap();
     let content = local_root
         .lookup("test.txt")
@@ -114,7 +113,7 @@ async fn merge() {
         .open()
         .await
         .unwrap()
-        .read_to_end(&mut conn)
+        .read_to_end()
         .await
         .unwrap();
     assert_eq!(content, b"hello");
@@ -137,7 +136,7 @@ async fn recreate_previously_deleted_file() {
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.write(&mut conn, b"foo").await.unwrap();
+    file.write(b"foo").await.unwrap();
     file.flush(&mut conn).await.unwrap();
     drop(file);
 
@@ -151,7 +150,7 @@ async fn recreate_previously_deleted_file() {
 
     // Create a file with the same name but different content
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(&mut conn, b"bar").await.unwrap();
+    file.write(b"bar").await.unwrap();
     file.flush(&mut conn).await.unwrap();
     drop(file);
 
@@ -275,7 +274,7 @@ async fn concurrent_write_and_read_file() {
 
             for _ in 0..chunk_count {
                 rand::thread_rng().fill(&mut buffer[..]);
-                file.write(&mut conn, &buffer).await.unwrap();
+                file.write(&buffer).await.unwrap();
             }
 
             file.flush(&mut conn).await.unwrap();
@@ -320,7 +319,7 @@ async fn append_to_file() {
     let mut conn = repo.db().acquire().await.unwrap();
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
-    file.write(&mut conn, b"foo").await.unwrap();
+    file.write(b"foo").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     // Concurrent file writes are currently not allowed so we need to drop the file before opening
@@ -329,11 +328,11 @@ async fn append_to_file() {
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut conn, b"bar").await.unwrap();
+    file.write(b"bar").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    let content = file.read_to_end(&mut conn).await.unwrap();
+    let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"foobar");
 }
 
@@ -356,7 +355,7 @@ async fn blind_access_non_empty_repo() {
 
     let mut file = repo.create_file("secret.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.write(&mut conn, b"redacted").await.unwrap();
+    file.write(b"redacted").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     drop(file);
@@ -455,7 +454,7 @@ async fn read_access_same_replica() {
 
     let mut file = repo.create_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.write(&mut conn, b"hello world").await.unwrap();
+    file.write(b"hello world").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     drop(file);
@@ -477,14 +476,14 @@ async fn read_access_same_replica() {
     let mut file = repo.open_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let content = file.read_to_end(&mut conn).await.unwrap();
+    let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
     file.seek(&mut conn, SeekFrom::Start(0)).await.unwrap();
     // short writes that don't cross block boundaries don't trigger the permission check which is
     // why the following works...
-    file.write(&mut conn, b"hello universe").await.unwrap();
+    file.write(b"hello universe").await.unwrap();
     // ...but flushing the file is not allowed.
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 
@@ -522,7 +521,7 @@ async fn read_access_different_replica() {
 
     let mut file = repo.create_file("public.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.write(&mut conn, b"hello world").await.unwrap();
+    file.write(b"hello world").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     drop(file);
@@ -541,8 +540,7 @@ async fn read_access_different_replica() {
     .unwrap();
 
     let mut file = repo.open_file("public.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
-    let content = file.read_to_end(&mut conn).await.unwrap();
+    let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"hello world");
 }
 
@@ -584,7 +582,7 @@ async fn attempt_to_modify_remote_file() {
     file.truncate(&mut conn, 0).await.unwrap();
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 
-    file.write(&mut conn, b"bar").await.unwrap();
+    file.write(b"bar").await.unwrap();
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 }
 
@@ -615,7 +613,7 @@ async fn version_vector_create_file() {
 
     assert!(root_vv_1 > root_vv_0);
 
-    file.write(&mut conn, b"blah").await.unwrap();
+    file.write(b"blah").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let root_vv_2 = file
@@ -732,7 +730,7 @@ async fn version_vector_fork() {
         .open()
         .await
         .unwrap();
-    file.write(&mut conn, b"hello").await.unwrap();
+    file.write(b"hello").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     remote_parent.refresh().await.unwrap();
@@ -809,7 +807,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let mut conn = repo.db().acquire().await.unwrap();
 
     let mut file = repo.create_file("old.txt").await.unwrap();
-    file.write(&mut conn, b"a").await.unwrap();
+    file.write(b"a").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let vv_0 = file.version_vector().await.unwrap();
@@ -874,15 +872,12 @@ async fn file_conflict_modify_local() {
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    local_file.write(&mut conn, b"local v2").await.unwrap();
+    local_file.write(b"local v2").await.unwrap();
     local_file.flush(&mut conn).await.unwrap();
     drop(local_file);
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    assert_eq!(
-        local_file.read_to_end(&mut conn).await.unwrap(),
-        b"local v2"
-    );
+    assert_eq!(local_file.read_to_end().await.unwrap(), b"local v2");
     assert_eq!(
         local_file.version_vector().await.unwrap(),
         vv![local_id => 3]
@@ -892,10 +887,7 @@ async fn file_conflict_modify_local() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-    assert_eq!(
-        remote_file.read_to_end(&mut conn).await.unwrap(),
-        b"remote v1"
-    );
+    assert_eq!(remote_file.read_to_end().await.unwrap(), b"remote v1");
     assert_eq!(
         remote_file.version_vector().await.unwrap(),
         vv![remote_id => 2]
@@ -948,8 +940,7 @@ async fn setup() -> (TempDir, Repository) {
 
 async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     let mut file = repo.open_file(path).await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
-    file.read_to_end(&mut conn).await.unwrap()
+    file.read_to_end().await.unwrap()
 }
 
 async fn create_remote_file(
@@ -985,7 +976,7 @@ async fn create_file_in_directory(
     content: &[u8],
 ) -> File {
     let mut file = dir.create_file(name.into()).await.unwrap();
-    file.write(conn, content).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush(conn).await.unwrap();
     file
 }

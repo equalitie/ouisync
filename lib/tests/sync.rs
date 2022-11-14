@@ -6,7 +6,7 @@ use self::common::{Env, Node, Proto, DEFAULT_TIMEOUT};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, db, AccessMode, AccessSecrets, EntryType, Error, File, MasterSecret,
+    crypto::sign::PublicKey, AccessMode, AccessSecrets, EntryType, Error, File, MasterSecret,
     Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
@@ -29,7 +29,7 @@ async fn relink_repository() {
     // Create a file by A
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    file_a.write(&mut conn, b"first").await.unwrap();
+    file_a.write(b"first").await.unwrap();
     file_a.flush(&mut conn).await.unwrap();
 
     // Wait until the file is seen by B
@@ -46,7 +46,7 @@ async fn relink_repository() {
     // Update the file while B's repo is unlinked
     let mut conn = repo_a.db().acquire().await.unwrap();
     file_a.truncate(&mut conn, 0).await.unwrap();
-    file_a.write(&mut conn, b"second").await.unwrap();
+    file_a.write(b"second").await.unwrap();
     file_a.flush(&mut conn).await.unwrap();
 
     // Re-register B's repo
@@ -131,7 +131,7 @@ async fn relay() {
     // are not connected to each other.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    write_in_chunks(&mut conn, &mut file, &content, 4096).await;
+    write_in_chunks(&mut file, &content, 4096).await;
     file.flush(&mut conn).await.unwrap();
     drop(file);
 
@@ -160,7 +160,7 @@ async fn transfer_large_file() {
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    write_in_chunks(&mut conn, &mut file, &content, 4096).await;
+    write_in_chunks(&mut file, &content, 4096).await;
     file.flush(&mut conn).await.unwrap();
     drop(file);
 
@@ -195,7 +195,7 @@ async fn transfer_multiple_files_sequentially() {
         let name = format!("file-{}.dat", index);
         let mut file = repo_a.create_file(&name).await.unwrap();
         let mut conn = repo_a.db().acquire().await.unwrap();
-        write_in_chunks(&mut conn, &mut file, content, 4096).await;
+        write_in_chunks(&mut file, content, 4096).await;
         file.flush(&mut conn).await.unwrap();
         drop(file);
 
@@ -236,19 +236,13 @@ async fn sync_during_file_write() {
         .unwrap();
 
     // A: Write half of the file content but don't flush yet.
-    write_in_chunks(
-        &mut repo_a.db().acquire().await.unwrap(),
-        &mut file_a,
-        &content[..content.len() / 2],
-        4096,
-    )
-    .await;
+    write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
 
     // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
     // A's.
     let mut file_b = repo_b.create_file("bar.txt").await.unwrap();
     let mut conn = repo_b.db().acquire().await.unwrap();
-    file_b.write(&mut conn, b"bar").await.unwrap();
+    file_b.write(b"bar").await.unwrap();
     file_b.flush(&mut conn).await.unwrap();
     drop(file_b);
 
@@ -262,12 +256,12 @@ async fn sync_during_file_write() {
 
     // A: Write the second half of the content and flush.
     let mut conn = repo_a.db().acquire().await.unwrap();
-    write_in_chunks(&mut conn, &mut file_a, &content[content.len() / 2..], 4096).await;
+    write_in_chunks(&mut file_a, &content[content.len() / 2..], 4096).await;
     file_a.flush(&mut conn).await.unwrap();
 
     // A: Reopen the file and verify it has the expected full content
     let mut file_a = repo_a.open_file("foo.txt").await.unwrap();
-    let actual_content = file_a.read_to_end(&mut conn).await.unwrap();
+    let actual_content = file_a.read_to_end().await.unwrap();
     assert_eq!(actual_content, content);
 
     // B: Wait until we see the file as well
@@ -348,7 +342,7 @@ async fn sync_during_file_read() {
 
         // A: write at least two blocks worth of data to the file
         let mut conn = repo_a.db().acquire().await.unwrap();
-        write_in_chunks(&mut conn, &mut file_a, &content_a, 4096).await;
+        write_in_chunks(&mut file_a, &content_a, 4096).await;
         file_a.flush(&mut conn).await.unwrap();
 
         // B: Wait until we are synced with A, still keeping the file open
@@ -395,18 +389,12 @@ async fn concurrent_modify_open_file() {
         .unwrap();
 
     // A: Write to file but don't flush yet
-    write_in_chunks(
-        &mut repo_a.db().acquire().await.unwrap(),
-        &mut file_a,
-        &content_a,
-        4096,
-    )
-    .await;
+    write_in_chunks(&mut file_a, &content_a, 4096).await;
 
     // B: Write to the same file and flush
     let mut file_b = repo_b.open_file("file.txt").await.unwrap();
     let mut conn = repo_b.db().acquire().await.unwrap();
-    write_in_chunks(&mut conn, &mut file_b, &content_b, 4096).await;
+    write_in_chunks(&mut file_b, &content_b, 4096).await;
     file_b.flush(&mut conn).await.unwrap();
     drop(conn);
 
@@ -436,14 +424,10 @@ async fn concurrent_modify_open_file() {
     );
 
     let mut file_a = repo_a.open_file_version("file.txt", &id_a).await.unwrap();
-    let mut conn = repo_a.db().acquire().await.unwrap();
-    let actual_content_a = file_a.read_to_end(&mut conn).await.unwrap();
-    drop(conn);
+    let actual_content_a = file_a.read_to_end().await.unwrap();
 
     let mut file_b = repo_a.open_file_version("file.txt", &id_b).await.unwrap();
-    let mut conn = repo_a.db().acquire().await.unwrap();
-    let actual_content_b = file_b.read_to_end(&mut conn).await.unwrap();
-    drop(conn);
+    let actual_content_b = file_b.read_to_end().await.unwrap();
 
     assert!(actual_content_a == content_a);
     assert!(actual_content_b == content_b);
@@ -475,7 +459,7 @@ async fn recreate_local_branch() {
 
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
     let mut conn = repo_a.db().acquire().await.unwrap();
-    file.write(&mut conn, b"hello from A\n").await.unwrap();
+    file.write(b"hello from A\n").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let vv_a_0 = repo_a
@@ -513,7 +497,7 @@ async fn recreate_local_branch() {
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
     let mut conn = repo_b.db().acquire().await.unwrap();
     file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut conn, b"hello from B\n").await.unwrap();
+    file.write(b"hello from B\n").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let vv_b = repo_b
@@ -602,7 +586,7 @@ async fn transfer_many_files() {
                     .unwrap();
 
                 let mut conn = repo_a.db().acquire().await.unwrap();
-                write_in_chunks(&mut conn, &mut file, content, 4096).await;
+                write_in_chunks(&mut file, content, 4096).await;
                 file.flush(&mut conn).await.unwrap();
 
                 // println!("put {}/{}", index + 1, contents.len());
@@ -888,7 +872,7 @@ async fn check_file_version_content(
 
     tracing::debug!(path, "opened");
 
-    let actual_content = match read_in_chunks(repo.db(), &mut file, 4096).await {
+    let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,
         // `EntryNotFound` can still happen even here if merge runs in the middle of reading
         // the file - we opened the file while it was still in the remote branch but then that
@@ -976,15 +960,10 @@ async fn expect_entry_not_found(repo: &Repository, path: &str) {
     .await
 }
 
-async fn write_in_chunks(
-    conn: &mut db::PoolConnection,
-    file: &mut File,
-    content: &[u8],
-    chunk_size: usize,
-) {
+async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
-        file.write(conn, &content[offset..end]).await.unwrap();
+        file.write(&content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(
@@ -996,19 +975,13 @@ async fn write_in_chunks(
     }
 }
 
-async fn read_in_chunks(
-    db: &db::Pool,
-    file: &mut File,
-    chunk_size: usize,
-) -> Result<Vec<u8>, Error> {
+async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
     let mut content = vec![0; file.len() as usize];
     let mut offset = 0;
 
     while offset < content.len() {
-        let mut conn = db.acquire().await?;
-
         let end = (offset + chunk_size).min(content.len());
-        let size = file.read(&mut conn, &mut content[offset..end]).await?;
+        let size = file.read(&mut content[offset..end]).await?;
         offset += size;
     }
 

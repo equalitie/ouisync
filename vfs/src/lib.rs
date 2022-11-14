@@ -783,7 +783,7 @@ impl Inner {
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read(&mut conn, &mut buffer).await?;
+        let len = file.read(&mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -811,7 +811,7 @@ impl Inner {
         let file = self.entries.get_file_mut(handle)?;
         file.seek(&mut conn, SeekFrom::Start(offset)).await?;
         file.fork(local_branch).await?;
-        file.write(&mut conn, data).await?;
+        file.write(data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }

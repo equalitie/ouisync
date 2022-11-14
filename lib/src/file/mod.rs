@@ -66,19 +66,21 @@ impl File {
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.
-    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
-        self.blob.read(conn, buffer).await
+    pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.read(&mut conn, buffer).await
     }
 
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
-        self.blob.read_to_end(conn).await
+    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.read_to_end(&mut conn).await
     }
 
     /// Writes `buffer` into this file.
-    pub async fn write(&mut self, conn: &mut db::PoolConnection, buffer: &[u8]) -> Result<()> {
-        let mut tx = conn.begin().await?;
+    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
+        let mut tx = self.branch().db().begin().await?;
         self.acquire_write_lock()?;
         self.blob.write(&mut tx, buffer).await?;
         tx.commit().await?;
@@ -130,15 +132,11 @@ impl File {
 
     /// Copy the entire contents of this file into the provided writer (e.g. a file on a regular
     /// filesystem)
-    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(
-        &mut self,
-        conn: &mut db::Connection,
-        dst: &mut W,
-    ) -> Result<()> {
+    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(&mut self, dst: &mut W) -> Result<()> {
         let mut buffer = vec![0; BLOCK_SIZE];
 
         loop {
-            let len = self.read(conn, &mut buffer).await?;
+            let len = self.read(&mut buffer).await?;
             dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
 
             if len < buffer.len() {
@@ -214,7 +212,7 @@ mod tests {
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
-        file0.write(&mut conn, b"small").await.unwrap();
+        file0.write(b"small").await.unwrap();
         file0.flush(&mut conn).await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
@@ -231,7 +229,7 @@ mod tests {
             .unwrap();
 
         file1.fork(branch1.clone()).await.unwrap();
-        file1.write(&mut conn, b"large").await.unwrap();
+        file1.write(b"large").await.unwrap();
         file1.flush(&mut conn).await.unwrap();
 
         // Reopen orig file and verify it's unchanged
@@ -247,7 +245,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"small");
+        assert_eq!(file.read_to_end().await.unwrap(), b"small");
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
@@ -262,7 +260,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut conn).await.unwrap(), b"large");
+        assert_eq!(file.read_to_end().await.unwrap(), b"large");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -291,7 +289,7 @@ mod tests {
         file1.fork(branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(&mut conn, b"oink").await.unwrap();
+            file1.write(b"oink").await.unwrap();
             file1.flush(&mut conn).await.unwrap();
         }
     }
@@ -301,8 +299,7 @@ mod tests {
     // of tests for various write concurrency cases.
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_writes() {
-        let (_base_dir, pool, [branch]) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let (_base_dir, _pool, [branch]) = setup().await;
 
         let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
@@ -317,9 +314,9 @@ mod tests {
             .await
             .unwrap();
 
-        file0.write(&mut conn, b"yip-yap").await.unwrap();
+        file0.write(b"yip-yap").await.unwrap();
         assert_matches!(
-            file1.write(&mut conn, b"ring-ding-ding").await,
+            file1.write(b"ring-ding-ding").await,
             Err(Error::ConcurrentWriteNotSupported)
         );
     }

@@ -346,17 +346,6 @@ impl Directory {
                 EntryData::File(file_data) => {
                     let print = print.indent();
 
-                    let mut conn = match self.branch().db().acquire().await {
-                        Ok(conn) => conn,
-                        Err(error) => {
-                            print.display(&format_args!(
-                                "Failed to acquire db connection: {:?}",
-                                error
-                            ));
-                            continue;
-                        }
-                    };
-
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
                         name.into(),
@@ -373,7 +362,7 @@ impl Directory {
                     match file {
                         Ok(mut file) => {
                             let mut buf = [0; 32];
-                            let lenght_result = file.read(&mut conn, &mut buf).await;
+                            let lenght_result = file.read(&mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
                                     let file_len = file.len();

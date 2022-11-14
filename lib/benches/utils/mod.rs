@@ -63,7 +63,7 @@ pub async fn write_file(
         let len = buffer_size.min(remaining);
 
         rng.fill(&mut buffer[..len]);
-        file.write(&mut conn, &buffer[..len]).await.unwrap();
+        file.write(&buffer[..len]).await.unwrap();
 
         remaining -= len;
     }
@@ -75,12 +75,11 @@ pub async fn write_file(
 /// total size of the content.
 pub async fn read_file(repo: &Repository, path: &Utf8Path, buffer_size: usize) -> usize {
     let mut file = repo.open_file(path).await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     let mut buffer = vec![0; buffer_size];
     let mut size = 0;
 
     loop {
-        let len = file.read(&mut conn, &mut buffer[..]).await.unwrap();
+        let len = file.read(&mut buffer[..]).await.unwrap();
 
         if len == 0 {
             break;

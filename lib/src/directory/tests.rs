@@ -20,11 +20,11 @@ async fn create_and_list_entries() {
     let mut dir = branch.open_or_create_root().await.unwrap();
 
     let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
-    file_dog.write(&mut conn, b"woof").await.unwrap();
+    file_dog.write(b"woof").await.unwrap();
     file_dog.flush(&mut conn).await.unwrap();
 
     let mut file_cat = dir.create_file("cat.txt".into()).await.unwrap();
-    file_cat.write(&mut conn, b"meow").await.unwrap();
+    file_cat.write(b"meow").await.unwrap();
     file_cat.flush(&mut conn).await.unwrap();
 
     // Reopen the dir and try to read the files.
@@ -43,7 +43,7 @@ async fn create_and_list_entries() {
             .open()
             .await
             .unwrap();
-        let actual_content = file.read_to_end(&mut conn).await.unwrap();
+        let actual_content = file.read_to_end().await.unwrap();
         assert_eq!(actual_content, expected_content);
     }
 }
@@ -128,7 +128,7 @@ async fn rename_file() {
     // Create a directory with a single file.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
     let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
-    file.write(&mut conn, content).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     let file_locator = *file.locator();
@@ -165,10 +165,7 @@ async fn rename_file() {
         .unwrap();
 
     assert_eq!(&file_locator, dst_file.locator());
-    assert_eq!(
-        &content[..],
-        &dst_file.read_to_end(&mut conn).await.unwrap()[..]
-    );
+    assert_eq!(&content[..], &dst_file.read_to_end().await.unwrap()[..]);
 
     let src_entry = parent_dir.lookup(src_name).unwrap();
 
@@ -188,7 +185,7 @@ async fn move_file_within_branch() {
     let mut aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
 
     let mut file = root_dir.create_file(file_name.into()).await.unwrap();
-    file.write(&mut conn, content).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
     root_dir.refresh().await.unwrap();
 
@@ -233,10 +230,7 @@ async fn move_file_within_branch() {
         .unwrap();
 
     assert_eq!(&file_locator, file.locator());
-    assert_eq!(
-        &content[..],
-        &file.read_to_end(&mut conn).await.unwrap()[..]
-    );
+    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
 
     drop(file);
 
@@ -268,10 +262,7 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    assert_eq!(
-        &content[..],
-        &file.read_to_end(&mut conn).await.unwrap()[..]
-    );
+    assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
 }
 
 // Move directory "dir/" with content "cow.txt" to directory "dst/".
@@ -296,7 +287,7 @@ async fn move_non_empty_directory() {
     let mut dir = root_dir.create_directory(dir_name.into()).await.unwrap();
 
     let mut file = dir.create_file(file_name.into()).await.unwrap();
-    file.write(&mut conn, content).await.unwrap();
+    file.write(content).await.unwrap();
     file.flush(&mut conn).await.unwrap();
 
     dir.refresh().await.unwrap();
@@ -515,7 +506,7 @@ async fn modify_directory_concurrently() {
         .unwrap();
 
     let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
-    file0.write(&mut conn, b"hello").await.unwrap();
+    file0.write(b"hello").await.unwrap();
     file0.flush(&mut conn).await.unwrap();
 
     dir1.refresh().await.unwrap();
@@ -527,7 +518,7 @@ async fn modify_directory_concurrently() {
         .open()
         .await
         .unwrap();
-    assert_eq!(file1.read_to_end(&mut conn).await.unwrap(), b"hello");
+    assert_eq!(file1.read_to_end().await.unwrap(), b"hello");
 }
 
 #[tokio::test(flavor = "multi_thread")]
