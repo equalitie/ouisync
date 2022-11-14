@@ -213,7 +213,7 @@ impl JointDirectory {
 
         for (name, branch_id, vv) in entries {
             local_version
-                .remove_entry(conn, &name, &branch_id, EntryTombstoneData::removed(vv))
+                .remove_entry(&name, &branch_id, EntryTombstoneData::removed(vv))
                 .await?;
         }
 
@@ -301,7 +301,7 @@ impl JointDirectory {
 
         for (name, tombstone) in check_for_removal {
             local_version
-                .remove_entry(conn, &name, local_branch.id(), tombstone)
+                .remove_entry(&name, local_branch.id(), tombstone)
                 .await?;
         }
 

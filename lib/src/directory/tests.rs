@@ -91,7 +91,6 @@ async fn remove_file() {
     let mut parent_dir = branch.open_root().await.unwrap();
     parent_dir
         .remove_entry(
-            &mut conn,
             name,
             branch.id(),
             EntryTombstoneData::removed(file_vv),
@@ -387,7 +386,6 @@ async fn remove_subdirectory() {
     let mut parent_dir = branch.open_root().await.unwrap();
     parent_dir
         .remove_entry(
-            &mut conn,
             name,
             branch.id(),
             EntryTombstoneData::removed(dir_vv),
@@ -486,7 +484,6 @@ async fn fork_over_tombstone() {
 
     root0
         .remove_entry(
-            &mut conn,
             "dir",
             branches[0].id(),
             EntryTombstoneData::removed(vv),
@@ -557,8 +554,7 @@ async fn modify_directory_concurrently() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_unique_remote_file() {
-    let (_base_dir, pool, local_branch) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let (_base_dir, _pool, local_branch) = setup().await;
 
     let mut root = local_branch.open_or_create_root().await.unwrap();
 
@@ -568,7 +564,6 @@ async fn remove_unique_remote_file() {
     let remote_vv = vv![remote_id => 1];
 
     root.remove_entry(
-        &mut conn,
         name,
         &remote_id,
         EntryTombstoneData::removed(remote_vv.clone()),
@@ -603,7 +598,6 @@ async fn remove_concurrent_remote_file() {
     let remote_vv = vv![remote_id => 1];
 
     root.remove_entry(
-        &mut conn,
         name,
         &remote_id,
         EntryTombstoneData::removed(remote_vv.clone()),

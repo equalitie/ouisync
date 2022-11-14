@@ -174,12 +174,11 @@ impl Directory {
     /// tombstone is created.
     pub(crate) async fn remove_entry(
         &mut self,
-        conn: &mut db::PoolConnection,
         name: &str,
         branch_id: &PublicKey,
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
-        let mut tx = conn.begin().await?;
+        let mut tx = self.branch().db().begin().await?;
 
         let content = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
