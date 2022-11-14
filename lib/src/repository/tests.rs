@@ -51,11 +51,10 @@ async fn count_leaf_nodes_sanity_checks() {
     // Create a small file in the root.
 
     let mut file = repo.create_file(file_name).await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
         .await
         .unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     // 2 = one for the root + one for the file.
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 2);
@@ -64,7 +63,7 @@ async fn count_leaf_nodes_sanity_checks() {
     // Make the file bigger to expand to two blocks
 
     file.write(&random_bytes(1)).await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     // 3 = one for the root + two for the file.
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 3);
@@ -135,9 +134,8 @@ async fn recreate_previously_deleted_file() {
 
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.write(b"foo").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
     drop(file);
 
     // Read it back and check the content
@@ -151,7 +149,7 @@ async fn recreate_previously_deleted_file() {
     // Create a file with the same name but different content
     let mut file = repo.create_file("test.txt").await.unwrap();
     file.write(b"bar").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
     drop(file);
 
     // Read it back and check the content
@@ -270,14 +268,12 @@ async fn concurrent_write_and_read_file() {
             let mut file = repo.create_file("test.txt").await.unwrap();
             let mut buffer = vec![0; chunk_size];
 
-            let mut conn = repo.db().acquire().await.unwrap();
-
             for _ in 0..chunk_count {
                 rand::thread_rng().fill(&mut buffer[..]);
                 file.write(&buffer).await.unwrap();
             }
 
-            file.flush(&mut conn).await.unwrap();
+            file.flush().await.unwrap();
         }
     });
 
@@ -316,11 +312,9 @@ async fn concurrent_write_and_read_file() {
 async fn append_to_file() {
     let (_base_dir, repo) = setup().await;
 
-    let mut conn = repo.db().acquire().await.unwrap();
-
     let mut file = repo.create_file("foo.txt").await.unwrap();
     file.write(b"foo").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     // Concurrent file writes are currently not allowed so we need to drop the file before opening
     // it again.
@@ -329,7 +323,7 @@ async fn append_to_file() {
     let mut file = repo.open_file("foo.txt").await.unwrap();
     file.seek(SeekFrom::End(0)).await.unwrap();
     file.write(b"bar").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();
@@ -354,9 +348,8 @@ async fn blind_access_non_empty_repo() {
     .unwrap();
 
     let mut file = repo.create_file("secret.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.write(b"redacted").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     drop(file);
     drop(repo);
@@ -453,9 +446,8 @@ async fn read_access_same_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.write(b"hello world").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     drop(file);
     drop(repo);
@@ -474,7 +466,6 @@ async fn read_access_same_replica() {
 
     // Reading files is allowed.
     let mut file = repo.open_file("public.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
 
     let content = file.read_to_end().await.unwrap();
     assert_eq!(content, b"hello world");
@@ -485,7 +476,7 @@ async fn read_access_same_replica() {
     // why the following works...
     file.write(b"hello universe").await.unwrap();
     // ...but flushing the file is not allowed.
-    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
     drop(file);
 
@@ -520,9 +511,8 @@ async fn read_access_different_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.write(b"hello world").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     drop(file);
     drop(repo);
@@ -552,9 +542,8 @@ async fn truncate_forked_remote_file() {
 
     let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     file.fork(local_branch).await.unwrap();
-    file.truncate(&mut conn, 0).await.unwrap();
+    file.truncate(0).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -566,7 +555,6 @@ async fn attempt_to_modify_remote_file() {
 
     let remote_branch = repo.get_branch(remote_id).unwrap();
 
-    let mut conn = repo.db().acquire().await.unwrap();
     let mut file = remote_branch
         .open_root()
         .await
@@ -579,19 +567,17 @@ async fn attempt_to_modify_remote_file() {
         .await
         .unwrap();
 
-    file.truncate(&mut conn, 0).await.unwrap();
-    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
+    file.truncate(0).await.unwrap();
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
     file.write(b"bar").await.unwrap();
-    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
+    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_create_file() {
     let (_base_dir, repo) = setup().await;
     let local_branch = repo.local_branch().unwrap();
-
-    let mut conn = repo.db().acquire().await.unwrap();
 
     let root_vv_0 = local_branch.version_vector().await.unwrap();
 
@@ -614,7 +600,7 @@ async fn version_vector_create_file() {
     assert!(root_vv_1 > root_vv_0);
 
     file.write(b"blah").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     let root_vv_2 = file
         .parent()
@@ -693,11 +679,9 @@ async fn version_vector_fork() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut conn = repo.db().acquire().await.unwrap();
-
     let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
     let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
-    let mut file = create_file_in_directory(&mut conn, &mut remote_parent, "foo.txt", &[]).await;
+    let mut file = create_file_in_directory(&mut remote_parent, "foo.txt", &[]).await;
 
     remote_parent.refresh().await.unwrap();
     let remote_parent_vv = remote_parent.version_vector().await.unwrap();
@@ -731,7 +715,7 @@ async fn version_vector_fork() {
         .await
         .unwrap();
     file.write(b"hello").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     remote_parent.refresh().await.unwrap();
     let remote_parent_vv = remote_parent.version_vector().await.unwrap();
@@ -804,11 +788,10 @@ async fn version_vector_moved_non_empty_directory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_file_moved_over_tombstone() {
     let (_base_dir, repo) = setup().await;
-    let mut conn = repo.db().acquire().await.unwrap();
 
     let mut file = repo.create_file("old.txt").await.unwrap();
     file.write(b"a").await.unwrap();
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 
     let vv_0 = file.version_vector().await.unwrap();
 
@@ -851,10 +834,8 @@ async fn file_conflict_modify_local() {
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut conn = repo.db().acquire().await.unwrap();
-
     // Create two concurrent versions of the same file.
-    let local_file = create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
+    let local_file = create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
 
     assert_eq!(
         local_file.version_vector().await.unwrap(),
@@ -862,8 +843,7 @@ async fn file_conflict_modify_local() {
     );
     drop(local_file);
 
-    let remote_file =
-        create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
+    let remote_file = create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
     assert_eq!(
         remote_file.version_vector().await.unwrap(),
         vv![remote_id => 2]
@@ -873,7 +853,7 @@ async fn file_conflict_modify_local() {
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
     local_file.write(b"local v2").await.unwrap();
-    local_file.flush(&mut conn).await.unwrap();
+    local_file.flush().await.unwrap();
     drop(local_file);
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
@@ -907,10 +887,8 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .reopen(repo.secrets().keys().unwrap());
 
     // Create two concurrent versions of the same file.
-    let mut conn = repo.db().acquire().await.unwrap();
-    create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
-    create_file_in_branch(&mut conn, &remote_branch, "test.txt", b"remote v1").await;
-    drop(conn);
+    create_file_in_branch(&local_branch, "test.txt", b"local v1").await;
+    create_file_in_branch(&remote_branch, "test.txt", b"remote v1").await;
 
     // Attempt to fork the remote version (fork is required to modify it)
     let mut remote_file = repo
@@ -954,30 +932,18 @@ async fn create_remote_file(
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
 
-    let mut conn = repo.db().acquire().await.unwrap();
-
-    create_file_in_branch(&mut conn, &remote_branch, name, content).await
+    create_file_in_branch(&remote_branch, name, content).await
 }
 
-async fn create_file_in_branch(
-    conn: &mut db::PoolConnection,
-    branch: &Branch,
-    name: &str,
-    content: &[u8],
-) -> File {
+async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> File {
     let mut root = branch.open_or_create_root().await.unwrap();
-    create_file_in_directory(conn, &mut root, name, content).await
+    create_file_in_directory(&mut root, name, content).await
 }
 
-async fn create_file_in_directory(
-    conn: &mut db::PoolConnection,
-    dir: &mut Directory,
-    name: &str,
-    content: &[u8],
-) -> File {
+async fn create_file_in_directory(dir: &mut Directory, name: &str, content: &[u8]) -> File {
     let mut file = dir.create_file(name.into()).await.unwrap();
     file.write(content).await.unwrap();
-    file.flush(conn).await.unwrap();
+    file.flush().await.unwrap();
     file
 }
 

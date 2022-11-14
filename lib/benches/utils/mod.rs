@@ -55,7 +55,6 @@ pub async fn write_file(
         return;
     }
 
-    let mut conn = repo.db().acquire().await.unwrap();
     let mut remaining = size;
     let mut buffer = vec![0; buffer_size];
 
@@ -68,7 +67,7 @@ pub async fn write_file(
         remaining -= len;
     }
 
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 }
 
 /// Read the whole content of the file at `path` in `buffer_size` bytes at a time. Returns the

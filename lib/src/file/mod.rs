@@ -95,21 +95,19 @@ impl File {
     }
 
     /// Truncates the file to the given length.
-    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
-        self.acquire_write_lock()?;
-        self.blob.truncate(conn, len).await?;
-
-        Ok(())
+    pub async fn truncate(&mut self, len: u64) -> Result<()> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.truncate(&mut conn, len).await
     }
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
-    pub async fn flush(&mut self, conn: &mut db::PoolConnection) -> Result<()> {
+    pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
         }
 
-        let mut tx = conn.begin().await?;
+        let mut tx = self.branch().db().begin().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
@@ -207,14 +205,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (_base_dir, pool, [branch0, branch1]) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let (_base_dir, [branch0, branch1]) = setup().await;
 
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
         file0.write(b"small").await.unwrap();
-        file0.flush(&mut conn).await.unwrap();
+        file0.flush().await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
@@ -231,7 +228,7 @@ mod tests {
 
         file1.fork(branch1.clone()).await.unwrap();
         file1.write(b"large").await.unwrap();
-        file1.flush(&mut conn).await.unwrap();
+        file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
@@ -269,11 +266,10 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (_base_dir, pool, [branch0, branch1]) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let (_base_dir, [branch0, branch1]) = setup().await;
 
         let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
-        file0.flush(&mut conn).await.unwrap();
+        file0.flush().await.unwrap();
 
         let mut file1 = branch0
             .open_root()
@@ -291,7 +287,7 @@ mod tests {
 
         for _ in 0..2 {
             file1.write(b"oink").await.unwrap();
-            file1.flush(&mut conn).await.unwrap();
+            file1.flush().await.unwrap();
         }
     }
 
@@ -300,7 +296,7 @@ mod tests {
     // of tests for various write concurrency cases.
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_writes() {
-        let (_base_dir, _pool, [branch]) = setup().await;
+        let (_base_dir, [branch]) = setup().await;
 
         let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
@@ -322,7 +318,7 @@ mod tests {
         );
     }
 
-    async fn setup<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
+    async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
@@ -337,7 +333,7 @@ mod tests {
             )
         });
 
-        (base_dir, pool, branches)
+        (base_dir, branches)
     }
 
     fn create_branch(

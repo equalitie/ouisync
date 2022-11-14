@@ -544,11 +544,9 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            let mut conn = self.repository.db().acquire().await?;
-
             file.fork(local_branch).await?;
-            file.truncate(&mut conn, size).await?;
-            file.flush(&mut conn).await?;
+            file.truncate(size).await?;
+            file.flush().await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len()))
@@ -700,8 +698,7 @@ impl Inner {
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
-        let mut conn = self.repository.db().acquire().await?;
-        file.flush(&mut conn).await?;
+        file.flush().await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -722,11 +719,10 @@ impl Inner {
 
         if flags.contains(libc::O_TRUNC) {
             let local_branch = self.repository.local_branch()?;
-            let mut conn = self.repository.db().acquire().await?;
 
             file.fork(local_branch).await?;
-            file.truncate(&mut conn, 0).await?;
-            file.flush(&mut conn).await?;
+            file.truncate(0).await?;
+            file.flush().await?;
         }
 
         // TODO: what about other flags (parameter)?
@@ -752,8 +748,7 @@ impl Inner {
         let file = self.entries.get_file_mut(handle)?;
 
         if flush {
-            let mut conn = self.repository.db().acquire().await?;
-            file.flush(&mut conn).await?;
+            file.flush().await?;
         }
 
         self.entries.remove(handle);
@@ -817,8 +812,7 @@ impl Inner {
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
         self.record_path(inode, None);
 
-        let mut conn = self.repository.db().acquire().await?;
-        self.entries.get_file_mut(handle)?.flush(&mut conn).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     #[instrument(skip(inode), fields(path), err)]
@@ -826,8 +820,7 @@ impl Inner {
         self.record_path(inode, None);
 
         // TODO: what about `datasync`?
-        let mut conn = self.repository.db().acquire().await?;
-        self.entries.get_file_mut(handle)?.flush(&mut conn).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     #[instrument(skip(parent, name), fields(path), err)]
