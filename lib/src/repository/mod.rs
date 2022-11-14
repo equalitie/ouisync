@@ -355,8 +355,6 @@ impl Repository {
         use std::borrow::Cow;
 
         let local_branch = self.local_branch()?;
-        let mut conn = self.db().acquire().await?;
-
         let src_joint_dir = self.cd(src_dir_path).await?;
 
         let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
@@ -366,7 +364,7 @@ impl Repository {
                 let mut file = entry.open().await?;
                 file.fork(local_branch.clone()).await?;
 
-                (file.parent(&mut conn).await?, Cow::Owned(src_name))
+                (file.parent().await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;

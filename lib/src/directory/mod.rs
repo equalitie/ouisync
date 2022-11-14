@@ -364,7 +364,6 @@ impl Directory {
                     );
 
                     let file = File::open(
-                        &mut conn,
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,

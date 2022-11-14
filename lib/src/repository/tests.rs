@@ -600,7 +600,7 @@ async fn version_vector_create_file() {
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
 
     let root_vv_1 = file
-        .parent(&mut conn)
+        .parent()
         .await
         .unwrap()
         .parent()
@@ -610,13 +610,7 @@ async fn version_vector_create_file() {
         .version_vector()
         .await
         .unwrap();
-    let parent_vv_1 = file
-        .parent(&mut conn)
-        .await
-        .unwrap()
-        .version_vector()
-        .await
-        .unwrap();
+    let parent_vv_1 = file.parent().await.unwrap().version_vector().await.unwrap();
     let file_vv_1 = file.version_vector().await.unwrap();
 
     assert!(root_vv_1 > root_vv_0);
@@ -625,7 +619,7 @@ async fn version_vector_create_file() {
     file.flush(&mut conn).await.unwrap();
 
     let root_vv_2 = file
-        .parent(&mut conn)
+        .parent()
         .await
         .unwrap()
         .parent()
@@ -635,13 +629,7 @@ async fn version_vector_create_file() {
         .version_vector()
         .await
         .unwrap();
-    let parent_vv_2 = file
-        .parent(&mut conn)
-        .await
-        .unwrap()
-        .version_vector()
-        .await
-        .unwrap();
+    let parent_vv_2 = file.parent().await.unwrap().version_vector().await.unwrap();
     let file_vv_2 = file.version_vector().await.unwrap();
 
     assert!(root_vv_2 > root_vv_1);

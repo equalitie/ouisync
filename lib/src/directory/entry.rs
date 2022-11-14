@@ -138,9 +138,7 @@ impl<'a> FileRef<'a> {
         let branch = self.branch().clone();
         let locator = self.locator();
 
-        let mut conn = self.branch().db().acquire().await?;
-
-        File::open(&mut conn, branch, locator, parent_context).await
+        File::open(branch, locator, parent_context).await
     }
 
     pub fn branch(&self) -> &Branch {

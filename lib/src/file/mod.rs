@@ -26,15 +26,15 @@ pub struct File {
 impl File {
     /// Opens an existing file.
     pub(crate) async fn open(
-        conn: &mut db::Connection,
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let mut conn = branch.db().acquire().await?;
         let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
 
         Ok(Self {
-            blob: Blob::open(conn, branch, locator).await?,
+            blob: Blob::open(&mut conn, branch, locator).await?,
             parent,
             write_lock,
         })
@@ -55,8 +55,8 @@ impl File {
         self.blob.branch()
     }
 
-    pub async fn parent(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.parent.open_in(conn, self.branch().clone()).await
+    pub async fn parent(&self) -> Result<Directory> {
+        self.parent.open(self.branch().clone()).await
     }
 
     /// Length of this file in bytes.
