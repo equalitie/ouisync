@@ -2,22 +2,12 @@ use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTr
 use std::{mem::size_of, time::Duration};
 use tokio::time::timeout;
 
+const RECV_TIMEOUT: Duration = Duration::from_secs(3);
+
 type BarrierId = u64;
 type Round = u32;
 type Step = u8;
 type Msg = (BarrierId, Round, Step);
-
-const MSG_STEP_SIZE: usize = size_of::<Step>();
-const MSG_ID_SIZE: usize = size_of::<BarrierId>();
-const MSG_ROUND_SIZE: usize = size_of::<Round>();
-const MSG_PREFIX: &[u8; 13] = b"barrier-start";
-const MSG_SUFFIX: &[u8; 11] = b"barrier-end";
-const MSG_PREFIX_SIZE: usize = MSG_PREFIX.len();
-const MSG_SUFFIX_SIZE: usize = MSG_SUFFIX.len();
-const MSG_SIZE: usize =
-    MSG_PREFIX_SIZE + MSG_ID_SIZE + MSG_ROUND_SIZE + MSG_STEP_SIZE + MSG_SUFFIX_SIZE;
-
-type MsgData = [u8; MSG_SIZE];
 
 /// Ensures there are no more in-flight messages beween us and the peer.
 ///
@@ -88,9 +78,6 @@ impl<'a> Barrier<'a> {
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
 
-        #[cfg(test)]
-        self.mark_step().await;
-
         let mut next_round: u32 = 0;
 
         loop {
@@ -154,9 +141,6 @@ impl<'a> Barrier<'a> {
     ) -> Result<Msg, BarrierError> {
         self.send(barrier_id, our_round, our_step).await?;
 
-        #[cfg(test)]
-        self.mark_step().await;
-
         loop {
             let (barrier_id, their_round, their_step) = self
                 .recv(
@@ -166,9 +150,6 @@ impl<'a> Barrier<'a> {
                     our_step,
                 )
                 .await?;
-
-            #[cfg(test)]
-            self.mark_step().await;
 
             if their_step > our_step {
                 // We have a miss-step in `exchange`, we just sent them that our step is 0 so
@@ -189,7 +170,10 @@ impl<'a> Barrier<'a> {
         #[cfg(test)] our_step: Step,
     ) -> Result<Msg, BarrierError> {
         loop {
-            let msg = match timeout(Duration::from_secs(5), self.stream.recv()).await {
+            #[cfg(test)]
+            self.mark_step().await;
+
+            let msg = match timeout(RECV_TIMEOUT, self.stream.recv()).await {
                 Ok(Ok(msg)) => msg,
                 Ok(Err(err)) => return Err(err.into()),
                 Err(_) => return Err(BarrierError::Timeout),
@@ -197,16 +181,26 @@ impl<'a> Barrier<'a> {
 
             match parse_message(&msg) {
                 Some((barrier_id, their_round, their_step)) => {
-                    #[cfg(test)]
                     match their_step {
-                        0 => println!(
+                        0 => {
+                            #[cfg(test)]
+                            println!(
                             "{:x} R{} S{} << their_barrier_id:{:x} their_round:{} their_step:{}",
                             self.barrier_id, round, our_step, barrier_id, their_round, their_step
-                        ),
-                        1 => println!(
-                            "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
-                            self.barrier_id, round, our_step, barrier_id, their_round, their_step
-                        ),
+                        )
+                        }
+                        1 => {
+                            #[cfg(test)]
+                            println!(
+                                "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
+                                self.barrier_id,
+                                round,
+                                our_step,
+                                barrier_id,
+                                their_round,
+                                their_step
+                            )
+                        }
                         _ => continue,
                     }
                     return Ok((barrier_id, their_round, their_step));
@@ -224,6 +218,9 @@ impl<'a> Barrier<'a> {
         our_round: Round,
         our_step: Step,
     ) -> Result<(), ChannelClosed> {
+        #[cfg(test)]
+        self.mark_step().await;
+
         #[cfg(test)]
         match our_step {
             0 => {
@@ -255,23 +252,35 @@ impl<'a> Barrier<'a> {
     }
 }
 
+const MSG_STEP_SIZE: usize = size_of::<Step>();
+const MSG_ID_SIZE: usize = size_of::<BarrierId>();
+const MSG_ROUND_SIZE: usize = size_of::<Round>();
+const MSG_PREFIX: &[u8; 13] = b"barrier-start";
+const MSG_SUFFIX: &[u8; 11] = b"barrier-end";
+const MSG_PREFIX_SIZE: usize = MSG_PREFIX.len();
+const MSG_SUFFIX_SIZE: usize = MSG_SUFFIX.len();
+const MSG_SIZE: usize =
+    MSG_PREFIX_SIZE + MSG_ID_SIZE + MSG_ROUND_SIZE + MSG_STEP_SIZE + MSG_SUFFIX_SIZE;
+
+type MsgData = [u8; MSG_SIZE];
+
 fn construct_message(barrier_id: BarrierId, round: Round, step: Step) -> MsgData {
     let mut msg = [0u8; size_of::<MsgData>()];
     let s = &mut msg[..];
 
-    s[0..MSG_PREFIX_SIZE].clone_from_slice(MSG_PREFIX);
+    s[..MSG_PREFIX_SIZE].clone_from_slice(MSG_PREFIX);
     let s = &mut s[MSG_PREFIX_SIZE..];
 
-    s[0..MSG_ID_SIZE].clone_from_slice(&barrier_id.to_le_bytes());
+    s[..MSG_ID_SIZE].clone_from_slice(&barrier_id.to_le_bytes());
     let s = &mut s[MSG_ID_SIZE..];
 
-    s[0..MSG_ROUND_SIZE].clone_from_slice(&round.to_le_bytes());
+    s[..MSG_ROUND_SIZE].clone_from_slice(&round.to_le_bytes());
     let s = &mut s[MSG_ROUND_SIZE..];
 
-    s[0..MSG_STEP_SIZE].clone_from_slice(&step.to_le_bytes());
+    s[..MSG_STEP_SIZE].clone_from_slice(&step.to_le_bytes());
     let s = &mut s[MSG_STEP_SIZE..];
 
-    s[0..MSG_SUFFIX_SIZE].clone_from_slice(MSG_SUFFIX);
+    s[..MSG_SUFFIX_SIZE].clone_from_slice(MSG_SUFFIX);
 
     msg
 }
