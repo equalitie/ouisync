@@ -284,7 +284,7 @@ impl Directory {
             match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
                     let mut dir = entry.open_in(conn).await?;
-                    dir.merge_version_vector(conn, vv).await?;
+                    dir.merge_version_vector(vv).await?;
                     Ok(dir)
                 }
                 Ok(EntryRef::File(_)) => {
@@ -308,12 +308,8 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
-    pub(crate) async fn merge_version_vector(
-        &mut self,
-        conn: &mut db::PoolConnection,
-        vv: VersionVector,
-    ) -> Result<()> {
-        let tx = conn.begin().await?;
+    pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
+        let tx = self.branch().db().begin().await?;
         self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
             .await
     }
