@@ -173,26 +173,17 @@ impl JointDirectory {
 
     /// Removes the specified entry from this directory. If the entry is a subdirectory, it has to
     /// be empty. Use [Self::remove_entry_recursively] to remove non-empty subdirectories.
-    pub async fn remove_entry(&mut self, conn: &mut db::PoolConnection, name: &str) -> Result<()> {
-        self.remove_entries(conn, Pattern::Unique(name)).await
+    pub async fn remove_entry(&mut self, name: &str) -> Result<()> {
+        self.remove_entries(Pattern::Unique(name)).await
     }
 
     /// Removes the specified entry from this directory, including all its content if it is a
     /// subdirectory.
-    pub async fn remove_entry_recursively(
-        &mut self,
-        conn: &mut db::PoolConnection,
-        name: &str,
-    ) -> Result<()> {
-        self.remove_entries_recursively(conn, Pattern::Unique(name))
-            .await
+    pub async fn remove_entry_recursively(&mut self, name: &str) -> Result<()> {
+        self.remove_entries_recursively(Pattern::Unique(name)).await
     }
 
-    async fn remove_entries(
-        &mut self,
-        conn: &mut db::PoolConnection,
-        pattern: Pattern<'_>,
-    ) -> Result<()> {
+    async fn remove_entries(&mut self, pattern: Pattern<'_>) -> Result<()> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
 
         let entries: Vec<_> = pattern
@@ -209,7 +200,7 @@ impl JointDirectory {
             })
             .collect();
 
-        let local_version = self.fork(conn).await?;
+        let local_version = self.fork().await?;
 
         for (name, branch_id, vv) in entries {
             local_version
@@ -221,21 +212,17 @@ impl JointDirectory {
     }
 
     #[async_recursion]
-    async fn remove_entries_recursively<'a>(
-        &'a mut self,
-        conn: &mut db::PoolConnection,
-        pattern: Pattern<'a>,
-    ) -> Result<()> {
+    async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
             let mut dir = entry.open(MissingVersionStrategy::Skip).await?;
-            dir.remove_entries_recursively(conn, Pattern::All).await?;
+            dir.remove_entries_recursively(Pattern::All).await?;
         }
 
         if let Some(local_version) = self.local_version_mut() {
             local_version.refresh().await?;
         }
 
-        self.remove_entries(conn, pattern).await
+        self.remove_entries(pattern).await
     }
 
     /// Merge all versions of this `JointDirectory` into a single `Directory`.
@@ -246,7 +233,7 @@ impl JointDirectory {
     /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
     pub async fn merge(&mut self, conn: &mut db::PoolConnection) -> Result<Directory> {
-        let local_version = self.fork(conn).await?;
+        let local_version = self.fork().await?;
         let local_branch = local_version.branch().clone();
 
         let old_version_vector = local_version.version_vector(conn).await?;
@@ -269,7 +256,7 @@ impl JointDirectory {
                             JointEntryRef::File(entry) => {
                                 let mut file = entry.open(conn).await?;
 
-                                match file.fork(conn, local_branch.clone()).await {
+                                match file.fork(local_branch.clone()).await {
                                     Ok(()) => (),
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
@@ -325,7 +312,7 @@ impl JointDirectory {
         Ok(outcome)
     }
 
-    async fn fork(&mut self, conn: &'_ mut db::PoolConnection) -> Result<&mut Directory> {
+    async fn fork(&mut self) -> Result<&mut Directory> {
         let local_branch = self.local_branch.as_ref().ok_or(Error::PermissionDenied)?;
 
         // Note the triple lookup (`contains_key`, `insert` and `get_mut`) is unfortunate but
@@ -334,7 +321,7 @@ impl JointDirectory {
         if !self.versions.contains_key(local_branch.id()) {
             // Grab any version and fork it to create the local one.
             let version = self.versions.values().next().ok_or(Error::EntryNotFound)?;
-            let version = version.fork(conn, local_branch).await?;
+            let version = version.fork(local_branch).await?;
 
             self.versions.insert(*local_branch.id(), version);
         }

@@ -425,7 +425,7 @@ async fn fork() {
             .unwrap()
     };
 
-    let mut dir1 = dir0.fork(&mut conn, &branches[1]).await.unwrap();
+    let mut dir1 = dir0.fork(&branches[1]).await.unwrap();
 
     dir1.create_file(&mut conn, "dog.jpg".into()).await.unwrap();
 
@@ -470,8 +470,7 @@ async fn fork() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fork_over_tombstone() {
-    let (_base_dir, pool, branches) = setup_multiple::<2>().await;
-    let mut conn = pool.acquire().await.unwrap();
+    let (_base_dir, _pool, branches) = setup_multiple::<2>().await;
 
     // Create a directory in branch 0 and delete it.
     let mut root0 = branches[0].open_or_create_root().await.unwrap();
@@ -502,7 +501,7 @@ async fn fork_over_tombstone() {
         .await
         .unwrap();
 
-    dir1.fork(&mut conn, &branches[0]).await.unwrap();
+    dir1.fork(&branches[0]).await.unwrap();
 
     // Check the forked dir now exists in branch 0.
     root0.refresh().await.unwrap();

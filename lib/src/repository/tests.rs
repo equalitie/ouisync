@@ -555,7 +555,7 @@ async fn truncate_forked_remote_file() {
     let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
-    file.fork(&mut conn, local_branch).await.unwrap();
+    file.fork(local_branch).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
 }
 
@@ -603,7 +603,7 @@ async fn version_vector_create_file() {
         .parent(&mut conn)
         .await
         .unwrap()
-        .parent(&mut conn)
+        .parent()
         .await
         .unwrap()
         .unwrap()
@@ -628,7 +628,7 @@ async fn version_vector_create_file() {
         .parent(&mut conn)
         .await
         .unwrap()
-        .parent(&mut conn)
+        .parent()
         .await
         .unwrap()
         .unwrap()
@@ -719,7 +719,7 @@ async fn version_vector_fork() {
     let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
-    file.fork(&mut conn, local_branch.clone()).await.unwrap();
+    file.fork(local_branch.clone()).await.unwrap();
 
     let local_file_vv_0 = file.version_vector(&mut conn).await.unwrap();
     assert_eq!(local_file_vv_0, remote_file_vv);
@@ -753,7 +753,7 @@ async fn version_vector_fork() {
     let remote_parent_vv = remote_parent.version_vector(&mut conn).await.unwrap();
     let remote_file_vv = file.version_vector(&mut conn).await.unwrap();
 
-    file.fork(&mut conn, local_branch.clone()).await.unwrap();
+    file.fork(local_branch.clone()).await.unwrap();
 
     let local_file_vv_1 = file.version_vector(&mut conn).await.unwrap();
     assert_eq!(local_file_vv_1, remote_file_vv);
@@ -944,9 +944,8 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     assert_matches!(
-        remote_file.fork(&mut conn, local_branch).await,
+        remote_file.fork(local_branch).await,
         Err(Error::EntryExists)
     );
 }

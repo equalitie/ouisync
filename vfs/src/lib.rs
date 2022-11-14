@@ -548,7 +548,7 @@ impl Inner {
         if let Some(size) = size {
             let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&mut conn, local_branch).await?;
+            file.fork(local_branch).await?;
             file.truncate(&mut conn, size).await?;
             file.flush(&mut conn).await?;
         }
@@ -726,7 +726,7 @@ impl Inner {
             let local_branch = self.repository.local_branch()?;
             let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&mut conn, local_branch).await?;
+            file.fork(local_branch).await?;
             file.truncate(&mut conn, 0).await?;
             file.flush(&mut conn).await?;
         }
@@ -812,7 +812,7 @@ impl Inner {
 
         let file = self.entries.get_file_mut(handle)?;
         file.seek(&mut conn, SeekFrom::Start(offset)).await?;
-        file.fork(&mut conn, local_branch).await?;
+        file.fork(local_branch).await?;
         file.write(&mut conn, data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))

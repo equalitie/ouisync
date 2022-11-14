@@ -151,7 +151,7 @@ impl File {
 
     /// Forks this file into the given branch. Ensure all its ancestor directories exist and live
     /// in the branch as well. Should be called before any mutable operation.
-    pub async fn fork(&mut self, conn: &mut db::PoolConnection, dst_branch: Branch) -> Result<()> {
+    pub async fn fork(&mut self, dst_branch: Branch) -> Result<()> {
         if self.branch().id() == dst_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
@@ -160,7 +160,7 @@ impl File {
 
         let (new_parent, new_blob) = self
             .parent
-            .fork(conn, &self.blob, self.branch().clone(), dst_branch.clone())
+            .fork(&self.blob, self.branch().clone(), dst_branch.clone())
             .await?;
 
         self.blob = new_blob;
@@ -230,7 +230,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork(&mut conn, branch1.clone()).await.unwrap();
+        file1.fork(branch1.clone()).await.unwrap();
         file1.write(&mut conn, b"large").await.unwrap();
         file1.flush(&mut conn).await.unwrap();
 
@@ -288,7 +288,7 @@ mod tests {
             .await
             .unwrap();
 
-        file1.fork(&mut conn, branch1).await.unwrap();
+        file1.fork(branch1).await.unwrap();
 
         for _ in 0..2 {
             file1.write(&mut conn, b"oink").await.unwrap();

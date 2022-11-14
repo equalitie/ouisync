@@ -326,10 +326,8 @@ impl Repository {
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-
-        let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(parent).await?;
-        parent.remove_entry(&mut conn, name).await?;
+        parent.remove_entry(name).await?;
 
         Ok(())
     }
@@ -338,10 +336,8 @@ impl Repository {
     #[instrument(skip(path), fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-
-        let mut conn = self.db().acquire().await?;
         let mut parent = self.cd(parent).await?;
-        parent.remove_entry_recursively(&mut conn, name).await?;
+        parent.remove_entry_recursively(name).await?;
 
         Ok(())
     }
@@ -372,7 +368,7 @@ impl Repository {
                 let src_name = entry.name().to_string();
 
                 let mut file = entry.open(&mut conn).await?;
-                file.fork(&mut conn, local_branch.clone()).await?;
+                file.fork(local_branch.clone()).await?;
 
                 (file.parent(&mut conn).await?, Cow::Owned(src_name))
             }
@@ -381,7 +377,7 @@ impl Repository {
                 let dir_to_move = dir_to_move.merge(&mut conn).await?;
 
                 let src_dir = dir_to_move
-                    .parent(&mut conn)
+                    .parent()
                     .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 

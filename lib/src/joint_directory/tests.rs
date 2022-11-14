@@ -109,7 +109,7 @@ async fn conflict_forked_files() {
 
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
-    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
+    file1.fork(branches[1].clone()).await.unwrap();
     file1.write(&mut conn, b"two").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
 
@@ -271,7 +271,7 @@ async fn conflict_identical_versions() {
 
     // Fork it into the other branch, creating an identical version of it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
-    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
+    file1.fork(branches[1].clone()).await.unwrap();
 
     let root1 = branches[1].open_root().await.unwrap();
 
@@ -318,7 +318,7 @@ async fn conflict_open_file() {
     let vv0 = file0.version_vector(&mut conn).await.unwrap();
 
     let mut file1 = file0;
-    file1.fork(&mut conn, branches[1].clone()).await.unwrap();
+    file1.fork(branches[1].clone()).await.unwrap();
     file1.write(&mut conn, b"foo").await.unwrap();
     file1.flush(&mut conn).await.unwrap();
     root1.refresh().await.unwrap();
@@ -895,7 +895,7 @@ async fn merge_file_and_tombstone() {
 
     // Fork the file into the remote branch.
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    file.fork(&mut conn, branches[1].clone()).await.unwrap();
+    file.fork(branches[1].clone()).await.unwrap();
 
     // Remove the file in the remote branch.
     remote_root
@@ -939,7 +939,7 @@ async fn merge_moved_file() {
 
     // Fork the file into the remote branch
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    file.fork(&mut conn, branches[1].clone()).await.unwrap();
+    file.fork(branches[1].clone()).await.unwrap();
 
     // Drop the file otherwise moving it would be blocked (https://github.com/equalitie/ouisync/issues/58)
     drop(file);
@@ -956,7 +956,6 @@ async fn merge_moved_file() {
     let entry_data = remote_root.lookup(file_name).unwrap().clone_data();
     remote_root
         .move_entry(
-            &mut conn,
             file_name,
             entry_data,
             &mut dir,
@@ -1019,9 +1018,7 @@ async fn remove_non_empty_subdirectory() {
     let mut root =
         JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root]);
 
-    root.remove_entry_recursively(&mut conn, "dir0")
-        .await
-        .unwrap();
+    root.remove_entry_recursively("dir0").await.unwrap();
 
     assert_matches!(root.lookup("dir0").next(), None);
     assert!(root.lookup("dir1").next().is_some());
@@ -1107,7 +1104,7 @@ async fn update_file(
 ) {
     let mut file = open_file(conn, parent, name).await;
 
-    file.fork(conn, local_branch.clone()).await.unwrap();
+    file.fork(local_branch.clone()).await.unwrap();
 
     file.truncate(conn, 0).await.unwrap();
     file.write(conn, content).await.unwrap();

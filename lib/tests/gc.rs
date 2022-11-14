@@ -137,9 +137,7 @@ async fn local_truncate_remote_file() {
 
     let mut file = repo_l.open_file("test.dat").await.unwrap();
     let mut conn = repo_l.db().acquire().await.unwrap();
-    file.fork(&mut conn, repo_l.local_branch().unwrap())
-        .await
-        .unwrap();
+    file.fork(repo_l.local_branch().unwrap()).await.unwrap();
     file.truncate(&mut conn, 0).await.unwrap();
     file.flush(&mut conn).await.unwrap();
 

@@ -125,22 +125,16 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        let mut conn = self.branch().db().acquire().await?;
-        self.create_directory_with_version_vector_op(
-            &mut conn,
-            name,
-            &VersionVectorOp::IncrementLocal,
-        )
-        .await
+        self.create_directory_with_version_vector_op(name, &VersionVectorOp::IncrementLocal)
+            .await
     }
 
     async fn create_directory_with_version_vector_op(
         &mut self,
-        conn: &mut db::PoolConnection,
         name: String,
         op: &VersionVectorOp,
     ) -> Result<Self> {
-        let mut tx = conn.begin().await?;
+        let mut tx = self.branch().db().begin().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -256,17 +250,14 @@ impl Directory {
     // directory already exists, it only updates it's version vector and otherwise does nothing.
     // Note this implicitly forks all the ancestor directories first.
     #[async_recursion]
-    pub(crate) async fn fork(
-        &self,
-        conn: &mut db::PoolConnection,
-        local_branch: &Branch,
-    ) -> Result<Directory> {
+    pub(crate) async fn fork(&self, local_branch: &Branch) -> Result<Directory> {
         if local_branch.id() == self.branch().id() {
             return Ok(self.clone());
         }
 
         let parent = if let Some(parent) = &self.parent {
-            let dir = parent.open_in(conn, self.branch().clone()).await?;
+            let mut conn = self.branch().db().acquire().await?;
+            let dir = parent.open_in(&mut conn, self.branch().clone()).await?;
             let entry_name = parent.entry_name();
 
             Some((dir, entry_name))
@@ -279,11 +270,11 @@ impl Directory {
             // by setting its version vector to what the version vector of the source directory was
             // at the time it was initially created.
             let vv = VersionVector::first(*self.branch().id());
-            let mut parent_dir = parent_dir.fork(conn, local_branch).await?;
+            let mut parent_dir = parent_dir.fork(local_branch).await?;
 
             match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    let mut dir = entry.open_in(conn).await?;
+                    let mut dir = entry.open().await?;
                     dir.merge_version_vector(vv).await?;
                     Ok(dir)
                 }
@@ -294,7 +285,6 @@ impl Directory {
                 Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
                     parent_dir
                         .create_directory_with_version_vector_op(
-                            conn,
                             entry_name.to_owned(),
                             &VersionVectorOp::Merge(vv),
                         )
@@ -314,9 +304,12 @@ impl Directory {
             .await
     }
 
-    pub async fn parent(&self, conn: &mut db::Connection) -> Result<Option<Directory>> {
+    pub async fn parent(&self) -> Result<Option<Directory>> {
         if let Some(parent) = &self.parent {
-            Ok(Some(parent.open_in(conn, self.branch().clone()).await?))
+            let mut conn = self.branch().db().acquire().await?;
+            Ok(Some(
+                parent.open_in(&mut conn, self.branch().clone()).await?,
+            ))
         } else {
             Ok(None)
         }
