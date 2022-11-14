@@ -43,6 +43,10 @@ impl Branch {
         self.branch_data.id()
     }
 
+    pub(crate) fn db(&self) -> &db::Pool {
+        &self.pool
+    }
+
     pub(crate) fn data(&self) -> &BranchData {
         &self.branch_data
     }
@@ -57,13 +61,11 @@ impl Branch {
     }
 
     pub(crate) async fn open_root(&self) -> Result<Directory> {
-        let mut conn = self.pool.acquire().await?;
-        Directory::open_root(&mut conn, self.clone()).await
+        Directory::open_root(self.clone()).await
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
-        let mut conn = self.pool.acquire().await?;
-        Directory::open_or_create_root(&mut conn, self.clone()).await
+        Directory::open_or_create_root(self.clone()).await
     }
 
     /// Ensures that the directory at the specified path exists including all its ancestors.
@@ -78,7 +80,7 @@ impl Branch {
                 Utf8Component::RootDir | Utf8Component::CurDir => (),
                 Utf8Component::Normal(name) => {
                     let next = match curr.lookup(name) {
-                        Ok(EntryRef::Directory(entry)) => Some(entry.open(&mut conn).await?),
+                        Ok(EntryRef::Directory(entry)) => Some(entry.open().await?),
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                         Err(error) => return Err(error),

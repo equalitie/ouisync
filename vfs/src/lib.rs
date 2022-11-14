@@ -446,10 +446,7 @@ impl Inner {
                 Representation::File(*entry.branch().id()),
             ),
             JointEntryRef::Directory(entry) => (
-                entry
-                    .open(&mut conn, MissingVersionStrategy::Skip)
-                    .await?
-                    .len(),
+                entry.open(MissingVersionStrategy::Skip).await?.len(),
                 Representation::Directory,
             ),
         };

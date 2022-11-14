@@ -187,7 +187,12 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
+    pub(crate) async fn open(&self) -> Result<Directory> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.open_in(&mut conn).await
+    }
+
+    pub(crate) async fn open_in(&self, conn: &mut db::Connection) -> Result<Directory> {
         Directory::open(
             conn,
             self.branch().clone(),

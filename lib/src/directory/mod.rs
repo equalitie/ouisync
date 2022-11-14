@@ -42,20 +42,19 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(conn: &mut db::Connection, owner_branch: Branch) -> Result<Self> {
-        Self::open(conn, owner_branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(branch: Branch) -> Result<Self> {
+        let mut conn = branch.db().acquire().await?;
+        Self::open(&mut conn, branch, Locator::ROOT, None).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
-    pub(crate) async fn open_or_create_root(
-        conn: &mut db::Connection,
-        branch: Branch,
-    ) -> Result<Self> {
+    pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
+        let mut conn = branch.db().acquire().await?;
 
-        match Self::open(conn, branch.clone(), locator, None).await {
+        match Self::open(&mut conn, branch.clone(), locator, None).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -288,7 +287,7 @@ impl Directory {
 
             match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    let mut dir = entry.open(conn).await?;
+                    let mut dir = entry.open_in(conn).await?;
                     dir.merge_version_vector(conn, vv).await?;
                     Ok(dir)
                 }
@@ -473,7 +472,7 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open(tx)
+                        .open_in(tx)
                         .await?
                         .entries()
                         .any(|entry| !entry.is_tombstone())

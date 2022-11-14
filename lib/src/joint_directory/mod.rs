@@ -147,7 +147,7 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    pub async fn cd(&self, conn: &mut db::Connection, path: impl AsRef<Utf8Path>) -> Result<Self> {
+    pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
         let mut curr = Cow::Borrowed(self);
 
         for component in path.as_ref().components() {
@@ -158,7 +158,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open(conn, MissingVersionStrategy::Skip)
+                        .open(MissingVersionStrategy::Skip)
                         .await?;
                     curr = Cow::Owned(next);
                 }
@@ -227,7 +227,7 @@ impl JointDirectory {
         pattern: Pattern<'a>,
     ) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
-            let mut dir = entry.open(conn, MissingVersionStrategy::Skip).await?;
+            let mut dir = entry.open(MissingVersionStrategy::Skip).await?;
             dir.remove_entries_recursively(conn, Pattern::All).await?;
         }
 
@@ -282,8 +282,7 @@ impl JointDirectory {
                                 }
                             }
                             JointEntryRef::Directory(entry) => {
-                                let mut dir =
-                                    entry.open(conn, MissingVersionStrategy::Fail).await?;
+                                let mut dir = entry.open(MissingVersionStrategy::Fail).await?;
                                 dir.merge(conn).await?;
                             }
                         }
@@ -518,12 +517,11 @@ impl<'a> JointDirectoryRef<'a> {
 
     pub async fn open(
         &self,
-        conn: &mut db::Connection,
         missing_version_strategy: MissingVersionStrategy,
     ) -> Result<JointDirectory> {
         let mut versions = Vec::new();
         for version in &self.versions {
-            match version.open(conn).await {
+            match version.open().await {
                 Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self

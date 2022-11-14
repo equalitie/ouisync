@@ -382,8 +382,6 @@ mod scan {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
-        let mut conn = shared.store.db().acquire().await?;
-
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
         for entry in dir.entries() {
@@ -399,7 +397,7 @@ mod scan {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    match entry.open(&mut conn, MissingVersionStrategy::Fail).await {
+                    match entry.open(MissingVersionStrategy::Fail).await {
                         Ok(dir) => subdirs.push(dir),
                         Err(error) => {
                             // On error, we can still proceed with finding missing blocks, but we
@@ -412,8 +410,6 @@ mod scan {
                 }
             }
         }
-
-        drop(conn);
 
         for entry in entries {
             process_blocks(shared, mode, entry).await?;

@@ -385,7 +385,7 @@ async fn cd_into_concurrent_directory() {
     create_file(&mut conn, &mut dir1, "cat.jpg", &[]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-    let dir = root.cd(&mut conn, "pics").await.unwrap();
+    let dir = root.cd("pics").await.unwrap();
 
     let entries: Vec<_> = dir.entries().collect();
     assert_eq!(entries.len(), 2);
@@ -904,7 +904,7 @@ async fn merge_concurrent_directories() {
     // version vectors are merged
     assert_eq!(entry.version_vector(), &local_dir_vv.merged(&remote_dir_vv));
 
-    let dir = entry.directory().unwrap().open(&mut conn).await.unwrap();
+    let dir = entry.directory().unwrap().open().await.unwrap();
     assert_eq!(dir.entries().count(), 2);
 
     dir.lookup("dog.jpg").unwrap().file().unwrap();
@@ -1012,7 +1012,7 @@ async fn merge_moved_file() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
     let mut file = dir

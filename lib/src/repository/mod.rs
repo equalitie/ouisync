@@ -268,7 +268,7 @@ impl Repository {
 
         let mut conn = self.db().acquire().await?;
 
-        self.cd(&mut conn, parent)
+        self.cd(parent)
             .await?
             .lookup_unique(name)?
             .file()?
@@ -287,7 +287,7 @@ impl Repository {
 
         let mut conn = self.db().acquire().await?;
 
-        self.cd(&mut conn, parent)
+        self.cd(parent)
             .await?
             .lookup_version(name, branch_id)?
             .open(&mut conn)
@@ -297,8 +297,7 @@ impl Repository {
     /// Opens a directory at the given path (relative to the repository root)
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let mut conn = self.db().acquire().await?;
-        self.cd(&mut conn, path).await
+        self.cd(path).await
     }
 
     /// Creates a new file at the given path.
@@ -329,7 +328,7 @@ impl Repository {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
         let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
+        let mut parent = self.cd(parent).await?;
         parent.remove_entry(&mut conn, name).await?;
 
         Ok(())
@@ -341,7 +340,7 @@ impl Repository {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
 
         let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
+        let mut parent = self.cd(parent).await?;
         parent.remove_entry_recursively(&mut conn, name).await?;
 
         Ok(())
@@ -366,7 +365,7 @@ impl Repository {
         let local_branch = self.local_branch()?;
         let mut conn = self.db().acquire().await?;
 
-        let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
+        let src_joint_dir = self.cd(src_dir_path).await?;
 
         let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
@@ -378,7 +377,7 @@ impl Repository {
                 (file.parent(&mut conn).await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
+                let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;
                 let dir_to_move = dir_to_move.merge(&mut conn).await?;
 
                 let src_dir = dir_to_move
@@ -397,7 +396,7 @@ impl Repository {
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
         let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
-        let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
+        let dst_joint_dir = self.cd(&dst_dir_path).await?;
 
         let dst_vv = match dst_joint_dir.lookup_unique(dst_name) {
             Err(Error::EntryNotFound) => {
@@ -507,12 +506,8 @@ impl Repository {
         Ok(JointDirectory::new(Some(local_branch), dirs))
     }
 
-    async fn cd<P: AsRef<Utf8Path>>(
-        &self,
-        conn: &mut db::Connection,
-        path: P,
-    ) -> Result<JointDirectory> {
-        self.root().await?.cd(conn, path).await
+    async fn cd<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        self.root().await?.cd(path).await
     }
 
     /// Close all db connections held by this repository. After this function returns, any

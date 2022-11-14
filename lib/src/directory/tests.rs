@@ -240,7 +240,7 @@ async fn move_file_within_branch() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap()
         .lookup(file_name)
@@ -354,14 +354,14 @@ async fn move_non_empty_directory() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap()
         .lookup(dir_name)
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap()
         .lookup(file_name)
@@ -438,7 +438,7 @@ async fn fork() {
             .unwrap()
             .directory()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap()
     };
@@ -458,7 +458,7 @@ async fn fork() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -473,7 +473,7 @@ async fn fork() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -523,7 +523,7 @@ async fn fork_over_tombstone() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -553,7 +553,7 @@ async fn modify_directory_concurrently() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
