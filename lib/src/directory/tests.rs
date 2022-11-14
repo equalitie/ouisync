@@ -83,7 +83,7 @@ async fn remove_file() {
         .unwrap();
     file.flush(&mut conn).await.unwrap();
 
-    let file_vv = file.version_vector(&mut conn).await.unwrap();
+    let file_vv = file.version_vector().await.unwrap();
     let file_locator = *file.locator();
     drop(file);
 
@@ -376,7 +376,7 @@ async fn remove_subdirectory() {
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
 
     let dir_locator = *dir.locator();
-    let dir_vv = dir.version_vector(&mut conn).await.unwrap();
+    let dir_vv = dir.version_vector().await.unwrap();
 
     // Reopen and remove the subdirectory
     let mut parent_dir = branch.open_root().await.unwrap();

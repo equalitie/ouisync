@@ -256,8 +256,7 @@ impl Directory {
         }
 
         let parent = if let Some(parent) = &self.parent {
-            let mut conn = self.branch().db().acquire().await?;
-            let dir = parent.open_in(&mut conn, self.branch().clone()).await?;
+            let dir = parent.open(self.branch().clone()).await?;
             let entry_name = parent.entry_name();
 
             Some((dir, entry_name))
@@ -306,10 +305,7 @@ impl Directory {
 
     pub async fn parent(&self) -> Result<Option<Directory>> {
         if let Some(parent) = &self.parent {
-            let mut conn = self.branch().db().acquire().await?;
-            Ok(Some(
-                parent.open_in(&mut conn, self.branch().clone()).await?,
-            ))
+            Ok(Some(parent.open(self.branch().clone()).await?))
         } else {
             Ok(None)
         }
@@ -449,13 +445,11 @@ impl Directory {
         self.blob.len()
     }
 
-    pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+    pub(crate) async fn version_vector(&self) -> Result<VersionVector> {
         if let Some(parent) = &self.parent {
-            parent
-                .entry_version_vector(conn, self.branch().clone())
-                .await
+            parent.entry_version_vector(self.branch().clone()).await
         } else {
-            self.branch().data().load_version_vector(conn).await
+            self.branch().version_vector().await
         }
     }
 

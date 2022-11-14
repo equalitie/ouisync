@@ -64,8 +64,7 @@ impl ParentContext {
         src_branch: Branch,
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let mut conn = src_branch.db().acquire().await?;
-        let directory = self.open_in(&mut conn, src_branch).await?;
+        let directory = self.open(src_branch).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
 
         assert_eq!(
@@ -77,11 +76,10 @@ impl ParentContext {
         let mut content = directory.entries.clone();
         let src_vv = src_entry_data.version_vector().clone();
 
-        let mut tx = conn.begin().await?;
-
         let new_blob =
             match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
                 Ok(()) => {
+                    let mut tx = directory.branch().db().begin().await?;
                     directory
                         .save(&mut tx, &content, OverwriteStrategy::Remove)
                         .await?;
@@ -105,8 +103,7 @@ impl ParentContext {
                         Some(Ordering::Greater) | None => return Err(Error::EntryExists),
                     }
 
-                    tx.commit().await?;
-
+                    let mut conn = dst_branch.db().acquire().await?;
                     Blob::open(&mut conn, dst_branch, Locator::head(blob_id)).await?
                 }
             };
@@ -138,19 +135,25 @@ impl ParentContext {
         .await
     }
 
+    /// Opens the parent directory of this entry.
+    pub async fn open(&self, branch: Branch) -> Result<Directory> {
+        Directory::open(
+            branch,
+            Locator::head(self.directory_id),
+            self.parent.as_deref().cloned(),
+        )
+        .await
+    }
+
     /// Returns the version vector of this entry.
     ///
     /// # Panics
     ///
     /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
     /// directory.
-    pub async fn entry_version_vector(
-        &self,
-        conn: &mut db::Connection,
-        branch: Branch,
-    ) -> Result<VersionVector> {
+    pub async fn entry_version_vector(&self, branch: Branch) -> Result<VersionVector> {
         Ok(self
-            .open_in(conn, branch)
+            .open(branch)
             .await?
             .lookup(&self.entry_name)?
             .version_vector()

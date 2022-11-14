@@ -171,9 +171,9 @@ impl File {
         Ok(())
     }
 
-    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+    pub async fn version_vector(&self) -> Result<VersionVector> {
         self.parent
-            .entry_version_vector(conn, self.branch().clone())
+            .entry_version_vector(self.branch().clone())
             .await
     }
 

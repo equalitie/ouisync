@@ -315,7 +315,7 @@ async fn conflict_open_file() {
         .create_file(&mut conn, "file.txt".into())
         .await
         .unwrap();
-    let vv0 = file0.version_vector(&mut conn).await.unwrap();
+    let vv0 = file0.version_vector().await.unwrap();
 
     let mut file1 = file0;
     file1.fork(branches[1].clone()).await.unwrap();
@@ -323,7 +323,7 @@ async fn conflict_open_file() {
     file1.flush(&mut conn).await.unwrap();
     root1.refresh().await.unwrap();
 
-    let vv1 = file1.version_vector(&mut conn).await.unwrap();
+    let vv1 = file1.version_vector().await.unwrap();
     assert!(vv1 > vv0);
 
     let _file0 = root0
@@ -409,8 +409,7 @@ async fn merge_locally_non_existing_file() {
 
     // Local branch is up to date
     assert!(
-        local_root.version_vector(&mut conn).await.unwrap()
-            >= remote_root.version_vector(&mut conn).await.unwrap()
+        local_root.version_vector().await.unwrap() >= remote_root.version_vector().await.unwrap()
     );
 }
 
@@ -465,8 +464,7 @@ async fn merge_locally_older_file() {
 
     // Local branch is up to date
     assert!(
-        local_root.version_vector(&mut conn).await.unwrap()
-            >= remote_root.version_vector(&mut conn).await.unwrap()
+        local_root.version_vector().await.unwrap() >= remote_root.version_vector().await.unwrap()
     );
 }
 
@@ -544,10 +542,10 @@ async fn attempt_to_merge_concurrent_file() {
 
     assert_eq!(
         local_root
-            .version_vector(&mut conn)
+            .version_vector()
             .await
             .unwrap()
-            .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
+            .partial_cmp(&remote_root.version_vector().await.unwrap()),
         None
     );
 
@@ -578,10 +576,10 @@ async fn attempt_to_merge_concurrent_file() {
     // The branches are still concurrent
     assert_eq!(
         local_root
-            .version_vector(&mut conn)
+            .version_vector()
             .await
             .unwrap()
-            .partial_cmp(&remote_root.version_vector(&mut conn).await.unwrap()),
+            .partial_cmp(&remote_root.version_vector().await.unwrap()),
         None
     );
 }
@@ -850,14 +848,14 @@ async fn merge_concurrent_directories() {
     create_file(&mut conn, &mut local_dir, "dog.jpg", &[]).await;
 
     local_dir.refresh().await.unwrap();
-    let local_dir_vv = local_dir.version_vector(&mut conn).await.unwrap();
+    let local_dir_vv = local_dir.version_vector().await.unwrap();
 
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
     create_file(&mut conn, &mut remote_dir, "cat.jpg", &[]).await;
 
     remote_dir.refresh().await.unwrap();
-    let remote_dir_vv = remote_dir.version_vector(&mut conn).await.unwrap();
+    let remote_dir_vv = remote_dir.version_vector().await.unwrap();
 
     JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
         .merge(&mut conn)
@@ -891,7 +889,7 @@ async fn merge_file_and_tombstone() {
     // Create a file in the local one.
     let mut local_root = branches[0].open_or_create_root().await.unwrap();
     let mut file = create_file(&mut conn, &mut local_root, "dog.jpg", &[]).await;
-    let file_vv = file.version_vector(&mut conn).await.unwrap();
+    let file_vv = file.version_vector().await.unwrap();
 
     // Fork the file into the remote branch.
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
