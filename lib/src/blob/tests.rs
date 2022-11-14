@@ -595,6 +595,7 @@ async fn fork_case(
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -656,6 +657,7 @@ async fn fork_is_idempotent() {
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -690,6 +692,7 @@ async fn fork_then_remove_src_branch() {
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -776,6 +779,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
 
     let branch = BranchData::new(PublicKey::random(), event_tx.clone());
     let branch = Branch::new(
+        pool.clone(),
         Arc::new(branch),
         secrets.into(),
         Arc::new(FileCache::new(event_tx)),

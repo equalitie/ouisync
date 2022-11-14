@@ -480,13 +480,13 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
+    async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
         let branches = self.shared.load_branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root(conn).await {
+            let dir = match branch.open_root().await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll
@@ -514,7 +514,7 @@ impl Repository {
         conn: &mut db::Connection,
         path: P,
     ) -> Result<JointDirectory> {
-        self.root(conn).await?.cd(conn, path).await
+        self.root().await?.cd(conn, path).await
     }
 
     /// Close all db connections held by this repository. After this function returns, any
@@ -568,7 +568,7 @@ impl Repository {
                 "/, vv: {:?}",
                 branch.version_vector(&mut conn).await.unwrap_or_default()
             ));
-            branch.debug_print(&mut conn, print.indent()).await;
+            branch.debug_print(print.indent()).await;
         }
 
         drop(conn);
@@ -611,10 +611,9 @@ impl Shared {
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        let mut conn = self.store.db().acquire().await?;
         self.store
             .index
-            .load_branches(&mut conn)
+            .load_branches()
             .await?
             .into_iter()
             .map(|data| self.inflate(data))
@@ -632,7 +631,12 @@ impl Shared {
             keys.read_only()
         };
 
-        Ok(Branch::new(data, keys, self.file_cache.clone()))
+        Ok(Branch::new(
+            self.store.db().clone(),
+            data,
+            keys,
+            self.file_cache.clone(),
+        ))
     }
 }
 

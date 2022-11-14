@@ -573,7 +573,7 @@ async fn attempt_to_modify_remote_file() {
 
     let mut conn = repo.db().acquire().await.unwrap();
     let mut file = remote_branch
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("test.txt")
@@ -731,7 +731,7 @@ async fn version_vector_fork() {
     assert_eq!(local_file_vv_0, remote_file_vv);
 
     let local_parent_vv_0 = local_branch
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("parent")
@@ -766,7 +766,7 @@ async fn version_vector_fork() {
     assert!(local_file_vv_1 > local_file_vv_0);
 
     let local_parent_vv_1 = local_branch
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("parent")
@@ -801,11 +801,10 @@ async fn version_vector_moved_non_empty_directory() {
     repo.create_directory("foo").await.unwrap();
     repo.create_file("foo/stuff.txt").await.unwrap();
 
-    let mut conn = repo.db().acquire().await.unwrap();
     let vv_0 = repo
         .local_branch()
         .unwrap()
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("foo")
@@ -818,7 +817,7 @@ async fn version_vector_moved_non_empty_directory() {
     let vv_1 = repo
         .local_branch()
         .unwrap()
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("bar")
@@ -855,7 +854,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let vv_2 = repo
         .local_branch()
         .unwrap()
-        .open_root(&mut conn)
+        .open_root()
         .await
         .unwrap()
         .lookup("old.txt")

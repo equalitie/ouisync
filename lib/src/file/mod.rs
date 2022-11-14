@@ -222,7 +222,7 @@ mod tests {
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -239,7 +239,7 @@ mod tests {
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -254,7 +254,7 @@ mod tests {
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -283,7 +283,7 @@ mod tests {
         file0.flush(&mut conn).await.unwrap();
 
         let mut file1 = branch0
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("pig.jpg")
@@ -315,7 +315,7 @@ mod tests {
             .await
             .unwrap();
         let mut file1 = branch
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("fox.txt")
@@ -339,19 +339,26 @@ mod tests {
         let (event_tx, _) = broadcast::channel(1);
         let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
-        let branches =
-            [(); N].map(|_| create_branch(event_tx.clone(), keys.clone(), file_cache.clone()));
+        let branches = [(); N].map(|_| {
+            create_branch(
+                pool.clone(),
+                event_tx.clone(),
+                keys.clone(),
+                file_cache.clone(),
+            )
+        });
 
         (base_dir, pool, branches)
     }
 
     fn create_branch(
+        pool: db::Pool,
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
         file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(Arc::new(branch_data), keys, file_cache)
+        Branch::new(pool, Arc::new(branch_data), keys, file_cache)
     }
 }
 

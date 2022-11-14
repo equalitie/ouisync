@@ -216,15 +216,15 @@ mod merge {
         let branches = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
-        let mut conn = shared.store.db().acquire().await?;
-
         for branch in branches {
-            match branch.open_root(&mut conn).await {
+            match branch.open_root().await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
             }
         }
+
+        let mut conn = shared.store.db().acquire().await?;
 
         JointDirectory::new(Some(local_branch.clone()), roots)
             .merge(&mut conn)
@@ -347,15 +347,13 @@ mod scan {
     async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
         let branches = shared.load_branches().await?;
 
-        let mut conn = shared.store.db().acquire().await?;
-
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
 
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root(&mut conn).await {
+            match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no

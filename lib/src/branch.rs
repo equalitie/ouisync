@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Branch {
+    pool: db::Pool,
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
     file_cache: Arc<FileCache>,
@@ -25,11 +26,13 @@ pub struct Branch {
 
 impl Branch {
     pub(crate) fn new(
+        pool: db::Pool,
         branch_data: Arc<BranchData>,
         keys: AccessKeys,
         file_cache: Arc<FileCache>,
     ) -> Self {
         Self {
+            pool,
             branch_data,
             keys,
             file_cache,
@@ -52,8 +55,9 @@ impl Branch {
         &self.keys
     }
 
-    pub(crate) async fn open_root(&self, conn: &mut db::Connection) -> Result<Directory> {
-        Directory::open_root(conn, self.clone()).await
+    pub(crate) async fn open_root(&self) -> Result<Directory> {
+        let mut conn = self.pool.acquire().await?;
+        Directory::open_root(&mut conn, self.clone()).await
     }
 
     pub(crate) async fn open_or_create_root(&self, conn: &mut db::Connection) -> Result<Directory> {
@@ -126,9 +130,20 @@ impl Branch {
         self.file_cache.contains_any(self.id())
     }
 
-    pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
-        match self.open_root(conn).await {
-            Ok(root) => root.debug_print(conn, print).await,
+    pub async fn debug_print(&self, print: DebugPrinter) {
+        let mut conn = match self.pool.acquire().await {
+            Ok(conn) => conn,
+            Err(error) => {
+                print.display(&format_args!(
+                    "failed to acquire db connection: {:?}",
+                    error
+                ));
+                return;
+            }
+        };
+
+        match self.open_root().await {
+            Ok(root) => root.debug_print(&mut conn, print).await,
             Err(error) => {
                 print.display(&format_args!("failed to open root directory: {:?}", error))
             }
@@ -138,6 +153,7 @@ impl Branch {
     #[cfg(test)]
     pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
         Self {
+            pool: self.pool,
             branch_data: self.branch_data,
             keys,
             file_cache: self.file_cache,
@@ -190,7 +206,12 @@ mod tests {
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
         let branch = index.get_branch(writer_id);
-        let branch = Branch::new(branch, secrets.into(), Arc::new(FileCache::new(event_tx)));
+        let branch = Branch::new(
+            pool.clone(),
+            branch,
+            secrets.into(),
+            Arc::new(FileCache::new(event_tx)),
+        );
 
         (base_dir, pool, branch)
     }

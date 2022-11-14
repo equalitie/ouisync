@@ -62,8 +62,9 @@ impl Index {
         Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
     }
 
-    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Arc<BranchData>>> {
-        BranchData::load_all(conn, self.shared.notify_tx.clone())
+    pub async fn load_branches(&self) -> Result<Vec<Arc<BranchData>>> {
+        let mut conn = self.pool.acquire().await?;
+        BranchData::load_all(&mut conn, self.shared.notify_tx.clone())
             .try_collect()
             .await
     }
