@@ -496,7 +496,7 @@ async fn recreate_local_branch() {
     // B: Modify the repo. This makes B's branch newer than A's
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
     let mut conn = repo_b.db().acquire().await.unwrap();
-    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    file.seek(SeekFrom::End(0)).await.unwrap();
     file.write(b"hello from B\n").await.unwrap();
     file.flush(&mut conn).await.unwrap();
 

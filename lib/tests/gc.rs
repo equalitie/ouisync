@@ -194,7 +194,7 @@ async fn concurrent_delete_update() {
 
     // Remote update. Don't change the length of the file so the first block (where the length it
     // stored) remains unchanged.
-    file.seek(&mut conn, SeekFrom::End(-64)).await.unwrap();
+    file.seek(SeekFrom::End(-64)).await.unwrap();
     write_to_file(&mut env.rng, &mut file, 64).await;
     file.flush(&mut conn).await.unwrap();
 

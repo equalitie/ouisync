@@ -774,12 +774,10 @@ impl Inner {
 
         // TODO: what about flags?
 
-        let mut conn = self.repository.db().acquire().await?;
-
         let file = self.entries.get_file_mut(handle)?;
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
@@ -806,10 +804,9 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         let local_branch = self.repository.local_branch()?;
-        let mut conn = self.repository.db().acquire().await?;
 
         let file = self.entries.get_file_mut(handle)?;
-        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset)).await?;
         file.fork(local_branch).await?;
         file.write(data).await?;
 

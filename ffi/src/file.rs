@@ -118,9 +118,8 @@ pub unsafe extern "C" fn file_read(
 
         ctx.spawn(async move {
             let mut g = ffi_file.lock().await;
-            let mut conn = g.repo.db().acquire().await?;
 
-            g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+            g.file.seek(SeekFrom::Start(offset)).await?;
 
             let buffer = slice::from_raw_parts_mut(buffer.into_inner(), len);
             let len = g.file.read(buffer).await? as u64;
@@ -151,8 +150,7 @@ pub unsafe extern "C" fn file_write(
 
             let local_branch = g.repo.local_branch()?;
 
-            let mut conn = g.repo.db().acquire().await?;
-            g.file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+            g.file.seek(SeekFrom::Start(offset)).await?;
             g.file.fork(local_branch).await?;
             g.file.write(buffer).await?;
 

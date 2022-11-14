@@ -89,8 +89,9 @@ impl File {
     }
 
     /// Seeks to an offset in the file.
-    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
-        self.blob.seek(conn, pos).await
+    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.seek(&mut conn, pos).await
     }
 
     /// Truncates the file to the given length.
