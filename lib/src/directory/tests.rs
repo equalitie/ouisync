@@ -40,7 +40,7 @@ async fn create_and_list_entries() {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
         let actual_content = file.read_to_end(&mut conn).await.unwrap();
@@ -160,7 +160,7 @@ async fn rename_file() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -228,7 +228,7 @@ async fn move_file_within_branch() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -264,7 +264,7 @@ async fn move_file_within_branch() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -344,7 +344,7 @@ async fn move_non_empty_directory() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -524,7 +524,7 @@ async fn modify_directory_concurrently() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
     assert_eq!(file1.read_to_end(&mut conn).await.unwrap(), b"hello");

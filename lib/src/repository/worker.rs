@@ -224,10 +224,8 @@ mod merge {
             }
         }
 
-        let mut conn = shared.store.db().acquire().await?;
-
         JointDirectory::new(Some(local_branch.clone()), roots)
-            .merge(&mut conn)
+            .merge()
             .await?;
 
         Ok(())

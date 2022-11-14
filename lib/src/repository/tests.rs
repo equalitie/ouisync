@@ -111,7 +111,7 @@ async fn merge() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap()
         .read_to_end(&mut conn)
@@ -577,7 +577,7 @@ async fn attempt_to_modify_remote_file() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
 
@@ -741,7 +741,7 @@ async fn version_vector_fork() {
         .unwrap()
         .file()
         .unwrap()
-        .open(&mut conn)
+        .open()
         .await
         .unwrap();
     file.write(&mut conn, b"hello").await.unwrap();

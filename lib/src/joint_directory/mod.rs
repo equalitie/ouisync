@@ -6,7 +6,6 @@ use crate::{
     branch::Branch,
     conflict,
     crypto::sign::PublicKey,
-    db,
     directory::{Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef},
     error::{Error, Result},
     file::File,
@@ -232,7 +231,7 @@ impl JointDirectory {
     ///
     /// TODO: consider returning the conflicting paths as well.
     #[async_recursion]
-    pub async fn merge(&mut self, conn: &mut db::PoolConnection) -> Result<Directory> {
+    pub async fn merge(&mut self) -> Result<Directory> {
         let local_version = self.fork().await?;
         let local_branch = local_version.branch().clone();
 
@@ -254,7 +253,7 @@ impl JointDirectory {
                     for entry in existing {
                         match entry {
                             JointEntryRef::File(entry) => {
-                                let mut file = entry.open(conn).await?;
+                                let mut file = entry.open().await?;
 
                                 match file.fork(local_branch.clone()).await {
                                     Ok(()) => (),
@@ -270,7 +269,7 @@ impl JointDirectory {
                             }
                             JointEntryRef::Directory(entry) => {
                                 let mut dir = entry.open(MissingVersionStrategy::Fail).await?;
-                                dir.merge(conn).await?;
+                                dir.merge().await?;
                             }
                         }
                     }
@@ -434,8 +433,8 @@ impl<'a> JointFileRef<'a> {
         }
     }
 
-    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
-        self.file.open(conn).await
+    pub async fn open(&self) -> Result<File> {
+        self.file.open().await
     }
 
     pub fn version_vector(&self) -> &'a VersionVector {

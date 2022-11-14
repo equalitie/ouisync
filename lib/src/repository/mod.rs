@@ -266,13 +266,11 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.db().acquire().await?;
-
         self.cd(parent)
             .await?
             .lookup_unique(name)?
             .file()?
-            .open(&mut conn)
+            .open()
             .await
     }
 
@@ -285,12 +283,10 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.db().acquire().await?;
-
         self.cd(parent)
             .await?
             .lookup_version(name, branch_id)?
-            .open(&mut conn)
+            .open()
             .await
     }
 
@@ -367,14 +363,14 @@ impl Repository {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
-                let mut file = entry.open(&mut conn).await?;
+                let mut file = entry.open().await?;
                 file.fork(local_branch.clone()).await?;
 
                 (file.parent(&mut conn).await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;
-                let dir_to_move = dir_to_move.merge(&mut conn).await?;
+                let dir_to_move = dir_to_move.merge().await?;
 
                 let src_dir = dir_to_move
                     .parent()

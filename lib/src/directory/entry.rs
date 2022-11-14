@@ -133,12 +133,14 @@ impl<'a> FileRef<'a> {
         &self.entry_data.version_vector
     }
 
-    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
+    pub async fn open(&self) -> Result<File> {
         let parent_context = self.inner.parent_context();
         let branch = self.branch().clone();
         let locator = self.locator();
 
-        File::open(conn, branch, locator, parent_context).await
+        let mut conn = self.branch().db().acquire().await?;
+
+        File::open(&mut conn, branch, locator, parent_context).await
     }
 
     pub fn branch(&self) -> &Branch {

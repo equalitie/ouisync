@@ -226,7 +226,7 @@ mod tests {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
@@ -243,7 +243,7 @@ mod tests {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
@@ -258,7 +258,7 @@ mod tests {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
@@ -284,7 +284,7 @@ mod tests {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
@@ -313,7 +313,7 @@ mod tests {
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
