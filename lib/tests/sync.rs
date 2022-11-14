@@ -481,7 +481,7 @@ async fn recreate_local_branch() {
     let vv_a_0 = repo_a
         .local_branch()
         .unwrap()
-        .version_vector(&mut conn)
+        .version_vector()
         .await
         .unwrap();
 
@@ -519,7 +519,7 @@ async fn recreate_local_branch() {
     let vv_b = repo_b
         .local_branch()
         .unwrap()
-        .version_vector(&mut conn)
+        .version_vector()
         .await
         .unwrap();
 
@@ -549,11 +549,10 @@ async fn recreate_local_branch() {
     time::timeout(
         DEFAULT_TIMEOUT,
         common::eventually(&repo_a, || async {
-            let mut conn = repo_a.db().acquire().await.unwrap();
             let vv_a_1 = repo_a
                 .local_branch()
                 .unwrap()
-                .version_vector(&mut conn)
+                .version_vector()
                 .await
                 .unwrap();
 
@@ -930,17 +929,19 @@ async fn check_file_version_content(
 // version vectors and A's version vector is greater or equal to B's.
 async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
     common::eventually(repo_a, || async {
-        let vv_a = {
-            let branch = repo_a.local_branch().unwrap();
-            let mut conn = repo_a.db().acquire().await.unwrap();
-            branch.version_vector(&mut conn).await.unwrap()
-        };
+        let vv_a = repo_a
+            .local_branch()
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap();
 
-        let vv_b = {
-            let branch = repo_b.local_branch().unwrap();
-            let mut conn = repo_b.db().acquire().await.unwrap();
-            branch.version_vector(&mut conn).await.unwrap()
-        };
+        let vv_b = repo_b
+            .local_branch()
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap();
 
         if vv_a.is_empty() || vv_b.is_empty() {
             return false;

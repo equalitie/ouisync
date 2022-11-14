@@ -614,7 +614,7 @@ async fn merge_is_idempotent() {
     let mut conn = pool.acquire().await.unwrap();
 
     let local_root = branches[0].open_or_create_root().await.unwrap();
-    let vv0 = branches[0].version_vector(&mut conn).await.unwrap();
+    let vv0 = branches[0].version_vector().await.unwrap();
 
     let mut remote_root = branches[1].open_or_create_root().await.unwrap();
 
@@ -629,7 +629,7 @@ async fn merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv1 = branches[0].version_vector(&mut conn).await.unwrap();
+    let vv1 = branches[0].version_vector().await.unwrap();
     assert!(vv1 > vv0);
 
     // Merge again. This time there is no local modification because there was no remote
@@ -642,7 +642,7 @@ async fn merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv2 = branches[0].version_vector(&mut conn).await.unwrap();
+    let vv2 = branches[0].version_vector().await.unwrap();
     assert_eq!(vv2, vv1);
 
     // Perform another remote modification and merge again - this causes local modification
@@ -657,7 +657,7 @@ async fn merge_is_idempotent() {
     .await
     .unwrap();
 
-    let vv3 = branches[0].version_vector(&mut conn).await.unwrap();
+    let vv3 = branches[0].version_vector().await.unwrap();
     assert!(vv3 > vv2);
 
     // Another idempotent merge which causes no local modification.
@@ -666,7 +666,7 @@ async fn merge_is_idempotent() {
         .await
         .unwrap();
 
-    let vv4 = branches[0].version_vector(&mut conn).await.unwrap();
+    let vv4 = branches[0].version_vector().await.unwrap();
     assert_eq!(vv4, vv3);
 }
 
@@ -690,7 +690,7 @@ async fn merge_create_file_roundtrip() {
     .await
     .unwrap();
 
-    let local_vv0 = branches[0].version_vector(&mut conn).await.unwrap();
+    let local_vv0 = branches[0].version_vector().await.unwrap();
 
     // remote: merge from local
     JointDirectory::new(
@@ -701,7 +701,7 @@ async fn merge_create_file_roundtrip() {
     .await
     .unwrap();
 
-    let remote_vv0 = branches[1].version_vector(&mut conn).await.unwrap();
+    let remote_vv0 = branches[1].version_vector().await.unwrap();
 
     assert_eq!(local_vv0, remote_vv0);
 
@@ -714,7 +714,7 @@ async fn merge_create_file_roundtrip() {
     .await
     .unwrap();
 
-    let local_vv1 = branches[0].version_vector(&mut conn).await.unwrap();
+    let local_vv1 = branches[0].version_vector().await.unwrap();
     assert_eq!(local_vv1, local_vv0);
 
     // remote: merge from local - this has no effect either
@@ -723,7 +723,7 @@ async fn merge_create_file_roundtrip() {
         .await
         .unwrap();
 
-    let remote_vv1 = branches[1].version_vector(&mut conn).await.unwrap();
+    let remote_vv1 = branches[1].version_vector().await.unwrap();
     assert_eq!(remote_vv1, remote_vv0);
 }
 
@@ -774,7 +774,7 @@ async fn merge_create_and_delete_file_roundtrip() {
     .await
     .unwrap();
 
-    let local_vv = branches[0].version_vector(&mut conn).await.unwrap();
+    let local_vv = branches[0].version_vector().await.unwrap();
 
     // remote: merge from local
     JointDirectory::new(
@@ -785,7 +785,7 @@ async fn merge_create_and_delete_file_roundtrip() {
     .await
     .unwrap();
 
-    let remote_vv = branches[1].version_vector(&mut conn).await.unwrap();
+    let remote_vv = branches[1].version_vector().await.unwrap();
 
     assert_eq!(local_vv, remote_vv);
 }

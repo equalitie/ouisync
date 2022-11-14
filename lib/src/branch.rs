@@ -47,8 +47,9 @@ impl Branch {
         &self.branch_data
     }
 
-    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
-        self.branch_data.load_version_vector(conn).await
+    pub async fn version_vector(&self) -> Result<VersionVector> {
+        let mut conn = self.pool.acquire().await?;
+        self.branch_data.load_version_vector(&mut conn).await
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {
@@ -108,9 +109,10 @@ impl Branch {
         dir.create_file(&mut conn, name.to_string()).await
     }
 
-    pub(crate) async fn root_block_id(&self, conn: &mut db::Connection) -> Result<BlockId> {
+    pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
+        let mut conn = self.pool.acquire().await?;
         self.data()
-            .get(conn, &Locator::ROOT.encode(self.keys().read()))
+            .get(&mut conn, &Locator::ROOT.encode(self.keys().read()))
             .await
     }
 

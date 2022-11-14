@@ -529,17 +529,6 @@ impl Repository {
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
 
-        let mut conn = match self.db().acquire().await {
-            Ok(conn) => conn,
-            Err(error) => {
-                print.display(&format_args!(
-                    "failed to acquire db connection: {:?}",
-                    error
-                ));
-                return;
-            }
-        };
-
         let branches = match self.shared.load_branches().await {
             Ok(branches) => branches,
             Err(error) => {
@@ -559,17 +548,15 @@ impl Repository {
                 "Branch ID: {:?}{}, root block ID:{:?}",
                 branch.id(),
                 local,
-                branch.root_block_id(&mut conn).await
+                branch.root_block_id().await
             ));
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",
-                branch.version_vector(&mut conn).await.unwrap_or_default()
+                branch.version_vector().await.unwrap_or_default()
             ));
             branch.debug_print(print.indent()).await;
         }
-
-        drop(conn);
 
         print.display(&"Index");
         let print = print.indent();

@@ -595,7 +595,7 @@ async fn version_vector_create_file() {
 
     let mut conn = repo.db().acquire().await.unwrap();
 
-    let root_vv_0 = local_branch.version_vector(&mut conn).await.unwrap();
+    let root_vv_0 = local_branch.version_vector().await.unwrap();
 
     let mut file = repo.create_file("parent/test.txt").await.unwrap();
 
