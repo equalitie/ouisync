@@ -1,11 +1,11 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
+use std::{mem::size_of, time::Duration};
+use tokio::time::timeout;
 
 type BarrierId = u64;
 type Round = u32;
 type Step = u8;
 type Msg = (BarrierId, Round, Step);
-
-use std::mem::size_of;
 
 const MSG_STEP_SIZE: usize = size_of::<Step>();
 const MSG_ID_SIZE: usize = size_of::<BarrierId>();
@@ -151,7 +151,7 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
         our_step: Step,
-    ) -> Result<Msg, ChannelClosed> {
+    ) -> Result<Msg, BarrierError> {
         self.send(barrier_id, our_round, our_step).await?;
 
         #[cfg(test)]
@@ -187,9 +187,13 @@ impl<'a> Barrier<'a> {
         &mut self,
         #[cfg(test)] round: Round,
         #[cfg(test)] our_step: Step,
-    ) -> Result<Msg, ChannelClosed> {
+    ) -> Result<Msg, BarrierError> {
         loop {
-            let msg = self.stream.recv().await?;
+            let msg = match timeout(Duration::from_secs(5), self.stream.recv()).await {
+                Ok(Ok(msg)) => msg,
+                Ok(Err(err)) => return Err(err.into()),
+                Err(_) => return Err(BarrierError::Timeout),
+            };
 
             match parse_message(&msg) {
                 Some((barrier_id, their_round, their_step)) => {
@@ -305,6 +309,8 @@ pub enum BarrierError {
     Failure,
     #[error("Channel closed")]
     ChannelClosed,
+    #[error("Timed out")]
+    Timeout,
 }
 
 impl From<ChannelClosed> for BarrierError {
@@ -489,9 +495,6 @@ mod tests {
 
             matches!(r1, Task1Result::CFinished)
         });
-
-        use std::time::Duration;
-        use tokio::time::timeout;
 
         match timeout(Duration::from_secs(5), task_c).await {
             Err(_) => panic!("Test case n:{} timed out", n),

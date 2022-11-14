@@ -195,8 +195,9 @@ async fn maintain_link(
 
         tracing::trace!(state = "awaiting barrier");
 
-        match Barrier::new(&mut stream, &mut sink).run().await {
+        match Barrier::new(&mut stream, &sink).run().await {
             Ok(()) => (),
+            Err(BarrierError::Timeout) => continue,
             Err(BarrierError::Failure) => continue,
             Err(BarrierError::ChannelClosed) => break,
         }
