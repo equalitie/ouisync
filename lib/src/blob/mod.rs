@@ -153,46 +153,39 @@ impl Blob {
     }
 
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch unless the blob is already in `dst_branch`. In that case
-    /// returns `Error::EntryExists`.
+    /// specified destination branch. This function is idempotent.
     pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
-        if self.unique.branch.id() == dst_branch.id() {
-            return Err(Error::EntryExists);
-        }
-
-        let read_key = self.unique.branch.keys().read();
-        // Take the write key from the dst branch, not the src branch, to protect us against
-        // accidentally forking into remote branch (remote branches don't have write access).
-        let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
-
         // HACK: read fresh length from the block to avoid stale cache
         let len = operations::read_len(tx, &self.unique).await?;
         let shared = self.shared.lock().await.deep_clone(len);
 
-        let locators = self
-            .unique
-            .head_locator
-            .sequence()
-            .take(shared.block_count() as usize);
+        // If the blob is already forked, do nothing but still return a clone of the original blob
+        // to maintain idempotency.
+        if self.unique.branch.id() != dst_branch.id() {
+            let read_key = self.unique.branch.keys().read();
+            // Take the write key from the dst branch, not the src branch, to protect us against
+            // accidentally forking into remote branch (remote branches don't have write access).
+            let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        for locator in locators {
-            let encoded_locator = locator.encode(read_key);
+            let locators = self
+                .unique
+                .head_locator
+                .sequence()
+                .take(shared.block_count() as usize);
 
-            let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
+            for locator in locators {
+                let encoded_locator = locator.encode(read_key);
 
-            let inserted = dst_branch
-                .data()
-                .insert(tx, &block_id, &encoded_locator, write_keys)
-                .await?;
+                let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
 
-            if !inserted {
-                // We have attempted to insert the block to the branch but it's already there. This
-                // could be either because we've hit the 2^sizeof(BlockId) chance that we generated
-                // the same BlockId twice (unlikely), or because the remote branch has moved the
-                // file from one location to another. In the latter case the blob has already been
-                // forked.
-                assert!(locator.is_head());
-                return Err(Error::EntryExists);
+                // It can happen that the current and dst branches are different, but the blob has
+                // already been forked by some other task in the meantime (after we loaded this
+                // blob but before the `tx` transaction has been created). In that case this
+                // `insert` is a no-op. We still proceed normally to maintain idempotency.
+                dst_branch
+                    .data()
+                    .insert(tx, &block_id, &encoded_locator, write_keys)
+                    .await?;
             }
         }
 

@@ -40,10 +40,6 @@ impl Locator {
         self.block
     }
 
-    pub fn is_head(&self) -> bool {
-        self.block == 0
-    }
-
     /// Secure encoding of this locator for the use in the index.
     pub fn encode(&self, secret_key: &SecretKey) -> Hash {
         (secret_key.as_ref(), self).hash()

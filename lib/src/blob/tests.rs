@@ -672,6 +672,40 @@ async fn fork_case(
 // TODO: test that fork() doesn't create new blocks
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fork_is_idempotent() {
+    let (mut rng, _base_dir, pool, src_branch) = setup(0).await;
+
+    let (event_tx, _) = broadcast::channel(1);
+    let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
+    let dst_branch = Branch::new(
+        dst_branch,
+        src_branch.keys().clone(),
+        Arc::new(BlobCache::new(event_tx)),
+    );
+
+    let locator = Locator::head(rng.gen());
+    let content: Vec<u8> = (&mut rng).sample_iter(Standard).take(512 * 1024).collect();
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut blob = Blob::create(src_branch.clone(), locator, Shared::uninit());
+    blob.write(&mut tx, &content[..]).await.unwrap();
+    blob.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    for i in 0..2 {
+        let mut tx = pool.begin().await.unwrap();
+        let blob_fork = blob
+            .try_fork(&mut tx, dst_branch.clone())
+            .await
+            .unwrap_or_else(|error| panic!("try_fork failed in iteration {}: {:?}", i, error));
+        tx.commit().await.unwrap();
+
+        assert_eq!(blob_fork.branch().id(), dst_branch.id());
+        assert_eq!(blob_fork.locator(), &locator);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut tx = pool.begin().await.unwrap();
