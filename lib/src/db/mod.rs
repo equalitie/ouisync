@@ -31,11 +31,27 @@ pub struct Pool {
 }
 
 impl Pool {
-    fn new(inner: SqlitePool) -> Self {
-        Self {
+    async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+        let connect_options = connect_options
+            .pragma("recursive_triggers", "ON")
+            // We assume that every transaction completes in a reasonable time (i.e., there are no
+            // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
+            // that so setting this excessively large timeout is the next best thing.
+            //
+            // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html) would
+            //    be one such way.
+            .busy_timeout(Duration::from_secs(24 * 60 * 60));
+
+        let inner = SqlitePoolOptions::new()
+            .max_connections(8)
+            .test_before_acquire(false)
+            .connect_with(connect_options)
+            .await?;
+
+        Ok(Self {
             inner,
             shared_tx: Arc::new(AsyncMutex::new(None)),
-        }
+        })
     }
 
     /// Acquire a database connection.
@@ -214,7 +230,7 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal);
 
-    let pool = create_pool(connect_options).await?;
+    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 
@@ -233,7 +249,7 @@ pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
     let connect_options = SqliteConnectOptions::new().filename(path);
-    let pool = create_pool(connect_options).await?;
+    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 
@@ -248,25 +264,6 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
-    let connect_options = connect_options
-        .pragma("recursive_triggers", "ON")
-        // We assume that every transaction completes in a reasonable time (i.e., there are no
-        // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
-        // that so setting this excessively large timeout is the next best thing.
-        //
-        // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html) would
-        //    be one such way.
-        .busy_timeout(Duration::from_secs(24 * 60 * 60));
-
-    SqlitePoolOptions::new()
-        .max_connections(8)
-        .connect_with(connect_options)
-        .await
-        .map(Pool::new)
-        .map_err(Error::Open)
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
