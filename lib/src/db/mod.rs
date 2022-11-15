@@ -169,18 +169,18 @@ impl SharedTransaction {
 }
 
 impl Deref for SharedTransaction {
-    type Target = Connection;
+    type Target = Transaction<'static>;
 
     fn deref(&self) -> &Self::Target {
         // `unwrap` is ok, see the NONE above.
-        self.0.as_ref().unwrap().deref()
+        self.0.as_ref().unwrap()
     }
 }
 
 impl DerefMut for SharedTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // `unwrap` is ok, see the NONE above.
-        self.0.as_mut().unwrap().deref_mut()
+        self.0.as_mut().unwrap()
     }
 }
 

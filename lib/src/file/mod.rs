@@ -80,10 +80,9 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_shared().await?;
         self.acquire_write_lock()?;
         self.blob.write(&mut tx, buffer).await?;
-        tx.commit().await?;
 
         Ok(())
     }
@@ -107,7 +106,7 @@ impl File {
             return Ok(());
         }
 
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_shared().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
