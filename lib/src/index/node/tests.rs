@@ -581,7 +581,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     // HACK: prevent "too many open files" error.
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -669,7 +669,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 
     // HACK: prevent "too many open files" error.
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 async fn setup() -> (TempDir, db::Pool) {

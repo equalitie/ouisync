@@ -31,7 +31,7 @@ async fn empty_blob() {
     assert_eq!(blob.read(&mut tx, &mut buffer[..]).await.unwrap(), 0);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -94,7 +94,7 @@ async fn write_and_read_case(
     assert!(read_content == orig_content);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -119,7 +119,7 @@ fn len(
         assert_eq!(blob.len(), content_len as u64);
 
         drop(tx);
-        pool.close().await;
+        pool.close().await.unwrap();
     })
 }
 
@@ -168,7 +168,7 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     assert_eq!(read_buffer[..len], content[expected_pos..]);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -202,7 +202,7 @@ fn seek_from_current(
         assert_eq!(read_buffer[..len], content[prev_pos..]);
 
         drop(tx);
-        pool.close().await;
+        pool.close().await.unwrap();
     })
 }
 
@@ -228,7 +228,7 @@ async fn seek_after_end() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -253,7 +253,7 @@ async fn seek_before_start() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -301,7 +301,7 @@ async fn remove_blob() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -354,7 +354,7 @@ async fn remove_blob_with_unflushed_writes() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -409,7 +409,7 @@ async fn truncate_to_empty() {
     assert!(block::exists(&mut tx, &new_block_id0).await.unwrap());
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -452,7 +452,7 @@ async fn truncate_to_shorter() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -475,7 +475,7 @@ async fn truncate_marks_as_dirty() {
     assert!(blob.is_dirty());
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -517,7 +517,7 @@ async fn modify_blob() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -542,7 +542,7 @@ async fn append() {
     assert_eq!(content, b"foobar");
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -562,7 +562,7 @@ async fn write_reopen_and_read() {
     assert_eq!(content, b"foo");
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -645,7 +645,7 @@ async fn fork_case(
     assert!(buffer == write_content);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 // TODO: test that fork() doesn't create new blocks
@@ -767,7 +767,7 @@ async fn block_ids_test() {
     assert_eq!(actual_count, 3);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {

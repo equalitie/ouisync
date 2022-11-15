@@ -364,7 +364,7 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        pool.close().await;
+        pool.close().await.unwrap();
     }
 
     async fn setup() -> (TempDir, db::Pool) {

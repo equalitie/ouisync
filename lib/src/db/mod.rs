@@ -96,8 +96,15 @@ impl Pool {
         Ok(SharedTransaction(shared_tx))
     }
 
-    pub(crate) async fn close(&self) {
-        self.inner.close().await
+    pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
+        if let Some(tx) = self.shared_tx.lock().await.take() {
+            // Ignore errors here
+            tx.commit().await?
+        }
+
+        self.inner.close().await;
+
+        Ok(())
     }
 }
 

@@ -495,9 +495,11 @@ impl Repository {
 
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
-    pub async fn close(&self) {
+    pub async fn close(&self) -> Result<()> {
         self.worker_handle.shutdown().await;
-        self.shared.store.db().close().await;
+        self.shared.store.db().close().await?;
+
+        Ok(())
     }
 
     pub async fn debug_print_root(&self) {

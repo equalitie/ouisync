@@ -323,8 +323,8 @@ async fn sync_during_file_read() {
             drop(reg_a);
             drop(reg_b);
 
-            repo_a.close().await;
-            repo_b.close().await;
+            repo_a.close().await.unwrap();
+            repo_b.close().await.unwrap();
 
             continue;
         };

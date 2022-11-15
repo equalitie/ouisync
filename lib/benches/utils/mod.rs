@@ -37,7 +37,8 @@ impl Deref for RepositoryGuard {
 
 impl Drop for RepositoryGuard {
     fn drop(&mut self) {
-        self.handle.block_on(self.repository.close())
+        self.handle
+            .block_on(async { self.repository.close().await.unwrap() })
     }
 }
 

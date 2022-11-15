@@ -146,7 +146,12 @@ impl fuser::Filesystem for VirtualFilesystem {
     }
 
     fn destroy(&mut self) {
-        self.rt.block_on(self.inner.repository.close());
+        tracing::debug!("closing repository");
+
+        match self.rt.block_on(self.inner.repository.close()) {
+            Ok(()) => tracing::debug!("repository closed"),
+            Err(error) => tracing::error!("failed to close repository: {:?}", error),
+        }
     }
 
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
