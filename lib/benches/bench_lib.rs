@@ -17,7 +17,7 @@ fn write_file(c: &mut Criterion) {
     let buffer_size = 4096;
     let file_name = Utf8Path::new("file.dat");
 
-    let mut group = c.benchmark_group("write_file");
+    let mut group = c.benchmark_group("lib/write_file");
     group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(
@@ -56,7 +56,7 @@ fn read_file(c: &mut Criterion) {
     let buffer_size = 4096;
     let file_name = Utf8Path::new("file.dat");
 
-    let mut group = c.benchmark_group("read_file");
+    let mut group = c.benchmark_group("lib/read_file");
     group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(

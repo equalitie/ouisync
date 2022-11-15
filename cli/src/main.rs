@@ -1,5 +1,4 @@
 mod options;
-mod virtual_filesystem;
 
 use self::options::{Named, Options};
 use anyhow::{format_err, Result};
@@ -162,7 +161,7 @@ async fn main() -> Result<()> {
         }
 
         let mount_guard =
-            virtual_filesystem::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
+            ouisync_vfs::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
 
         repo_guards.push((mount_guard, registration));
     }

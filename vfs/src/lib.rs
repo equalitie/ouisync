@@ -145,6 +145,10 @@ impl fuser::Filesystem for VirtualFilesystem {
         Ok(())
     }
 
+    fn destroy(&mut self) {
+        self.rt.block_on(self.inner.repository.close());
+    }
+
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
         let attr = try_request!(self.rt.block_on(self.inner.lookup(parent, name)), reply);
         reply.entry(&TTL, &attr, 0)
