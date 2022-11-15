@@ -38,11 +38,19 @@ impl Pool {
         }
     }
 
+    /// Acquire a database connection.
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
         self.inner.acquire().await.map(PoolConnection)
     }
 
-    // TODO: doc
+    /// Begin a regular ("unique") transaction. At most one task can hold a transaction at any time.
+    /// Any other tasks are blocked on calling `begin` until the task that currently holds it is
+    /// done with it (commits it or rolls it back). Performing read-only operations concurrently
+    /// while a transaction is in use is still allowed. Those operations will not see the writes
+    /// performed via the transaction until that transaction is committed however.
+    ///
+    /// If an idle `SharedTransaction` exists in the pool when `begin` is called, it is
+    /// automatically committed before the regular transaction is created.
     pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
         let mut shared_tx = self.shared_tx.lock().await;
 
@@ -53,7 +61,14 @@ impl Pool {
         Transaction::begin(&self.inner).await
     }
 
-    // TODO: doc
+    /// Begin a shared transaction. Unlike regular transaction, a shared transaction is not
+    /// automatically rolled back when dropped. Instead it's returned to the pool where it can be
+    /// reused by calling `begin_shared` again. An idle shared transaction is auto committed when a
+    /// regular transaction is created with `begin`. Shared transaction can also be manually
+    /// committed or rolled back by calling `commit` or `rollback` on it respectively.
+    ///
+    /// Use shared transactions to group multiple writes that don't logically need to be in the
+    /// same transaction to improve performance by reducing the number of commits.
     pub async fn begin_shared(&self) -> Result<SharedTransaction, sqlx::Error> {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
