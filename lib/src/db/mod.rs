@@ -12,30 +12,56 @@ use std::{
     io,
     ops::{Deref, DerefMut},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::fs;
+use tokio::{
+    fs,
+    sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
+};
 
 /// Database connection pool.
 #[derive(Clone)]
 pub struct Pool {
     inner: SqlitePool,
+    shared_tx: Arc<AsyncMutex<Option<Transaction<'static>>>>,
 }
 
 impl Pool {
     fn new(inner: SqlitePool) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            shared_tx: Arc::new(AsyncMutex::new(None)),
+        }
     }
 
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
         self.inner.acquire().await.map(PoolConnection)
     }
 
+    // TODO: doc
     pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.lock().await;
+
+        if let Some(tx) = shared_tx.take() {
+            tx.commit().await?;
+        }
+
         Transaction::begin(&self.inner).await
+    }
+
+    // TODO: doc
+    pub async fn begin_shared(&self) -> Result<SharedTransaction, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.clone().lock_owned().await;
+
+        if shared_tx.is_none() {
+            *shared_tx = Some(Transaction::begin(&self.inner).await?);
+        }
+
+        Ok(SharedTransaction(shared_tx))
     }
 
     pub(crate) async fn close(&self) {
@@ -44,16 +70,11 @@ impl Pool {
 }
 
 /// Database connection
+// TODO: create a newtype for this which hides `begin` (use the ref-cast crate)
 pub type Connection = SqliteConnection;
 
 /// Database connection from pool
 pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
-
-impl PoolConnection {
-    pub async fn begin(&mut self) -> Result<Transaction<'_>, sqlx::Error> {
-        Transaction::begin(&mut self.0).await
-    }
-}
 
 impl Deref for PoolConnection {
     type Target = Connection;
@@ -124,6 +145,42 @@ impl Deref for Transaction<'_> {
 impl DerefMut for Transaction<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.deref_mut()
+    }
+}
+
+/// Shared transaction
+///
+/// See [Pool::begin_shared] for more details.
+
+// NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
+// `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
+pub struct SharedTransaction(AsyncOwnedMutexGuard<Option<Transaction<'static>>>);
+
+impl SharedTransaction {
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        // `unwrap` is ok, see the NONE above.
+        self.0.take().unwrap().commit().await
+    }
+
+    pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
+        // `unwrap` is ok, see the NONE above.
+        self.0.take().unwrap().rollback().await
+    }
+}
+
+impl Deref for SharedTransaction {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        // `unwrap` is ok, see the NONE above.
+        self.0.as_ref().unwrap().deref()
+    }
+}
+
+impl DerefMut for SharedTransaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // `unwrap` is ok, see the NONE above.
+        self.0.as_mut().unwrap().deref_mut()
     }
 }
 
