@@ -4,7 +4,7 @@ use crate::debug;
 use sqlx::{
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
-        SqliteTransactionBehavior,
+        SqliteSynchronous, SqliteTransactionBehavior,
     },
     Acquire, Row, SqlitePool,
 };
@@ -33,6 +33,7 @@ pub struct Pool {
 impl Pool {
     async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
         let connect_options = connect_options
+            .synchronous(SqliteSynchronous::Normal)
             .pragma("recursive_triggers", "ON")
             // We assume that every transaction completes in a reasonable time (i.e., there are no
             // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
