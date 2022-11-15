@@ -1,0 +1,29 @@
+[package]
+name = "ouisync-vfs"
+description = "Secure P2P file sharing (virtual filesystem)"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+camino = "1.0.9"
+ouisync-lib = { package = "ouisync", path = "../lib" }
+slab = "0.4.6"
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]
+fuser = "0.11.0"
+libc = "0.2.126"
+
+[dev-dependencies]
+proptest = "1.0"
+rand = "0.8.5"
+tempfile = "3.2"
+test-strategy = "0.2.1"
+tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
+

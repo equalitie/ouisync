@@ -16,24 +16,19 @@ path = "src/main.rs"
 
 [dependencies]
 ouisync-lib = { package = "ouisync", path = "../lib" }
+ouisync-vfs = { path = "../vfs" }
 anyhow = "1.0.57"
-camino = "1.0.9"
 clap = { version = "3.2.5", features = ["derive"] }
 dirs = "4.0.0"
-slab = "0.4.6"
 tokio = { workspace = true, features = ["signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
-rand = "0.8.5"
-
-[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]
-fuser = "0.11.0"
-libc = "0.2.126"
 
 [dev-dependencies]
 backoff = "0.4.0"
 hex = "0.4.3"
-proptest = "1.0"
+rand = "0.8.5"
 tempfile = "3.2"
-test-strategy = "0.2.1"
 
+[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dev-dependencies]
+libc = "0.2.126"
