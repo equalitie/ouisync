@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[[bench]]
+name = "bench_vfs"
+harness = false
+
 [dependencies]
 camino = "1.0.9"
 ouisync-lib = { package = "ouisync", path = "../lib" }
@@ -21,6 +25,7 @@ fuser = "0.11.0"
 libc = "0.2.126"
 
 [dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
 proptest = "1.0"
 rand = "0.8.5"
 tempfile = "3.2"

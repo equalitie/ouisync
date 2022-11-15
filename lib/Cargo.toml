@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [[bench]]
-name = "bench"
+name = "bench_lib"
 harness = false
 
 [dependencies]
