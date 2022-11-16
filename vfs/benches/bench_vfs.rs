@@ -1,11 +1,8 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use ouisync_lib::{AccessSecrets, MasterSecret, Repository};
 use ouisync_vfs::MountGuard;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::runtime::{Handle, Runtime};
 
@@ -22,25 +19,14 @@ fn write_file(c: &mut Criterion) {
     group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(BenchmarkId::from_parameter(file_size), |b| {
-        b.iter_custom(|iters| {
-            let mut elapsed = Duration::ZERO;
-
-            for _ in 0..iters {
-                // Setup
-                let (mut rng, base_dir, mount_guard) = runtime.block_on(utils::setup());
+        b.iter_batched_ref(
+            || runtime.block_on(utils::setup()),
+            |(rng, base_dir, _mount_guard)| {
                 let file_path = base_dir.path().join("mnt").join(file_name);
-
-                // Measure
-                let time = Instant::now();
-                utils::write_file(&mut rng, &file_path, file_size);
-                elapsed += time.elapsed();
-
-                // Teardown
-                drop(mount_guard);
-            }
-
-            elapsed
-        })
+                utils::write_file(rng, &file_path, file_size);
+            },
+            BatchSize::LargeInput,
+        );
     });
     group.finish();
 }

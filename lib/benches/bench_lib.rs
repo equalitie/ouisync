@@ -1,9 +1,8 @@
 mod utils;
 
 use camino::Utf8Path;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use rand::{rngs::StdRng, SeedableRng};
-use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -15,7 +14,6 @@ fn write_file(c: &mut Criterion) {
 
     let file_size = 1024 * 1024;
     let buffer_size = 4096;
-    let file_name = Utf8Path::new("file.dat");
 
     let mut group = c.benchmark_group("lib/write_file");
     group.sample_size(50);
@@ -23,27 +21,27 @@ fn write_file(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter(format!("{}@{}", file_size, buffer_size)),
         |b| {
-            b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut elapsed = Duration::ZERO;
-
-                for _ in 0..iters {
-                    // Setup
+            b.iter_batched_ref(
+                || {
                     let mut rng = StdRng::from_entropy();
                     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-                    let repo = utils::create_repo(&mut rng, &base_dir.path().join("repo.db")).await;
-
-                    // Body
-                    let time = Instant::now();
-                    utils::write_file(&mut rng, &repo, file_name, file_size as usize, buffer_size)
-                        .await;
-                    elapsed += time.elapsed();
-
-                    // Teardown
-                    repo.close().await;
-                }
-
-                elapsed
-            })
+                    let repo = runtime.block_on(utils::create_repo(
+                        &mut rng,
+                        &base_dir.path().join("repo.db"),
+                    ));
+                    (rng, base_dir, repo)
+                },
+                |(rng, _base_dir, repo)| {
+                    runtime.block_on(utils::write_file(
+                        rng,
+                        repo,
+                        Utf8Path::new("file.dat"),
+                        file_size as usize,
+                        buffer_size,
+                    ))
+                },
+                BatchSize::LargeInput,
+            );
         },
     );
     group.finish();
@@ -54,7 +52,6 @@ fn read_file(c: &mut Criterion) {
 
     let file_size = 1024 * 1024;
     let buffer_size = 4096;
-    let file_name = Utf8Path::new("file.dat");
 
     let mut group = c.benchmark_group("lib/read_file");
     group.sample_size(50);
@@ -62,28 +59,35 @@ fn read_file(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter(format!("{}@{}", file_size, buffer_size)),
         |b| {
-            b.to_async(&runtime).iter_custom(|iters| async move {
-                let mut elapsed = Duration::ZERO;
+            let file_name = Utf8Path::new("file.dat");
 
-                for _ in 0..iters {
-                    // Setup
+            b.iter_batched_ref(
+                || {
                     let mut rng = StdRng::from_entropy();
                     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-                    let repo = utils::create_repo(&mut rng, &base_dir.path().join("repo.db")).await;
-                    utils::write_file(&mut rng, &repo, file_name, file_size as usize, buffer_size)
+
+                    let repo = runtime.block_on(async {
+                        let repo =
+                            utils::create_repo(&mut rng, &base_dir.path().join("repo.db")).await;
+
+                        utils::write_file(
+                            &mut rng,
+                            &repo,
+                            file_name,
+                            file_size as usize,
+                            buffer_size,
+                        )
                         .await;
+                        repo
+                    });
 
-                    // Body
-                    let time = Instant::now();
-                    let _len = utils::read_file(&repo, file_name, buffer_size).await;
-                    elapsed += time.elapsed();
-
-                    // Teardown
-                    repo.close().await;
-                }
-
-                elapsed
-            })
+                    (base_dir, repo)
+                },
+                |(_base_dir, repo)| {
+                    let _len = runtime.block_on(utils::read_file(repo, file_name, buffer_size));
+                },
+                BatchSize::LargeInput,
+            );
         },
     );
     group.finish();
