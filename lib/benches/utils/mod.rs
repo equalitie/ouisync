@@ -1,10 +1,11 @@
 use camino::Utf8Path;
 use ouisync::{AccessSecrets, MasterSecret, Repository};
 use rand::{rngs::StdRng, Rng};
-use std::path::Path;
+use std::{ops::Deref, path::Path};
+use tokio::runtime::Handle;
 
-pub async fn create_repo(rng: &mut StdRng, store: &Path) -> Repository {
-    Repository::create(
+pub async fn create_repo(rng: &mut StdRng, store: &Path) -> RepositoryGuard {
+    let repository = Repository::create(
         store,
         rng.gen(),
         MasterSecret::generate(rng),
@@ -12,7 +13,32 @@ pub async fn create_repo(rng: &mut StdRng, store: &Path) -> Repository {
         true,
     )
     .await
-    .unwrap()
+    .unwrap();
+
+    RepositoryGuard {
+        repository,
+        handle: Handle::current(),
+    }
+}
+
+// Wrapper for `Repository` which calls `close` on drop.
+pub struct RepositoryGuard {
+    repository: Repository,
+    handle: Handle,
+}
+
+impl Deref for RepositoryGuard {
+    type Target = Repository;
+
+    fn deref(&self) -> &Self::Target {
+        &self.repository
+    }
+}
+
+impl Drop for RepositoryGuard {
+    fn drop(&mut self) {
+        self.handle.block_on(self.repository.close())
+    }
 }
 
 /// Write `size` random bytes to a file at `path` (`buffer_size` bytes at a time).
