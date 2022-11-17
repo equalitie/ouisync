@@ -706,6 +706,63 @@ async fn fork_is_idempotent() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fork_then_remove_src_branch() {
+    let (mut rng, _base_dir, pool, src_branch) = setup(0).await;
+
+    let (event_tx, _) = broadcast::channel(1);
+    let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
+    let dst_branch = Branch::new(
+        dst_branch,
+        src_branch.keys().clone(),
+        Arc::new(BlobCache::new(event_tx)),
+    );
+
+    let locator_0 = Locator::head(rng.gen());
+    let locator_1 = Locator::head(rng.gen());
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut blob_0 = Blob::create(src_branch.clone(), locator_0, Shared::uninit());
+    blob_0.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let mut blob_1 = Blob::create(src_branch.clone(), locator_1, Shared::uninit());
+    blob_1.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    blob_0.try_fork(&mut tx, dst_branch.clone()).await.unwrap();
+    tx.commit().await.unwrap();
+
+    drop(blob_0);
+    drop(blob_1);
+
+    let mut conn = pool.acquire().await.unwrap();
+
+    // Remove the src branch
+    src_branch
+        .data()
+        .load_snapshot(&mut conn)
+        .await
+        .unwrap()
+        .remove(&mut conn)
+        .await
+        .unwrap();
+
+    // The forked blob still exists
+    Blob::open(&mut conn, dst_branch, locator_0, Shared::uninit())
+        .await
+        .unwrap();
+
+    // The unforked is gone
+    match Blob::open(&mut conn, src_branch, locator_1, Shared::uninit()).await {
+        Err(Error::EntryNotFound) => (),
+        Err(error) => panic!("unexpected error {:?}", error),
+        Ok(_) => panic!("unexpected success"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut tx = pool.begin().await.unwrap();

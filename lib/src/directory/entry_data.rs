@@ -1,6 +1,5 @@
 use crate::{blob_id::BlobId, version_vector::VersionVector};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 //--------------------------------------------------------------------
 
@@ -24,10 +23,6 @@ impl EntryData {
             blob_id,
             version_vector,
         })
-    }
-
-    pub fn tombstone(version_vector: VersionVector) -> Self {
-        Self::Tombstone(EntryTombstoneData { version_vector })
     }
 
     pub fn version_vector(&self) -> &VersionVector {
@@ -57,7 +52,7 @@ impl EntryData {
 
 //--------------------------------------------------------------------
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct EntryFileData {
     pub blob_id: BlobId,
     pub version_vector: VersionVector,
@@ -72,15 +67,6 @@ impl Clone for EntryFileData {
     }
 }
 
-impl fmt::Debug for EntryFileData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("EntryFileData")
-            .field("blob_id", &self.blob_id)
-            .field("vv", &self.version_vector)
-            .finish()
-    }
-}
-
 impl PartialEq for EntryFileData {
     fn eq(&self, other: &Self) -> bool {
         self.blob_id == other.blob_id && self.version_vector == other.version_vector
@@ -89,36 +75,59 @@ impl PartialEq for EntryFileData {
 
 impl Eq for EntryFileData {}
 
-//--------------------------------------------------------------------
-
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub(crate) struct EntryDirectoryData {
     pub blob_id: BlobId,
     pub version_vector: VersionVector,
 }
 
-impl fmt::Debug for EntryDirectoryData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("EntryDirectoryData")
-            .field("blob_id", &self.blob_id)
-            .field("vv", &self.version_vector)
-            .finish()
-    }
-}
-
-//--------------------------------------------------------------------
-
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub struct EntryTombstoneData {
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub(crate) struct EntryTombstoneData {
+    pub cause: TombstoneCause,
     pub version_vector: VersionVector,
 }
 
-impl fmt::Debug for EntryTombstoneData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("EntryTombstoneData")
-            .field("vv", &self.version_vector)
-            .finish()
+impl EntryTombstoneData {
+    /// Create tombstone date with `Removed` cause
+    pub fn removed(version_vector: VersionVector) -> Self {
+        Self {
+            cause: TombstoneCause::Removed,
+            version_vector,
+        }
+    }
+
+    /// Create tombstone date with `Moved` cause
+    pub fn moved(version_vector: VersionVector) -> Self {
+        Self {
+            cause: TombstoneCause::Moved,
+            version_vector,
+        }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        use std::cmp::Ordering::*;
+        use TombstoneCause::*;
+
+        self.cause = match self.version_vector.partial_cmp(&other.version_vector) {
+            Some(Greater) => self.cause,
+            Some(Less) => other.cause,
+            Some(Equal) | None => {
+                // In case of conflict, prefer `Moved` to avoid deleting the moved blob
+                match (self.cause, other.cause) {
+                    (Removed, Removed) => Removed,
+                    (Removed, Moved) | (Moved, Removed) | (Moved, Moved) => Moved,
+                }
+            }
+        };
+
+        self.version_vector.merge(&other.version_vector);
     }
 }
 
-//--------------------------------------------------------------------
+/// What caused a tombstone to be created: either the original entry was removed or moved to some
+/// other location.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub(crate) enum TombstoneCause {
+    Removed,
+    Moved,
+}

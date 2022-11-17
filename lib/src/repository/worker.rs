@@ -429,7 +429,7 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().begin().await?;
+        let mut conn = shared.store.db().acquire().await?;
         block::mark_all_unreachable(&mut conn).await
     }
 

@@ -15,10 +15,10 @@ async fn no_conflict() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root0, "file0.txt", &[], &branches[0]).await;
+    create_file(&mut conn, &mut root0, "file0.txt", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root1, "file1.txt", &[], &branches[1]).await;
+    create_file(&mut conn, &mut root1, "file1.txt", &[]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
     let entries: Vec<_> = root.entries().collect();
@@ -47,10 +47,10 @@ async fn conflict_independent_files() {
     let mut conn = pool.acquire().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root0, "file.txt", &[], &branches[0]).await;
+    create_file(&mut conn, &mut root0, "file.txt", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root1, "file.txt", &[], &branches[1]).await;
+    create_file(&mut conn, &mut root1, "file.txt", &[]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
 
@@ -105,7 +105,7 @@ async fn conflict_forked_files() {
     let mut tx = pool.begin().await.unwrap();
 
     let mut root0 = branches[0].open_or_create_root(&mut tx).await.unwrap();
-    create_file(&mut tx, &mut root0, "file.txt", b"one", &branches[0]).await;
+    create_file(&mut tx, &mut root0, "file.txt", b"one").await;
 
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&mut tx, &root0, "file.txt").await;
@@ -176,7 +176,7 @@ async fn conflict_file_and_single_version_directory() {
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
 
-    create_file(&mut conn, &mut root0, "config", &[], &branches[0]).await;
+    create_file(&mut conn, &mut root0, "config", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
@@ -236,7 +236,7 @@ async fn conflict_file_and_multi_version_directory() {
     branches.sort_by(|lhs, rhs| lhs.id().cmp(rhs.id()));
 
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root0, "config", &[], &branches[0]).await;
+    create_file(&mut conn, &mut root0, "config", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     root1
@@ -283,7 +283,7 @@ async fn conflict_identical_versions() {
 
     // Create a file by one branch.
     let mut root0 = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut root0, "file.txt", b"one", &branches[0]).await;
+    create_file(&mut conn, &mut root0, "file.txt", b"one").await;
 
     // Fork it into the other branch, creating an identical version of it.
     let mut file1 = open_file(&mut conn, &root0, "file.txt").await;
@@ -372,14 +372,14 @@ async fn cd_into_concurrent_directory() {
         .create_directory(&mut conn, "pics".to_owned())
         .await
         .unwrap();
-    create_file(&mut conn, &mut dir0, "dog.jpg", &[], &branches[0]).await;
+    create_file(&mut conn, &mut dir0, "dog.jpg", &[]).await;
 
     let mut root1 = branches[1].open_or_create_root(&mut conn).await.unwrap();
     let mut dir1 = root1
         .create_directory(&mut conn, "pics".to_owned())
         .await
         .unwrap();
-    create_file(&mut conn, &mut dir1, "cat.jpg", &[], &branches[1]).await;
+    create_file(&mut conn, &mut dir1, "cat.jpg", &[]).await;
 
     let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
     let dir = root.cd(&mut conn, "pics").await.unwrap();
@@ -405,14 +405,7 @@ async fn merge_locally_non_existing_file() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file in the remote root
-    create_file(
-        &mut conn,
-        &mut remote_root,
-        "cat.jpg",
-        content,
-        &branches[1],
-    )
-    .await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", content).await;
 
     // Construct a joint directory over both root dirs and merge it.
     JointDirectory::new(
@@ -452,14 +445,7 @@ async fn merge_locally_older_file() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Create a file in the remote root
-    create_file(
-        &mut conn,
-        &mut remote_root,
-        "cat.jpg",
-        content_v0,
-        &branches[1],
-    )
-    .await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", content_v0).await;
 
     // Merge to transfer the file to the local branch
     JointDirectory::new(
@@ -514,14 +500,7 @@ async fn merge_locally_newer_file() {
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
-    create_file(
-        &mut conn,
-        &mut remote_root,
-        "cat.jpg",
-        content_v0,
-        &branches[1],
-    )
-    .await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", content_v0).await;
 
     JointDirectory::new(
         Some(branches[0].clone()),
@@ -562,7 +541,7 @@ async fn attempt_to_merge_concurrent_file() {
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
-    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0").await;
 
     JointDirectory::new(
         Some(branches[0].clone()),
@@ -637,7 +616,7 @@ async fn merge_is_idempotent() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // Merge after a remote modification - this causes local modification.
-    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0").await;
 
     JointDirectory::new(
         Some(branches[0].clone()),
@@ -697,7 +676,7 @@ async fn merge_create_file_roundtrip() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // remote: create the file
-    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0").await;
 
     // local: merge from remote
     JointDirectory::new(
@@ -754,14 +733,7 @@ async fn merge_create_and_delete_file_roundtrip() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
 
     // local: create the file
-    create_file(
-        &mut conn,
-        &mut local_root,
-        "monkey.jpg",
-        b"v0",
-        &branches[0],
-    )
-    .await;
+    create_file(&mut conn, &mut local_root, "monkey.jpg", b"v0").await;
 
     // remote: merge from local
     JointDirectory::new(
@@ -781,7 +753,12 @@ async fn merge_create_and_delete_file_roundtrip() {
         .version_vector()
         .clone();
     remote_root
-        .remove_entry(&mut conn, "monkey.jpg", branches[1].id(), file_vv)
+        .remove_entry(
+            &mut conn,
+            "monkey.jpg",
+            branches[1].id(),
+            EntryTombstoneData::removed(file_vv),
+        )
         .await
         .unwrap();
 
@@ -816,7 +793,7 @@ async fn merge_remote_only() {
 
     let mut conn = pool.acquire().await.unwrap();
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
-    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0", &branches[1]).await;
+    create_file(&mut conn, &mut remote_root, "cat.jpg", b"v0").await;
 
     // When passing only the remote dir to the joint directory the merge still works.
     JointDirectory::new(Some(branches[0].clone()), [remote_root])
@@ -839,7 +816,7 @@ async fn merge_sequential_modifications() {
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
 
-    create_file(&mut conn, &mut local_root, "dog.jpg", b"v0", &branches[0]).await;
+    create_file(&mut conn, &mut local_root, "dog.jpg", b"v0").await;
     local_root.refresh(&mut conn).await.unwrap();
 
     let vv0 = read_version_vector(&local_root, "dog.jpg").await;
@@ -893,7 +870,7 @@ async fn merge_concurrent_directories() {
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
-    create_file(&mut conn, &mut local_dir, "dog.jpg", &[], &branches[0]).await;
+    create_file(&mut conn, &mut local_dir, "dog.jpg", &[]).await;
 
     local_dir.refresh(&mut conn).await.unwrap();
     let local_dir_vv = local_dir.version_vector(&mut conn).await.unwrap();
@@ -903,7 +880,7 @@ async fn merge_concurrent_directories() {
         .create_directory(&mut conn, "dir".into())
         .await
         .unwrap();
-    create_file(&mut conn, &mut remote_dir, "cat.jpg", &[], &branches[1]).await;
+    create_file(&mut conn, &mut remote_dir, "cat.jpg", &[]).await;
 
     remote_dir.refresh(&mut conn).await.unwrap();
     let remote_dir_vv = remote_dir.version_vector(&mut conn).await.unwrap();
@@ -939,7 +916,7 @@ async fn merge_file_and_tombstone() {
 
     // Create a file in the local one.
     let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
-    let mut file = create_file(&mut conn, &mut local_root, "dog.jpg", &[], &branches[0]).await;
+    let mut file = create_file(&mut conn, &mut local_root, "dog.jpg", &[]).await;
     let file_vv = file.version_vector(&mut conn).await.unwrap();
 
     // Fork the file into the remote branch.
@@ -948,7 +925,12 @@ async fn merge_file_and_tombstone() {
 
     // Remove the file in the remote branch.
     remote_root
-        .remove_entry(&mut conn, "dog.jpg", branches[1].id(), file_vv)
+        .remove_entry(
+            &mut conn,
+            "dog.jpg",
+            branches[1].id(),
+            EntryTombstoneData::removed(file_vv),
+        )
         .await
         .unwrap();
 
@@ -968,6 +950,77 @@ async fn merge_file_and_tombstone() {
     assert!(entry.is_tombstone());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_moved_file() {
+    // Create two branches.
+    let (_base_dir, pool, branches) = setup(2).await;
+    let mut conn = pool.acquire().await.unwrap();
+
+    let dir_name = "b";
+    let file_name = "a";
+    let file_content = b"content of the file";
+
+    // Create a file in the local one.
+    let mut local_root = branches[0].open_or_create_root(&mut conn).await.unwrap();
+    let mut file = create_file(&mut conn, &mut local_root, file_name, file_content).await;
+
+    // Fork the file into the remote branch
+    let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
+    file.fork(&mut conn, branches[1].clone()).await.unwrap();
+
+    remote_root.refresh(&mut conn).await.unwrap();
+
+    // Create a new directory in the remote branch
+    let mut dir = remote_root
+        .create_directory(&mut conn, dir_name.to_owned())
+        .await
+        .unwrap();
+
+    // Move the file into the new directory
+    let entry_data = remote_root.lookup(file_name).unwrap().clone_data();
+    remote_root
+        .move_entry(
+            &mut conn,
+            file_name,
+            entry_data,
+            &mut dir,
+            file_name,
+            VersionVector::first(*branches[1].id()),
+        )
+        .await
+        .unwrap();
+
+    // Merge back into the local branch
+    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+        .merge(&mut conn)
+        .await
+        .unwrap();
+
+    local_root.refresh(&mut conn).await.unwrap();
+
+    // The file is moved from it's original location to the new directory
+    assert_matches!(local_root.lookup(file_name), Ok(EntryRef::Tombstone(_)));
+
+    let dir = local_root
+        .lookup(dir_name)
+        .unwrap()
+        .directory()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
+    let mut file = dir
+        .lookup(file_name)
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
+
+    assert_eq!(file.read_to_end(&mut conn).await.unwrap(), file_content);
+}
+
 // TODO: merge directory with missing blocks
 
 #[tokio::test(flavor = "multi_thread")]
@@ -980,7 +1033,7 @@ async fn remove_non_empty_subdirectory() {
         .create_directory(&mut tx, "dir0".into())
         .await
         .unwrap();
-    create_file(&mut tx, &mut local_dir, "foo.txt", &[], &branches[0]).await;
+    create_file(&mut tx, &mut local_dir, "foo.txt", &[]).await;
 
     local_root
         .create_directory(&mut tx, "dir1".into())
@@ -992,7 +1045,7 @@ async fn remove_non_empty_subdirectory() {
         .create_directory(&mut tx, "dir0".into())
         .await
         .unwrap();
-    create_file(&mut tx, &mut remote_dir, "bar.txt", &[], &branches[1]).await;
+    create_file(&mut tx, &mut remote_dir, "bar.txt", &[]).await;
 
     remote_root
         .create_directory(&mut tx, "dir2".into())
@@ -1069,13 +1122,11 @@ async fn create_file(
     parent: &mut Directory,
     name: &str,
     content: &[u8],
-    local_branch: &Branch,
 ) -> File {
     let mut file = parent.create_file(conn, name.to_owned()).await.unwrap();
     let mut tx = conn.begin().await.unwrap();
 
     if !content.is_empty() {
-        file.fork(&mut tx, local_branch.clone()).await.unwrap();
         file.write(&mut tx, content).await.unwrap();
     }
 
