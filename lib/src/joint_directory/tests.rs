@@ -950,8 +950,6 @@ async fn merge_file_and_tombstone() {
     assert!(entry.is_tombstone());
 }
 
-// FIXME: https://github.com/equalitie/ouisync/issues/91
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_moved_file() {
     // Create two branches.
