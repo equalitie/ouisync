@@ -4,11 +4,11 @@ use super::entry_data::EntryData;
 use crate::{
     blob_id::BlobId,
     branch::Branch,
-    crypto::sign::PublicKey,
     error::{Error, Result},
     index::VersionVectorOp,
     version_vector::VersionVector,
 };
+use serde::Deserialize;
 use std::{
     collections::{
         btree_map::{self, Entry},
@@ -18,11 +18,11 @@ use std::{
 };
 
 /// Version of the Directory serialization format.
-pub(crate) const VERSION: u64 = 1;
+pub(crate) const VERSION: u64 = 2;
 
 #[derive(Clone, Debug)]
 pub(super) struct Content {
-    entries: ContentV1,
+    entries: v2::Entries,
     overwritten_blobs: Vec<BlobId>,
 }
 
@@ -37,10 +37,9 @@ impl Content {
     pub fn deserialize(mut input: &[u8]) -> Result<Self> {
         let version = vint64::decode(&mut input).map_err(|_| Error::MalformedDirectory)?;
         let content = match version {
-            VERSION => bincode::deserialize(input).map_err(|_| Error::MalformedDirectory),
-            0 => Ok(upgrade_from_v0(
-                bincode::deserialize(input).map_err(|_| Error::MalformedDirectory)?,
-            )),
+            VERSION => deserialize_entries(input),
+            1 => Ok(v2::from_v1(deserialize_entries(input)?)),
+            0 => Ok(v2::from_v1(v1::from_v0(deserialize_entries(input)?))),
             _ => Err(Error::StorageVersionMismatch),
         };
 
@@ -164,28 +163,87 @@ impl<'a> IntoIterator for &'a Content {
     }
 }
 
-type ContentV1 = BTreeMap<String, EntryData>;
-type ContentV0 = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
+fn deserialize_entries<'a, T: Deserialize<'a>>(input: &'a [u8]) -> Result<T, Error> {
+    bincode::deserialize(input).map_err(|_| Error::MalformedDirectory)
+}
 
-fn upgrade_from_v0(v0: ContentV0) -> ContentV1 {
-    use crate::conflict;
+mod v2 {
+    use super::{
+        super::entry_data::{EntryData, EntryTombstoneData, TombstoneCause},
+        v1,
+    };
+    use std::collections::BTreeMap;
 
-    let mut v1 = BTreeMap::new();
+    pub(super) type Entries = BTreeMap<String, EntryData>;
 
-    for (name, versions) in v0 {
-        if versions.len() <= 1 {
-            // If there is only one version, insert it directly
-            if let Some(data) = versions.into_values().next() {
-                v1.insert(name, data);
-            }
-        } else {
-            // If there is more than one version, create unique name for each of them and insert
-            // them as separate entries
-            for (author_id, data) in versions {
-                v1.insert(conflict::create_unique_name(&name, &author_id), data);
+    pub(super) fn from_v1(v1: v1::Entries) -> Entries {
+        v1.into_iter()
+            .map(|(name, data)| {
+                let data = match data {
+                    v1::EntryData::File(data) => EntryData::File(data),
+                    v1::EntryData::Directory(data) => EntryData::Directory(data),
+                    v1::EntryData::Tombstone(v1::EntryTombstoneData { version_vector }) => {
+                        EntryData::Tombstone(EntryTombstoneData {
+                            cause: TombstoneCause::Removed,
+                            version_vector,
+                        })
+                    }
+                };
+
+                (name, data)
+            })
+            .collect()
+    }
+}
+
+mod v1 {
+    use super::v0;
+    use std::collections::BTreeMap;
+    pub(super) use v0::{EntryData, EntryTombstoneData};
+
+    pub(super) type Entries = BTreeMap<String, v0::EntryData>;
+
+    pub(super) fn from_v0(v0: v0::Entries) -> Entries {
+        use crate::conflict;
+
+        let mut v1 = BTreeMap::new();
+
+        for (name, versions) in v0 {
+            if versions.len() <= 1 {
+                // If there is only one version, insert it directly
+                if let Some(data) = versions.into_values().next() {
+                    v1.insert(name, data);
+                }
+            } else {
+                // If there is more than one version, create unique name for each of them and insert
+                // them as separate entries
+                for (author_id, data) in versions {
+                    v1.insert(conflict::create_unique_name(&name, &author_id), data);
+                }
             }
         }
+
+        v1
+    }
+}
+
+mod v0 {
+    use super::super::entry_data::{EntryDirectoryData, EntryFileData};
+    use crate::{crypto::sign::PublicKey, version_vector::VersionVector};
+    use serde::Deserialize;
+    use std::collections::BTreeMap;
+
+    pub(super) type Entries = BTreeMap<String, BTreeMap<PublicKey, EntryData>>;
+
+    #[derive(Deserialize)]
+    pub(super) enum EntryData {
+        File(EntryFileData),
+        Directory(EntryDirectoryData),
+        Tombstone(EntryTombstoneData),
     }
 
-    v1
+    #[derive(Deserialize)]
+    pub(super) struct EntryTombstoneData {
+        pub version_vector: VersionVector,
+    }
 }
