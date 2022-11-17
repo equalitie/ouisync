@@ -753,7 +753,12 @@ async fn merge_create_and_delete_file_roundtrip() {
         .version_vector()
         .clone();
     remote_root
-        .remove_entry(&mut conn, "monkey.jpg", branches[1].id(), file_vv)
+        .remove_entry(
+            &mut conn,
+            "monkey.jpg",
+            branches[1].id(),
+            EntryTombstoneData::removed(file_vv),
+        )
         .await
         .unwrap();
 
@@ -920,7 +925,12 @@ async fn merge_file_and_tombstone() {
 
     // Remove the file in the remote branch.
     remote_root
-        .remove_entry(&mut conn, "dog.jpg", branches[1].id(), file_vv)
+        .remove_entry(
+            &mut conn,
+            "dog.jpg",
+            branches[1].id(),
+            EntryTombstoneData::removed(file_vv),
+        )
         .await
         .unwrap();
 

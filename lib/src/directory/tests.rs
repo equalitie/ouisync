@@ -89,7 +89,12 @@ async fn remove_file() {
     // Reopen and remove the file
     let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
-        .remove_entry(&mut conn, name, branch.id(), file_vv)
+        .remove_entry(
+            &mut conn,
+            name,
+            branch.id(),
+            EntryTombstoneData::removed(file_vv),
+        )
         .await
         .unwrap();
 
@@ -383,7 +388,12 @@ async fn remove_subdirectory() {
     // Reopen and remove the subdirectory
     let mut parent_dir = branch.open_root(&mut conn).await.unwrap();
     parent_dir
-        .remove_entry(&mut conn, name, branch.id(), dir_vv)
+        .remove_entry(
+            &mut conn,
+            name,
+            branch.id(),
+            EntryTombstoneData::removed(dir_vv),
+        )
         .await
         .unwrap();
 
@@ -477,7 +487,12 @@ async fn fork_over_tombstone() {
     let vv = root0.lookup("dir").unwrap().version_vector().clone();
 
     root0
-        .remove_entry(&mut tx, "dir", branches[0].id(), vv)
+        .remove_entry(
+            &mut tx,
+            "dir",
+            branches[0].id(),
+            EntryTombstoneData::removed(vv),
+        )
         .await
         .unwrap();
 
@@ -557,9 +572,14 @@ async fn remove_unique_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1];
 
-    root.remove_entry(&mut conn, name, &remote_id, remote_vv.clone())
-        .await
-        .unwrap();
+    root.remove_entry(
+        &mut conn,
+        name,
+        &remote_id,
+        EntryTombstoneData::removed(remote_vv.clone()),
+    )
+    .await
+    .unwrap();
 
     let local_vv = assert_matches!(
         root.lookup(name),
@@ -587,9 +607,14 @@ async fn remove_concurrent_remote_file() {
     let remote_id = PublicKey::random();
     let remote_vv = vv![remote_id => 1];
 
-    root.remove_entry(&mut conn, name, &remote_id, remote_vv.clone())
-        .await
-        .unwrap();
+    root.remove_entry(
+        &mut conn,
+        name,
+        &remote_id,
+        EntryTombstoneData::removed(remote_vv.clone()),
+    )
+    .await
+    .unwrap();
 
     let local_vv = assert_matches!(
         root.lookup(name),

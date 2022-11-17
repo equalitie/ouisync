@@ -7,7 +7,7 @@ use crate::{
     conflict,
     crypto::sign::PublicKey,
     db,
-    directory::{Directory, DirectoryRef, EntryRef, EntryType, FileRef},
+    directory::{Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef},
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -217,7 +217,7 @@ impl JointDirectory {
 
         for (name, branch_id, vv) in entries {
             local_version
-                .remove_entry(conn, &name, &branch_id, vv)
+                .remove_entry(conn, &name, &branch_id, EntryTombstoneData::removed(vv))
                 .await?;
         }
 
@@ -293,8 +293,8 @@ impl JointDirectory {
                         }
                     }
                 }
-                Merge::Tombstone(vv) => {
-                    check_for_removal.push((name.to_owned(), vv.into_owned()));
+                Merge::Tombstone(tombstone) => {
+                    check_for_removal.push((name.to_owned(), tombstone));
                 }
             }
         }
@@ -304,9 +304,9 @@ impl JointDirectory {
         let local_version = self.local_version_mut().unwrap();
         local_version.refresh(conn).await?;
 
-        for (name, vv) in check_for_removal {
+        for (name, tombstone) in check_for_removal {
             local_version
-                .remove_entry(conn, &name, local_branch.id(), vv)
+                .remove_entry(conn, &name, local_branch.id(), tombstone)
                 .await?;
         }
 
@@ -606,7 +606,7 @@ enum Merge<'a> {
     // zero or more versions of an entry...
     Existing(Existing<'a>),
     // ...or a single tombstone
-    Tombstone(Cow<'a, VersionVector>),
+    Tombstone(EntryTombstoneData),
 }
 
 #[derive(Default, Clone)]
@@ -648,7 +648,7 @@ impl<'a> Merge<'a> {
     {
         let mut files = VecDeque::new();
         let mut directories = vec![];
-        let mut tombstone: Option<Cow<VersionVector>> = None;
+        let mut tombstone: Option<EntryTombstoneData> = None;
 
         // Note that doing this will remove files that have been removed by tombstones as well.
         let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
@@ -660,10 +660,10 @@ impl<'a> Merge<'a> {
                 EntryRef::Tombstone(_) if !files.is_empty() || !directories.is_empty() => continue,
                 EntryRef::Tombstone(new_tombstone) => {
                     let new_tombstone = if let Some(mut old_tombstone) = tombstone.take() {
-                        old_tombstone.to_mut().merge(new_tombstone.version_vector());
+                        old_tombstone.merge(new_tombstone.data());
                         old_tombstone
                     } else {
-                        Cow::Borrowed(new_tombstone.version_vector())
+                        new_tombstone.data().clone()
                     };
 
                     tombstone = Some(new_tombstone);

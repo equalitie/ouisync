@@ -234,7 +234,7 @@ impl<'a> TombstoneRef<'a> {
         self.inner.branch_id()
     }
 
-    pub fn data(&self) -> &EntryTombstoneData {
+    pub(crate) fn data(&self) -> &EntryTombstoneData {
         self.entry_data
     }
 

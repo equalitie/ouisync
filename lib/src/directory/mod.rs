@@ -7,10 +7,13 @@ mod parent_context;
 mod tests;
 
 pub use self::{
-    entry::{DirectoryRef, EntryRef, FileRef, TombstoneRef},
+    entry::{DirectoryRef, EntryRef, FileRef},
     entry_type::EntryType,
 };
-pub(crate) use self::{entry_data::EntryData, parent_context::ParentContext};
+pub(crate) use self::{
+    entry_data::{EntryData, EntryTombstoneData, TombstoneCause},
+    parent_context::ParentContext,
+};
 
 use self::content::Content;
 use crate::{
@@ -27,15 +30,6 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use std::{fmt, mem};
-
-/// What to do with the existing entry when inserting a new entry in its place.
-pub(crate) enum OverwriteStrategy {
-    // Remove it
-    Remove,
-    // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
-    // else)
-    Keep,
-}
 
 #[derive(Clone)]
 pub struct Directory {
@@ -183,17 +177,17 @@ impl Directory {
     /// entry with the same name is increased to be "happens after" `vv`. If the local version does
     /// not exist, or if it is the one being removed (branch_id == self.branch_id), then a
     /// tombstone is created.
-    pub async fn remove_entry(
+    pub(crate) async fn remove_entry(
         &mut self,
         conn: &mut db::Connection,
         name: &str,
         branch_id: &PublicKey,
-        vv: VersionVector,
+        tombstone: EntryTombstoneData,
     ) -> Result<()> {
         let mut tx = conn.begin().await?;
 
         let content = match self
-            .begin_remove_entry(&mut tx, name, branch_id, vv, OverwriteStrategy::Remove)
+            .begin_remove_entry(&mut tx, name, branch_id, tombstone)
             .await
         {
             Ok(content) => content,
@@ -243,12 +237,7 @@ impl Directory {
         let mut tx = conn.begin().await?;
 
         let dst_content = dst_dir
-            .begin_insert_entry(
-                &mut tx,
-                dst_name.to_owned(),
-                dst_data,
-                OverwriteStrategy::Remove,
-            )
+            .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
             .await?;
 
         let branch_id = *self.branch().id();
@@ -257,8 +246,7 @@ impl Directory {
                 &mut tx,
                 src_name,
                 &branch_id,
-                src_vv,
-                OverwriteStrategy::Keep,
+                EntryTombstoneData::moved(src_vv),
             )
             .await?;
 
@@ -480,12 +468,11 @@ impl Directory {
         tx: &mut db::Transaction<'_>,
         name: &str,
         branch_id: &PublicKey,
-        vv: VersionVector,
-        overwrite: OverwriteStrategy,
+        mut tombstone: EntryTombstoneData,
     ) -> Result<Content> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
-        if matches!(overwrite, OverwriteStrategy::Remove) {
+        if matches!(tombstone.cause, TombstoneCause::Removed) {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
@@ -505,21 +492,26 @@ impl Directory {
         let new_data = match self.lookup(name) {
             Ok(old_entry @ (EntryRef::File(_) | EntryRef::Directory(_))) => {
                 if branch_id == self.branch().id() {
-                    EntryData::tombstone(vv.incremented(*self.branch().id()))
+                    tombstone.version_vector.increment(*self.branch().id());
+                    EntryData::Tombstone(tombstone)
                 } else {
                     let mut new_data = old_entry.clone_data();
-                    new_data.version_vector_mut().merge(&vv);
+                    new_data
+                        .version_vector_mut()
+                        .merge(&tombstone.version_vector);
                     new_data.version_vector_mut().increment(*self.branch().id());
                     new_data
                 }
             }
-            Ok(EntryRef::Tombstone(_)) => EntryData::tombstone(vv),
-            Err(Error::EntryNotFound) => EntryData::tombstone(vv.incremented(*self.branch().id())),
+            Ok(EntryRef::Tombstone(_)) => EntryData::Tombstone(tombstone),
+            Err(Error::EntryNotFound) => {
+                tombstone.version_vector.increment(*self.branch().id());
+                EntryData::Tombstone(tombstone)
+            }
             Err(e) => return Err(e),
         };
 
-        self.begin_insert_entry(tx, name.to_owned(), new_data, overwrite)
-            .await
+        self.begin_insert_entry(tx, name.to_owned(), new_data).await
     }
 
     async fn begin_insert_entry(
@@ -527,8 +519,17 @@ impl Directory {
         tx: &mut db::Transaction<'_>,
         name: String,
         data: EntryData,
-        overwrite: OverwriteStrategy,
     ) -> Result<Content> {
+        let overwrite = match data {
+            EntryData::Tombstone(EntryTombstoneData {
+                cause: TombstoneCause::Moved,
+                ..
+            }) => OverwriteStrategy::Keep,
+            EntryData::Tombstone(_) | EntryData::File(_) | EntryData::Directory(_) => {
+                OverwriteStrategy::Remove
+            }
+        };
+
         let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, data)?;
         self.save(tx, &content, overwrite).await?;
@@ -645,4 +646,13 @@ async fn load(
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))
+}
+
+/// What to do with the existing entry when inserting a new entry in its place.
+enum OverwriteStrategy {
+    // Remove it
+    Remove,
+    // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
+    // else)
+    Keep,
 }
