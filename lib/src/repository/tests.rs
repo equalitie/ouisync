@@ -686,31 +686,32 @@ async fn truncate_forked_remote_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_modify_remote_file() {
     let (_base_dir, repo) = setup().await;
+    let remote_id = PublicKey::random();
 
-    create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
+    create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
 
-    // HACK: during the above `create_remote_file` call the remote branch is opened in write mode
-    // and then the remote root dir is cached. If the garbage collector kicks in at that time and
-    // opens the remote root dir as well, it retains it in the cache even after
-    // `create_remote_file` is finished. Then the following `open_file` might open the root from
-    // the cache where it still has write mode and that would make the subsequent assertions to
-    // fail because they expect it to have read-only mode. To prevent this we manually trigger
-    // the garbage collector and wait for it to finish, to make sure the root dir is dropped and
-    // removed from the cache. Then `open_file` reopens the root dir correctly in read-only mode.
-    repo.force_garbage_collection().await.unwrap();
+    let remote_branch = repo.get_branch(remote_id).unwrap();
 
-    let mut file = repo.open_file("test.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
+    let mut file = remote_branch
+        .open_root(&mut conn)
+        .await
+        .unwrap()
+        .lookup("test.txt")
+        .unwrap()
+        .file()
+        .unwrap()
+        .open(&mut conn)
+        .await
+        .unwrap();
+
     assert_matches!(
-        file.truncate(&mut tx, 0).await,
+        file.truncate(&mut conn, 0).await,
         Err(Error::PermissionDenied)
     );
-    tx.commit().await.unwrap();
 
-    let mut file = repo.open_file("test.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.write(&mut tx, b"bar").await.unwrap();
-    assert_matches!(file.flush(&mut tx).await, Err(Error::PermissionDenied));
+    file.write(&mut conn, b"bar").await.unwrap();
+    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1088,48 +1089,6 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remove_branch() {
-    let (_base_dir, repo) = setup().await;
-
-    let local_branch = repo.local_branch().unwrap();
-
-    let remote_id = PublicKey::random();
-    let remote_branch = repo
-        .get_branch(remote_id)
-        .unwrap()
-        .reopen(repo.secrets().keys().unwrap());
-
-    let mut conn = repo.db().acquire().await.unwrap();
-
-    // Keep the root dir open until we create both files to make sure it keeps write access.
-    let mut remote_root = remote_branch.open_or_create_root(&mut conn).await.unwrap();
-    create_file_in_directory(&mut conn, &mut remote_root, "foo.txt", b"foo").await;
-    create_file_in_directory(&mut conn, &mut remote_root, "bar.txt", b"bar").await;
-    drop(remote_root);
-
-    let mut file = repo.open_file("foo.txt").await.unwrap();
-    file.fork(&mut conn, local_branch).await.unwrap();
-    drop(file);
-
-    repo.shared
-        .store
-        .index
-        .get_branch(remote_id)
-        .load_snapshot(&mut conn)
-        .await
-        .unwrap()
-        .remove(&mut conn)
-        .await
-        .unwrap();
-
-    // The forked file still exists
-    assert_eq!(read_file(&repo, "foo.txt").await, b"foo");
-
-    // The remote-only file is gone
-    assert_matches!(repo.open_file("bar.txt").await, Err(Error::EntryNotFound));
-}
-
 async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
@@ -1137,7 +1096,7 @@ async fn setup() -> (TempDir, Repository) {
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
+        true,
     )
     .await
     .unwrap();
@@ -1151,7 +1110,12 @@ async fn read_file(repo: &Repository, path: impl AsRef<Utf8Path>) -> Vec<u8> {
     file.read_to_end(&mut conn).await.unwrap()
 }
 
-async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str, content: &[u8]) {
+async fn create_remote_file(
+    repo: &Repository,
+    remote_id: PublicKey,
+    name: &str,
+    content: &[u8],
+) -> File {
     let remote_branch = repo
         .get_branch(remote_id)
         .unwrap()
@@ -1159,7 +1123,7 @@ async fn create_remote_file(repo: &Repository, remote_id: PublicKey, name: &str,
 
     let mut conn = repo.db().acquire().await.unwrap();
 
-    create_file_in_branch(&mut conn, &remote_branch, name, content).await;
+    create_file_in_branch(&mut conn, &remote_branch, name, content).await
 }
 
 async fn create_file_in_branch(
