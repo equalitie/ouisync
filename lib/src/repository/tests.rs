@@ -1020,20 +1020,13 @@ async fn file_conflict_modify_local() {
     );
     drop(remote_file);
 
-    drop(conn);
-
-    repo.force_garbage_collection().await.unwrap();
-
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    local_file.write(&mut tx, b"local v2").await.unwrap();
-    local_file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    local_file.write(&mut conn, b"local v2").await.unwrap();
+    local_file.flush(&mut conn).await.unwrap();
     drop(local_file);
 
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     assert_eq!(
         local_file.read_to_end(&mut conn).await.unwrap(),
         b"local v2"
@@ -1042,13 +1035,11 @@ async fn file_conflict_modify_local() {
         local_file.version_vector(&mut conn).await.unwrap(),
         vv![local_id => 3]
     );
-    drop(conn);
 
     let mut remote_file = repo
         .open_file_version("test.txt", &remote_id)
         .await
         .unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     assert_eq!(
         remote_file.read_to_end(&mut conn).await.unwrap(),
         b"remote v1"
@@ -1143,10 +1134,8 @@ async fn create_file_in_directory(
     content: &[u8],
 ) -> File {
     let mut file = dir.create_file(conn, name.into()).await.unwrap();
-    let mut tx = conn.begin().await.unwrap();
-    file.write(&mut tx, content).await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
+    file.write(conn, content).await.unwrap();
+    file.flush(conn).await.unwrap();
     file
 }
 

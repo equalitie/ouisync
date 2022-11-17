@@ -129,6 +129,7 @@ pub(crate) async fn mark_reachable(conn: &mut db::Connection, id: &BlockId) -> R
 pub(crate) async fn remove_unreachable(conn: &mut db::Connection) -> Result<usize> {
     let mut tx = conn.begin().await?;
 
+    // // DEBUG
     // let ids: Vec<BlockId> = sqlx::query("SELECT id FROM unreachable_blocks")
     //     .map(|row: sqlx::sqlite::SqliteRow| row.get(0))
     //     .fetch_all(&mut *tx)
