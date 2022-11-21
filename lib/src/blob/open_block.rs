@@ -1,4 +1,3 @@
-use super::operations;
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
@@ -44,8 +43,8 @@ impl OpenBlock {
         locator: Locator,
     ) -> Result<Self> {
         let (id, mut buffer, nonce) =
-            operations::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
-        operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
+            super::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
+        super::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
 
         let content = Cursor::new(buffer);
 
