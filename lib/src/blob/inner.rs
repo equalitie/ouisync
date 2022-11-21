@@ -4,10 +4,15 @@ use super::open_block::OpenBlock;
 use crate::{
     block::BLOCK_SIZE,
     branch::Branch,
+    db,
     event::{Event, Payload},
     locator::Locator,
 };
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
+};
 use tokio::sync::broadcast;
 
 // State unique to each instance of a blob.
@@ -18,6 +23,7 @@ pub(super) struct Unique {
     pub current_block: OpenBlock,
     pub len: u64,
     pub len_dirty: bool,
+    pub len_version: u64,
 }
 
 impl Unique {
@@ -34,6 +40,7 @@ impl Unique {
 // State shared among multiple instances of the same blob.
 pub(crate) struct Shared {
     event_tx: broadcast::Sender<Event>,
+    len_version: AtomicU64,
 }
 
 impl Shared {
@@ -43,7 +50,20 @@ impl Shared {
     }
 
     pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Self> {
-        Arc::new(Self { event_tx })
+        Arc::new(Self {
+            event_tx,
+            len_version: AtomicU64::new(0),
+        })
+    }
+
+    pub fn len_version(&self) -> u64 {
+        self.len_version.load(Ordering::Relaxed)
+    }
+
+    // Note this function must be called within a db transaction to make sure the calling task is
+    // the only one setting the shared length at any given time.
+    pub fn set_len_version(&self, _tx: &mut db::Transaction<'_>, version: u64) {
+        self.len_version.store(version, Ordering::Relaxed)
     }
 }
 

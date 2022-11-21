@@ -44,6 +44,7 @@ impl Blob {
         shared: Arc<Shared>,
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
+        let len_version = shared.len_version();
         let len = current_block.content.read_u64();
 
         Ok(Self {
@@ -54,6 +55,7 @@ impl Blob {
                 current_block,
                 len,
                 len_dirty: false,
+                len_version,
             },
         })
     }
@@ -61,6 +63,7 @@ impl Blob {
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator, shared: Arc<Shared>) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
+        let len_version = shared.len_version();
 
         Self {
             shared,
@@ -70,6 +73,7 @@ impl Blob {
                 current_block,
                 len: 0,
                 len_dirty: false,
+                len_version,
             },
         }
     }
@@ -135,6 +139,9 @@ impl Blob {
                 break;
             }
 
+            // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
+            // truncated this blob and we are trying to read pass its end. In that case we should
+            // update `self.unique.len` and try the loop again.
             let (id, content) = read_block(
                 conn,
                 self.unique.branch.data(),
@@ -246,6 +253,9 @@ impl Blob {
         if block_number != self.unique.current_block.locator.number() {
             let locator = self.unique.locator_at(block_number);
 
+            // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
+            // truncated this blob and we are trying to seek pass its end. In that case we should
+            // update `self.unique.len` and try again.
             let (id, content) = read_block(
                 conn,
                 self.unique.branch.data(),
@@ -273,34 +283,10 @@ impl Blob {
             return Err(Error::OperationNotSupported);
         }
 
-        let mut tx = conn.begin().await?;
-
-        let old_block_count = self.unique.block_count();
-
-        // FIXME: this is not cancel-safe. We should update `self` only after the transaction is
-        // committed.
+        self.seek(conn, SeekFrom::Start(len)).await?;
 
         self.unique.len = len;
         self.unique.len_dirty = true;
-
-        let new_block_count = self.unique.block_count();
-
-        if self.seek_position() > self.unique.len {
-            self.seek(&mut tx, SeekFrom::End(0)).await?;
-        }
-
-        remove_blocks(
-            &mut tx,
-            &self.unique.branch,
-            self.unique
-                .head_locator
-                .sequence()
-                .skip(new_block_count as usize)
-                .take((old_block_count - new_block_count) as usize),
-        )
-        .await?;
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -316,6 +302,7 @@ impl Blob {
 
         self.write_len(&mut tx).await?;
         self.write_current_block(&mut tx).await?;
+        self.trim(&mut tx).await?;
 
         tx.commit().await?;
 
@@ -355,14 +342,18 @@ impl Blob {
             }
         }
 
+        let shared = dst_branch.fetch_blob_shared(*self.unique.head_locator.blob_id());
+        let len_version = shared.len_version();
+
         let forked = Self {
-            shared: dst_branch.fetch_blob_shared(*self.unique.head_locator.blob_id()),
+            shared,
             unique: Unique {
                 branch: dst_branch,
                 head_locator: self.unique.head_locator,
                 current_block: self.unique.current_block.clone(),
                 len: self.unique.len,
                 len_dirty: self.unique.len_dirty,
+                len_version,
             },
         };
 
@@ -425,6 +416,15 @@ impl Blob {
             .write()
             .ok_or(Error::PermissionDenied)?;
 
+        let shared_len_version = self.shared.len_version();
+        if self.unique.len_version < shared_len_version {
+            self.unique.len = load_len(tx, &self.unique).await?;
+            self.unique.len_dirty = false;
+            self.unique.len_version = shared_len_version;
+
+            return Ok(());
+        }
+
         if self.unique.current_block.locator.number() == 0 {
             let old_pos = self.unique.current_block.content.pos;
             self.unique.current_block.content.pos = 0;
@@ -457,6 +457,8 @@ impl Blob {
         }
 
         self.unique.len_dirty = false;
+        self.unique.len_version += 1;
+        self.shared.set_len_version(tx, self.unique.len_version);
 
         Ok(())
     }
@@ -489,6 +491,25 @@ impl Blob {
         self.unique.current_block.dirty = false;
 
         Ok(())
+    }
+
+    async fn trim(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        match remove_blocks(
+            tx,
+            &self.unique.branch,
+            self.unique
+                .head_locator
+                .sequence()
+                .skip(self.unique.block_count() as usize),
+        )
+        .await
+        {
+            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
+            // we should never get `Ok` because the locator sequence we are passing to
+            // `remove_blocks` is unbounded).
+            Ok(()) | Err(Error::EntryNotFound) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -610,19 +631,15 @@ where
     Ok(())
 }
 
-// async fn read_len(conn: &mut db::Connection, unique: &Unique) -> Result<u64> {
-//     if unique.current_block.locator.number() == 0 {
-//         Ok(unique.current_block.content.buffer.read_u64(0))
-//     } else {
-//         let locator = unique.locator_at(0);
-//         let (_, buffer) = read_block(
-//             conn,
-//             unique.branch.data(),
-//             unique.branch.keys().read(),
-//             &locator,
-//         )
-//         .await?;
+async fn load_len(conn: &mut db::Connection, unique: &Unique) -> Result<u64> {
+    let locator = unique.locator_at(0);
+    let (_, buffer) = read_block(
+        conn,
+        unique.branch.data(),
+        unique.branch.keys().read(),
+        &locator,
+    )
+    .await?;
 
-//         Ok(buffer.read_u64(0))
-//     }
-// }
+    Ok(buffer.read_u64(0))
+}

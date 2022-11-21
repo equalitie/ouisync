@@ -707,10 +707,8 @@ async fn attempt_to_modify_remote_file() {
         .await
         .unwrap();
 
-    assert_matches!(
-        file.truncate(&mut conn, 0).await,
-        Err(Error::PermissionDenied)
-    );
+    file.truncate(&mut conn, 0).await.unwrap();
+    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 
     file.write(&mut conn, b"bar").await.unwrap();
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
