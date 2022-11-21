@@ -1,5 +1,5 @@
 use crate::{
-    blob::{Blob, MaybeInitShared},
+    blob::{Blob, Shared},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -7,10 +7,10 @@ use crate::{
     error::{Error, Result},
     index::VersionVectorOp,
     locator::Locator,
+    sync::Mutex as AsyncMutex,
     version_vector::VersionVector,
 };
-use std::fmt;
-use std::io::SeekFrom;
+use std::{fmt, io::SeekFrom, sync::Arc};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {
@@ -25,7 +25,7 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: MaybeInitShared,
+        blob_shared: Arc<AsyncMutex<Shared>>,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(conn, branch, locator, blob_shared).await?,
@@ -38,7 +38,7 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: MaybeInitShared,
+        blob_shared: Arc<AsyncMutex<Shared>>,
     ) -> Self {
         Self {
             blob: Blob::create(branch, locator, blob_shared),
@@ -56,8 +56,8 @@ impl File {
 
     /// Length of this file in bytes.
     #[allow(clippy::len_without_is_empty)]
-    pub async fn len(&self) -> u64 {
-        self.blob.len().await
+    pub fn len(&self) -> u64 {
+        self.blob.len()
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.

@@ -105,7 +105,7 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(&mut conn, branch.clone(), file_locator, Shared::uninit()).await {
+    match Blob::open(&mut conn, branch.clone(), file_locator, Shared::detached()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
@@ -402,7 +402,7 @@ async fn remove_subdirectory() {
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(&mut conn, branch, dir_locator, Shared::uninit()).await {
+    match Blob::open(&mut conn, branch, dir_locator, Shared::detached()).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),

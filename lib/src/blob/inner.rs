@@ -8,10 +8,7 @@ use crate::{
     locator::Locator,
     sync::Mutex,
 };
-use std::{
-    fmt,
-    sync::{Arc, Weak},
-};
+use std::{fmt, sync::Arc};
 use tokio::sync::broadcast;
 
 // State unique to each instance of a blob.
@@ -20,6 +17,7 @@ pub(super) struct Unique {
     pub branch: Branch,
     pub head_locator: Locator,
     pub current_block: OpenBlock,
+    pub len: u64,
     pub len_dirty: bool,
 }
 
@@ -27,42 +25,32 @@ impl Unique {
     pub fn locator_at(&self, number: u32) -> Locator {
         self.head_locator.nth(number)
     }
-}
-
-// State shared among multiple instances of the same blob.
-pub(crate) struct Shared {
-    pub(super) len: u64,
-    event_tx: broadcast::Sender<Event>,
-}
-
-impl Shared {
-    pub fn uninit() -> MaybeInitShared {
-        let (tx, _) = broadcast::channel(1);
-        Self::uninit_with_close_notify(tx)
-    }
-
-    pub fn uninit_with_close_notify(tx: broadcast::Sender<Event>) -> MaybeInitShared {
-        MaybeInitShared {
-            shared: Self::new(0, tx).into_locked(),
-            init: false,
-        }
-    }
-
-    pub fn deep_clone(&self, len: u64) -> Self {
-        Self::new(len, self.event_tx.clone())
-    }
-
-    pub fn into_locked(self) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(self))
-    }
-
-    fn new(len: u64, event_tx: broadcast::Sender<Event>) -> Self {
-        Self { len, event_tx }
-    }
 
     // Total number of blocks in this blob including the possibly partially filled final block.
     pub fn block_count(&self) -> u32 {
         block_count(self.len)
+    }
+}
+
+// State shared among multiple instances of the same blob.
+pub(crate) struct Shared {
+    event_tx: broadcast::Sender<Event>,
+}
+
+impl Shared {
+    pub fn detached() -> Arc<Mutex<Self>> {
+        let (tx, _) = broadcast::channel(1);
+        Self::new(tx)
+    }
+
+    pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { event_tx }))
+    }
+
+    pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            event_tx: self.event_tx.clone(),
+        }))
     }
 }
 
@@ -76,40 +64,7 @@ impl Drop for Shared {
 
 impl fmt::Debug for Shared {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Shared")
-            .field("len", &self.len)
-            .finish_non_exhaustive()
-    }
-}
-
-// Wrapper for `Shared` that may or might not be initialized.
-#[derive(Clone)]
-pub(crate) struct MaybeInitShared {
-    shared: Arc<Mutex<Shared>>,
-    init: bool,
-}
-
-impl MaybeInitShared {
-    pub(super) async fn ensure_init(self, len: u64) -> Arc<Mutex<Shared>> {
-        if !self.init {
-            self.shared.lock().await.len = len;
-        }
-
-        self.shared
-    }
-
-    pub(super) fn assume_init(self) -> Arc<Mutex<Shared>> {
-        self.shared
-    }
-
-    pub(crate) fn downgrade(&self) -> Weak<Mutex<Shared>> {
-        Arc::downgrade(&self.shared)
-    }
-}
-
-impl From<Arc<Mutex<Shared>>> for MaybeInitShared {
-    fn from(shared: Arc<Mutex<Shared>>) -> Self {
-        Self { shared, init: true }
+        f.debug_struct("Shared").finish_non_exhaustive()
     }
 }
 

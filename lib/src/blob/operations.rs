@@ -40,7 +40,7 @@ impl<'a> Operations<'a> {
         let mut total_len = 0;
 
         loop {
-            let remaining = (self.shared.len - self.seek_position())
+            let remaining = (self.unique.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
@@ -54,7 +54,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.unique.current_block.locator.next();
-            if locator.number() >= self.shared.block_count() {
+            if locator.number() >= self.unique.block_count() {
                 break;
             }
 
@@ -77,7 +77,7 @@ impl<'a> Operations<'a> {
     pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         let mut buffer = vec![
             0;
-            (self.shared.len - self.seek_position())
+            (self.unique.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX)
         ];
@@ -102,8 +102,8 @@ impl<'a> Operations<'a> {
 
             buffer = &buffer[len..];
 
-            if self.seek_position() > self.shared.len {
-                self.shared.len = self.seek_position();
+            if self.seek_position() > self.unique.len {
+                self.unique.len = self.seek_position();
                 self.unique.len_dirty = true;
             }
 
@@ -112,7 +112,7 @@ impl<'a> Operations<'a> {
             }
 
             let locator = self.unique.current_block.locator.next();
-            let (id, content) = if locator.number() < self.shared.block_count() {
+            let (id, content) = if locator.number() < self.unique.block_count() {
                 read_block(
                     tx,
                     self.unique.branch.data(),
@@ -139,19 +139,19 @@ impl<'a> Operations<'a> {
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
-            SeekFrom::Start(n) => n.min(self.shared.len),
+            SeekFrom::Start(n) => n.min(self.unique.len),
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    self.shared.len
+                    self.unique.len
                 } else {
-                    self.shared.len.saturating_sub((-n) as u64)
+                    self.unique.len.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
                     self.seek_position()
                         .saturating_add(n as u64)
-                        .min(self.shared.len)
+                        .min(self.unique.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -183,26 +183,26 @@ impl<'a> Operations<'a> {
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, tx: &mut db::Transaction<'_>, len: u64) -> Result<()> {
-        if len == self.shared.len {
+        if len == self.unique.len {
             return Ok(());
         }
 
-        if len > self.shared.len {
+        if len > self.unique.len {
             // TODO: consider supporting this
             return Err(Error::OperationNotSupported);
         }
 
-        let old_block_count = self.shared.block_count();
+        let old_block_count = self.unique.block_count();
 
         // FIXME: this is not cancel-safe. We should update `self` only after the transaction is
         // committed.
 
-        self.shared.len = len;
+        self.unique.len = len;
         self.unique.len_dirty = true;
 
-        let new_block_count = self.shared.block_count();
+        let new_block_count = self.unique.block_count();
 
-        if self.seek_position() > self.shared.len {
+        if self.seek_position() > self.unique.len {
             self.seek(tx, SeekFrom::End(0)).await?;
         }
 
@@ -296,7 +296,7 @@ impl<'a> Operations<'a> {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        write_len(tx, self.unique, self.shared.len).await
+        write_len(tx, self.unique).await
     }
 
     // Returns the current seek position from the start of the blob.
@@ -324,7 +324,7 @@ pub(super) async fn read_len(conn: &mut db::Connection, unique: &Unique) -> Resu
     }
 }
 
-async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique, len: u64) -> Result<()> {
+async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique) -> Result<()> {
     if !unique.len_dirty {
         return Ok(());
     }
@@ -339,7 +339,7 @@ async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique, len: u64) 
     if unique.current_block.locator.number() == 0 {
         let old_pos = unique.current_block.content.pos;
         unique.current_block.content.pos = 0;
-        unique.current_block.content.write_u64(len);
+        unique.current_block.content.write_u64(unique.len);
         unique.current_block.content.pos = old_pos;
         unique.current_block.dirty = true;
     } else {
@@ -354,7 +354,7 @@ async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique, len: u64) 
 
         let mut cursor = Cursor::new(buffer);
         cursor.pos = 0;
-        cursor.write_u64(len);
+        cursor.write_u64(unique.len);
 
         write_block(
             tx,

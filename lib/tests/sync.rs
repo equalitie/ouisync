@@ -1009,7 +1009,7 @@ async fn read_in_chunks(
     file: &mut File,
     chunk_size: usize,
 ) -> Result<Vec<u8>, Error> {
-    let mut content = vec![0; file.len().await as usize];
+    let mut content = vec![0; file.len() as usize];
     let mut offset = 0;
 
     while offset < content.len() {

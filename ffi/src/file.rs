@@ -193,7 +193,7 @@ pub unsafe extern "C" fn file_len(handle: SharedHandle<Mutex<FfiFile>>, port: Po
         let ffi_file = handle.get();
         ctx.spawn(async move {
             let g = ffi_file.lock().await;
-            Ok(g.file.len().await)
+            Ok(g.file.len())
         })
     })
 }

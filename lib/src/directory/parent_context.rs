@@ -111,7 +111,7 @@ impl ParentContext {
                         conn,
                         dst_branch,
                         Locator::head(blob_id),
-                        blob::Shared::uninit(),
+                        blob::Shared::detached(),
                     )
                     .await?
                 }

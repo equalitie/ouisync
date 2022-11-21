@@ -5,10 +5,7 @@ mod operations;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    cache::BlobCache,
-    inner::{MaybeInitShared, Shared},
-};
+pub(crate) use self::{cache::BlobCache, inner::Shared};
 use self::{inner::Unique, open_block::OpenBlock, operations::Operations};
 use crate::{
     blob_id::BlobId, block::BlockId, branch::Branch, db, error::Error, error::Result,
@@ -33,12 +30,10 @@ impl Blob {
         conn: &mut db::Connection,
         branch: Branch,
         head_locator: Locator,
-        shared: MaybeInitShared,
+        shared: Arc<Mutex<Shared>>,
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
-
         let len = current_block.content.read_u64();
-        let shared = shared.ensure_init(len).await;
 
         Ok(Self {
             shared,
@@ -46,21 +41,23 @@ impl Blob {
                 branch,
                 head_locator,
                 current_block,
+                len,
                 len_dirty: false,
             },
         })
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator, shared: MaybeInitShared) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator, shared: Arc<Mutex<Shared>>) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
-            shared: shared.assume_init(),
+            shared,
             unique: Unique {
                 branch,
                 head_locator,
                 current_block,
+                len: 0,
                 len_dirty: false,
             },
         }
@@ -94,8 +91,8 @@ impl Blob {
         &self.unique.head_locator
     }
 
-    pub async fn len(&self) -> u64 {
-        self.shared.lock().await.len
+    pub fn len(&self) -> u64 {
+        self.unique.len
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -155,9 +152,7 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch. This function is idempotent.
     pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
-        // HACK: read fresh length from the block to avoid stale cache
-        let len = operations::read_len(tx, &self.unique).await?;
-        let shared = self.shared.lock().await.deep_clone(len);
+        let shared = self.shared.lock().await.deep_clone();
 
         // If the blob is already forked, do nothing but still return a clone of the original blob
         // to maintain idempotency.
@@ -171,7 +166,7 @@ impl Blob {
                 .unique
                 .head_locator
                 .sequence()
-                .take(shared.block_count() as usize);
+                .take(self.unique.block_count() as usize);
 
             for locator in locators {
                 let encoded_locator = locator.encode(read_key);
@@ -190,11 +185,12 @@ impl Blob {
         }
 
         let forked = Self {
-            shared: shared.into_locked(),
+            shared,
             unique: Unique {
                 branch: dst_branch,
                 head_locator: self.unique.head_locator,
                 current_block: self.unique.current_block.clone(),
+                len: self.unique.len,
                 len_dirty: self.unique.len_dirty,
             },
         };

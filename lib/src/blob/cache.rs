@@ -1,8 +1,8 @@
-use super::inner::{MaybeInitShared, Shared};
+use super::inner::Shared;
 use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event, sync::Mutex as AsyncMutex};
 use std::{
     collections::HashMap,
-    sync::{Mutex as BlockingMutex, Weak},
+    sync::{Arc, Mutex as BlockingMutex, Weak},
 };
 use tokio::sync::broadcast;
 
@@ -22,7 +22,7 @@ impl BlobCache {
         }
     }
 
-    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> MaybeInitShared {
+    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> Arc<AsyncMutex<Shared>> {
         let mut slots = self.slots.lock().unwrap();
 
         // Cleanup
@@ -39,10 +39,10 @@ impl BlobCache {
             .or_insert_with(Weak::new);
 
         if let Some(shared) = slot.upgrade() {
-            shared.into()
+            shared
         } else {
-            let shared = Shared::uninit_with_close_notify(self.event_tx.clone());
-            *slot = shared.downgrade();
+            let shared = Shared::new(self.event_tx.clone());
+            *slot = Arc::downgrade(&shared);
             shared
         }
     }
