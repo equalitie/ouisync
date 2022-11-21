@@ -968,6 +968,9 @@ async fn merge_moved_file() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     file.fork(&mut conn, branches[1].clone()).await.unwrap();
 
+    // Drop the file otherwise moving it would be blocked (https://github.com/equalitie/ouisync/issues/58)
+    drop(file);
+
     remote_root.refresh(&mut conn).await.unwrap();
 
     // Create a new directory in the remote branch

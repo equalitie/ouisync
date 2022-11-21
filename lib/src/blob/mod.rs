@@ -152,8 +152,6 @@ impl Blob {
     /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
     /// specified destination branch. This function is idempotent.
     pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
-        let shared = self.shared.lock().await.deep_clone();
-
         // If the blob is already forked, do nothing but still return a clone of the original blob
         // to maintain idempotency.
         if self.unique.branch.id() != dst_branch.id() {
@@ -185,7 +183,7 @@ impl Blob {
         }
 
         let forked = Self {
-            shared,
+            shared: dst_branch.fetch_blob_shared(*self.unique.head_locator.blob_id()),
             unique: Unique {
                 branch: dst_branch,
                 head_locator: self.unique.head_locator,

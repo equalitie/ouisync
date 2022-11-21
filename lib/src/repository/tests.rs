@@ -868,6 +868,8 @@ async fn version_vector_fork() {
 
     assert!(local_parent_vv_0 <= remote_parent_vv);
 
+    drop(file);
+
     // modify the file and fork again
     let mut file = remote_parent
         .lookup("foo.txt")

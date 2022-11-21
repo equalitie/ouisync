@@ -249,6 +249,7 @@ impl Directory {
                 EntryTombstoneData::moved(src_vv),
             )
             .await?;
+        println!("move_entry 3");
 
         tx.commit().await?;
 

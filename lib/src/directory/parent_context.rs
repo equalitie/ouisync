@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use super::{Error, OverwriteStrategy};
 use crate::{
-    blob::{self, Blob},
+    blob::Blob,
     blob_id::BlobId,
     branch::Branch,
     db,
@@ -107,13 +107,8 @@ impl ParentContext {
 
                     tx.commit().await?;
 
-                    Blob::open(
-                        conn,
-                        dst_branch,
-                        Locator::head(blob_id),
-                        blob::Shared::detached(),
-                    )
-                    .await?
+                    let shared = dst_branch.fetch_blob_shared(blob_id);
+                    Blob::open(conn, dst_branch, Locator::head(blob_id), shared).await?
                 }
             };
 
