@@ -6,7 +6,6 @@ use crate::{
     branch::Branch,
     event::{Event, Payload},
     locator::Locator,
-    sync::Mutex,
 };
 use std::{fmt, sync::Arc};
 use tokio::sync::broadcast;
@@ -38,19 +37,13 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub fn detached() -> Arc<Mutex<Self>> {
+    pub fn detached() -> Arc<Self> {
         let (tx, _) = broadcast::channel(1);
         Self::new(tx)
     }
 
-    pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self { event_tx }))
-    }
-
-    pub fn deep_clone(&self) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self {
-            event_tx: self.event_tx.clone(),
-        }))
+    pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Self> {
+        Arc::new(Self { event_tx })
     }
 }
 

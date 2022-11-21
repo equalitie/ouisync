@@ -12,7 +12,6 @@ use crate::{
     index::BranchData,
     locator::Locator,
     path,
-    sync::Mutex as AsyncMutex,
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};
@@ -116,7 +115,7 @@ impl Branch {
             .await
     }
 
-    pub(crate) fn fetch_blob_shared(&self, blob_id: BlobId) -> Arc<AsyncMutex<Shared>> {
+    pub(crate) fn fetch_blob_shared(&self, blob_id: BlobId) -> Arc<Shared> {
         self.blob_cache.fetch(*self.id(), blob_id)
     }
 

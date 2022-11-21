@@ -1,5 +1,5 @@
 use super::inner::Shared;
-use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event, sync::Mutex as AsyncMutex};
+use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex as BlockingMutex, Weak},
@@ -11,7 +11,7 @@ pub(crate) struct BlobCache {
     event_tx: broadcast::Sender<Event>,
 }
 
-type BlobMap = HashMap<BlobId, Weak<AsyncMutex<Shared>>>;
+type BlobMap = HashMap<BlobId, Weak<Shared>>;
 type BranchMap = HashMap<PublicKey, BlobMap>;
 
 impl BlobCache {
@@ -22,7 +22,7 @@ impl BlobCache {
         }
     }
 
-    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> Arc<AsyncMutex<Shared>> {
+    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> Arc<Shared> {
         let mut slots = self.slots.lock().unwrap();
 
         // Cleanup

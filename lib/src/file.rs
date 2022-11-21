@@ -7,7 +7,6 @@ use crate::{
     error::{Error, Result},
     index::VersionVectorOp,
     locator::Locator,
-    sync::Mutex as AsyncMutex,
     version_vector::VersionVector,
 };
 use std::{fmt, io::SeekFrom, sync::Arc};
@@ -25,7 +24,7 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: Arc<AsyncMutex<Shared>>,
+        blob_shared: Arc<Shared>,
     ) -> Result<Self> {
         Ok(Self {
             blob: Blob::open(conn, branch, locator, blob_shared).await?,
@@ -38,7 +37,7 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: Arc<AsyncMutex<Shared>>,
+        blob_shared: Arc<Shared>,
     ) -> Self {
         Self {
             blob: Blob::create(branch, locator, blob_shared),

@@ -14,12 +14,11 @@ use crate::{
     error::{Error, Result},
     index::BranchData,
     locator::Locator,
-    sync::MutexGuard,
 };
 use std::{convert::TryInto, io::SeekFrom};
 
 pub(crate) struct Operations<'a> {
-    pub(super) shared: MutexGuard<'a, Shared>,
+    pub(super) shared: &'a Shared,
     pub(super) unique: &'a mut Unique,
 }
 
@@ -296,7 +295,52 @@ impl<'a> Operations<'a> {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        write_len(tx, self.unique).await
+        if !self.unique.len_dirty {
+            return Ok(());
+        }
+
+        let read_key = self.unique.branch.keys().read();
+        let write_keys = self
+            .unique
+            .branch
+            .keys()
+            .write()
+            .ok_or(Error::PermissionDenied)?;
+
+        if self.unique.current_block.locator.number() == 0 {
+            let old_pos = self.unique.current_block.content.pos;
+            self.unique.current_block.content.pos = 0;
+            self.unique.current_block.content.write_u64(self.unique.len);
+            self.unique.current_block.content.pos = old_pos;
+            self.unique.current_block.dirty = true;
+        } else {
+            let locator = self.unique.locator_at(0);
+            let (_, buffer) = read_block(
+                tx,
+                self.unique.branch.data(),
+                self.unique.branch.keys().read(),
+                &locator,
+            )
+            .await?;
+
+            let mut cursor = Cursor::new(buffer);
+            cursor.pos = 0;
+            cursor.write_u64(self.unique.len);
+
+            write_block(
+                tx,
+                self.unique.branch.data(),
+                read_key,
+                write_keys,
+                &locator,
+                cursor.buffer,
+            )
+            .await?;
+        }
+
+        self.unique.len_dirty = false;
+
+        Ok(())
     }
 
     // Returns the current seek position from the start of the blob.
@@ -322,54 +366,6 @@ pub(super) async fn read_len(conn: &mut db::Connection, unique: &Unique) -> Resu
 
         Ok(buffer.read_u64(0))
     }
-}
-
-async fn write_len(tx: &mut db::Transaction<'_>, unique: &mut Unique) -> Result<()> {
-    if !unique.len_dirty {
-        return Ok(());
-    }
-
-    let read_key = unique.branch.keys().read();
-    let write_keys = unique
-        .branch
-        .keys()
-        .write()
-        .ok_or(Error::PermissionDenied)?;
-
-    if unique.current_block.locator.number() == 0 {
-        let old_pos = unique.current_block.content.pos;
-        unique.current_block.content.pos = 0;
-        unique.current_block.content.write_u64(unique.len);
-        unique.current_block.content.pos = old_pos;
-        unique.current_block.dirty = true;
-    } else {
-        let locator = unique.locator_at(0);
-        let (_, buffer) = read_block(
-            tx,
-            unique.branch.data(),
-            unique.branch.keys().read(),
-            &locator,
-        )
-        .await?;
-
-        let mut cursor = Cursor::new(buffer);
-        cursor.pos = 0;
-        cursor.write_u64(unique.len);
-
-        write_block(
-            tx,
-            unique.branch.data(),
-            read_key,
-            write_keys,
-            &locator,
-            cursor.buffer,
-        )
-        .await?;
-    }
-
-    unique.len_dirty = false;
-
-    Ok(())
 }
 
 async fn read_block(

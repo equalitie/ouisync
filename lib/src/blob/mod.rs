@@ -9,7 +9,7 @@ pub(crate) use self::{cache::BlobCache, inner::Shared};
 use self::{inner::Unique, open_block::OpenBlock, operations::Operations};
 use crate::{
     blob_id::BlobId, block::BlockId, branch::Branch, db, error::Error, error::Result,
-    locator::Locator, sync::Mutex,
+    locator::Locator,
 };
 use std::{io::SeekFrom, mem, sync::Arc};
 
@@ -20,7 +20,7 @@ pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 #[derive(Clone)]
 pub(crate) struct Blob {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<Shared>,
     unique: Unique,
 }
 
@@ -30,7 +30,7 @@ impl Blob {
         conn: &mut db::Connection,
         branch: Branch,
         head_locator: Locator,
-        shared: Arc<Mutex<Shared>>,
+        shared: Arc<Shared>,
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
         let len = current_block.content.read_u64();
@@ -48,7 +48,7 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator, shared: Arc<Mutex<Shared>>) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator, shared: Arc<Shared>) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
@@ -203,7 +203,7 @@ impl Blob {
 
     async fn lock(&mut self) -> Operations<'_> {
         Operations {
-            shared: self.shared.lock().await,
+            shared: &self.shared,
             unique: &mut self.unique,
         }
     }
