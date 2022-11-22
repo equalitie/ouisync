@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [lib]
-crate-type = ["cdylib"] # TODO: we might also need `staticlib` for ios
+crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 camino = "1.0.9"
