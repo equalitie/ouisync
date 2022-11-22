@@ -2,7 +2,7 @@
 members = ["bindgen", "cli", "ffi", "lib", "util", "vfs"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Adam Cigánek <adam@equalit.ie>", "Peter Jankuliak <peter@equalit.ie>"]
 repository = "https://github.com/equalitie/ouisync"
 license = "MPL-2.0"
