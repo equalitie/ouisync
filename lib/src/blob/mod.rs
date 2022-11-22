@@ -127,7 +127,7 @@ impl Blob {
 
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to read pass its end. In that case we should
-            // update `self.unique.len` and try the loop again.
+            // update `self.len` and try the loop again.
             let (id, content) = read_block(
                 conn,
                 self.branch.data(),
@@ -239,7 +239,7 @@ impl Blob {
 
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
-            // update `self.unique.len` and try again.
+            // update `self.len` and try again.
             let (id, content) = read_block(
                 conn,
                 self.branch.data(),
@@ -467,19 +467,6 @@ impl Blob {
             Ok(()) | Err(Error::EntryNotFound) => Ok(()),
             Err(error) => Err(error),
         }
-    }
-
-    async fn load_len(&self, conn: &mut db::Connection) -> Result<u64> {
-        let locator = self.head_locator.nth(0);
-        let (_, buffer) = read_block(
-            conn,
-            self.branch.data(),
-            self.branch.keys().read(),
-            &locator,
-        )
-        .await?;
-
-        Ok(buffer.read_u64(0))
     }
 }
 
