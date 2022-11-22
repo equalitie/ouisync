@@ -66,6 +66,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
+        self.blob.acquire_write_lock()?;
         self.blob.write(conn, buffer).await
     }
 
@@ -76,6 +77,7 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
+        self.blob.acquire_write_lock()?;
         self.blob.truncate(conn, len).await
     }
 

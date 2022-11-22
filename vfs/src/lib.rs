@@ -992,6 +992,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOTSUP,
         Error::RequestTimeout => libc::ETIMEDOUT,
+        Error::ConcurrentWriteNotSupported => libc::EBUSY,
     }
 }
 

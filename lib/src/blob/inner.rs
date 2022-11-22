@@ -1,12 +1,9 @@
 //! Innternal state of Blob
 
-use crate::{
-    db,
-    event::{Event, Payload},
-};
+use crate::event::{Event, Payload};
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
 use tokio::sync::broadcast;
@@ -14,25 +11,19 @@ use tokio::sync::broadcast;
 // State shared among multiple instances of the same blob.
 pub(crate) struct Shared {
     event_tx: broadcast::Sender<Event>,
-    len_version: AtomicU64,
+    write_lock: AtomicBool,
 }
 
 impl Shared {
     pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Self> {
         Arc::new(Self {
             event_tx,
-            len_version: AtomicU64::new(0),
+            write_lock: AtomicBool::new(false),
         })
     }
 
-    pub fn len_version(&self) -> u64 {
-        self.len_version.load(Ordering::Relaxed)
-    }
-
-    // Note this function must be called within a db transaction to make sure the calling task is
-    // the only one setting the shared length at any given time.
-    pub fn set_len_version(&self, _tx: &mut db::Transaction<'_>, version: u64) {
-        self.len_version.store(version, Ordering::Relaxed)
+    pub(super) fn acquire_write_lock(&self) -> bool {
+        !self.write_lock.fetch_or(true, Ordering::Relaxed)
     }
 }
 
@@ -46,6 +37,8 @@ impl Drop for Shared {
 
 impl fmt::Debug for Shared {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Shared").finish_non_exhaustive()
+        f.debug_struct("Shared")
+            .field("write_lock", &self.write_lock.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
     }
 }

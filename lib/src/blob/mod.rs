@@ -1,4 +1,5 @@
 mod cache;
+// TODO: rename to `shared`
 mod inner;
 mod open_block;
 #[cfg(test)]
@@ -33,7 +34,7 @@ pub(crate) struct Blob {
     current_block: OpenBlock,
     len: u64,
     len_dirty: bool,
-    len_version: u64,
+    write_lock: WriteLock,
     shared: Arc<Shared>,
 }
 
@@ -45,18 +46,17 @@ impl Blob {
         head_locator: Locator,
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
-        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
-        let len_version = shared.len_version();
         let len = current_block.content.read_u64();
+        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
 
         Ok(Self {
-            shared,
             branch,
             head_locator,
             current_block,
             len,
             len_dirty: false,
-            len_version,
+            write_lock: WriteLock::new(),
+            shared,
         })
     }
 
@@ -64,16 +64,15 @@ impl Blob {
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
         let shared = branch.fetch_blob_shared(*head_locator.blob_id());
-        let len_version = shared.len_version();
 
         Self {
-            shared,
             branch,
             head_locator,
             current_block,
             len: 0,
             len_dirty: false,
-            len_version,
+            write_lock: WriteLock::new(),
+            shared,
         }
     }
 
@@ -339,19 +338,26 @@ impl Blob {
         }
 
         let shared = dst_branch.fetch_blob_shared(*self.head_locator.blob_id());
-        let len_version = shared.len_version();
 
         let forked = Self {
-            shared,
             branch: dst_branch,
             head_locator: self.head_locator,
             current_block: self.current_block.clone(),
             len: self.len,
             len_dirty: self.len_dirty,
-            len_version,
+            write_lock: WriteLock::new(),
+            shared,
         };
 
         Ok(forked)
+    }
+
+    pub fn acquire_write_lock(&mut self) -> Result<()> {
+        if self.write_lock.acquire(&self.shared) {
+            Ok(())
+        } else {
+            Err(Error::ConcurrentWriteNotSupported)
+        }
     }
 
     /// Was this blob modified and not flushed yet?
@@ -409,15 +415,6 @@ impl Blob {
         let read_key = self.branch.keys().read();
         let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-        let shared_len_version = self.shared.len_version();
-        if self.len_version < shared_len_version {
-            self.len = self.load_len(tx).await?;
-            self.len_dirty = false;
-            self.len_version = shared_len_version;
-
-            return Ok(());
-        }
-
         if self.current_block.locator.number() == 0 {
             let old_pos = self.current_block.content.pos;
             self.current_block.content.pos = 0;
@@ -449,8 +446,6 @@ impl Blob {
         }
 
         self.len_dirty = false;
-        self.len_version += 1;
-        self.shared.set_len_version(tx, self.len_version);
 
         Ok(())
     }
@@ -635,4 +630,32 @@ where
     }
 
     Ok(())
+}
+
+struct WriteLock(bool);
+
+impl WriteLock {
+    fn new() -> Self {
+        Self(false)
+    }
+
+    fn acquire(&mut self, shared: &Shared) -> bool {
+        if self.0 {
+            return true;
+        }
+
+        if shared.acquire_write_lock() {
+            self.0 = true;
+            return true;
+        }
+
+        false
+    }
+}
+
+impl Clone for WriteLock {
+    fn clone(&self) -> Self {
+        // There can be at most one acquired write lock
+        Self::new()
+    }
 }

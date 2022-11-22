@@ -325,7 +325,8 @@ async fn concurrent_write_and_read_file() {
     .unwrap();
 }
 
-// FIXME:
+// FIXME: Concurrent file writes are currently not allowed. Re-enable this test when they are
+// implemented.
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn interleaved_flush() {
@@ -441,21 +442,22 @@ async fn interleaved_flush() {
 async fn append_to_file() {
     let (_base_dir, repo) = setup().await;
 
-    let mut file = repo.create_file("foo.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.write(&mut tx, b"foo").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
-
-    let mut file = repo.open_file("foo.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.seek(&mut tx, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut tx, b"bar").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
-
-    let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
+
+    let mut file = repo.create_file("foo.txt").await.unwrap();
+    file.write(&mut conn, b"foo").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    // Concurrent file writes are currently not allowed so we need to drop the file before opening
+    // it again.
+    drop(file);
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
+    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    file.write(&mut conn, b"bar").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
     let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
 }
