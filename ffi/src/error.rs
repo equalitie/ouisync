@@ -42,7 +42,7 @@ impl ToErrorCode for Error {
             Self::EntryNotFound => ErrorCode::EntryNotFound,
             Self::AmbiguousEntry => ErrorCode::AmbiguousEntry,
             Self::DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
-            Self::OperationNotSupported => ErrorCode::OperationNotSupported,
+            Self::OperationNotSupported | Self::ConcurrentWriteNotSupported => ErrorCode::OperationNotSupported,
             Self::BlockNotFound(_)
             | Self::BlockNotReferenced
             | Self::WrongBlockLength(_)

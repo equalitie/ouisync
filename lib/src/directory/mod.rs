@@ -17,7 +17,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{Blob, Shared},
+    blob::Blob,
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -110,14 +110,8 @@ impl Directory {
         let data = EntryData::file(blob_id, version_vector);
         let parent =
             ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
-        let shared = self.branch().fetch_blob_shared(blob_id);
 
-        let mut file = File::create(
-            self.branch().clone(),
-            Locator::head(blob_id),
-            parent,
-            shared,
-        );
+        let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
@@ -249,6 +243,7 @@ impl Directory {
                 EntryTombstoneData::moved(src_vv),
             )
             .await?;
+        println!("move_entry 3");
 
         tx.commit().await?;
 
@@ -349,7 +344,7 @@ impl Directory {
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let blob = Blob::create(owner_branch, locator, Shared::uninit());
+        let blob = Blob::create(owner_branch, locator);
 
         Directory {
             blob,
@@ -378,7 +373,6 @@ impl Directory {
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
-                        Shared::uninit(),
                     )
                     .await;
 
@@ -388,7 +382,7 @@ impl Directory {
                             let lenght_result = file.read(conn, &mut buf).await;
                             match lenght_result {
                                 Ok(length) => {
-                                    let file_len = file.len().await;
+                                    let file_len = file.len();
                                     let ellipsis = if file_len > length as u64 { ".." } else { "" };
                                     print.display(&format!(
                                         "Content: {:?}{}",
@@ -449,8 +443,8 @@ impl Directory {
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
     /// itself.
-    pub async fn len(&self) -> u64 {
-        self.blob.len().await
+    pub fn len(&self) -> u64 {
+        self.blob.len()
     }
 
     pub(crate) async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
@@ -641,7 +635,7 @@ async fn load(
     branch: Branch,
     locator: Locator,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open(conn, branch, locator, Shared::uninit()).await?;
+    let mut blob = Blob::open(conn, branch, locator).await?;
     let buffer = blob.read_to_end(conn).await?;
     let content = Content::deserialize(&buffer)?;
 

@@ -1,4 +1,3 @@
-use super::operations;
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     branch::Branch,
@@ -44,8 +43,8 @@ impl OpenBlock {
         locator: Locator,
     ) -> Result<Self> {
         let (id, mut buffer, nonce) =
-            operations::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
-        operations::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
+            super::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
+        super::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
 
         let content = Cursor::new(buffer);
 
@@ -74,15 +73,6 @@ impl Buffer {
     // Panics if the remaining length after `offset` is less than `N`.
     pub fn read_array<const N: usize>(&self, offset: usize) -> [u8; N] {
         self[offset..offset + N].try_into().unwrap()
-    }
-
-    // Read data from `offset` of the buffer into a `u64`.
-    //
-    // # Panics
-    //
-    // Panics if the remaining length after `offset` is less than `size_of::<u64>()`
-    pub fn read_u64(&self, offset: usize) -> u64 {
-        u64::from_le_bytes(self.read_array(offset))
     }
 }
 

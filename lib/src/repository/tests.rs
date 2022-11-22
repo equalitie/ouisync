@@ -301,7 +301,7 @@ async fn concurrent_write_and_read_file() {
             loop {
                 match repo.open_file("test.txt").await {
                     Ok(file) => {
-                        let actual_len = file.len().await;
+                        let actual_len = file.len();
                         let expected_len = (chunk_count * chunk_size) as u64;
 
                         if actual_len == expected_len {
@@ -326,134 +326,25 @@ async fn concurrent_write_and_read_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn interleaved_flush() {
-    let content1 = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE); // 1 block
-    let content2 = random_bytes(2 * BLOCK_SIZE - blob::HEADER_SIZE); // 2 blocks
-
-    case(
-        "write 2 blocks, write 0 blocks, flush 2nd then 1st",
-        &content2,
-        &[],
-        FlushOrder::SecondThenFirst,
-        3,
-        &content2,
-    )
-    .await;
-
-    case(
-        "write 1 block, write 2 blocks, flush 1st then 2nd",
-        &content1,
-        &content2,
-        FlushOrder::FirstThenSecond,
-        3,
-        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
-    )
-    .await;
-
-    case(
-        "write 1 block, write 2 blocks, flush 2nd then 1st",
-        &content1,
-        &content2,
-        FlushOrder::SecondThenFirst,
-        3,
-        &concat([nth_block(&content1, 0), nth_block(&content2, 1)]),
-    )
-    .await;
-
-    enum FlushOrder {
-        FirstThenSecond,
-        SecondThenFirst,
-    }
-
-    // Open two instances of the same file, write `content0` to the first and `content1` to the
-    // second, then flush in the specified order, finally check the total number of blocks in the
-    // repository and the content of the file.
-    async fn case(
-        label: &str,
-        content0: &[u8],
-        content1: &[u8],
-        flush_order: FlushOrder,
-        expected_total_block_count: usize,
-        expected_content: &[u8],
-    ) {
-        let base_dir = TempDir::new().unwrap();
-        let repo = Repository::create(
-            base_dir.path().join("repo.db"),
-            rand::random(),
-            MasterSecret::random(),
-            AccessSecrets::random_write(),
-            false,
-        )
-        .await
-        .unwrap();
-        let file_name = "test.txt";
-
-        let mut file0 = repo.create_file(file_name).await.unwrap();
-        let mut tx = repo.db().begin().await.unwrap();
-        file0.flush(&mut tx).await.unwrap();
-        tx.commit().await.unwrap();
-
-        let mut file1 = repo.open_file(file_name).await.unwrap();
-        let mut tx = repo.db().begin().await.unwrap();
-
-        file0.write(&mut tx, content0).await.unwrap();
-        file1.write(&mut tx, content1).await.unwrap();
-
-        match flush_order {
-            FlushOrder::FirstThenSecond => {
-                file0.flush(&mut tx).await.unwrap();
-                file1.flush(&mut tx).await.unwrap();
-            }
-            FlushOrder::SecondThenFirst => {
-                file1.flush(&mut tx).await.unwrap();
-                file0.flush(&mut tx).await.unwrap();
-            }
-        }
-
-        tx.commit().await.unwrap();
-
-        assert_eq!(
-            count_local_index_leaf_nodes(&repo).await,
-            expected_total_block_count,
-            "'{}': unexpected total number of blocks in the repository",
-            label
-        );
-
-        let actual_content = read_file(&repo, file_name).await;
-        assert_eq!(
-            actual_content.len(),
-            expected_content.len(),
-            "'{}': unexpected file content length",
-            label
-        );
-
-        assert!(
-            actual_content == expected_content,
-            "'{}': unexpected file content",
-            label
-        );
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
     let (_base_dir, repo) = setup().await;
 
-    let mut file = repo.create_file("foo.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.write(&mut tx, b"foo").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
-
-    let mut file = repo.open_file("foo.txt").await.unwrap();
-    let mut tx = repo.db().begin().await.unwrap();
-    file.seek(&mut tx, SeekFrom::End(0)).await.unwrap();
-    file.write(&mut tx, b"bar").await.unwrap();
-    file.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
-
-    let mut file = repo.open_file("foo.txt").await.unwrap();
     let mut conn = repo.db().acquire().await.unwrap();
+
+    let mut file = repo.create_file("foo.txt").await.unwrap();
+    file.write(&mut conn, b"foo").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    // Concurrent file writes are currently not allowed so we need to drop the file before opening
+    // it again.
+    drop(file);
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
+    file.seek(&mut conn, SeekFrom::End(0)).await.unwrap();
+    file.write(&mut conn, b"bar").await.unwrap();
+    file.flush(&mut conn).await.unwrap();
+
+    let mut file = repo.open_file("foo.txt").await.unwrap();
     let content = file.read_to_end(&mut conn).await.unwrap();
     assert_eq!(content, b"foobar");
 }
@@ -705,10 +596,8 @@ async fn attempt_to_modify_remote_file() {
         .await
         .unwrap();
 
-    assert_matches!(
-        file.truncate(&mut conn, 0).await,
-        Err(Error::PermissionDenied)
-    );
+    file.truncate(&mut conn, 0).await.unwrap();
+    assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
 
     file.write(&mut conn, b"bar").await.unwrap();
     assert_matches!(file.flush(&mut conn).await, Err(Error::PermissionDenied));
@@ -866,6 +755,8 @@ async fn version_vector_fork() {
 
     assert!(local_parent_vv_0 <= remote_parent_vv);
 
+    drop(file);
+
     // modify the file and fork again
     let mut file = remote_parent
         .lookup("foo.txt")
@@ -1006,6 +897,7 @@ async fn file_conflict_modify_local() {
 
     // Create two concurrent versions of the same file.
     let local_file = create_file_in_branch(&mut conn, &local_branch, "test.txt", b"local v1").await;
+
     assert_eq!(
         local_file.version_vector(&mut conn).await.unwrap(),
         vv![local_id => 2]
@@ -1143,19 +1035,4 @@ fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
     rand::thread_rng().fill(&mut buffer[..]);
     buffer
-}
-
-fn nth_block(content: &[u8], index: usize) -> &[u8] {
-    if index == 0 {
-        &content[..BLOCK_SIZE - blob::HEADER_SIZE]
-    } else {
-        &content[BLOCK_SIZE - blob::HEADER_SIZE + (index - 1) * BLOCK_SIZE..][..BLOCK_SIZE]
-    }
-}
-
-fn concat<const N: usize>(buffers: [&[u8]; N]) -> Vec<u8> {
-    buffers.into_iter().fold(Vec::new(), |mut vec, buffer| {
-        vec.extend_from_slice(buffer);
-        vec
-    })
 }

@@ -140,12 +140,8 @@ impl JointDirectory {
     /// Length of the directory in bytes. If there are multiple versions, returns the sum of their
     /// lengths.
     #[allow(clippy::len_without_is_empty)]
-    pub async fn len(&self) -> u64 {
-        let mut sum = 0;
-        for dir in self.versions.values() {
-            sum += dir.len().await;
-        }
-        sum
+    pub fn len(&self) -> u64 {
+        self.versions.values().map(|dir| dir.len()).sum()
     }
 
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.

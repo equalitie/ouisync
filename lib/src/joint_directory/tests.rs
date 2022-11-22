@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, blob::BlobCache, branch::Branch, crypto::sign::PublicKey, db,
+    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db, file::FileCache,
     index::BranchData, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -968,6 +968,9 @@ async fn merge_moved_file() {
     let mut remote_root = branches[1].open_or_create_root(&mut conn).await.unwrap();
     file.fork(&mut conn, branches[1].clone()).await.unwrap();
 
+    // Drop the file otherwise moving it would be blocked (https://github.com/equalitie/ouisync/issues/58)
+    drop(file);
+
     remote_root.refresh(&mut conn).await.unwrap();
 
     // Create a new directory in the remote branch
@@ -1077,17 +1080,17 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, db::P
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
-    let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
+    let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
     let branches = (0..branch_count)
         .map(|_| {
             let id = PublicKey::generate(&mut rng);
             let event_tx = event_tx.clone();
             let secrets = secrets.clone();
-            let blob_cache = blob_cache.clone();
+            let file_cache = file_cache.clone();
 
             let data = BranchData::new(id, event_tx);
-            Branch::new(Arc::new(data), secrets.into(), blob_cache)
+            Branch::new(Arc::new(data), secrets.into(), file_cache)
         })
         .collect();
 

@@ -9,7 +9,6 @@ pub use self::id::RepositoryId;
 use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{AccessMode, AccessSecrets, MasterSecret},
-    blob::BlobCache,
     block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
@@ -22,7 +21,7 @@ use crate::{
     directory::{Directory, EntryType},
     error::{Error, Result},
     event::BranchChangedReceiver,
-    file::File,
+    file::{File, FileCache},
     index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
@@ -216,7 +215,7 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            blob_cache: Arc::new(BlobCache::new(event_tx)),
+            file_cache: Arc::new(FileCache::new(event_tx)),
         });
 
         let local_branch = if shared.secrets.can_write() && enable_merger {
@@ -602,8 +601,8 @@ struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
-    // Cache for open blobs to track multiple instances of the same blob.
-    blob_cache: Arc<BlobCache>,
+    // Cache for open files to track multiple instances of the same file.
+    file_cache: Arc<FileCache>,
 }
 
 impl Shared {
@@ -632,7 +631,7 @@ impl Shared {
             keys.read_only()
         };
 
-        Ok(Branch::new(data, keys, self.blob_cache.clone()))
+        Ok(Branch::new(data, keys, self.file_cache.clone()))
     }
 }
 

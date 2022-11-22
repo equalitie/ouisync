@@ -1,5 +1,10 @@
+mod cache;
+mod lock;
+
+use self::lock::WriteLock;
+pub(crate) use self::{cache::FileCache, lock::OpenLock};
 use crate::{
-    blob::{Blob, MaybeInitShared},
+    blob::Blob,
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -9,13 +14,13 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::fmt;
-use std::io::SeekFrom;
+use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {
     blob: Blob,
     parent: ParentContext,
+    write_lock: WriteLock,
 }
 
 impl File {
@@ -25,24 +30,24 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: MaybeInitShared,
     ) -> Result<Self> {
+        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
+
         Ok(Self {
-            blob: Blob::open(conn, branch, locator, blob_shared).await?,
+            blob: Blob::open(conn, branch, locator).await?,
             parent,
+            write_lock,
         })
     }
 
     /// Creates a new file.
-    pub(crate) fn create(
-        branch: Branch,
-        locator: Locator,
-        parent: ParentContext,
-        blob_shared: MaybeInitShared,
-    ) -> Self {
+    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
+
         Self {
-            blob: Blob::create(branch, locator, blob_shared),
+            blob: Blob::create(branch, locator),
             parent,
+            write_lock,
         }
     }
 
@@ -56,8 +61,8 @@ impl File {
 
     /// Length of this file in bytes.
     #[allow(clippy::len_without_is_empty)]
-    pub async fn len(&self) -> u64 {
-        self.blob.len().await
+    pub fn len(&self) -> u64 {
+        self.blob.len()
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.
@@ -73,6 +78,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
+        self.acquire_write_lock()?;
         self.blob.write(conn, buffer).await
     }
 
@@ -83,6 +89,7 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
+        self.acquire_write_lock()?;
         self.blob.truncate(conn, len).await
     }
 
@@ -147,11 +154,13 @@ impl File {
 
         let (new_parent, new_blob) = self
             .parent
-            .fork(conn, &self.blob, self.branch().clone(), dst_branch)
+            .fork(conn, &self.blob, self.branch().clone(), dst_branch.clone())
             .await?;
 
         self.blob = new_blob;
         self.parent = new_parent;
+        self.write_lock =
+            WriteLock::new(dst_branch.acquire_open_lock(*self.blob.locator().blob_id()));
 
         Ok(())
     }
@@ -167,6 +176,13 @@ impl File {
     pub(crate) fn locator(&self) -> &Locator {
         self.blob.locator()
     }
+
+    fn acquire_write_lock(&mut self) -> Result<()> {
+        self.write_lock
+            .acquire()
+            .then_some(())
+            .ok_or(Error::ConcurrentWriteNotSupported)
+    }
 }
 
 #[cfg(test)]
@@ -174,19 +190,19 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
-        blob::BlobCache,
         crypto::sign::PublicKey,
         db,
         event::Event,
         index::BranchData,
     };
+    use assert_matches::assert_matches;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (_base_dir, pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, [branch0, branch1]) = setup().await;
         let mut tx = pool.begin().await.unwrap();
 
         // Create a file owned by branch 0
@@ -251,7 +267,7 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (_base_dir, pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, [branch0, branch1]) = setup().await;
         let mut tx = pool.begin().await.unwrap();
 
         let mut file0 = branch0
@@ -280,25 +296,56 @@ mod tests {
         }
     }
 
-    async fn setup() -> (TempDir, db::Pool, Branch, Branch) {
+    // TODO: currently concurrent writes are not allowed and this tests simply asserts that. When
+    // concurrent writes are implemented, we should remove this test and replace it with a series
+    // of tests for various write concurrency cases.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_writes() {
+        let (_base_dir, pool, [branch]) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let mut file0 = branch
+            .ensure_file_exists(&mut conn, "fox.txt".into())
+            .await
+            .unwrap();
+        let mut file1 = branch
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .lookup("fox.txt")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
+
+        file0.write(&mut conn, b"yip-yap").await.unwrap();
+        assert_matches!(
+            file1.write(&mut conn, b"ring-ding-ding").await,
+            Err(Error::ConcurrentWriteNotSupported)
+        );
+    }
+
+    async fn setup<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
-        let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
+        let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
-        let branch0 = create_branch(event_tx.clone(), keys.clone(), blob_cache.clone());
-        let branch1 = create_branch(event_tx, keys, blob_cache);
+        let branches =
+            [(); N].map(|_| create_branch(event_tx.clone(), keys.clone(), file_cache.clone()));
 
-        (base_dir, pool, branch0, branch1)
+        (base_dir, pool, branches)
     }
 
     fn create_branch(
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
-        blob_cache: Arc<BlobCache>,
+        file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(Arc::new(branch_data), keys, blob_cache)
+        Branch::new(Arc::new(branch_data), keys, file_cache)
     }
 }
 

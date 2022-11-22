@@ -442,15 +442,14 @@ impl Inner {
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
-                entry.open(&mut conn).await?.len().await,
+                entry.open(&mut conn).await?.len(),
                 Representation::File(*entry.branch().id()),
             ),
             JointEntryRef::Directory(entry) => (
                 entry
                     .open(&mut conn, MissingVersionStrategy::Skip)
                     .await?
-                    .len()
-                    .await,
+                    .len(),
                 Representation::Directory,
             ),
         };
@@ -557,7 +556,7 @@ impl Inner {
             file.flush(&mut conn).await?;
         }
 
-        Ok(make_file_attr(inode, EntryType::File, file.len().await))
+        Ok(make_file_attr(inode, EntryType::File, file.len()))
     }
 
     #[instrument(skip(inode, flags), fields(path, %flags), err)]
@@ -666,7 +665,7 @@ impl Inner {
         let inode = self
             .inodes
             .lookup(parent, name, name, Representation::Directory);
-        let len = dir.len().await;
+        let len = dir.len();
 
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }
@@ -943,7 +942,7 @@ impl fmt::Debug for Inner {
 }
 
 async fn make_file_attr_for_entry(entry: &JointEntry, inode: Inode) -> FileAttr {
-    make_file_attr(inode, entry.entry_type(), entry.len().await)
+    make_file_attr(inode, entry.entry_type(), entry.len())
 }
 
 fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
@@ -993,6 +992,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOTSUP,
         Error::RequestTimeout => libc::ETIMEDOUT,
+        Error::ConcurrentWriteNotSupported => libc::EBUSY,
     }
 }
 

@@ -1,20 +1,20 @@
-use super::inner::{MaybeInitShared, Shared};
-use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event, sync::Mutex as AsyncMutex};
+use super::lock::OpenLock;
+use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event};
 use std::{
     collections::HashMap,
-    sync::{Mutex as BlockingMutex, Weak},
+    sync::{Arc, Mutex as BlockingMutex, Weak},
 };
 use tokio::sync::broadcast;
 
-pub(crate) struct BlobCache {
+pub(crate) struct FileCache {
     slots: BlockingMutex<BranchMap>,
     event_tx: broadcast::Sender<Event>,
 }
 
-type BlobMap = HashMap<BlobId, Weak<AsyncMutex<Shared>>>;
-type BranchMap = HashMap<PublicKey, BlobMap>;
+type FileMap = HashMap<BlobId, Weak<OpenLock>>;
+type BranchMap = HashMap<PublicKey, FileMap>;
 
-impl BlobCache {
+impl FileCache {
     pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
         Self {
             slots: BlockingMutex::new(HashMap::new()),
@@ -22,7 +22,7 @@ impl BlobCache {
         }
     }
 
-    pub fn fetch(&self, branch_id: PublicKey, blob_id: BlobId) -> MaybeInitShared {
+    pub fn acquire(&self, branch_id: PublicKey, blob_id: BlobId) -> Arc<OpenLock> {
         let mut slots = self.slots.lock().unwrap();
 
         // Cleanup
@@ -38,12 +38,12 @@ impl BlobCache {
             .entry(blob_id)
             .or_insert_with(Weak::new);
 
-        if let Some(shared) = slot.upgrade() {
-            shared.into()
+        if let Some(lock) = slot.upgrade() {
+            lock
         } else {
-            let shared = Shared::uninit_with_close_notify(self.event_tx.clone());
-            *slot = shared.downgrade();
-            shared
+            let lock = OpenLock::new(self.event_tx.clone());
+            *slot = Arc::downgrade(&lock);
+            lock
         }
     }
 

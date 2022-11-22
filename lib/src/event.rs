@@ -16,8 +16,8 @@ task_local! {
 pub(crate) enum Payload {
     /// A new snapshot was created or a block received in the specified branch.
     BranchChanged(PublicKey),
-    /// A blob was closed
-    BlobClosed,
+    /// A file was closed
+    FileClosed,
 }
 
 /// Notification event
@@ -76,7 +76,7 @@ impl BranchChangedReceiver {
                     ..
                 }) => break Ok(branch_id),
                 Ok(Event {
-                    payload: Payload::BlobClosed,
+                    payload: Payload::FileClosed,
                     ..
                 }) => continue,
                 Err(error) => break Err(error),

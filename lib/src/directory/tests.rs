@@ -1,12 +1,13 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
-    blob::{Blob, BlobCache},
+    blob::Blob,
     db,
+    file::FileCache,
     index::BranchData,
 };
 use assert_matches::assert_matches;
-use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
@@ -105,7 +106,7 @@ async fn remove_file() {
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Check the file blob itself was removed as well.
-    match Blob::open(&mut conn, branch.clone(), file_locator, Shared::uninit()).await {
+    match Blob::open(&mut conn, branch.clone(), file_locator).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("file blob should not exists but it does"),
@@ -402,7 +403,7 @@ async fn remove_subdirectory() {
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 
     // Check the directory blob itself was removed as well.
-    match Blob::open(&mut conn, branch, dir_locator, Shared::uninit()).await {
+    match Blob::open(&mut conn, branch, dir_locator).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("directory blob should not exists but it does"),
@@ -635,8 +636,7 @@ async fn setup() -> (TempDir, db::Pool, Branch) {
 async fn setup_multiple<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
-    let branches: Vec<_> = (0..N).map(|_| create_branch(keys.clone())).collect();
-    let branches = branches.try_into().ok().unwrap();
+    let branches = [(); N].map(|_| create_branch(keys.clone()));
 
     (base_dir, pool, branches)
 }
@@ -647,6 +647,6 @@ fn create_branch(keys: AccessKeys) -> Branch {
     Branch::new(
         Arc::new(branch_data),
         keys,
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     )
 }
