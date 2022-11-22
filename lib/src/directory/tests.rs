@@ -7,7 +7,7 @@ use crate::{
     index::BranchData,
 };
 use assert_matches::assert_matches;
-use std::{collections::BTreeSet, convert::TryInto, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
@@ -636,8 +636,7 @@ async fn setup() -> (TempDir, db::Pool, Branch) {
 async fn setup_multiple<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
-    let branches: Vec<_> = (0..N).map(|_| create_branch(keys.clone())).collect();
-    let branches = branches.try_into().ok().unwrap();
+    let branches = [(); N].map(|_| create_branch(keys.clone()));
 
     (base_dir, pool, branches)
 }

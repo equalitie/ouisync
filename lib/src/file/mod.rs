@@ -195,13 +195,14 @@ mod tests {
         event::Event,
         index::BranchData,
     };
+    use assert_matches::assert_matches;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (_base_dir, pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, [branch0, branch1]) = setup().await;
         let mut tx = pool.begin().await.unwrap();
 
         // Create a file owned by branch 0
@@ -266,7 +267,7 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (_base_dir, pool, branch0, branch1) = setup().await;
+        let (_base_dir, pool, [branch0, branch1]) = setup().await;
         let mut tx = pool.begin().await.unwrap();
 
         let mut file0 = branch0
@@ -295,16 +296,47 @@ mod tests {
         }
     }
 
-    async fn setup() -> (TempDir, db::Pool, Branch, Branch) {
+    // TODO: currently concurrent writes are not allowed and this tests simply asserts that. When
+    // concurrent writes are implemented, we should remove this test and replace it with a series
+    // of tests for various write concurrency cases.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_writes() {
+        let (_base_dir, pool, [branch]) = setup().await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let mut file0 = branch
+            .ensure_file_exists(&mut conn, "fox.txt".into())
+            .await
+            .unwrap();
+        let mut file1 = branch
+            .open_root(&mut conn)
+            .await
+            .unwrap()
+            .lookup("fox.txt")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open(&mut conn)
+            .await
+            .unwrap();
+
+        file0.write(&mut conn, b"yip-yap").await.unwrap();
+        assert_matches!(
+            file1.write(&mut conn, b"ring-ding-ding").await,
+            Err(Error::ConcurrentWriteNotSupported)
+        );
+    }
+
+    async fn setup<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
         let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
-        let branch0 = create_branch(event_tx.clone(), keys.clone(), file_cache.clone());
-        let branch1 = create_branch(event_tx, keys, file_cache);
+        let branches =
+            [(); N].map(|_| create_branch(event_tx.clone(), keys.clone(), file_cache.clone()));
 
-        (base_dir, pool, branch0, branch1)
+        (base_dir, pool, branches)
     }
 
     fn create_branch(
