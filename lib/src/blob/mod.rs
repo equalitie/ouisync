@@ -4,11 +4,8 @@ mod open_block;
 #[cfg(test)]
 mod tests;
 
+use self::open_block::{Buffer, Cursor, OpenBlock};
 pub(crate) use self::{cache::BlobCache, inner::Shared};
-use self::{
-    inner::Unique,
-    open_block::{Buffer, Cursor, OpenBlock},
-};
 use crate::{
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -31,8 +28,13 @@ pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 #[derive(Clone)]
 pub(crate) struct Blob {
+    branch: Branch,
+    head_locator: Locator,
+    current_block: OpenBlock,
+    len: u64,
+    len_dirty: bool,
+    len_version: u64,
     shared: Arc<Shared>,
-    unique: Unique,
 }
 
 impl Blob {
@@ -49,14 +51,12 @@ impl Blob {
 
         Ok(Self {
             shared,
-            unique: Unique {
-                branch,
-                head_locator,
-                current_block,
-                len,
-                len_dirty: false,
-                len_version,
-            },
+            branch,
+            head_locator,
+            current_block,
+            len,
+            len_dirty: false,
+            len_version,
         })
     }
 
@@ -68,14 +68,12 @@ impl Blob {
 
         Self {
             shared,
-            unique: Unique {
-                branch,
-                head_locator,
-                current_block,
-                len: 0,
-                len_dirty: false,
-                len_version,
-            },
+            branch,
+            head_locator,
+            current_block,
+            len: 0,
+            len_dirty: false,
+            len_version,
         }
     }
 
@@ -99,16 +97,16 @@ impl Blob {
     }
 
     pub fn branch(&self) -> &Branch {
-        &self.unique.branch
+        &self.branch
     }
 
     /// Locator of this blob.
     pub fn locator(&self) -> &Locator {
-        &self.unique.head_locator
+        &self.head_locator
     }
 
     pub fn len(&self) -> u64 {
-        self.unique.len
+        self.len
     }
 
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
@@ -122,11 +120,11 @@ impl Blob {
         let mut total_len = 0;
 
         loop {
-            let remaining = (self.unique.len - self.seek_position())
+            let remaining = (self.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX);
             let len = buffer.len().min(remaining);
-            let len = self.unique.current_block.content.read(&mut buffer[..len]);
+            let len = self.current_block.content.read(&mut buffer[..len]);
 
             buffer = &mut buffer[len..];
             total_len += len;
@@ -135,8 +133,8 @@ impl Blob {
                 break;
             }
 
-            let locator = self.unique.current_block.locator.next();
-            if locator.number() >= self.unique.block_count() {
+            let locator = self.current_block.locator.next();
+            if locator.number() >= self.block_count() {
                 break;
             }
 
@@ -145,8 +143,8 @@ impl Blob {
             // update `self.unique.len` and try the loop again.
             let (id, content) = read_block(
                 conn,
-                self.unique.branch.data(),
-                self.unique.branch.keys().read(),
+                self.branch.data(),
+                self.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -162,7 +160,7 @@ impl Blob {
     pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
         let mut buffer = vec![
             0;
-            (self.unique.len - self.seek_position())
+            (self.len - self.seek_position())
                 .try_into()
                 .unwrap_or(usize::MAX)
         ];
@@ -178,32 +176,32 @@ impl Blob {
         let mut tx = conn.begin().await?;
 
         loop {
-            let len = self.unique.current_block.content.write(buffer);
+            let len = self.current_block.content.write(buffer);
 
             // TODO: only set the dirty flag if the content actually changed. Otherwise overwriting
             // a block with the same content it already had would result in a new block with a new
             // version being unnecessarily created.
             if len > 0 {
-                self.unique.current_block.dirty = true;
+                self.current_block.dirty = true;
             }
 
             buffer = &buffer[len..];
 
-            if self.seek_position() > self.unique.len {
-                self.unique.len = self.seek_position();
-                self.unique.len_dirty = true;
+            if self.seek_position() > self.len {
+                self.len = self.seek_position();
+                self.len_dirty = true;
             }
 
             if buffer.is_empty() {
                 break;
             }
 
-            let locator = self.unique.current_block.locator.next();
-            let (id, content) = if locator.number() < self.unique.block_count() {
+            let locator = self.current_block.locator.next();
+            let (id, content) = if locator.number() < self.block_count() {
                 read_block(
                     &mut tx,
-                    self.unique.branch.data(),
-                    self.unique.branch.keys().read(),
+                    self.branch.data(),
+                    self.branch.keys().read(),
                     &locator,
                 )
                 .await?
@@ -228,19 +226,17 @@ impl Blob {
     /// Returns the new seek position from the start of the blob.
     pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
-            SeekFrom::Start(n) => n.min(self.unique.len),
+            SeekFrom::Start(n) => n.min(self.len),
             SeekFrom::End(n) => {
                 if n >= 0 {
-                    self.unique.len
+                    self.len
                 } else {
-                    self.unique.len.saturating_sub((-n) as u64)
+                    self.len.saturating_sub((-n) as u64)
                 }
             }
             SeekFrom::Current(n) => {
                 if n >= 0 {
-                    self.seek_position()
-                        .saturating_add(n as u64)
-                        .min(self.unique.len)
+                    self.seek_position().saturating_add(n as u64).min(self.len)
                 } else {
                     self.seek_position().saturating_sub((-n) as u64)
                 }
@@ -251,16 +247,16 @@ impl Blob {
         let block_number = (actual_offset / BLOCK_SIZE as u64) as u32;
         let block_offset = (actual_offset % BLOCK_SIZE as u64) as usize;
 
-        if block_number != self.unique.current_block.locator.number() {
-            let locator = self.unique.locator_at(block_number);
+        if block_number != self.current_block.locator.number() {
+            let locator = self.head_locator.nth(block_number);
 
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
             // update `self.unique.len` and try again.
             let (id, content) = read_block(
                 conn,
-                self.unique.branch.data(),
-                self.unique.branch.keys().read(),
+                self.branch.data(),
+                self.branch.keys().read(),
                 &locator,
             )
             .await?;
@@ -268,26 +264,26 @@ impl Blob {
             self.replace_current_block(locator, id, content)?;
         }
 
-        self.unique.current_block.content.pos = block_offset;
+        self.current_block.content.pos = block_offset;
 
         Ok(offset)
     }
 
     /// Truncate the blob to the given length.
     pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
-        if len == self.unique.len {
+        if len == self.len {
             return Ok(());
         }
 
-        if len > self.unique.len {
+        if len > self.len {
             // TODO: consider supporting this
             return Err(Error::OperationNotSupported);
         }
 
         self.seek(conn, SeekFrom::Start(len)).await?;
 
-        self.unique.len = len;
-        self.unique.len_dirty = true;
+        self.len = len;
+        self.len_dirty = true;
 
         Ok(())
     }
@@ -315,22 +311,21 @@ impl Blob {
     pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
         // If the blob is already forked, do nothing but still return a clone of the original blob
         // to maintain idempotency.
-        if self.unique.branch.id() != dst_branch.id() {
-            let read_key = self.unique.branch.keys().read();
+        if self.branch.id() != dst_branch.id() {
+            let read_key = self.branch.keys().read();
             // Take the write key from the dst branch, not the src branch, to protect us against
             // accidentally forking into remote branch (remote branches don't have write access).
             let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
             let locators = self
-                .unique
                 .head_locator
                 .sequence()
-                .take(self.unique.block_count() as usize);
+                .take(self.block_count() as usize);
 
             for locator in locators {
                 let encoded_locator = locator.encode(read_key);
 
-                let block_id = self.unique.branch.data().get(tx, &encoded_locator).await?;
+                let block_id = self.branch.data().get(tx, &encoded_locator).await?;
 
                 // It can happen that the current and dst branches are different, but the blob has
                 // already been forked by some other task in the meantime (after we loaded this
@@ -343,19 +338,17 @@ impl Blob {
             }
         }
 
-        let shared = dst_branch.fetch_blob_shared(*self.unique.head_locator.blob_id());
+        let shared = dst_branch.fetch_blob_shared(*self.head_locator.blob_id());
         let len_version = shared.len_version();
 
         let forked = Self {
             shared,
-            unique: Unique {
-                branch: dst_branch,
-                head_locator: self.unique.head_locator,
-                current_block: self.unique.current_block.clone(),
-                len: self.unique.len,
-                len_dirty: self.unique.len_dirty,
-                len_version,
-            },
+            branch: dst_branch,
+            head_locator: self.head_locator,
+            current_block: self.current_block.clone(),
+            len: self.len,
+            len_dirty: self.len_dirty,
+            len_version,
         };
 
         Ok(forked)
@@ -363,14 +356,18 @@ impl Blob {
 
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
-        self.unique.current_block.dirty || self.unique.len_dirty
+        self.current_block.dirty || self.len_dirty
     }
 
     // Returns the current seek position from the start of the blob.
     fn seek_position(&self) -> u64 {
-        self.unique.current_block.locator.number() as u64 * BLOCK_SIZE as u64
-            + self.unique.current_block.content.pos as u64
+        self.current_block.locator.number() as u64 * BLOCK_SIZE as u64
+            + self.current_block.content.pos as u64
             - HEADER_SIZE as u64
+    }
+
+    fn block_count(&self) -> u32 {
+        block_count(self.len)
     }
 
     // Precondition: the current block is not dirty (panics if it is).
@@ -382,7 +379,7 @@ impl Blob {
     ) -> Result<()> {
         // Prevent data loss
         // TODO: Find a way to write the current dirty block to the db in a deadlock-free way.
-        if self.unique.current_block.dirty {
+        if self.current_block.dirty {
             return Err(Error::OperationNotSupported);
         }
 
@@ -393,7 +390,7 @@ impl Blob {
             content.pos = HEADER_SIZE;
         }
 
-        self.unique.current_block = OpenBlock {
+        self.current_block = OpenBlock {
             locator,
             id,
             content,
@@ -405,91 +402,80 @@ impl Blob {
 
     // Write the current blob length into the blob header in the head block.
     async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.unique.len_dirty {
+        if !self.len_dirty {
             return Ok(());
         }
 
-        let read_key = self.unique.branch.keys().read();
-        let write_keys = self
-            .unique
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let read_key = self.branch.keys().read();
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         let shared_len_version = self.shared.len_version();
-        if self.unique.len_version < shared_len_version {
-            self.unique.len = load_len(tx, &self.unique).await?;
-            self.unique.len_dirty = false;
-            self.unique.len_version = shared_len_version;
+        if self.len_version < shared_len_version {
+            self.len = self.load_len(tx).await?;
+            self.len_dirty = false;
+            self.len_version = shared_len_version;
 
             return Ok(());
         }
 
-        if self.unique.current_block.locator.number() == 0 {
-            let old_pos = self.unique.current_block.content.pos;
-            self.unique.current_block.content.pos = 0;
-            self.unique.current_block.content.write_u64(self.unique.len);
-            self.unique.current_block.content.pos = old_pos;
-            self.unique.current_block.dirty = true;
+        if self.current_block.locator.number() == 0 {
+            let old_pos = self.current_block.content.pos;
+            self.current_block.content.pos = 0;
+            self.current_block.content.write_u64(self.len);
+            self.current_block.content.pos = old_pos;
+            self.current_block.dirty = true;
         } else {
-            let locator = self.unique.locator_at(0);
             let (_, buffer) = read_block(
                 tx,
-                self.unique.branch.data(),
-                self.unique.branch.keys().read(),
-                &locator,
+                self.branch.data(),
+                self.branch.keys().read(),
+                &self.head_locator,
             )
             .await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
-            cursor.write_u64(self.unique.len);
+            cursor.write_u64(self.len);
 
             write_block(
                 tx,
-                self.unique.branch.data(),
+                self.branch.data(),
                 read_key,
                 write_keys,
-                &locator,
+                &self.head_locator,
                 cursor.buffer,
             )
             .await?;
         }
 
-        self.unique.len_dirty = false;
-        self.unique.len_version += 1;
-        self.shared.set_len_version(tx, self.unique.len_version);
+        self.len_dirty = false;
+        self.len_version += 1;
+        self.shared.set_len_version(tx, self.len_version);
 
         Ok(())
     }
 
     // Write the current block into the store.
     async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
-        if !self.unique.current_block.dirty {
+        if !self.current_block.dirty {
             return Ok(());
         }
 
-        let read_key = self.unique.branch.keys().read();
-        let write_keys = self
-            .unique
-            .branch
-            .keys()
-            .write()
-            .ok_or(Error::PermissionDenied)?;
+        let read_key = self.branch.keys().read();
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
 
         let block_id = write_block(
             tx,
-            self.unique.branch.data(),
+            self.branch.data(),
             read_key,
             write_keys,
-            &self.unique.current_block.locator,
-            self.unique.current_block.content.buffer.clone(),
+            &self.current_block.locator,
+            self.current_block.content.buffer.clone(),
         )
         .await?;
 
-        self.unique.current_block.id = block_id;
-        self.unique.current_block.dirty = false;
+        self.current_block.id = block_id;
+        self.current_block.dirty = false;
 
         Ok(())
     }
@@ -497,11 +483,10 @@ impl Blob {
     async fn trim(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
         match remove_blocks(
             tx,
-            &self.unique.branch,
-            self.unique
-                .head_locator
+            &self.branch,
+            self.head_locator
                 .sequence()
-                .skip(self.unique.block_count() as usize),
+                .skip(self.block_count() as usize),
         )
         .await
         {
@@ -511,6 +496,19 @@ impl Blob {
             Ok(()) | Err(Error::EntryNotFound) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    async fn load_len(&self, conn: &mut db::Connection) -> Result<u64> {
+        let locator = self.head_locator.nth(0);
+        let (_, buffer) = read_block(
+            conn,
+            self.branch.data(),
+            self.branch.keys().read(),
+            &locator,
+        )
+        .await?;
+
+        Ok(buffer.read_u64(0))
     }
 }
 
@@ -538,6 +536,13 @@ impl BlockIds {
             Err(error) => Err(error),
         }
     }
+}
+
+fn block_count(len: u64) -> u32 {
+    // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+    (1 + (len + HEADER_SIZE as u64 - 1) / BLOCK_SIZE as u64)
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 async fn read_block(
@@ -630,17 +635,4 @@ where
     }
 
     Ok(())
-}
-
-async fn load_len(conn: &mut db::Connection, unique: &Unique) -> Result<u64> {
-    let locator = unique.locator_at(0);
-    let (_, buffer) = read_block(
-        conn,
-        unique.branch.data(),
-        unique.branch.keys().read(),
-        &locator,
-    )
-    .await?;
-
-    Ok(buffer.read_u64(0))
 }
