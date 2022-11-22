@@ -107,8 +107,7 @@ impl ParentContext {
 
                     tx.commit().await?;
 
-                    let shared = dst_branch.fetch_blob_shared(blob_id);
-                    Blob::open(conn, dst_branch, Locator::head(blob_id), shared).await?
+                    Blob::open(conn, dst_branch, Locator::head(blob_id)).await?
                 }
             };
 

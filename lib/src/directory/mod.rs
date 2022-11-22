@@ -17,7 +17,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{Blob, Shared},
+    blob::Blob,
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -110,14 +110,8 @@ impl Directory {
         let data = EntryData::file(blob_id, version_vector);
         let parent =
             ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
-        let shared = self.branch().fetch_blob_shared(blob_id);
 
-        let mut file = File::create(
-            self.branch().clone(),
-            Locator::head(blob_id),
-            parent,
-            shared,
-        );
+        let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
@@ -350,7 +344,7 @@ impl Directory {
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let blob = Blob::create(owner_branch, locator, Shared::detached());
+        let blob = Blob::create(owner_branch, locator);
 
         Directory {
             blob,
@@ -379,7 +373,6 @@ impl Directory {
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
                         parent_context,
-                        Shared::detached(),
                     )
                     .await;
 
@@ -642,7 +635,7 @@ async fn load(
     branch: Branch,
     locator: Locator,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open(conn, branch, locator, Shared::detached()).await?;
+    let mut blob = Blob::open(conn, branch, locator).await?;
     let buffer = blob.read_to_end(conn).await?;
     let content = Content::deserialize(&buffer)?;
 

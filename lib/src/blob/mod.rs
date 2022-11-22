@@ -41,9 +41,9 @@ impl Blob {
         conn: &mut db::Connection,
         branch: Branch,
         head_locator: Locator,
-        shared: Arc<Shared>,
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
+        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
         let len_version = shared.len_version();
         let len = current_block.content.read_u64();
 
@@ -61,8 +61,9 @@ impl Blob {
     }
 
     /// Creates a new blob.
-    pub fn create(branch: Branch, head_locator: Locator, shared: Arc<Shared>) -> Self {
+    pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
+        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
         let len_version = shared.len_version();
 
         Self {

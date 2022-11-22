@@ -134,12 +134,11 @@ impl<'a> FileRef<'a> {
     }
 
     pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
-        let shared = self.branch().fetch_blob_shared(*self.blob_id());
         let parent_context = self.inner.parent_context();
         let branch = self.branch().clone();
         let locator = self.locator();
 
-        File::open(conn, branch, locator, parent_context, shared).await
+        File::open(conn, branch, locator, parent_context).await
     }
 
     pub fn branch(&self) -> &Branch {

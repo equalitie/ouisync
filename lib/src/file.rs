@@ -1,5 +1,5 @@
 use crate::{
-    blob::{Blob, Shared},
+    blob::Blob,
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -9,7 +9,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, io::SeekFrom, sync::Arc};
+use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 pub struct File {
@@ -24,23 +24,17 @@ impl File {
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
-        blob_shared: Arc<Shared>,
     ) -> Result<Self> {
         Ok(Self {
-            blob: Blob::open(conn, branch, locator, blob_shared).await?,
+            blob: Blob::open(conn, branch, locator).await?,
             parent,
         })
     }
 
     /// Creates a new file.
-    pub(crate) fn create(
-        branch: Branch,
-        locator: Locator,
-        parent: ParentContext,
-        blob_shared: Arc<Shared>,
-    ) -> Self {
+    pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
         Self {
-            blob: Blob::create(branch, locator, blob_shared),
+            blob: Blob::create(branch, locator),
             parent,
         }
     }

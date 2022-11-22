@@ -44,11 +44,6 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub fn detached() -> Arc<Self> {
-        let (tx, _) = broadcast::channel(1);
-        Self::new(tx)
-    }
-
     pub fn new(event_tx: broadcast::Sender<Event>) -> Arc<Self> {
         Arc::new(Self {
             event_tx,
