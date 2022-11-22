@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
-    blob::{Blob, BlobCache},
+    blob::Blob,
     db,
+    file::FileCache,
     index::BranchData,
 };
 use assert_matches::assert_matches;
@@ -647,6 +648,6 @@ fn create_branch(keys: AccessKeys) -> Branch {
     Branch::new(
         Arc::new(branch_data),
         keys,
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     )
 }

@@ -4,6 +4,7 @@ use crate::{
     block::{self, BLOCK_SIZE},
     crypto::sign::PublicKey,
     error::Error,
+    file::FileCache,
     index::BranchData,
     test_utils,
 };
@@ -604,7 +605,7 @@ async fn fork_case(
     let dst_branch = Branch::new(
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     );
 
     let src_locator = if src_locator_is_root {
@@ -665,7 +666,7 @@ async fn fork_is_idempotent() {
     let dst_branch = Branch::new(
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     );
 
     let locator = Locator::head(rng.gen());
@@ -699,7 +700,7 @@ async fn fork_then_remove_src_branch() {
     let dst_branch = Branch::new(
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     );
 
     let locator_0 = Locator::head(rng.gen());
@@ -785,7 +786,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
     let branch = Branch::new(
         Arc::new(branch),
         secrets.into(),
-        Arc::new(BlobCache::new(event_tx)),
+        Arc::new(FileCache::new(event_tx)),
     );
 
     (rng, base_dir, pool, branch)

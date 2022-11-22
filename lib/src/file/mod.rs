@@ -1,3 +1,8 @@
+mod cache;
+mod lock;
+
+use self::lock::WriteLock;
+pub(crate) use self::{cache::FileCache, lock::OpenLock};
 use crate::{
     blob::Blob,
     block::BLOCK_SIZE,
@@ -15,6 +20,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 pub struct File {
     blob: Blob,
     parent: ParentContext,
+    write_lock: WriteLock,
 }
 
 impl File {
@@ -25,17 +31,23 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
+
         Ok(Self {
             blob: Blob::open(conn, branch, locator).await?,
             parent,
+            write_lock,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
+
         Self {
             blob: Blob::create(branch, locator),
             parent,
+            write_lock,
         }
     }
 
@@ -66,7 +78,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
-        self.blob.acquire_write_lock()?;
+        self.acquire_write_lock()?;
         self.blob.write(conn, buffer).await
     }
 
@@ -77,7 +89,7 @@ impl File {
 
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
-        self.blob.acquire_write_lock()?;
+        self.acquire_write_lock()?;
         self.blob.truncate(conn, len).await
     }
 
@@ -142,11 +154,13 @@ impl File {
 
         let (new_parent, new_blob) = self
             .parent
-            .fork(conn, &self.blob, self.branch().clone(), dst_branch)
+            .fork(conn, &self.blob, self.branch().clone(), dst_branch.clone())
             .await?;
 
         self.blob = new_blob;
         self.parent = new_parent;
+        self.write_lock =
+            WriteLock::new(dst_branch.acquire_open_lock(*self.blob.locator().blob_id()));
 
         Ok(())
     }
@@ -162,6 +176,13 @@ impl File {
     pub(crate) fn locator(&self) -> &Locator {
         self.blob.locator()
     }
+
+    fn acquire_write_lock(&mut self) -> Result<()> {
+        self.write_lock
+            .acquire()
+            .then_some(())
+            .ok_or(Error::ConcurrentWriteNotSupported)
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +190,6 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
-        blob::BlobCache,
         crypto::sign::PublicKey,
         db,
         event::Event,
@@ -279,10 +299,10 @@ mod tests {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
-        let blob_cache = Arc::new(BlobCache::new(event_tx.clone()));
+        let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
-        let branch0 = create_branch(event_tx.clone(), keys.clone(), blob_cache.clone());
-        let branch1 = create_branch(event_tx, keys, blob_cache);
+        let branch0 = create_branch(event_tx.clone(), keys.clone(), file_cache.clone());
+        let branch1 = create_branch(event_tx, keys, file_cache);
 
         (base_dir, pool, branch0, branch1)
     }
@@ -290,10 +310,10 @@ mod tests {
     fn create_branch(
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
-        blob_cache: Arc<BlobCache>,
+        file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(Arc::new(branch_data), keys, blob_cache)
+        Branch::new(Arc::new(branch_data), keys, file_cache)
     }
 }
 

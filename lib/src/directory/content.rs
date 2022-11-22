@@ -86,7 +86,7 @@ impl Content {
                 match entry.get() {
                     EntryData::File(old_data)
                         if new_data.version_vector() > &old_data.version_vector
-                            && !branch.is_blob_open(&old_data.blob_id) =>
+                            && !branch.is_file_open(&old_data.blob_id) =>
                     {
                         self.overwritten_blobs.push(old_data.blob_id);
                     }

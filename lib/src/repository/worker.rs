@@ -258,7 +258,7 @@ mod prune {
                 Ok(branch) => {
                     // Don't remove branches that are in use. We get notified when they stop being
                     // used so we can try again.
-                    if branch.is_any_blob_open() {
+                    if branch.is_any_file_open() {
                         tracing::trace!("not removing outdated branch {:?} - in use", branch.id());
                         continue;
                     }

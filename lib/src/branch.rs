@@ -1,6 +1,5 @@
 use crate::{
     access_control::AccessKeys,
-    blob::{BlobCache, Shared},
     blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
@@ -8,7 +7,7 @@ use crate::{
     debug::DebugPrinter,
     directory::{Directory, EntryRef},
     error::{Error, Result},
-    file::File,
+    file::{File, FileCache, OpenLock},
     index::BranchData,
     locator::Locator,
     path,
@@ -21,19 +20,19 @@ use std::sync::Arc;
 pub struct Branch {
     branch_data: Arc<BranchData>,
     keys: AccessKeys,
-    blob_cache: Arc<BlobCache>,
+    file_cache: Arc<FileCache>,
 }
 
 impl Branch {
     pub(crate) fn new(
         branch_data: Arc<BranchData>,
         keys: AccessKeys,
-        blob_cache: Arc<BlobCache>,
+        file_cache: Arc<FileCache>,
     ) -> Self {
         Self {
             branch_data,
             keys,
-            blob_cache,
+            file_cache,
         }
     }
 
@@ -115,16 +114,16 @@ impl Branch {
             .await
     }
 
-    pub(crate) fn fetch_blob_shared(&self, blob_id: BlobId) -> Arc<Shared> {
-        self.blob_cache.fetch(*self.id(), blob_id)
+    pub(crate) fn acquire_open_lock(&self, blob_id: BlobId) -> Arc<OpenLock> {
+        self.file_cache.acquire(*self.id(), blob_id)
     }
 
-    pub(crate) fn is_blob_open(&self, blob_id: &BlobId) -> bool {
-        self.blob_cache.contains(self.id(), blob_id)
+    pub(crate) fn is_file_open(&self, blob_id: &BlobId) -> bool {
+        self.file_cache.contains(self.id(), blob_id)
     }
 
-    pub(crate) fn is_any_blob_open(&self) -> bool {
-        self.blob_cache.contains_any(self.id())
+    pub(crate) fn is_any_file_open(&self) -> bool {
+        self.file_cache.contains_any(self.id())
     }
 
     pub async fn debug_print(&self, conn: &mut db::Connection, print: DebugPrinter) {
@@ -141,7 +140,7 @@ impl Branch {
         Self {
             branch_data: self.branch_data,
             keys,
-            blob_cache: self.blob_cache,
+            file_cache: self.file_cache,
         }
     }
 }
@@ -191,7 +190,7 @@ mod tests {
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
         let branch = index.get_branch(writer_id);
-        let branch = Branch::new(branch, secrets.into(), Arc::new(BlobCache::new(event_tx)));
+        let branch = Branch::new(branch, secrets.into(), Arc::new(FileCache::new(event_tx)));
 
         (base_dir, pool, branch)
     }

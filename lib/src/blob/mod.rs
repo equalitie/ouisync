@@ -1,12 +1,8 @@
-mod cache;
-// TODO: rename to `shared`
-mod inner;
 mod open_block;
 #[cfg(test)]
 mod tests;
 
 use self::open_block::{Buffer, Cursor, OpenBlock};
-pub(crate) use self::{cache::BlobCache, inner::Shared};
 use crate::{
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -20,7 +16,7 @@ use crate::{
     index::BranchData,
     locator::Locator,
 };
-use std::{io::SeekFrom, mem, sync::Arc};
+use std::{io::SeekFrom, mem};
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -34,8 +30,6 @@ pub(crate) struct Blob {
     current_block: OpenBlock,
     len: u64,
     len_dirty: bool,
-    write_lock: WriteLock,
-    shared: Arc<Shared>,
 }
 
 impl Blob {
@@ -47,7 +41,6 @@ impl Blob {
     ) -> Result<Self> {
         let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
         let len = current_block.content.read_u64();
-        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
 
         Ok(Self {
             branch,
@@ -55,15 +48,12 @@ impl Blob {
             current_block,
             len,
             len_dirty: false,
-            write_lock: WriteLock::new(),
-            shared,
         })
     }
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
         let current_block = OpenBlock::new_head(head_locator);
-        let shared = branch.fetch_blob_shared(*head_locator.blob_id());
 
         Self {
             branch,
@@ -71,8 +61,6 @@ impl Blob {
             current_block,
             len: 0,
             len_dirty: false,
-            write_lock: WriteLock::new(),
-            shared,
         }
     }
 
@@ -337,27 +325,15 @@ impl Blob {
             }
         }
 
-        let shared = dst_branch.fetch_blob_shared(*self.head_locator.blob_id());
-
         let forked = Self {
             branch: dst_branch,
             head_locator: self.head_locator,
             current_block: self.current_block.clone(),
             len: self.len,
             len_dirty: self.len_dirty,
-            write_lock: WriteLock::new(),
-            shared,
         };
 
         Ok(forked)
-    }
-
-    pub fn acquire_write_lock(&mut self) -> Result<()> {
-        if self.write_lock.acquire(&self.shared) {
-            Ok(())
-        } else {
-            Err(Error::ConcurrentWriteNotSupported)
-        }
     }
 
     /// Was this blob modified and not flushed yet?
@@ -630,32 +606,4 @@ where
     }
 
     Ok(())
-}
-
-struct WriteLock(bool);
-
-impl WriteLock {
-    fn new() -> Self {
-        Self(false)
-    }
-
-    fn acquire(&mut self, shared: &Shared) -> bool {
-        if self.0 {
-            return true;
-        }
-
-        if shared.acquire_write_lock() {
-            self.0 = true;
-            return true;
-        }
-
-        false
-    }
-}
-
-impl Clone for WriteLock {
-    fn clone(&self) -> Self {
-        // There can be at most one acquired write lock
-        Self::new()
-    }
 }

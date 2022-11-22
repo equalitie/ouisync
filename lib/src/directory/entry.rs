@@ -154,7 +154,7 @@ impl<'a> FileRef<'a> {
     }
 
     pub(crate) fn is_open(&self) -> bool {
-        self.branch().is_blob_open(self.blob_id())
+        self.branch().is_file_open(self.blob_id())
     }
 }
 
