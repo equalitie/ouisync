@@ -96,6 +96,7 @@ impl File {
     /// Truncates the file to the given length.
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         let mut conn = self.branch().db().acquire().await?;
+        self.acquire_write_lock()?;
         self.blob.truncate(&mut conn, len).await
     }
 
@@ -313,6 +314,10 @@ mod tests {
         file0.write(b"yip-yap").await.unwrap();
         assert_matches!(
             file1.write(b"ring-ding-ding").await,
+            Err(Error::ConcurrentWriteNotSupported)
+        );
+        assert_matches!(
+            file1.truncate(0).await,
             Err(Error::ConcurrentWriteNotSupported)
         );
     }
