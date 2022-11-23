@@ -85,6 +85,7 @@ async fn remove_remote_file() {
     // TODO: wait until A sees the file being deleted
 }
 
+// FIXME: this test occasionally fails
 #[tokio::test(flavor = "multi_thread")]
 async fn relay() {
     // Simulate two peers that can't connect to each other but both can connect to a third peer.
@@ -535,6 +536,7 @@ async fn recreate_local_branch() {
     .unwrap()
 }
 
+// FIXME: this test occasionally fails
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_many_files() {
     let mut env = Env::with_seed(0);
@@ -562,15 +564,13 @@ async fn transfer_many_files() {
         let contents = contents.clone();
         async move {
             for (index, content) in contents.iter().enumerate() {
-                let mut file = repo_a
-                    .create_file(format!("file-{}.dat", index))
-                    .await
-                    .unwrap();
+                let name = format!("file-{}.dat", index);
+                let mut file = repo_a.create_file(&name).await.unwrap();
 
                 write_in_chunks(&mut file, content, 4096).await;
                 file.flush().await.unwrap();
 
-                // println!("put {}/{}", index + 1, contents.len());
+                tracing::info!("put {:?}", name);
             }
         }
         .instrument(Span::current())
@@ -580,18 +580,13 @@ async fn transfer_many_files() {
         async move {
             common::eventually(&repo_b, || async {
                 for (index, content) in contents.iter().enumerate() {
-                    if !check_file_version_content(
-                        &repo_b,
-                        &format!("file-{}.dat", index),
-                        None,
-                        content,
-                    )
-                    .await
-                    {
+                    let name = format!("file-{}.dat", index);
+
+                    if !check_file_version_content(&repo_b, &name, None, content).await {
                         return false;
                     }
 
-                    // println!("get {}/{}", index + 1, contents.len());
+                    tracing::info!("get {:?}", name);
                 }
 
                 true
@@ -601,7 +596,7 @@ async fn transfer_many_files() {
         .instrument(Span::current()),
     );
 
-    time::timeout(Duration::from_secs(30), async move {
+    time::timeout(Duration::from_secs(10), async move {
         task_a.await.unwrap();
         task_b.await.unwrap();
     })
@@ -750,9 +745,6 @@ async fn remote_rename_non_empty_directory() {
         .unwrap();
 }
 
-// FIXME: fails because the blocks of the "archive" directory in the remote branch are
-//        garbage-collected after its merged but before being renamed to "trash".
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
     let mut env = Env::with_seed(0);
