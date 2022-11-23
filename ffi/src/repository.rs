@@ -25,7 +25,7 @@ pub const ACCESS_MODE_WRITE: u8 = 2;
 const ENABLE_MERGER: bool = true;
 
 pub struct RepositoryHolder {
-    repository: Repository,
+    pub(super) repository: Repository,
     registration: Registration,
 }
 
@@ -133,15 +133,14 @@ pub unsafe extern "C" fn repository_open(
 
 /// Closes a repository.
 #[no_mangle]
-pub unsafe extern "C" fn repository_close(handle: SharedHandle<RepositoryHolder>, port: Port<()>) {
-    let session = session::get();
-    let sender = session.sender();
-    let holder = handle.release();
-
-    session.runtime().spawn(async move {
-        holder.repository.close().await;
-        sender.send(port, ());
-    });
+pub unsafe extern "C" fn repository_close(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+        ctx.spawn(async move { holder.repository.close().await })
+    })
 }
 
 /// Return the RepositoryId of the repository in the low hex format.

@@ -1,141 +1,117 @@
 mod migrations;
 
 use crate::debug;
-use futures_util::Stream;
-use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
-        SqliteTransactionBehavior,
+        SqliteSynchronous, SqliteTransactionBehavior,
     },
-    Acquire, Database, Either, Execute, Executor, Row, SqlitePool,
+    Acquire, Row, SqlitePool,
 };
 use std::{
-    future::Future,
     io,
     ops::{Deref, DerefMut},
     path::Path,
-    pin::Pin,
+    sync::Arc,
     time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::fs;
+use tokio::{
+    fs,
+    sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
+};
 
 /// Database connection pool.
 #[derive(Clone)]
 pub struct Pool {
     inner: SqlitePool,
+    shared_tx: Arc<AsyncMutex<Option<Transaction<'static>>>>,
 }
 
 impl Pool {
-    fn new(inner: SqlitePool) -> Self {
-        Self { inner }
+    async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+        let connect_options = connect_options
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .pragma("recursive_triggers", "ON")
+            // We assume that every transaction completes in a reasonable time (i.e., there are no
+            // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
+            // that so setting this excessively large timeout is the next best thing.
+            //
+            // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html)
+            //    would be one such way.
+            .busy_timeout(Duration::from_secs(24 * 60 * 60));
+
+        let inner = SqlitePoolOptions::new()
+            .max_connections(8)
+            .test_before_acquire(false)
+            .connect_with(connect_options)
+            .await?;
+
+        Ok(Self {
+            inner,
+            shared_tx: Arc::new(AsyncMutex::new(None)),
+        })
     }
 
+    /// Acquire a database connection.
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
         self.inner.acquire().await.map(PoolConnection)
     }
 
+    /// Begin a regular ("unique") transaction. At most one task can hold a transaction at any time.
+    /// Any other tasks are blocked on calling `begin` until the task that currently holds it is
+    /// done with it (commits it or rolls it back). Performing read-only operations concurrently
+    /// while a transaction is in use is still allowed. Those operations will not see the writes
+    /// performed via the transaction until that transaction is committed however.
+    ///
+    /// If an idle `SharedTransaction` exists in the pool when `begin` is called, it is
+    /// automatically committed before the regular transaction is created.
     pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.lock().await;
+
+        if let Some(tx) = shared_tx.take() {
+            tx.commit().await?;
+        }
+
         Transaction::begin(&self.inner).await
     }
 
-    pub(crate) async fn close(&self) {
-        self.inner.close().await
+    /// Begin a shared transaction. Unlike regular transaction, a shared transaction is not
+    /// automatically rolled back when dropped. Instead it's returned to the pool where it can be
+    /// reused by calling `begin_shared` again. An idle shared transaction is auto committed when a
+    /// regular transaction is created with `begin`. Shared transaction can also be manually
+    /// committed or rolled back by calling `commit` or `rollback` on it respectively.
+    ///
+    /// Use shared transactions to group multiple writes that don't logically need to be in the
+    /// same transaction to improve performance by reducing the number of commits.
+    pub async fn begin_shared(&self) -> Result<SharedTransaction, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.clone().lock_owned().await;
+
+        if shared_tx.is_none() {
+            *shared_tx = Some(Transaction::begin(&self.inner).await?);
+        }
+
+        Ok(SharedTransaction(shared_tx))
+    }
+
+    pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
+        if let Some(tx) = self.shared_tx.lock().await.take() {
+            // Ignore errors here
+            tx.commit().await?
+        }
+
+        self.inner.close().await;
+
+        Ok(())
     }
 }
 
 /// Database connection
-#[derive(Debug, RefCast)]
-#[repr(transparent)]
-pub struct Connection(SqliteConnection);
-
-impl Connection {
-    pub async fn begin(&mut self) -> Result<Transaction<'_>, sqlx::Error> {
-        Transaction::begin(&mut self.0).await
-    }
-}
-
-// Delegate the `Executor` impl to the inner type (what a trait!)
-impl<'c> Executor<'c> for &'c mut Connection {
-    type Database = Sqlite;
-
-    fn fetch_many<'e, 'q: 'e, E: 'q>(
-        self,
-        query: E,
-    ) -> Pin<
-        Box<
-            dyn Stream<
-                    Item = Result<
-                        Either<
-                            <Self::Database as Database>::QueryResult,
-                            <Self::Database as Database>::Row,
-                        >,
-                        sqlx::Error,
-                    >,
-                > + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-        E: Execute<'q, Self::Database>,
-    {
-        self.0.fetch_many(query)
-    }
-
-    fn fetch_optional<'e, 'q: 'e, E: 'q>(
-        self,
-        query: E,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Option<<Self::Database as Database>::Row>, sqlx::Error>>
-                + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-        E: Execute<'q, Self::Database>,
-    {
-        self.0.fetch_optional(query)
-    }
-
-    fn prepare_with<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-        parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        <Self::Database as sqlx::database::HasStatement<'q>>::Statement,
-                        sqlx::Error,
-                    >,
-                > + Send
-                + 'e,
-        >,
-    >
-    where
-        'c: 'e,
-    {
-        self.0.prepare_with(sql, parameters)
-    }
-
-    fn describe<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<sqlx::Describe<Self::Database>, sqlx::Error>> + Send + 'e>,
-    >
-    where
-        'c: 'e,
-    {
-        self.0.describe(sql)
-    }
-}
+// TODO: create a newtype for this which hides `begin` (use the ref-cast crate)
+pub type Connection = SqliteConnection;
 
 /// Database connection from pool
 pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
@@ -144,13 +120,13 @@ impl Deref for PoolConnection {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        self.0.deref()
     }
 }
 
 impl DerefMut for PoolConnection {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        self.0.deref_mut()
     }
 }
 
@@ -202,13 +178,49 @@ impl Deref for Transaction<'_> {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        self.0.deref()
     }
 }
 
 impl DerefMut for Transaction<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        self.0.deref_mut()
+    }
+}
+
+/// Shared transaction
+///
+/// See [Pool::begin_shared] for more details.
+
+// NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
+// `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
+pub struct SharedTransaction(AsyncOwnedMutexGuard<Option<Transaction<'static>>>);
+
+impl SharedTransaction {
+    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
+        // `unwrap` is ok, see the NONE above.
+        self.0.take().unwrap().commit().await
+    }
+
+    pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
+        // `unwrap` is ok, see the NONE above.
+        self.0.take().unwrap().rollback().await
+    }
+}
+
+impl Deref for SharedTransaction {
+    type Target = Transaction<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        // `unwrap` is ok, see the NONE above.
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl DerefMut for SharedTransaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // `unwrap` is ok, see the NONE above.
+        self.0.as_mut().unwrap()
     }
 }
 
@@ -224,13 +236,11 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
     let connect_options = SqliteConnectOptions::new()
         .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal);
+        .create_if_missing(true);
 
-    let pool = create_pool(connect_options).await?;
+    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
+    migrations::run(&pool).await?;
 
     Ok(pool)
 }
@@ -247,10 +257,9 @@ pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
 pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
     let connect_options = SqliteConnectOptions::new().filename(path);
-    let pool = create_pool(connect_options).await?;
+    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
-    let mut conn = pool.acquire().await?;
-    migrations::run(&mut conn).await?;
+    migrations::run(&pool).await?;
 
     Ok(pool)
 }
@@ -263,25 +272,6 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-async fn create_pool(connect_options: SqliteConnectOptions) -> Result<Pool, Error> {
-    let connect_options = connect_options
-        .pragma("recursive_triggers", "ON")
-        // We assume that every transaction completes in a reasonable time (i.e., there are no
-        // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
-        // that so setting this excessively large timeout is the next best thing.
-        //
-        // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html) would
-        //    be one such way.
-        .busy_timeout(Duration::from_secs(24 * 60 * 60));
-
-    SqlitePoolOptions::new()
-        .max_connections(8)
-        .connect_with(connect_options)
-        .await
-        .map(Pool::new)
-        .map_err(Error::Open)
 }
 
 // Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx

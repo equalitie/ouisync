@@ -40,7 +40,7 @@ impl ParentContext {
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
-        let mut directory = self.directory(tx, branch).await?;
+        let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.entries.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
         directory
@@ -60,14 +60,11 @@ impl ParentContext {
     ///
     pub async fn fork(
         &self,
-        conn: &mut db::Connection,
         entry_blob: &Blob,
         src_branch: Branch,
         dst_branch: Branch,
     ) -> Result<(Self, Blob)> {
-        let mut tx = conn.begin().await?;
-
-        let directory = self.directory(&mut tx, src_branch).await?;
+        let directory = self.open(src_branch).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
 
         assert_eq!(
@@ -75,13 +72,14 @@ impl ParentContext {
             Some(entry_blob.locator().blob_id())
         );
 
-        let mut directory = directory.fork(&mut tx, &dst_branch).await?;
+        let mut directory = directory.fork(&dst_branch).await?;
         let mut content = directory.entries.clone();
         let src_vv = src_entry_data.version_vector().clone();
 
         let new_blob =
             match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
                 Ok(()) => {
+                    let mut tx = directory.branch().db().begin().await?;
                     directory
                         .save(&mut tx, &content, OverwriteStrategy::Remove)
                         .await?;
@@ -105,9 +103,8 @@ impl ParentContext {
                         Some(Ordering::Greater) | None => return Err(Error::EntryExists),
                     }
 
-                    tx.commit().await?;
-
-                    Blob::open(conn, dst_branch, Locator::head(blob_id)).await?
+                    let mut conn = dst_branch.db().acquire().await?;
+                    Blob::open(&mut conn, dst_branch, Locator::head(blob_id)).await?
                 }
             };
 
@@ -127,10 +124,20 @@ impl ParentContext {
         &self.entry_name
     }
 
-    /// Returns the parent directory of this entry.
-    pub async fn directory(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
-        Directory::open(
+    /// Opens the parent directory of this entry.
+    pub async fn open_in(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
+        Directory::open_in(
             conn,
+            branch,
+            Locator::head(self.directory_id),
+            self.parent.as_deref().cloned(),
+        )
+        .await
+    }
+
+    /// Opens the parent directory of this entry.
+    pub async fn open(&self, branch: Branch) -> Result<Directory> {
+        Directory::open(
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),
@@ -144,13 +151,9 @@ impl ParentContext {
     ///
     /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
     /// directory.
-    pub async fn entry_version_vector(
-        &self,
-        conn: &mut db::Connection,
-        branch: Branch,
-    ) -> Result<VersionVector> {
+    pub async fn entry_version_vector(&self, branch: Branch) -> Result<VersionVector> {
         Ok(self
-            .directory(conn, branch)
+            .open(branch)
             .await?
             .lookup(&self.entry_name)?
             .version_vector()

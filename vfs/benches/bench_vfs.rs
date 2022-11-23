@@ -13,7 +13,6 @@ fn write_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
     let file_size = 1024 * 1024;
-    let file_name = Path::new("file.dat");
 
     let mut group = c.benchmark_group("vfs/write_file");
     group.sample_size(50);
@@ -22,7 +21,7 @@ fn write_file(c: &mut Criterion) {
         b.iter_batched_ref(
             || runtime.block_on(utils::setup()),
             |(rng, base_dir, _mount_guard)| {
-                let file_path = base_dir.path().join("mnt").join(file_name);
+                let file_path = base_dir.path().join("mnt").join("file.dat");
                 utils::write_file(rng, &file_path, file_size);
             },
             BatchSize::LargeInput,

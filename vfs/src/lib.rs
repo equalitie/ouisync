@@ -146,7 +146,12 @@ impl fuser::Filesystem for VirtualFilesystem {
     }
 
     fn destroy(&mut self) {
-        self.rt.block_on(self.inner.repository.close());
+        tracing::debug!("closing repository");
+
+        match self.rt.block_on(self.inner.repository.close()) {
+            Ok(()) => tracing::debug!("repository closed"),
+            Err(error) => tracing::error!("failed to close repository: {:?}", error),
+        }
     }
 
     fn lookup(&mut self, _req: &Request, parent: Inode, name: &OsStr, reply: ReplyEntry) {
@@ -437,19 +442,14 @@ impl Inner {
         let parent_path = self.inodes.get(parent).calculate_path();
         let parent_dir = self.repository.open_directory(parent_path).await?;
 
-        let mut conn = self.repository.db().acquire().await?;
-
         let entry = parent_dir.lookup_unique(name)?;
         let (len, repr) = match &entry {
             JointEntryRef::File(entry) => (
-                entry.open(&mut conn).await?.len(),
+                entry.open().await?.len(),
                 Representation::File(*entry.branch().id()),
             ),
             JointEntryRef::Directory(entry) => (
-                entry
-                    .open(&mut conn, MissingVersionStrategy::Skip)
-                    .await?
-                    .len(),
+                entry.open(MissingVersionStrategy::Skip).await?.len(),
                 Representation::Directory,
             ),
         };
@@ -549,11 +549,9 @@ impl Inner {
         };
 
         if let Some(size) = size {
-            let mut conn = self.repository.db().acquire().await?;
-
-            file.fork(&mut conn, local_branch).await?;
-            file.truncate(&mut conn, size).await?;
-            file.flush(&mut conn).await?;
+            file.fork(local_branch).await?;
+            file.truncate(size).await?;
+            file.flush().await?;
         }
 
         Ok(make_file_attr(inode, EntryType::File, file.len()))
@@ -705,8 +703,7 @@ impl Inner {
 
         let path = self.inodes.get(parent).calculate_path().join(name);
         let mut file = self.repository.create_file(&path).await?;
-        let mut conn = self.repository.db().acquire().await?;
-        file.flush(&mut conn).await?;
+        file.flush().await?;
 
         let branch_id = *file.branch().id();
         let entry = JointEntry::File(file);
@@ -727,11 +724,10 @@ impl Inner {
 
         if flags.contains(libc::O_TRUNC) {
             let local_branch = self.repository.local_branch()?;
-            let mut conn = self.repository.db().acquire().await?;
 
-            file.fork(&mut conn, local_branch).await?;
-            file.truncate(&mut conn, 0).await?;
-            file.flush(&mut conn).await?;
+            file.fork(local_branch).await?;
+            file.truncate(0).await?;
+            file.flush().await?;
         }
 
         // TODO: what about other flags (parameter)?
@@ -757,8 +753,7 @@ impl Inner {
         let file = self.entries.get_file_mut(handle)?;
 
         if flush {
-            let mut conn = self.repository.db().acquire().await?;
-            file.flush(&mut conn).await?;
+            file.flush().await?;
         }
 
         self.entries.remove(handle);
@@ -779,16 +774,14 @@ impl Inner {
 
         // TODO: what about flags?
 
-        let mut conn = self.repository.db().acquire().await?;
-
         let file = self.entries.get_file_mut(handle)?;
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset)).await?;
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read(&mut conn, &mut buffer).await?;
+        let len = file.read(&mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -811,12 +804,11 @@ impl Inner {
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
         let local_branch = self.repository.local_branch()?;
-        let mut conn = self.repository.db().acquire().await?;
 
         let file = self.entries.get_file_mut(handle)?;
-        file.seek(&mut conn, SeekFrom::Start(offset)).await?;
-        file.fork(&mut conn, local_branch).await?;
-        file.write(&mut conn, data).await?;
+        file.seek(SeekFrom::Start(offset)).await?;
+        file.fork(local_branch).await?;
+        file.write(data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
@@ -825,8 +817,7 @@ impl Inner {
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
         self.record_path(inode, None);
 
-        let mut conn = self.repository.db().acquire().await?;
-        self.entries.get_file_mut(handle)?.flush(&mut conn).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     #[instrument(skip(inode), fields(path), err)]
@@ -834,8 +825,7 @@ impl Inner {
         self.record_path(inode, None);
 
         // TODO: what about `datasync`?
-        let mut conn = self.repository.db().acquire().await?;
-        self.entries.get_file_mut(handle)?.flush(&mut conn).await
+        self.entries.get_file_mut(handle)?.flush().await
     }
 
     #[instrument(skip(parent, name), fields(path), err)]

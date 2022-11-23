@@ -153,8 +153,7 @@ async fn receive_root_node_with_existing_hash() {
     let block_nonce = rng.gen();
     let locator = rng.gen();
 
-    let mut conn = index.pool.acquire().await.unwrap();
-    let mut tx = conn.begin().await.unwrap();
+    let mut tx = index.pool.begin().await.unwrap();
 
     block::write(&mut tx, &block_id, &content, &block_nonce)
         .await
@@ -166,13 +165,14 @@ async fn receive_root_node_with_existing_hash() {
 
     tx.commit().await.unwrap();
 
+    let mut conn = index.pool.acquire().await.unwrap();
+
     // Receive root node with the same hash as the current local one but different writer id.
     let root = local_branch
         .load_snapshot(&mut conn)
         .await
         .unwrap()
         .root_node;
-    drop(conn);
 
     assert!(root.summary.is_complete());
     let root_hash = root.proof.hash;
@@ -186,7 +186,6 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
 
-    let mut conn = index.pool.acquire().await.unwrap();
     assert!(local_branch
         .load_snapshot(&mut conn)
         .await

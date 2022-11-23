@@ -213,12 +213,11 @@ mod merge {
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        let branches = shared.load_branches(&mut conn).await?;
+        let branches = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            match branch.open_root(&mut conn).await {
+            match branch.open_root().await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
@@ -226,7 +225,7 @@ mod merge {
         }
 
         JointDirectory::new(Some(local_branch.clone()), roots)
-            .merge(&mut conn)
+            .merge()
             .await?;
 
         Ok(())
@@ -272,10 +271,8 @@ mod prune {
 
             tracing::trace!("removing outdated branch {:?}", snapshot.id());
 
-            let mut tx = conn.begin().await?;
-            snapshot.remove_all_older(&mut tx).await?;
-            snapshot.remove(&mut tx).await?;
-            tx.commit().await?;
+            snapshot.remove_all_older(&mut conn).await?;
+            snapshot.remove(&mut conn).await?;
 
             removed.push(snapshot);
         }
@@ -346,8 +343,7 @@ mod scan {
     }
 
     async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
-        let mut conn = shared.store.db().acquire().await?;
-        let branches = shared.load_branches(&mut conn).await?;
+        let branches = shared.load_branches().await?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
@@ -355,7 +351,7 @@ mod scan {
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root(&mut conn).await {
+            match branch.open_root().await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
@@ -384,8 +380,6 @@ mod scan {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
-        let mut conn = shared.store.db().acquire().await?;
-
         // Collect the entries first, so we don't keep the directories locked while we are
         // processing the entries.
         for entry in dir.entries() {
@@ -401,7 +395,7 @@ mod scan {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    match entry.open(&mut conn, MissingVersionStrategy::Fail).await {
+                    match entry.open(MissingVersionStrategy::Fail).await {
                         Ok(dir) => subdirs.push(dir),
                         Err(error) => {
                             // On error, we can still proceed with finding missing blocks, but we
@@ -415,8 +409,6 @@ mod scan {
             }
         }
 
-        drop(conn);
-
         for entry in entries {
             process_blocks(shared, mode, entry).await?;
         }
@@ -429,17 +421,28 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        block::mark_all_unreachable(&mut conn).await
+        let mut tx = shared.store.db().begin().await?;
+        block::mark_all_unreachable(&mut tx).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
-    async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        let count = block::remove_unreachable(&mut conn).await?;
+    async fn remove_unreachable_blocks(_shared: &Shared) -> Result<()> {
+        // HACK: prevents `unused` warning
+        let _ = block::remove_unreachable;
+
+        // FIXME!
+
+        /*
+        let mut tx = shared.store.db().begin().await?;
+        let count = block::remove_unreachable(&mut tx).await?;
+        tx.commit().await?;
 
         if count > 0 {
             tracing::debug!("unreachable blocks removed: {}", count);
         }
+        */
 
         Ok(())
     }

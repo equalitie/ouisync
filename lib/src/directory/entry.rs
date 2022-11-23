@@ -133,12 +133,12 @@ impl<'a> FileRef<'a> {
         &self.entry_data.version_vector
     }
 
-    pub async fn open(&self, conn: &mut db::Connection) -> Result<File> {
+    pub async fn open(&self) -> Result<File> {
         let parent_context = self.inner.parent_context();
         let branch = self.branch().clone();
         let locator = self.locator();
 
-        File::open(conn, branch, locator, parent_context).await
+        File::open(branch, locator, parent_context).await
     }
 
     pub fn branch(&self) -> &Branch {
@@ -187,8 +187,13 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(&self, conn: &mut db::Connection) -> Result<Directory> {
-        Directory::open(
+    pub(crate) async fn open(&self) -> Result<Directory> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.open_in(&mut conn).await
+    }
+
+    pub(crate) async fn open_in(&self, conn: &mut db::Connection) -> Result<Directory> {
+        Directory::open_in(
             conn,
             self.branch().clone(),
             self.locator(),

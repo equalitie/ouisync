@@ -37,7 +37,8 @@ impl Deref for RepositoryGuard {
 
 impl Drop for RepositoryGuard {
     fn drop(&mut self) {
-        self.handle.block_on(self.repository.close())
+        self.handle
+            .block_on(async { self.repository.close().await.unwrap() })
     }
 }
 
@@ -55,7 +56,6 @@ pub async fn write_file(
         return;
     }
 
-    let mut conn = repo.db().acquire().await.unwrap();
     let mut remaining = size;
     let mut buffer = vec![0; buffer_size];
 
@@ -63,24 +63,23 @@ pub async fn write_file(
         let len = buffer_size.min(remaining);
 
         rng.fill(&mut buffer[..len]);
-        file.write(&mut conn, &buffer[..len]).await.unwrap();
+        file.write(&buffer[..len]).await.unwrap();
 
         remaining -= len;
     }
 
-    file.flush(&mut conn).await.unwrap();
+    file.flush().await.unwrap();
 }
 
 /// Read the whole content of the file at `path` in `buffer_size` bytes at a time. Returns the
 /// total size of the content.
 pub async fn read_file(repo: &Repository, path: &Utf8Path, buffer_size: usize) -> usize {
     let mut file = repo.open_file(path).await.unwrap();
-    let mut conn = repo.db().acquire().await.unwrap();
     let mut buffer = vec![0; buffer_size];
     let mut size = 0;
 
     loop {
-        let len = file.read(&mut conn, &mut buffer[..]).await.unwrap();
+        let len = file.read(&mut buffer[..]).await.unwrap();
 
         if len == 0 {
             break;

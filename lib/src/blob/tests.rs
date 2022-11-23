@@ -19,19 +19,19 @@ use tokio::sync::broadcast;
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
     let (_, _base_dir, pool, branch) = setup(0).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-    blob.flush(&mut conn).await.unwrap();
+    blob.flush(&mut tx).await.unwrap();
 
     // Re-open the blob and read its contents.
-    let mut blob = Blob::open(&mut conn, branch, Locator::ROOT).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch, Locator::ROOT).await.unwrap();
 
     let mut buffer = [0; 1];
-    assert_eq!(blob.read(&mut conn, &mut buffer[..]).await.unwrap(), 0);
+    assert_eq!(blob.read(&mut tx, &mut buffer[..]).await.unwrap(), 0);
 
-    drop(conn);
-    pool.close().await;
+    drop(tx);
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -94,7 +94,7 @@ async fn write_and_read_case(
     assert!(read_content == orig_content);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -119,7 +119,7 @@ fn len(
         assert_eq!(blob.len(), content_len as u64);
 
         drop(tx);
-        pool.close().await;
+        pool.close().await.unwrap();
     })
 }
 
@@ -168,7 +168,7 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
     assert_eq!(read_buffer[..len], content[expected_pos..]);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -202,7 +202,7 @@ fn seek_from_current(
         assert_eq!(read_buffer[..len], content[prev_pos..]);
 
         drop(tx);
-        pool.close().await;
+        pool.close().await.unwrap();
     })
 }
 
@@ -228,7 +228,7 @@ async fn seek_after_end() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -253,13 +253,13 @@ async fn seek_before_start() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_blob() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let locator0 = random_head_locator(&mut rng);
     let locator1 = locator0.next();
@@ -270,57 +270,49 @@ async fn remove_blob() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), locator0);
-    blob.write(&mut conn, &content).await.unwrap();
-    blob.flush(&mut conn).await.unwrap();
+    blob.write(&mut tx, &content).await.unwrap();
+    blob.flush(&mut tx).await.unwrap();
 
     let encoded_locator0 = locator0.encode(branch.keys().read());
     let encoded_locator1 = locator1.encode(branch.keys().read());
 
     let block_ids = {
-        let id0 = branch
-            .data()
-            .get(&mut conn, &encoded_locator0)
-            .await
-            .unwrap();
-        let id1 = branch
-            .data()
-            .get(&mut conn, &encoded_locator1)
-            .await
-            .unwrap();
+        let id0 = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
+        let id1 = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
         [id0, id1]
     };
 
     // Remove the blob
-    Blob::remove(&mut conn, &branch, locator0).await.unwrap();
+    Blob::remove(&mut tx, &branch, locator0).await.unwrap();
 
     // Check the block entries were deleted from the index.
     assert_matches!(
-        branch.data().get(&mut conn, &encoded_locator0).await,
+        branch.data().get(&mut tx, &encoded_locator0).await,
         Err(Error::EntryNotFound)
     );
     assert_matches!(
-        branch.data().get(&mut conn, &encoded_locator1).await,
+        branch.data().get(&mut tx, &encoded_locator1).await,
         Err(Error::EntryNotFound)
     );
 
     // Check the blocks were deleted as well.
     for block_id in &block_ids {
-        assert!(!block::exists(&mut conn, block_id).await.unwrap());
+        assert!(!block::exists(&mut tx, block_id).await.unwrap());
     }
 
-    drop(conn);
-    pool.close().await;
+    drop(tx);
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_blob_with_unflushed_writes() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     // Create an empty blob and flush it.
     let locator = random_head_locator(&mut rng);
     let mut blob = Blob::create(branch.clone(), locator);
-    blob.flush(&mut conn).await.unwrap();
+    blob.flush(&mut tx).await.unwrap();
 
     // Write two blocks to it (write a little bit past the second block to force it to be written
     // to the store) but don't flush.
@@ -328,7 +320,7 @@ async fn remove_blob_with_unflushed_writes() {
         .sample_iter(Standard)
         .take(2 * BLOCK_SIZE - HEADER_SIZE + 1)
         .collect();
-    blob.write(&mut conn, &content).await.unwrap();
+    blob.write(&mut tx, &content).await.unwrap();
 
     let encoded_locators: Vec<_> = locator
         .sequence()
@@ -337,32 +329,32 @@ async fn remove_blob_with_unflushed_writes() {
         .collect();
     let mut block_ids = Vec::new();
     for encoded_locator in &encoded_locators {
-        block_ids.push(branch.data().get(&mut conn, encoded_locator).await.unwrap());
+        block_ids.push(branch.data().get(&mut tx, encoded_locator).await.unwrap());
     }
 
     // Drop the blob without flushing it first.
     drop(blob);
 
     // Remove the blob
-    Blob::remove(&mut conn, &branch, locator).await.unwrap();
+    Blob::remove(&mut tx, &branch, locator).await.unwrap();
 
     // Check that all blocks, including the unflushed ones, were deleted:
 
     // from the index...
     for encoded_locator in &encoded_locators {
         assert_matches!(
-            branch.data().get(&mut conn, encoded_locator).await,
+            branch.data().get(&mut tx, encoded_locator).await,
             Err(Error::EntryNotFound)
         );
     }
 
     // ...and from the block store as well.
     for block_id in &block_ids {
-        assert!(!block::exists(&mut conn, block_id).await.unwrap());
+        assert!(!block::exists(&mut tx, block_id).await.unwrap());
     }
 
-    drop(conn);
-    pool.close().await;
+    drop(tx);
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -417,7 +409,7 @@ async fn truncate_to_empty() {
     assert!(block::exists(&mut tx, &new_block_id0).await.unwrap());
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -460,7 +452,7 @@ async fn truncate_to_shorter() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -483,7 +475,7 @@ async fn truncate_marks_as_dirty() {
     assert!(blob.is_dirty());
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -525,7 +517,7 @@ async fn modify_blob() {
     }
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -550,7 +542,7 @@ async fn append() {
     assert_eq!(content, b"foobar");
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -570,7 +562,7 @@ async fn write_reopen_and_read() {
     assert_eq!(content, b"foo");
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 #[proptest]
@@ -603,6 +595,7 @@ async fn fork_case(
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -652,7 +645,7 @@ async fn fork_case(
     assert!(buffer == write_content);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 // TODO: test that fork() doesn't create new blocks
@@ -664,6 +657,7 @@ async fn fork_is_idempotent() {
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -698,6 +692,7 @@ async fn fork_then_remove_src_branch() {
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = Arc::new(BranchData::new(PublicKey::random(), event_tx.clone()));
     let dst_branch = Branch::new(
+        pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
         Arc::new(FileCache::new(event_tx)),
@@ -772,7 +767,7 @@ async fn block_ids_test() {
     assert_eq!(actual_count, 3);
 
     drop(tx);
-    pool.close().await;
+    pool.close().await.unwrap();
 }
 
 async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
@@ -784,6 +779,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
 
     let branch = BranchData::new(PublicKey::random(), event_tx.clone());
     let branch = Branch::new(
+        pool.clone(),
         Arc::new(branch),
         secrets.into(),
         Arc::new(FileCache::new(event_tx)),

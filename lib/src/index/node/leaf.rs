@@ -194,12 +194,10 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
-    pub async fn save(&self, conn: &mut db::Connection, parent: &Hash) -> Result<()> {
-        let mut tx = conn.begin().await?;
+    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
         for node in self {
-            node.save(&mut tx, parent).await?;
+            node.save(tx, parent).await?;
         }
-        tx.commit().await?;
 
         Ok(())
     }

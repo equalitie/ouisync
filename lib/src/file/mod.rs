@@ -26,15 +26,15 @@ pub struct File {
 impl File {
     /// Opens an existing file.
     pub(crate) async fn open(
-        conn: &mut db::Connection,
         branch: Branch,
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let mut conn = branch.db().acquire().await?;
         let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
 
         Ok(Self {
-            blob: Blob::open(conn, branch, locator).await?,
+            blob: Blob::open(&mut conn, branch, locator).await?,
             parent,
             write_lock,
         })
@@ -55,8 +55,8 @@ impl File {
         self.blob.branch()
     }
 
-    pub async fn parent(&self, conn: &mut db::Connection) -> Result<Directory> {
-        self.parent.directory(conn, self.branch().clone()).await
+    pub async fn parent(&self) -> Result<Directory> {
+        self.parent.open(self.branch().clone()).await
     }
 
     /// Length of this file in bytes.
@@ -66,41 +66,47 @@ impl File {
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.
-    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
-        self.blob.read(conn, buffer).await
+    pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.read(&mut conn, buffer).await
     }
 
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
-        self.blob.read_to_end(conn).await
+    pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.read_to_end(&mut conn).await
     }
 
     /// Writes `buffer` into this file.
-    pub async fn write(&mut self, conn: &mut db::Connection, buffer: &[u8]) -> Result<()> {
+    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
+        let mut tx = self.branch().db().begin_shared().await?;
         self.acquire_write_lock()?;
-        self.blob.write(conn, buffer).await
+        self.blob.write(&mut tx, buffer).await?;
+
+        Ok(())
     }
 
     /// Seeks to an offset in the file.
-    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
-        self.blob.seek(conn, pos).await
+    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.seek(&mut conn, pos).await
     }
 
     /// Truncates the file to the given length.
-    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
-        self.acquire_write_lock()?;
-        self.blob.truncate(conn, len).await
+    pub async fn truncate(&mut self, len: u64) -> Result<()> {
+        let mut conn = self.branch().db().acquire().await?;
+        self.blob.truncate(&mut conn, len).await
     }
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
-    pub async fn flush(&mut self, conn: &mut db::Connection) -> Result<()> {
+    pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
         }
 
-        let mut tx = conn.begin().await?;
+        let mut tx = self.branch().db().begin_shared().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
@@ -117,22 +123,18 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, conn: &mut db::Connection) -> Result<()> {
-        self.blob.flush(conn).await?;
+    pub(crate) async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        self.blob.flush(tx).await?;
         Ok(())
     }
 
     /// Copy the entire contents of this file into the provided writer (e.g. a file on a regular
     /// filesystem)
-    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(
-        &mut self,
-        conn: &mut db::Connection,
-        dst: &mut W,
-    ) -> Result<()> {
+    pub async fn copy_to_writer<W: AsyncWrite + Unpin>(&mut self, dst: &mut W) -> Result<()> {
         let mut buffer = vec![0; BLOCK_SIZE];
 
         loop {
-            let len = self.read(conn, &mut buffer).await?;
+            let len = self.read(&mut buffer).await?;
             dst.write_all(&buffer[..len]).await.map_err(Error::Writer)?;
 
             if len < buffer.len() {
@@ -145,7 +147,7 @@ impl File {
 
     /// Forks this file into the given branch. Ensure all its ancestor directories exist and live
     /// in the branch as well. Should be called before any mutable operation.
-    pub async fn fork(&mut self, conn: &mut db::Connection, dst_branch: Branch) -> Result<()> {
+    pub async fn fork(&mut self, dst_branch: Branch) -> Result<()> {
         if self.branch().id() == dst_branch.id() {
             // File already lives in the local branch. We assume the ancestor directories have been
             // already created as well so there is nothing else to do.
@@ -154,7 +156,7 @@ impl File {
 
         let (new_parent, new_blob) = self
             .parent
-            .fork(conn, &self.blob, self.branch().clone(), dst_branch.clone())
+            .fork(&self.blob, self.branch().clone(), dst_branch.clone())
             .await?;
 
         self.blob = new_blob;
@@ -165,9 +167,9 @@ impl File {
         Ok(())
     }
 
-    pub async fn version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
+    pub async fn version_vector(&self) -> Result<VersionVector> {
         self.parent
-            .entry_version_vector(conn, self.branch().clone())
+            .entry_version_vector(self.branch().clone())
             .await
     }
 
@@ -202,64 +204,60 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
-        let (_base_dir, pool, [branch0, branch1]) = setup().await;
-        let mut tx = pool.begin().await.unwrap();
+        let (_base_dir, [branch0, branch1]) = setup().await;
 
         // Create a file owned by branch 0
-        let mut file0 = branch0
-            .ensure_file_exists(&mut tx, "/dog.jpg".into())
-            .await
-            .unwrap();
+        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
 
-        file0.write(&mut tx, b"small").await.unwrap();
-        file0.flush(&mut tx).await.unwrap();
+        file0.write(b"small").await.unwrap();
+        file0.flush().await.unwrap();
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
-            .open_root(&mut tx)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut tx)
+            .open()
             .await
             .unwrap();
 
-        file1.fork(&mut tx, branch1.clone()).await.unwrap();
-        file1.write(&mut tx, b"large").await.unwrap();
-        file1.flush(&mut tx).await.unwrap();
+        file1.fork(branch1.clone()).await.unwrap();
+        file1.write(b"large").await.unwrap();
+        file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root(&mut tx)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut tx)
+            .open()
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut tx).await.unwrap(), b"small");
+        assert_eq!(file.read_to_end().await.unwrap(), b"small");
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root(&mut tx)
+            .open_root()
             .await
             .unwrap()
             .lookup("dog.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut tx)
+            .open()
             .await
             .unwrap();
 
-        assert_eq!(file.read_to_end(&mut tx).await.unwrap(), b"large");
+        assert_eq!(file.read_to_end().await.unwrap(), b"large");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -267,32 +265,28 @@ mod tests {
         // This test makes sure that modifying a forked file properly updates the file metadata so
         // subsequent modifications work correclty.
 
-        let (_base_dir, pool, [branch0, branch1]) = setup().await;
-        let mut tx = pool.begin().await.unwrap();
+        let (_base_dir, [branch0, branch1]) = setup().await;
 
-        let mut file0 = branch0
-            .ensure_file_exists(&mut tx, "/pig.jpg".into())
-            .await
-            .unwrap();
-        file0.flush(&mut tx).await.unwrap();
+        let mut file0 = branch0.ensure_file_exists("/pig.jpg".into()).await.unwrap();
+        file0.flush().await.unwrap();
 
         let mut file1 = branch0
-            .open_root(&mut tx)
+            .open_root()
             .await
             .unwrap()
             .lookup("pig.jpg")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut tx)
+            .open()
             .await
             .unwrap();
 
-        file1.fork(&mut tx, branch1).await.unwrap();
+        file1.fork(branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(&mut tx, b"oink").await.unwrap();
-            file1.flush(&mut tx).await.unwrap();
+            file1.write(b"oink").await.unwrap();
+            file1.flush().await.unwrap();
         }
     }
 
@@ -301,51 +295,54 @@ mod tests {
     // of tests for various write concurrency cases.
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_writes() {
-        let (_base_dir, pool, [branch]) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
+        let (_base_dir, [branch]) = setup().await;
 
-        let mut file0 = branch
-            .ensure_file_exists(&mut conn, "fox.txt".into())
-            .await
-            .unwrap();
+        let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
-            .open_root(&mut conn)
+            .open_root()
             .await
             .unwrap()
             .lookup("fox.txt")
             .unwrap()
             .file()
             .unwrap()
-            .open(&mut conn)
+            .open()
             .await
             .unwrap();
 
-        file0.write(&mut conn, b"yip-yap").await.unwrap();
+        file0.write(b"yip-yap").await.unwrap();
         assert_matches!(
-            file1.write(&mut conn, b"ring-ding-ding").await,
+            file1.write(b"ring-ding-ding").await,
             Err(Error::ConcurrentWriteNotSupported)
         );
     }
 
-    async fn setup<const N: usize>() -> (TempDir, db::Pool, [Branch; N]) {
+    async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
         let file_cache = Arc::new(FileCache::new(event_tx.clone()));
 
-        let branches =
-            [(); N].map(|_| create_branch(event_tx.clone(), keys.clone(), file_cache.clone()));
+        let branches = [(); N].map(|_| {
+            create_branch(
+                pool.clone(),
+                event_tx.clone(),
+                keys.clone(),
+                file_cache.clone(),
+            )
+        });
 
-        (base_dir, pool, branches)
+        (base_dir, branches)
     }
 
     fn create_branch(
+        pool: db::Pool,
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
         file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(Arc::new(branch_data), keys, file_cache)
+        Branch::new(pool, Arc::new(branch_data), keys, file_cache)
     }
 }
 

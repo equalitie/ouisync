@@ -343,23 +343,19 @@ impl SnapshotData {
 
     async fn save_path(
         &mut self,
-        conn: &mut db::Connection,
+        tx: &mut db::Transaction<'_>,
         path: &Path,
         write_keys: &Keypair,
     ) -> Result<()> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
-                for (bucket, node) in inner_layer {
-                    node.save(conn, &parent_hash, bucket).await?;
-                }
+                inner_layer.save(tx, &parent_hash).await?;
             }
         }
 
         let layer = Path::total_layer_count() - 1;
         if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
-            for leaf in &path.leaves {
-                leaf.save(conn, &parent_hash).await?;
-            }
+            path.leaves.save(tx, &parent_hash).await?;
         }
 
         let writer_id = self.root_node.proof.writer_id;
@@ -370,12 +366,12 @@ impl SnapshotData {
             .clone()
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
-        let new_root_node = RootNode::create(conn, new_proof, self.root_node.summary).await?;
+        let new_root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
 
         // NOTE: It is not enough to remove only the old_root because there may be a non zero
         // number of incomplete roots that have been downloaded prior to new_root becoming
         // complete.
-        new_root_node.remove_recursively_all_older(conn).await?;
+        new_root_node.remove_recursively_all_older(tx).await?;
 
         self.root_node = new_root_node;
 
@@ -434,7 +430,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
-        let (_base_dir, mut conn, branch) = setup().await;
+        let (_base_dir, pool, branch) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -442,7 +438,8 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = conn.begin().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
         branch
             .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
             .await
@@ -456,7 +453,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn rewrite_locator() {
         for _ in 0..32 {
-            let (_base_dir, mut conn, branch) = setup().await;
+            let (_base_dir, pool, branch) = setup().await;
             let read_key = SecretKey::random();
             let write_keys = Keypair::random();
 
@@ -466,7 +463,7 @@ mod tests {
             let locator = random_head_locator();
             let encoded_locator = locator.encode(&read_key);
 
-            let mut tx = conn.begin().await.unwrap();
+            let mut tx = pool.begin().await.unwrap();
 
             branch
                 .insert(&mut tx, &b1, &encoded_locator, &write_keys)
@@ -491,7 +488,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
-        let (_base_dir, mut conn, branch) = setup().await;
+        let (_base_dir, pool, branch) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -499,7 +496,7 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = conn.begin().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
@@ -539,11 +536,11 @@ mod tests {
 
     async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
-        let (_base_dir, mut conn, branch) = setup().await;
+        let (_base_dir, pool, branch) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
 
         let mut locators = Vec::new();
-        let mut tx = conn.begin().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
 
         // Add blocks
         for _ in 0..leaf_count {
@@ -591,19 +588,17 @@ mod tests {
             .is_some()
     }
 
-    async fn init_db() -> (TempDir, db::PoolConnection) {
-        let (base_dir, pool) = db::create_temp().await.unwrap();
-        let conn = pool.acquire().await.unwrap();
-        (base_dir, conn)
+    async fn init_db() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 
-    async fn setup() -> (TempDir, db::PoolConnection, BranchData) {
-        let (base_dir, conn) = init_db().await;
+    async fn setup() -> (TempDir, db::Pool, BranchData) {
+        let (base_dir, pool) = init_db().await;
 
         let (notify_tx, _) = broadcast::channel(1);
         let branch = BranchData::new(PublicKey::random(), notify_tx);
 
-        (base_dir, conn, branch)
+        (base_dir, pool, branch)
     }
 
     fn random_head_locator() -> Locator {

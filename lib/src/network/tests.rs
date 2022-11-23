@@ -101,8 +101,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     // HACK: prevent "too many open files" error.
-    a_store.db().close().await;
-    b_store.db().close().await;
+    a_store.db().close().await.unwrap();
+    b_store.db().close().await.unwrap();
 }
 
 // NOTE: Reducing the number of cases otherwise this test is too slow.
@@ -152,8 +152,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     drop(client);
 
     // HACK: prevent "too many open files" error.
-    a_store.db().close().await;
-    b_store.db().close().await;
+    a_store.db().close().await.unwrap();
+    b_store.db().close().await.unwrap();
 }
 
 // Receive a `LeafNode` with non-missing block, then drop the connection before the block itself is
@@ -335,9 +335,9 @@ async fn failed_block_other_peer() {
 
                 drop(conn_bc);
 
-                a_store.db().close().await;
-                b_store.db().close().await;
-                c_store.db().close().await;
+                a_store.db().close().await.unwrap();
+                b_store.db().close().await.unwrap();
+                c_store.db().close().await.unwrap();
 
                 continue 'main;
             }

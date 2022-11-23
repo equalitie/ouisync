@@ -80,9 +80,9 @@ impl Repository {
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let master_key = metadata::secret_to_key(master_secret, &mut tx).await?;
-        let this_writer_id = generate_writer_id(&device_id, &master_key, &mut tx).await?;
-        metadata::set_access_secrets(&access_secrets, &master_key, &mut tx).await?;
+        let master_key = metadata::secret_to_key(&mut tx, master_secret).await?;
+        let this_writer_id = generate_writer_id(&mut tx, &device_id, &master_key).await?;
+        metadata::set_access_secrets(&mut tx, &access_secrets, &master_key).await?;
 
         tx.commit().await?;
 
@@ -145,18 +145,18 @@ impl Repository {
         enable_merger: bool,
         span: Span,
     ) -> Result<Self> {
-        let mut conn = pool.acquire().await?;
+        let mut tx = pool.begin().await?;
 
         let master_key = if let Some(master_secret) = master_secret {
-            Some(metadata::secret_to_key(master_secret, &mut conn).await?)
+            Some(metadata::secret_to_key(&mut tx, master_secret).await?)
         } else {
             None
         };
 
         let access_secrets = if let Some(master_key) = &master_key {
-            metadata::get_access_secrets(master_key, &mut conn).await?
+            metadata::get_access_secrets(&mut tx, master_key).await?
         } else {
-            let id = metadata::get_repository_id(&mut conn).await?;
+            let id = metadata::get_repository_id(&mut tx).await?;
             AccessSecrets::Blind { id }
         };
 
@@ -167,17 +167,17 @@ impl Repository {
             // master secret.
             let master_key = master_key.as_ref().unwrap();
 
-            if metadata::check_device_id(&device_id, &mut conn).await? {
-                metadata::get_writer_id(master_key, &mut conn).await?
+            if metadata::check_device_id(&mut tx, &device_id).await? {
+                metadata::get_writer_id(&mut tx, master_key).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&device_id, master_key, &mut conn).await?
+                generate_writer_id(&mut tx, &device_id, master_key).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
         };
 
-        drop(conn);
+        tx.commit().await?;
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
@@ -266,13 +266,11 @@ impl Repository {
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.db().acquire().await?;
-
-        self.cd(&mut conn, parent)
+        self.cd(parent)
             .await?
             .lookup_unique(name)?
             .file()?
-            .open(&mut conn)
+            .open()
             .await
     }
 
@@ -285,29 +283,25 @@ impl Repository {
     ) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
-        let mut conn = self.db().acquire().await?;
-
-        self.cd(&mut conn, parent)
+        self.cd(parent)
             .await?
             .lookup_version(name, branch_id)?
-            .open(&mut conn)
+            .open()
             .await
     }
 
     /// Opens a directory at the given path (relative to the repository root)
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
-        let mut conn = self.db().acquire().await?;
-        self.cd(&mut conn, path).await
+        self.cd(path).await
     }
 
     /// Creates a new file at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
-        let mut conn = self.db().acquire().await?;
         let file = self
             .local_branch()?
-            .ensure_file_exists(&mut conn, path.as_ref())
+            .ensure_file_exists(path.as_ref())
             .await?;
 
         Ok(file)
@@ -316,10 +310,9 @@ impl Repository {
     /// Creates a new directory at the given path.
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
-        let mut conn = self.db().acquire().await?;
         let dir = self
             .local_branch()?
-            .ensure_directory_exists(&mut conn, path.as_ref())
+            .ensure_directory_exists(path.as_ref())
             .await?;
 
         Ok(dir)
@@ -329,10 +322,8 @@ impl Repository {
     #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-
-        let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry(&mut conn, name).await?;
+        let mut parent = self.cd(parent).await?;
+        parent.remove_entry(name).await?;
 
         Ok(())
     }
@@ -341,10 +332,8 @@ impl Repository {
     #[instrument(skip(path), fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
-
-        let mut conn = self.db().acquire().await?;
-        let mut parent = self.cd(&mut conn, parent).await?;
-        parent.remove_entry_recursively(&mut conn, name).await?;
+        let mut parent = self.cd(parent).await?;
+        parent.remove_entry_recursively(name).await?;
 
         Ok(())
     }
@@ -366,25 +355,23 @@ impl Repository {
         use std::borrow::Cow;
 
         let local_branch = self.local_branch()?;
-        let mut conn = self.db().acquire().await?;
-
-        let src_joint_dir = self.cd(&mut conn, src_dir_path).await?;
+        let src_joint_dir = self.cd(src_dir_path).await?;
 
         let (mut src_dir, src_name) = match src_joint_dir.lookup_unique(src_name)? {
             JointEntryRef::File(entry) => {
                 let src_name = entry.name().to_string();
 
-                let mut file = entry.open(&mut conn).await?;
-                file.fork(&mut conn, local_branch.clone()).await?;
+                let mut file = entry.open().await?;
+                file.fork(local_branch.clone()).await?;
 
-                (file.parent(&mut conn).await?, Cow::Owned(src_name))
+                (file.parent().await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let mut dir_to_move = entry.open(&mut conn, MissingVersionStrategy::Skip).await?;
-                let dir_to_move = dir_to_move.merge(&mut conn).await?;
+                let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;
+                let dir_to_move = dir_to_move.merge().await?;
 
                 let src_dir = dir_to_move
-                    .parent(&mut conn)
+                    .parent()
                     .await?
                     .ok_or(Error::OperationNotSupported /* can't move root */)?;
 
@@ -399,7 +386,7 @@ impl Repository {
         // now and when the entry is actually to be removed, the concurrent updates shall remain.
         let src_entry = src_dir.lookup(&src_name)?.clone_data();
 
-        let dst_joint_dir = self.cd(&mut conn, &dst_dir_path).await?;
+        let dst_joint_dir = self.cd(&dst_dir_path).await?;
 
         let dst_vv = match dst_joint_dir.lookup_unique(dst_name) {
             Err(Error::EntryNotFound) => {
@@ -417,17 +404,10 @@ impl Repository {
         drop(dst_joint_dir);
 
         let mut dst_dir = local_branch
-            .ensure_directory_exists(&mut conn, dst_dir_path.as_ref())
+            .ensure_directory_exists(dst_dir_path.as_ref())
             .await?;
         src_dir
-            .move_entry(
-                &mut conn,
-                &src_name,
-                src_entry,
-                &mut dst_dir,
-                dst_name,
-                dst_vv,
-            )
+            .move_entry(&src_name, src_entry, &mut dst_dir, dst_name, dst_vv)
             .await?;
 
         Ok(())
@@ -480,13 +460,13 @@ impl Repository {
     }
 
     // Opens the root directory across all branches as JointDirectory.
-    async fn root(&self, conn: &mut db::Connection) -> Result<JointDirectory> {
+    async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-        let branches = self.shared.load_branches(conn).await?;
+        let branches = self.shared.load_branches().await?;
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root(conn).await {
+            let dir = match branch.open_root().await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll
@@ -509,19 +489,17 @@ impl Repository {
         Ok(JointDirectory::new(Some(local_branch), dirs))
     }
 
-    async fn cd<P: AsRef<Utf8Path>>(
-        &self,
-        conn: &mut db::Connection,
-        path: P,
-    ) -> Result<JointDirectory> {
-        self.root(conn).await?.cd(conn, path).await
+    async fn cd<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+        self.root().await?.cd(path).await
     }
 
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
-    pub async fn close(&self) {
+    pub async fn close(&self) -> Result<()> {
         self.worker_handle.shutdown().await;
-        self.shared.store.db().close().await;
+        self.shared.store.db().close().await?;
+
+        Ok(())
     }
 
     pub async fn debug_print_root(&self) {
@@ -531,18 +509,7 @@ impl Repository {
     pub async fn debug_print(&self, print: DebugPrinter) {
         print.display(&"Repository");
 
-        let mut conn = match self.db().acquire().await {
-            Ok(conn) => conn,
-            Err(error) => {
-                print.display(&format_args!(
-                    "failed to acquire db connection: {:?}",
-                    error
-                ));
-                return;
-            }
-        };
-
-        let branches = match self.shared.load_branches(&mut conn).await {
+        let branches = match self.shared.load_branches().await {
             Ok(branches) => branches,
             Err(error) => {
                 print.display(&format_args!("failed to load branches: {:?}", error));
@@ -561,17 +528,15 @@ impl Repository {
                 "Branch ID: {:?}{}, root block ID:{:?}",
                 branch.id(),
                 local,
-                branch.root_block_id(&mut conn).await
+                branch.root_block_id().await
             ));
             let print = print.indent();
             print.display(&format_args!(
                 "/, vv: {:?}",
-                branch.version_vector(&mut conn).await.unwrap_or_default()
+                branch.version_vector().await.unwrap_or_default()
             ));
-            branch.debug_print(&mut conn, print.indent()).await;
+            branch.debug_print(print.indent()).await;
         }
-
-        drop(conn);
 
         print.display(&"Index");
         let print = print.indent();
@@ -610,10 +575,10 @@ impl Shared {
         self.inflate(self.store.index.get_branch(self.this_writer_id))
     }
 
-    pub async fn load_branches(&self, conn: &mut db::Connection) -> Result<Vec<Branch>> {
+    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
         self.store
             .index
-            .load_branches(conn)
+            .load_branches()
             .await?
             .into_iter()
             .map(|data| self.inflate(data))
@@ -631,19 +596,24 @@ impl Shared {
             keys.read_only()
         };
 
-        Ok(Branch::new(data, keys, self.file_cache.clone()))
+        Ok(Branch::new(
+            self.store.db().clone(),
+            data,
+            keys,
+            self.file_cache.clone(),
+        ))
     }
 }
 
 async fn generate_writer_id(
+    tx: &mut db::Transaction<'_>,
     device_id: &DeviceId,
     master_key: &cipher::SecretKey,
-    conn: &mut db::Connection,
 ) -> Result<sign::PublicKey> {
     // TODO: we should be storing the SK in the db, not the PK.
     let writer_id = sign::SecretKey::random();
     let writer_id = PublicKey::from(&writer_id);
-    metadata::set_writer_id(&writer_id, device_id, master_key, conn).await?;
+    metadata::set_writer_id(tx, &writer_id, device_id, master_key).await?;
 
     Ok(writer_id)
 }
