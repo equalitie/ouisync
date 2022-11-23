@@ -9,7 +9,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
-    file::File,
+    file::{self, File},
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -139,6 +139,15 @@ impl<'a> FileRef<'a> {
         let locator = self.locator();
 
         File::open(branch, locator, parent_context).await
+    }
+
+    /// Fork the file without opening it.
+    pub(crate) async fn fork(&self, dst_branch: Branch) -> Result<()> {
+        let parent_context = self.inner.parent_context();
+        let src_branch = self.branch().clone();
+        let locator = self.locator();
+
+        file::fork(src_branch, dst_branch, locator, parent_context).await
     }
 
     pub fn branch(&self) -> &Branch {

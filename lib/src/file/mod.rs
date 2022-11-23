@@ -188,6 +188,29 @@ impl File {
     }
 }
 
+/// Fork a file without opening it first.
+/// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
+/// write concurrency is implemented.
+pub(crate) async fn fork(
+    src_branch: Branch,
+    dst_branch: Branch,
+    locator: Locator,
+    parent: ParentContext,
+) -> Result<()> {
+    if src_branch.id() == dst_branch.id() {
+        return Ok(());
+    }
+
+    let blob = {
+        let mut conn = src_branch.db().acquire().await?;
+        Blob::open(&mut conn, src_branch.clone(), locator).await?
+    };
+
+    parent.fork(&blob, src_branch, dst_branch).await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
