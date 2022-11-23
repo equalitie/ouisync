@@ -33,14 +33,15 @@ pub struct Pool {
 impl Pool {
     async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
         let connect_options = connect_options
+            .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .pragma("recursive_triggers", "ON")
             // We assume that every transaction completes in a reasonable time (i.e., there are no
             // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
             // that so setting this excessively large timeout is the next best thing.
             //
-            // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html) would
-            //    be one such way.
+            // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html)
+            //    would be one such way.
             .busy_timeout(Duration::from_secs(24 * 60 * 60));
 
         let inner = SqlitePoolOptions::new()
@@ -235,8 +236,7 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
     let connect_options = SqliteConnectOptions::new()
         .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal);
+        .create_if_missing(true);
 
     let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
 
