@@ -85,11 +85,7 @@ async fn remove_file() {
     // Reopen and remove the file
     let mut parent_dir = branch.open_root().await.unwrap();
     parent_dir
-        .remove_entry(
-            name,
-            branch.id(),
-            EntryTombstoneData::removed(file_vv),
-        )
+        .remove_entry(name, branch.id(), EntryTombstoneData::removed(file_vv))
         .await
         .unwrap();
 
@@ -355,11 +351,7 @@ async fn remove_subdirectory() {
     // Reopen and remove the subdirectory
     let mut parent_dir = branch.open_root().await.unwrap();
     parent_dir
-        .remove_entry(
-            name,
-            branch.id(),
-            EntryTombstoneData::removed(dir_vv),
-        )
+        .remove_entry(name, branch.id(), EntryTombstoneData::removed(dir_vv))
         .await
         .unwrap();
 
@@ -451,11 +443,7 @@ async fn fork_over_tombstone() {
     let vv = root0.lookup("dir").unwrap().version_vector().clone();
 
     root0
-        .remove_entry(
-            "dir",
-            branches[0].id(),
-            EntryTombstoneData::removed(vv),
-        )
+        .remove_entry("dir", branches[0].id(), EntryTombstoneData::removed(vv))
         .await
         .unwrap();
 
