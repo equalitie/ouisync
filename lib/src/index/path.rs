@@ -27,17 +27,19 @@ use crate::{
 pub(super) struct Path {
     locator: Hash,
     pub root_hash: Hash,
+    pub root_summary: Summary,
     pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
 }
 
 impl Path {
-    pub fn new(root_hash: Hash, locator: Hash) -> Self {
+    pub fn new(root_hash: Hash, root_summary: Summary, locator: Hash) -> Self {
         let inner = vec![InnerNodeMap::default(); INNER_LAYER_COUNT];
 
         Self {
             locator,
             root_hash,
+            root_summary,
             inner,
             leaves: LeafNodeSet::default(),
         }
@@ -103,17 +105,18 @@ impl Path {
             let bucket = self.get_bucket(inner_layer);
 
             if let Some(hash) = self.compute_hash_for_layer(inner_layer + 1) {
-                self.inner[inner_layer].insert(bucket, InnerNode::new(hash, Summary::FULL));
+                let summary = self.compute_summary_for_layer(inner_layer + 1);
+                self.inner[inner_layer].insert(bucket, InnerNode::new(hash, summary));
             } else {
                 self.inner[inner_layer].remove(bucket);
             }
         }
 
         self.root_hash = self.compute_hash_for_layer(0).unwrap_or(*EMPTY_INNER_HASH);
+        self.root_summary = self.compute_summary_for_layer(0);
     }
 
-    // Assumes layers higher than `layer` have their hashes/BlockVersions already
-    // computed/assigned.
+    // Assumes layers higher than `layer` have their hashes already computed
     fn compute_hash_for_layer(&self, layer: usize) -> Option<Hash> {
         if layer == INNER_LAYER_COUNT {
             if self.leaves.is_empty() {
@@ -125,6 +128,15 @@ impl Path {
             None
         } else {
             Some(self.inner[layer].hash())
+        }
+    }
+
+    // Assumes layers higher than `layer` have their summaries already computed
+    fn compute_summary_for_layer(&self, layer: usize) -> Summary {
+        if layer == INNER_LAYER_COUNT {
+            Summary::from_leaves(&self.leaves)
+        } else {
+            Summary::from_inners(&self.inner[layer])
         }
     }
 }

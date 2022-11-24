@@ -318,7 +318,11 @@ impl SnapshotData {
         conn: &mut db::Connection,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
-        let mut path = Path::new(self.root_node.proof.hash, *encoded_locator);
+        let mut path = Path::new(
+            self.root_node.proof.hash,
+            self.root_node.summary,
+            *encoded_locator,
+        );
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
@@ -361,7 +365,7 @@ impl SnapshotData {
             .clone()
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
-        let new_root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
+        let new_root_node = RootNode::create(tx, new_proof, path.root_summary).await?;
 
         // NOTE: It is not enough to remove only the old_root because there may be a non zero
         // number of incomplete roots that have been downloaded prior to new_root becoming
