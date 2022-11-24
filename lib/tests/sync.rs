@@ -10,8 +10,8 @@ use ouisync::{
     Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc, time::Duration};
-use tokio::{task, time};
+use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
+use tokio::task;
 use tracing::{Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -530,12 +530,8 @@ async fn transfer_many_files() {
         .instrument(Span::current()),
     );
 
-    time::timeout(Duration::from_secs(10), async move {
-        task_a.await.unwrap();
-        task_b.await.unwrap();
-    })
-    .await
-    .unwrap()
+    task_a.await.unwrap();
+    task_b.await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
