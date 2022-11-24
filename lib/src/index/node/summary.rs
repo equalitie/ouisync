@@ -1,3 +1,5 @@
+use crate::format::Hex;
+
 use super::{InnerNodeMap, LeafNodeSet};
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -6,7 +8,7 @@ use sqlx::{
     sqlite::{SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef},
     Decode, Encode, Sqlite, Type,
 };
-use std::hash::Hasher;
+use std::{fmt, hash::Hasher};
 use twox_hash::xxh3::{Hash128, HasherExt};
 
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
@@ -80,10 +82,15 @@ impl Summary {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+/// Summary information about the presence of multiple blocks belonging to a subtree.
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum MultiBlockPresence {
+    /// All blocks missing
     None,
+    /// Some blocks present. The contained checksum is used to determine whether two subtrees have
+    /// the same set of present blocks.
     Some(Checksum),
+    /// All blocks present.
     Full,
 }
 
@@ -135,6 +142,16 @@ impl<'r> Decode<'r, Sqlite> for MultiBlockPresence {
             NONE => Ok(Self::None),
             FULL => Ok(Self::Full),
             _ => Ok(Self::Some(array)),
+        }
+    }
+}
+
+impl fmt::Debug for MultiBlockPresence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Some(checksum) => write!(f, "Some({:10x})", Hex(checksum)),
+            Self::Full => write!(f, "Full"),
         }
     }
 }
