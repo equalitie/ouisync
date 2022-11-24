@@ -54,6 +54,7 @@ impl Bin {
         command.arg("--print-port");
         command.arg("--disable-upnp");
         command.arg("--disable-dht");
+        command.arg("--disable-pex");
         command.arg("--disable-local-discovery");
 
         let master_key = SecretKey::random();
@@ -255,7 +256,7 @@ pub fn eventually<F>(f: F)
 where
     F: FnMut() -> Result<(), Error>,
 {
-    eventually_with_timeout(Duration::from_secs(120), f)
+    eventually_with_timeout(Duration::from_secs(60), f)
 }
 
 #[track_caller]

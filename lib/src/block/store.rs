@@ -126,9 +126,11 @@ pub(crate) async fn remove_unreachable(tx: &mut db::Transaction<'_>) -> Result<u
     // // DEBUG
     // let ids: Vec<BlockId> = sqlx::query("SELECT id FROM unreachable_blocks")
     //     .map(|row: sqlx::sqlite::SqliteRow| row.get(0))
-    //     .fetch_all(&mut *tx)
+    //     .fetch_all(&mut **tx)
     //     .await?;
-    // tracing::debug!(?ids, "remove_unreachable");
+    // if !ids.is_empty() {
+    //     tracing::warn!(?ids, "remove_unreachable");
+    // }
 
     sqlx::query("DELETE FROM blocks WHERE id IN (SELECT id FROM unreachable_blocks)")
         .execute(&mut **tx)

@@ -225,7 +225,7 @@ fn relay() {
     );
 
     let file_name = "test.dat";
-    let size = 4 * 1024 * 1024;
+    let size = 2 * 1024 * 1024;
 
     // Create the file by A
     {
