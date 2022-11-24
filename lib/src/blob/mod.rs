@@ -304,7 +304,7 @@ impl Blob {
                 // `insert` is a no-op. We still proceed normally to maintain idempotency.
                 dst_branch
                     .data()
-                    .insert(tx, &block_id, &encoded_locator, write_keys)
+                    .insert(tx, &encoded_locator, &block_id, write_keys)
                     .await?;
             }
         }
@@ -540,7 +540,7 @@ async fn write_block(
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
     let inserted = branch
-        .insert(tx, &id, &locator.encode(read_key), write_keys)
+        .insert(tx, &locator.encode(read_key), &id, write_keys)
         .await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we

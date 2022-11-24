@@ -159,7 +159,7 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
     local_branch
-        .insert(&mut tx, &block_id, &locator, &write_keys)
+        .insert(&mut tx, &locator, &block_id, &write_keys)
         .await
         .unwrap();
 

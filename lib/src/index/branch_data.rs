@@ -100,13 +100,13 @@ impl BranchData {
     pub async fn insert(
         &self,
         tx: &mut db::Transaction<'_>,
-        block_id: &BlockId,
         encoded_locator: &LocatorHash,
+        block_id: &BlockId,
         write_keys: &Keypair,
     ) -> Result<bool> {
         self.load_or_create_snapshot(tx, write_keys)
             .await?
-            .insert_block(tx, block_id, encoded_locator, write_keys)
+            .insert_block(tx, encoded_locator, block_id, write_keys)
             .await
     }
 
@@ -211,8 +211,8 @@ impl SnapshotData {
     pub async fn insert_block(
         &mut self,
         tx: &mut db::Transaction<'_>,
-        block_id: &BlockId,
         encoded_locator: &LocatorHash,
+        block_id: &BlockId,
         write_keys: &Keypair,
     ) -> Result<bool> {
         let mut path = self.load_path(tx, encoded_locator).await?;
@@ -441,7 +441,7 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
 
         branch
-            .insert(&mut tx, &block_id, &encoded_locator, &write_keys)
+            .insert(&mut tx, &encoded_locator, &block_id, &write_keys)
             .await
             .unwrap();
 
@@ -466,12 +466,12 @@ mod tests {
             let mut tx = pool.begin().await.unwrap();
 
             branch
-                .insert(&mut tx, &b1, &encoded_locator, &write_keys)
+                .insert(&mut tx, &encoded_locator, &b1, &write_keys)
                 .await
                 .unwrap();
 
             branch
-                .insert(&mut tx, &b2, &encoded_locator, &write_keys)
+                .insert(&mut tx, &encoded_locator, &b2, &write_keys)
                 .await
                 .unwrap();
 
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
         branch
-            .insert(&mut tx, &b, &encoded_locator, &write_keys)
+            .insert(&mut tx, &encoded_locator, &b, &write_keys)
             .await
             .unwrap();
         let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
@@ -548,7 +548,7 @@ mod tests {
             let block_id = rng.gen();
 
             branch
-                .insert(&mut tx, &block_id, &locator, &write_keys)
+                .insert(&mut tx, &locator, &block_id, &write_keys)
                 .await
                 .unwrap();
 

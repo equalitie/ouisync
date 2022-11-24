@@ -489,7 +489,7 @@ async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, writ
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
-        .insert(&mut tx, &block_id, &encoded_locator, write_keys)
+        .insert(&mut tx, &encoded_locator, &block_id, write_keys)
         .await
         .unwrap();
     block::write(&mut tx, &block_id, &content, &nonce)
