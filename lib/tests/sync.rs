@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Node, Proto, DEFAULT_TIMEOUT};
+use self::common::{Env, Node, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
@@ -32,12 +32,7 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Wait until the file is seen by B
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_b, "test.txt", b"first"),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "test.txt", b"first").await;
 
     // Unlink B's repo
     drop(reg_b);
@@ -51,12 +46,7 @@ async fn relink_repository() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // Wait until the file is updated
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_b, "test.txt", b"second"),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "test.txt", b"second").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -72,12 +62,7 @@ async fn remove_remote_file() {
     let mut file = repo_a.create_file("test.txt").await.unwrap();
     file.flush().await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_b, "test.txt", &[]),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "test.txt", &[]).await;
 
     // Delete the file by B
     repo_b.remove_entry("test.txt").await.unwrap();
@@ -138,12 +123,7 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
     file.flush().await.unwrap();
     drop(file);
 
-    time::timeout(
-        Duration::from_secs(60),
-        expect_file_content(&repo_b, "test.dat", &content),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -166,12 +146,7 @@ async fn transfer_large_file() {
     file.flush().await.unwrap();
     drop(file);
 
-    time::timeout(
-        Duration::from_secs(60),
-        expect_file_content(&repo_b, "test.dat", &content),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -203,12 +178,7 @@ async fn transfer_multiple_files_sequentially() {
         // Wait until we see all the already transfered files
         for (index, content) in contents.iter().take(index + 1).enumerate() {
             let name = format!("file-{}.dat", index);
-            time::timeout(
-                DEFAULT_TIMEOUT,
-                expect_file_content(&repo_b, &name, content),
-            )
-            .await
-            .unwrap();
+            expect_file_content(&repo_b, &name, content).await;
         }
     }
 }
@@ -232,9 +202,7 @@ async fn sync_during_file_write() {
     let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
 
     // B: Wait until everything gets merged
-    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
-        .await
-        .unwrap();
+    expect_in_sync(&repo_b, &repo_a).await;
 
     // A: Write half of the file content but don't flush yet.
     write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
@@ -247,12 +215,7 @@ async fn sync_during_file_write() {
     drop(file_b);
 
     // A: Wait until we see the file created by B
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_a, "bar.txt", b"bar"),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_a, "bar.txt", b"bar").await;
 
     // A: Write the second half of the content and flush.
     write_in_chunks(&mut file_a, &content[content.len() / 2..], 4096).await;
@@ -264,12 +227,7 @@ async fn sync_during_file_write() {
     assert_eq!(actual_content, content);
 
     // B: Wait until we see the file as well
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_b, "foo.txt", &content),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_b, "foo.txt", &content).await;
 }
 
 // Test that merge is not affected by files from remote branches being open while it's ongoing.
@@ -296,27 +254,21 @@ async fn sync_during_file_read() {
         let mut file_b = None;
         let mut tx = repo_b.subscribe();
 
-        time::timeout(DEFAULT_TIMEOUT, async {
-            loop {
-                match repo_b.open_file("foo.txt").await {
-                    Ok(file) => {
-                        // Only use the file if it's still in the remote branch, otherwise the test
-                        // preconditions are not met and we need to restart the test.
-                        if file.branch().id() == &branch_id_a {
-                            file_b = Some(file);
-                        }
+        loop {
+            match repo_b.open_file("foo.txt").await {
+                Ok(file) => {
+                    // Only use the file if it's still in the remote branch, otherwise the test
+                    // preconditions are not met and we need to restart the test.
+                    if file.branch().id() == &branch_id_a {
+                        file_b = Some(file);
+                    }
 
-                        break;
-                    }
-                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
-                        common::wait(&mut tx).await
-                    }
-                    Err(error) => panic!("unexpected error: {:?}", error),
+                    break;
                 }
+                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => common::wait(&mut tx).await,
+                Err(error) => panic!("unexpected error: {:?}", error),
             }
-        })
-        .await
-        .unwrap();
+        }
 
         let file_b = if let Some(file) = file_b {
             file
@@ -344,21 +296,14 @@ async fn sync_during_file_read() {
         file_a.flush().await.unwrap();
 
         // B: Wait until we are synced with A, still keeping the file open
-        time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
-            .await
-            .unwrap();
+        expect_in_sync(&repo_b, &repo_a).await;
 
         // B: Drop and reopen the file and verify that the fact we held the file open did not
         // interfere with the merging and that the file is now identical to A's file.
         drop(file_b);
 
         let branch_id_b = *repo_b.local_branch().unwrap().id();
-        time::timeout(
-            DEFAULT_TIMEOUT,
-            expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a),
-        )
-        .await
-        .unwrap();
+        expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a).await;
 
         break;
     }
@@ -382,9 +327,7 @@ async fn concurrent_modify_open_file() {
     let mut file_a = repo_a.create_file("file.txt").await.unwrap();
 
     // B: Wait until everything gets merged
-    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
-        .await
-        .unwrap();
+    expect_in_sync(&repo_b, &repo_a).await;
 
     // A: Write to file but don't flush yet
     write_in_chunks(&mut file_a, &content_a, 4096).await;
@@ -400,12 +343,7 @@ async fn concurrent_modify_open_file() {
     let id_b = *repo_b.local_branch().unwrap().id();
 
     // A: Wait until we see B's writes
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b),
-    )
-    .await
-    .unwrap();
+    expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
 
     // A: Flush the file
     file_a.flush().await.unwrap();
@@ -481,9 +419,7 @@ async fn recreate_local_branch() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // B: Sync with A
-    time::timeout(DEFAULT_TIMEOUT, expect_in_sync(&repo_b, &repo_a))
-        .await
-        .unwrap();
+    expect_in_sync(&repo_b, &repo_a).await;
 
     // B: Modify the repo. This makes B's branch newer than A's
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
@@ -503,12 +439,7 @@ async fn recreate_local_branch() {
     assert!(vv_b > vv_a_0);
 
     // A: Sync with B. Afterwards our local branch will become outdated compared to B's
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n"),
-    )
-    .await
-    .unwrap();
+    expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n").await;
 
     // A: Reopen in write mode
     drop(repo_a);
@@ -520,27 +451,23 @@ async fn recreate_local_branch() {
     repo_a.create_file("bar.txt").await.unwrap();
 
     // A: Make sure the local version changed monotonically.
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        common::eventually(&repo_a, || async {
-            let vv_a_1 = repo_a
-                .local_branch()
-                .unwrap()
-                .version_vector()
-                .await
-                .unwrap();
+    common::eventually(&repo_a, || async {
+        let vv_a_1 = repo_a
+            .local_branch()
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap();
 
-            match vv_a_1.partial_cmp(&vv_b) {
-                Some(Ordering::Greater) => true,
-                Some(Ordering::Equal | Ordering::Less) => {
-                    panic!("non-monotonic version progression")
-                }
-                None => false,
+        match vv_a_1.partial_cmp(&vv_b) {
+            Some(Ordering::Greater) => true,
+            Some(Ordering::Equal | Ordering::Less) => {
+                panic!("non-monotonic version progression")
             }
-        }),
-    )
-    .await
-    .unwrap()
+            None => false,
+        }
+    })
+    .await;
 }
 
 // FIXME: this test occasionally fails
@@ -623,12 +550,7 @@ async fn transfer_directory_with_file() {
     let mut dir = repo_a.create_directory("food").await.unwrap();
     dir.create_file("pizza.jpg".into()).await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -643,12 +565,7 @@ async fn transfer_directory_with_subdirectory() {
     let mut dir0 = repo_a.create_directory("food").await.unwrap();
     dir0.create_directory("mediterranean".into()).await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -663,28 +580,15 @@ async fn remote_rename_file() {
     repo_b.create_file("foo.txt").await.unwrap();
 
     // Wait until the file is synced and merged over to the local branch.
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "foo.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_a, "foo.txt", EntryType::File).await;
 
     repo_b
         .move_entry("/", "foo.txt", "/", "bar.txt")
         .await
         .unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "bar.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
-
-    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo.txt"))
-        .await
-        .unwrap();
+    expect_entry_exists(&repo_a, "bar.txt", EntryType::File).await;
+    expect_entry_not_found(&repo_a, "foo.txt").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -698,25 +602,12 @@ async fn remote_rename_empty_directory() {
 
     repo_b.create_directory("foo").await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "foo", EntryType::Directory),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "bar", EntryType::Directory),
-    )
-    .await
-    .unwrap();
-
-    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo"))
-        .await
-        .unwrap();
+    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
+    expect_entry_not_found(&repo_a, "foo").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -731,25 +622,12 @@ async fn remote_rename_non_empty_directory() {
     let mut dir = repo_b.create_directory("foo").await.unwrap();
     dir.create_file("data.txt".into()).await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File).await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
-
-    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "foo"))
-        .await
-        .unwrap();
+    expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File).await;
+    expect_entry_not_found(&repo_a, "foo").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -763,12 +641,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
 
     repo_b.create_file("data.txt").await.unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "data.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_a, "data.txt", EntryType::File).await;
 
     repo_b.create_directory("archive").await.unwrap();
     repo_b
@@ -776,32 +649,16 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
         .await
         .unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
+    expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File).await;
 
     repo_b
         .move_entry("/", "archive", "/", "trash")
         .await
         .unwrap();
 
-    time::timeout(
-        DEFAULT_TIMEOUT,
-        expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File),
-    )
-    .await
-    .unwrap();
-
-    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "data.txt"))
-        .await
-        .unwrap();
-
-    time::timeout(DEFAULT_TIMEOUT, expect_entry_not_found(&repo_a, "archive"))
-        .await
-        .unwrap();
+    expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File).await;
+    expect_entry_not_found(&repo_a, "data.txt").await;
+    expect_entry_not_found(&repo_a, "archive").await;
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the

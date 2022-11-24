@@ -2,11 +2,10 @@
 
 mod common;
 
-use self::common::{Env, Proto, DEFAULT_TIMEOUT};
+use self::common::{Env, Proto};
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng};
 use std::io::SeekFrom;
-use tokio::time;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_local_file() {
@@ -40,9 +39,7 @@ async fn local_delete_remote_file() {
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 3))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 3).await;
 
     repo_l.remove_entry("test.dat").await.unwrap();
     repo_l.force_merge().await.unwrap();
@@ -65,16 +62,12 @@ async fn remote_delete_remote_file() {
     repo_r.create_file("test.dat").await.unwrap();
 
     // 1 block for the file + 1 block for the remote root directory
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 2))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 2).await;
 
     repo_r.remove_entry("test.dat").await.unwrap();
 
     // The remote file is removed but the remote root remains to track the tombstone
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 1))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 1).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -110,9 +103,7 @@ async fn local_truncate_remote_file() {
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 3))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 3).await;
 
     let mut file = repo_l.open_file("test.dat").await.unwrap();
     file.fork(repo_l.local_branch().unwrap()).await.unwrap();
@@ -141,17 +132,13 @@ async fn remote_truncate_remote_file() {
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 3))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 3).await;
 
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
     // 1 block for the file + 1 block for the remote root
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 2))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 2).await;
 }
 
 // FIXME: this currently fails because the first block of the file is not changed by the update and
@@ -171,9 +158,7 @@ async fn concurrent_delete_update() {
     file.flush().await.unwrap();
 
     // 1 for the remote root + 1 for the file
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 2))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 2).await;
 
     // Disconnect to allow concurrent modifications.
     drop(reg_l);
@@ -197,9 +182,7 @@ async fn concurrent_delete_update() {
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     // 1 for the local root + 1 for the remote root + 2 for the file
-    time::timeout(DEFAULT_TIMEOUT, expect_block_count(&repo_l, 4))
-        .await
-        .unwrap();
+    expect_block_count(&repo_l, 4).await;
 }
 
 async fn expect_block_count(repo: &Repository, expected_count: usize) {

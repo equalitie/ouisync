@@ -11,10 +11,10 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::{sync::broadcast::error::RecvError, time};
 use tracing::Instrument;
 
-pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
 // Test environment
 pub(crate) struct Env {
@@ -158,14 +158,15 @@ where
             break;
         }
 
-        wait(&mut rx).await;
+        wait(&mut rx).await
     }
 }
 
 pub(crate) async fn wait(rx: &mut BranchChangedReceiver) {
-    match rx.recv().await {
-        Ok(_) | Err(RecvError::Lagged(_)) => (),
-        Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+    match time::timeout(DEFAULT_TIMEOUT, rx.recv()).await {
+        Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => (),
+        Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
+        Err(_) => panic!("timeout waiting for notification"),
     }
 }
 
