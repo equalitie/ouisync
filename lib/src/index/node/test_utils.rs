@@ -1,6 +1,7 @@
 use super::{
     super::{proof::Proof, Index},
-    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, Summary, INNER_LAYER_COUNT,
+    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, SingleBlockPresence, Summary,
+    INNER_LAYER_COUNT,
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
@@ -46,7 +47,7 @@ impl Snapshot {
             leaves
                 .entry(BucketPath::new(&node.locator, INNER_LAYER_COUNT - 1))
                 .or_insert_with(LeafNodeSet::default)
-                .modify(&node.locator, &node.block_id, true);
+                .modify(&node.locator, &node.block_id, SingleBlockPresence::Missing);
         }
 
         let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();

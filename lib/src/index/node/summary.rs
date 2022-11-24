@@ -36,10 +36,13 @@ impl Summary {
         let mut block_presence_builder = MultiBlockPresenceBuilder::new();
 
         for node in nodes {
-            if node.is_missing {
-                block_presence_builder.update(MultiBlockPresence::None);
-            } else {
-                block_presence_builder.update(MultiBlockPresence::Full);
+            match node.block_presence {
+                SingleBlockPresence::Missing => {
+                    block_presence_builder.update(MultiBlockPresence::None)
+                }
+                SingleBlockPresence::Present => {
+                    block_presence_builder.update(MultiBlockPresence::Full)
+                }
             }
         }
 
@@ -79,6 +82,57 @@ impl Summary {
 
     pub fn is_complete(&self) -> bool {
         self.is_complete
+    }
+}
+
+/// Information about the presence of a single block.
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum SingleBlockPresence {
+    Missing,
+    Present,
+}
+
+impl SingleBlockPresence {
+    pub fn is_present(self) -> bool {
+        match self {
+            Self::Missing => false,
+            Self::Present => true,
+        }
+    }
+}
+
+impl Type<Sqlite> for SingleBlockPresence {
+    fn type_info() -> SqliteTypeInfo {
+        <bool as Type<Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &SqliteTypeInfo) -> bool {
+        <bool as Type<Sqlite>>::compatible(ty)
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for SingleBlockPresence {
+    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
+        Encode::<Sqlite>::encode(self.is_present(), args)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for SingleBlockPresence {
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
+        if <bool as Decode<'r, Sqlite>>::decode(value)? {
+            Ok(SingleBlockPresence::Present)
+        } else {
+            Ok(SingleBlockPresence::Missing)
+        }
+    }
+}
+
+impl fmt::Debug for SingleBlockPresence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "Missing"),
+            Self::Present => write!(f, "Present"),
+        }
     }
 }
 

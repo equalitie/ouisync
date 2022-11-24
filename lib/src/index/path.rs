@@ -1,6 +1,6 @@
 use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, Summary, EMPTY_INNER_HASH,
-    INNER_LAYER_COUNT,
+    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, SingleBlockPresence, Summary,
+    EMPTY_INNER_HASH, INNER_LAYER_COUNT,
 };
 use crate::{
     block::BlockId,
@@ -74,7 +74,10 @@ impl Path {
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
     pub fn set_leaf(&mut self, block_id: &BlockId) -> Option<BlockId> {
-        match self.leaves.modify(&self.locator, block_id, false) {
+        match self
+            .leaves
+            .modify(&self.locator, block_id, SingleBlockPresence::Present)
+        {
             ModifyStatus::Updated(old_block_id) => {
                 self.recalculate(INNER_LAYER_COUNT);
                 Some(old_block_id)

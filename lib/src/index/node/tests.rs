@@ -180,7 +180,7 @@ async fn save_new_present_leaf_node() {
     let node = nodes.get(&encoded_locator).unwrap();
     assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
-    assert!(!node.is_missing);
+    assert_eq!(node.block_presence, SingleBlockPresence::Present);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -201,7 +201,7 @@ async fn save_new_missing_leaf_node() {
     let node = nodes.get(&encoded_locator).unwrap();
     assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
-    assert!(node.is_missing);
+    assert_eq!(node.block_presence, SingleBlockPresence::Missing);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -225,7 +225,7 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
     let node = nodes.get(&encoded_locator).unwrap();
     assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
-    assert!(node.is_missing);
+    assert_eq!(node.block_presence, SingleBlockPresence::Missing);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -249,7 +249,7 @@ async fn save_missing_leaf_node_over_existing_present_one() {
     let node = nodes.get(&encoded_locator).unwrap();
     assert_eq!(node.locator, encoded_locator);
     assert_eq!(node.block_id, block_id);
-    assert!(!node.is_missing);
+    assert_eq!(node.block_presence, SingleBlockPresence::Present);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -477,7 +477,10 @@ async fn set_present_on_leaf_node_with_missing_block() {
     assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
 
     let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
-    assert!(!nodes.get(&encoded_locator).unwrap().is_missing);
+    assert_eq!(
+        nodes.get(&encoded_locator).unwrap().block_presence,
+        SingleBlockPresence::Present
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
