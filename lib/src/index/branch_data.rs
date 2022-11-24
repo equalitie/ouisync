@@ -319,9 +319,6 @@ impl SnapshotData {
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
         let mut path = Path::new(self.root_node.proof.hash, *encoded_locator);
-
-        path.layers_found += 1;
-
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
@@ -332,15 +329,9 @@ impl SnapshotData {
             } else {
                 return Ok(path);
             };
-
-            path.layers_found += 1;
         }
 
         path.leaves = LeafNode::load_children(conn, &parent).await?;
-
-        if path.leaves.get(encoded_locator).is_some() {
-            path.layers_found += 1;
-        }
 
         Ok(path)
     }

@@ -26,11 +26,6 @@ use crate::{
 #[derive(Debug)]
 pub(super) struct Path {
     locator: Hash,
-    /// Count of the number of layers found where a locator has a corresponding bucket. Including
-    /// the root and leaf layers.  (e.g. 0 -> root wasn't found; 1 -> root was found but no inner
-    /// nor leaf layers was; 2 -> root and one inner (possibly leaf if INNER_LAYER_COUNT == 0)
-    /// layers were found; ...)
-    pub layers_found: usize,
     pub root_hash: Hash,
     pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
@@ -42,7 +37,6 @@ impl Path {
 
         Self {
             locator,
-            layers_found: 0,
             root_hash,
             inner,
             leaves: LeafNodeSet::default(),
