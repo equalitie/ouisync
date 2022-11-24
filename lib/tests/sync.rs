@@ -85,17 +85,24 @@ async fn remove_remote_file() {
     // TODO: wait until A sees the file being deleted
 }
 
-// FIXME: this test occasionally fails
 #[tokio::test(flavor = "multi_thread")]
-async fn relay() {
-    // Simulate two peers that can't connect to each other but both can connect to a third peer.
-
+async fn relay_write() {
     // There used to be a deadlock that got triggered only when transferring a sufficiently large
     // file.
     let file_size = 4 * 1024 * 1024;
+    relay_case(Proto::Tcp, file_size, AccessMode::Write).await
+}
 
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_blind() {
+    let file_size = 4 * 1024 * 1024;
+    relay_case(Proto::Tcp, file_size, AccessMode::Blind).await
+}
+
+// Simulate two peers that can't connect to each other but both can connect to a third ("relay")
+// peer.
+async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
     let mut env = Env::with_seed(0);
-    let proto = Proto::Tcp;
 
     // The "relay" peer.
     let node_r = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
@@ -117,7 +124,7 @@ async fn relay() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     let repo_r = env
-        .create_repo_with_secrets(repo_a.secrets().with_mode(AccessMode::Blind))
+        .create_repo_with_secrets(repo_a.secrets().with_mode(relay_access_mode))
         .await;
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
