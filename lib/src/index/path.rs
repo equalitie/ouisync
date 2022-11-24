@@ -49,8 +49,10 @@ impl Path {
         }
     }
 
-    pub fn get_leaf(&self) -> Option<BlockId> {
-        self.leaves.get(&self.locator).map(|node| node.block_id)
+    pub fn get_leaf(&self) -> Option<(BlockId, SingleBlockPresence)> {
+        self.leaves
+            .get(&self.locator)
+            .map(|node| (node.block_id, node.block_presence))
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
@@ -73,11 +75,12 @@ impl Path {
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.
-    pub fn set_leaf(&mut self, block_id: &BlockId) -> Option<BlockId> {
-        match self
-            .leaves
-            .modify(&self.locator, block_id, SingleBlockPresence::Present)
-        {
+    pub fn set_leaf(
+        &mut self,
+        block_id: &BlockId,
+        block_presence: SingleBlockPresence,
+    ) -> Option<BlockId> {
+        match self.leaves.modify(&self.locator, block_id, block_presence) {
             ModifyStatus::Updated(old_block_id) => {
                 self.recalculate(INNER_LAYER_COUNT);
                 Some(old_block_id)

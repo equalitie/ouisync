@@ -10,7 +10,7 @@ use futures_util::{Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::{iter::FromIterator, mem, slice, vec};
+use std::{iter::FromIterator, slice, vec};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct LeafNode {
@@ -159,16 +159,11 @@ impl LeafNodeSet {
     }
 
     /// Inserts a new node or updates it if already exists.
-    ///
-    /// When a new node is created, it's `block_presence` is set to `initial_block_presence`. When
-    /// an existing node is updated, its `block_presence` is left unchanged and
-    /// `initial_block_presence` is ignored.
-    // FIXME: this is wrong, we should alwauy update block_presence
     pub fn modify(
         &mut self,
         locator: &Hash,
         block_id: &BlockId,
-        initial_block_presence: SingleBlockPresence,
+        block_presence: SingleBlockPresence,
     ) -> ModifyStatus {
         match self.lookup(locator) {
             Ok(index) => {
@@ -177,7 +172,11 @@ impl LeafNodeSet {
                 if &node.block_id == block_id {
                     ModifyStatus::Unchanged
                 } else {
-                    ModifyStatus::Updated(mem::replace(&mut node.block_id, *block_id))
+                    let old_block_id = node.block_id;
+                    node.block_id = *block_id;
+                    node.block_presence = block_presence;
+
+                    ModifyStatus::Updated(old_block_id)
                 }
             }
             Err(index) => {
@@ -186,7 +185,7 @@ impl LeafNodeSet {
                     LeafNode {
                         locator: *locator,
                         block_id: *block_id,
-                        block_presence: initial_block_presence,
+                        block_presence,
                     },
                 );
                 ModifyStatus::Inserted

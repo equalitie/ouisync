@@ -1,5 +1,5 @@
 use super::{
-    node::{InnerNode, LeafNode, RootNode, INNER_LAYER_COUNT},
+    node::{InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
     VersionVectorOp,
@@ -102,11 +102,12 @@ impl BranchData {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
+        block_presence: SingleBlockPresence,
         write_keys: &Keypair,
     ) -> Result<bool> {
         self.load_or_create_snapshot(tx, write_keys)
             .await?
-            .insert_block(tx, encoded_locator, block_id, write_keys)
+            .insert_block(tx, encoded_locator, block_id, block_presence, write_keys)
             .await
     }
 
@@ -129,7 +130,11 @@ impl BranchData {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(&self, conn: &mut db::Connection, encoded_locator: &Hash) -> Result<BlockId> {
+    pub async fn get(
+        &self,
+        conn: &mut db::Connection,
+        encoded_locator: &Hash,
+    ) -> Result<(BlockId, SingleBlockPresence)> {
         self.load_snapshot(conn)
             .await?
             .get_block(conn, encoded_locator)
@@ -213,6 +218,7 @@ impl SnapshotData {
         tx: &mut db::Transaction<'_>,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
+        block_presence: SingleBlockPresence,
         write_keys: &Keypair,
     ) -> Result<bool> {
         let mut path = self.load_path(tx, encoded_locator).await?;
@@ -221,7 +227,7 @@ impl SnapshotData {
             return Ok(false);
         }
 
-        path.set_leaf(block_id);
+        path.set_leaf(block_id, block_presence);
 
         self.save_path(tx, &path, write_keys).await?;
 
@@ -254,13 +260,11 @@ impl SnapshotData {
         &self,
         conn: &mut db::Connection,
         encoded_locator: &Hash,
-    ) -> Result<BlockId> {
-        let path = self.load_path(conn, encoded_locator).await?;
-
-        match path.get_leaf() {
-            Some(block_id) => Ok(block_id),
-            None => Err(Error::EntryNotFound),
-        }
+    ) -> Result<(BlockId, SingleBlockPresence)> {
+        self.load_path(conn, encoded_locator)
+            .await?
+            .get_leaf()
+            .ok_or(Error::EntryNotFound)
     }
 
     /// Update the root version vector of this branch.
@@ -441,11 +445,17 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
 
         branch
-            .insert(&mut tx, &encoded_locator, &block_id, &write_keys)
+            .insert(
+                &mut tx,
+                &encoded_locator,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
 
-        let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+        let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
         assert_eq!(r, block_id);
     }
@@ -466,16 +476,28 @@ mod tests {
             let mut tx = pool.begin().await.unwrap();
 
             branch
-                .insert(&mut tx, &encoded_locator, &b1, &write_keys)
+                .insert(
+                    &mut tx,
+                    &encoded_locator,
+                    &b1,
+                    SingleBlockPresence::Present,
+                    &write_keys,
+                )
                 .await
                 .unwrap();
 
             branch
-                .insert(&mut tx, &encoded_locator, &b2, &write_keys)
+                .insert(
+                    &mut tx,
+                    &encoded_locator,
+                    &b2,
+                    SingleBlockPresence::Present,
+                    &write_keys,
+                )
                 .await
                 .unwrap();
 
-            let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+            let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
 
             assert_eq!(r, b2);
 
@@ -501,10 +523,16 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
         branch
-            .insert(&mut tx, &encoded_locator, &b, &write_keys)
+            .insert(
+                &mut tx,
+                &encoded_locator,
+                &b,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
-        let r = branch.get(&mut tx, &encoded_locator).await.unwrap();
+        let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
         assert_eq!(r, b);
 
         assert_eq!(
@@ -548,7 +576,13 @@ mod tests {
             let block_id = rng.gen();
 
             branch
-                .insert(&mut tx, &locator, &block_id, &write_keys)
+                .insert(
+                    &mut tx,
+                    &locator,
+                    &block_id,
+                    SingleBlockPresence::Present,
+                    &write_keys,
+                )
                 .await
                 .unwrap();
 

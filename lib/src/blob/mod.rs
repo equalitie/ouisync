@@ -13,7 +13,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    index::BranchData,
+    index::{BranchData, SingleBlockPresence},
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
@@ -296,7 +296,8 @@ impl Blob {
             for locator in locators {
                 let encoded_locator = locator.encode(read_key);
 
-                let block_id = self.branch.data().get(tx, &encoded_locator).await?;
+                let (block_id, block_presence) =
+                    self.branch.data().get(tx, &encoded_locator).await?;
 
                 // It can happen that the current and dst branches are different, but the blob has
                 // already been forked by some other task in the meantime (after we loaded this
@@ -304,7 +305,7 @@ impl Blob {
                 // `insert` is a no-op. We still proceed normally to maintain idempotency.
                 dst_branch
                     .data()
-                    .insert(tx, &encoded_locator, &block_id, write_keys)
+                    .insert(tx, &encoded_locator, &block_id, block_presence, write_keys)
                     .await?;
             }
         }
@@ -473,7 +474,7 @@ impl BlockIds {
         self.locator = self.locator.next();
 
         match self.branch.data().get(conn, &encoded).await {
-            Ok(block_id) => Ok(Some(block_id)),
+            Ok((block_id, _)) => Ok(Some(block_id)),
             Err(Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error),
         }
@@ -517,7 +518,7 @@ async fn load_block(
     // with just one connection this function has exclusive access to the db and so the described
     // situation is impossible. Leaving it here in case we ever go back to multiple connections.
 
-    let id = branch.get(conn, &locator.encode(read_key)).await?;
+    let (id, _) = branch.get(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
     let nonce = block::read(conn, &id, &mut content).await?;
 
@@ -540,7 +541,13 @@ async fn write_block(
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
     let inserted = branch
-        .insert(tx, &locator.encode(read_key), &id, write_keys)
+        .insert(
+            tx,
+            &locator.encode(read_key),
+            &id,
+            SingleBlockPresence::Present,
+            write_keys,
+        )
         .await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we

@@ -10,7 +10,10 @@ mod tests;
 pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::BranchData,
-    node::{receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Summary},
+    node::{
+        receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        SingleBlockPresence, Summary,
+    },
     proof::UntrustedProof,
     receive_filter::ReceiveFilter,
 };

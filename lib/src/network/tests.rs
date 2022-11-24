@@ -12,7 +12,7 @@ use crate::{
     event::Event,
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, RootNode, VersionVectorOp,
+        BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
     repository::{LocalId, RepositoryId},
     store::Store,
@@ -489,7 +489,13 @@ async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, writ
 
     let mut tx = index.pool.begin().await.unwrap();
     branch
-        .insert(&mut tx, &encoded_locator, &block_id, write_keys)
+        .insert(
+            &mut tx,
+            &encoded_locator,
+            &block_id,
+            SingleBlockPresence::Present,
+            write_keys,
+        )
         .await
         .unwrap();
     block::write(&mut tx, &block_id, &content, &nonce)

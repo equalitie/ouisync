@@ -112,9 +112,11 @@ impl Branch {
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
         let mut conn = self.pool.acquire().await?;
-        self.data()
+        let (block_id, _) = self
+            .data()
             .get(&mut conn, &Locator::ROOT.encode(self.keys().read()))
-            .await
+            .await?;
+        Ok(block_id)
     }
 
     pub(crate) fn acquire_open_lock(&self, blob_id: BlobId) -> Arc<OpenLock> {

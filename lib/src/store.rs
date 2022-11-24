@@ -105,7 +105,7 @@ mod tests {
         error::Error,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData,
+            BranchData, SingleBlockPresence,
         },
         locator::Locator,
         repository::RepositoryId,
@@ -141,14 +141,26 @@ mod tests {
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
         branch0
-            .insert(&mut tx, &locator0, &block_id, &write_keys)
+            .insert(
+                &mut tx,
+                &locator0,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
 
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
         branch1
-            .insert(&mut tx, &locator1, &block_id, &write_keys)
+            .insert(
+                &mut tx,
+                &locator1,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
 
@@ -192,7 +204,13 @@ mod tests {
             .await
             .unwrap();
         branch
-            .insert(&mut tx, &locator, &id0, &write_keys)
+            .insert(
+                &mut tx,
+                &locator,
+                &id0,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
 
@@ -206,7 +224,13 @@ mod tests {
             .await
             .unwrap();
         branch
-            .insert(&mut tx, &locator, &id1, &write_keys)
+            .insert(
+                &mut tx,
+                &locator,
+                &id1,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
             .await
             .unwrap();
 

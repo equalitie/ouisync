@@ -277,8 +277,8 @@ async fn remove_blob() {
     let encoded_locator1 = locator1.encode(branch.keys().read());
 
     let block_ids = {
-        let id0 = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
+        let (id0, _) = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
+        let (id1, _) = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
         [id0, id1]
     };
 
@@ -329,7 +329,8 @@ async fn remove_blob_with_unflushed_writes() {
         .collect();
     let mut block_ids = Vec::new();
     for encoded_locator in &encoded_locators {
-        block_ids.push(branch.data().get(&mut tx, encoded_locator).await.unwrap());
+        let (block_id, _) = branch.data().get(&mut tx, encoded_locator).await.unwrap();
+        block_ids.push(block_id);
     }
 
     // Drop the blob without flushing it first.
@@ -378,8 +379,8 @@ async fn truncate_to_empty() {
     let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
-        let id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &locator1).await.unwrap();
+        let (id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
+        let (id1, _) = branch.data().get(&mut tx, &locator1).await.unwrap();
 
         (id0, id1)
     };
@@ -403,7 +404,7 @@ async fn truncate_to_empty() {
     // The first block is not deleted because it's needed to store the metadata.
     // It's only deleted when the blob itself is deleted.
     // Check that it was modified to store the new length though.
-    let new_block_id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
+    let (new_block_id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
     assert_ne!(new_block_id0, old_block_id0);
     assert!(!block::exists(&mut tx, &old_block_id0).await.unwrap());
     assert!(block::exists(&mut tx, &new_block_id0).await.unwrap());
@@ -495,8 +496,8 @@ async fn modify_blob() {
     let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
-        let id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
-        let id1 = branch.data().get(&mut tx, &locator1).await.unwrap();
+        let (id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
+        let (id1, _) = branch.data().get(&mut tx, &locator1).await.unwrap();
         (id0, id1)
     };
 
@@ -505,8 +506,8 @@ async fn modify_blob() {
     blob.write(&mut tx, &buffer).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let new_block_id0 = branch.data().get(&mut tx, &locator0).await.unwrap();
-    let new_block_id1 = branch.data().get(&mut tx, &locator1).await.unwrap();
+    let (new_block_id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
+    let (new_block_id1, _) = branch.data().get(&mut tx, &locator1).await.unwrap();
 
     assert_ne!(new_block_id0, old_block_id0);
     assert_ne!(new_block_id1, old_block_id1);
