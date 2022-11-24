@@ -8,7 +8,7 @@ use crate::{
     },
     db,
     error::Error,
-    index::node::summary::BlockPresence,
+    index::node::summary::MultiBlockPresence,
     test_utils,
     version_vector::VersionVector,
 };
@@ -261,7 +261,7 @@ async fn compute_summary_from_empty_leaf_nodes() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -292,7 +292,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_missing_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -311,7 +311,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_some_present_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_matches!(summary.block_presence, BlockPresence::Some(_));
+    assert_matches!(summary.block_presence, MultiBlockPresence::Some(_));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -329,7 +329,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_present_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Full);
+    assert_eq!(summary.block_presence, MultiBlockPresence::Full);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -341,7 +341,7 @@ async fn compute_summary_from_empty_inner_nodes() {
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -382,7 +382,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_missing_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::None);
+    assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -430,7 +430,7 @@ async fn compute_summary_from_complete_inner_nodes_with_some_present_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_matches!(summary.block_presence, BlockPresence::Some(_));
+    assert_matches!(summary.block_presence, MultiBlockPresence::Some(_));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -458,7 +458,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_present_blocks() {
     tx.commit().await.unwrap();
 
     assert!(summary.is_complete);
-    assert_eq!(summary.block_presence, BlockPresence::Full);
+    assert_eq!(summary.block_presence, MultiBlockPresence::Full);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -648,7 +648,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Check that initially all blocks are missing
     root_node.reload(&mut tx).await.unwrap();
 
-    assert_eq!(root_node.summary.block_presence, BlockPresence::None);
+    assert_eq!(root_node.summary.block_presence, MultiBlockPresence::None);
 
     let mut received_blocks = 0;
 
@@ -659,9 +659,12 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
         root_node.reload(&mut tx).await.unwrap();
 
         if received_blocks < snapshot.blocks().len() {
-            assert_matches!(root_node.summary.block_presence, BlockPresence::Some(_));
+            assert_matches!(
+                root_node.summary.block_presence,
+                MultiBlockPresence::Some(_)
+            );
         } else {
-            assert_eq!(root_node.summary.block_presence, BlockPresence::Full);
+            assert_eq!(root_node.summary.block_presence, MultiBlockPresence::Full);
         }
 
         // TODO: check also inner and leaf nodes

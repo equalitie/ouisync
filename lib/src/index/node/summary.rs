@@ -14,30 +14,30 @@ use twox_hash::xxh3::{Hash128, HasherExt};
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct Summary {
     pub is_complete: bool,
-    pub block_presence: BlockPresence,
+    pub block_presence: MultiBlockPresence,
 }
 
 impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
     pub const INCOMPLETE: Self = Self {
         is_complete: false,
-        block_presence: BlockPresence::None,
+        block_presence: MultiBlockPresence::None,
     };
 
     /// Summary indicating that the whole subtree is complete and all its blocks present.
     pub const FULL: Self = Self {
         is_complete: true,
-        block_presence: BlockPresence::Full,
+        block_presence: MultiBlockPresence::Full,
     };
 
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
-        let mut block_presence_builder = BlockPresenceBuilder::new();
+        let mut block_presence_builder = MultiBlockPresenceBuilder::new();
 
         for node in nodes {
             if node.is_missing {
-                block_presence_builder.update(BlockPresence::None);
+                block_presence_builder.update(MultiBlockPresence::None);
             } else {
-                block_presence_builder.update(BlockPresence::Full);
+                block_presence_builder.update(MultiBlockPresence::Full);
             }
         }
 
@@ -48,7 +48,7 @@ impl Summary {
     }
 
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
-        let mut block_presence_builder = BlockPresenceBuilder::new();
+        let mut block_presence_builder = MultiBlockPresenceBuilder::new();
         let mut is_complete = true;
 
         for (_, node) in nodes {
@@ -81,7 +81,7 @@ impl Summary {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) enum BlockPresence {
+pub(crate) enum MultiBlockPresence {
     None,
     Some(Checksum),
     Full,
@@ -96,7 +96,7 @@ const FULL: Checksum = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
 
-impl BlockPresence {
+impl MultiBlockPresence {
     pub fn is_outdated(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Some(lhs), Self::Some(rhs)) => lhs != rhs,
@@ -114,19 +114,19 @@ impl BlockPresence {
     }
 }
 
-impl Type<Sqlite> for BlockPresence {
+impl Type<Sqlite> for MultiBlockPresence {
     fn type_info() -> SqliteTypeInfo {
         <&[u8] as Type<Sqlite>>::type_info()
     }
 }
 
-impl<'q> Encode<'q, Sqlite> for &'q BlockPresence {
+impl<'q> Encode<'q, Sqlite> for &'q MultiBlockPresence {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
         Encode::<Sqlite>::encode(self.checksum(), args)
     }
 }
 
-impl<'r> Decode<'r, Sqlite> for BlockPresence {
+impl<'r> Decode<'r, Sqlite> for MultiBlockPresence {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
         let slice = <&[u8] as Decode<Sqlite>>::decode(value)?;
         let array = slice.try_into()?;
@@ -139,7 +139,7 @@ impl<'r> Decode<'r, Sqlite> for BlockPresence {
     }
 }
 
-struct BlockPresenceBuilder {
+struct MultiBlockPresenceBuilder {
     state: BuilderState,
     hasher: Hash128,
 }
@@ -152,7 +152,7 @@ enum BuilderState {
     Full,
 }
 
-impl BlockPresenceBuilder {
+impl MultiBlockPresenceBuilder {
     fn new() -> Self {
         Self {
             state: BuilderState::Init,
@@ -160,30 +160,30 @@ impl BlockPresenceBuilder {
         }
     }
 
-    fn update(&mut self, p: BlockPresence) {
+    fn update(&mut self, p: MultiBlockPresence) {
         self.hasher.write(p.checksum());
 
         self.state = match (self.state, p) {
-            (BuilderState::Init, BlockPresence::None) => BuilderState::None,
-            (BuilderState::Init, BlockPresence::Some(_)) => BuilderState::Some,
-            (BuilderState::Init, BlockPresence::Full) => BuilderState::Full,
-            (BuilderState::None, BlockPresence::None) => BuilderState::None,
-            (BuilderState::None, BlockPresence::Some(_))
-            | (BuilderState::None, BlockPresence::Full)
+            (BuilderState::Init, MultiBlockPresence::None) => BuilderState::None,
+            (BuilderState::Init, MultiBlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Init, MultiBlockPresence::Full) => BuilderState::Full,
+            (BuilderState::None, MultiBlockPresence::None) => BuilderState::None,
+            (BuilderState::None, MultiBlockPresence::Some(_))
+            | (BuilderState::None, MultiBlockPresence::Full)
             | (BuilderState::Some, _)
-            | (BuilderState::Full, BlockPresence::None)
-            | (BuilderState::Full, BlockPresence::Some(_)) => BuilderState::Some,
-            (BuilderState::Full, BlockPresence::Full) => BuilderState::Full,
+            | (BuilderState::Full, MultiBlockPresence::None)
+            | (BuilderState::Full, MultiBlockPresence::Some(_)) => BuilderState::Some,
+            (BuilderState::Full, MultiBlockPresence::Full) => BuilderState::Full,
         }
     }
 
-    fn build(self) -> BlockPresence {
+    fn build(self) -> MultiBlockPresence {
         match self.state {
-            BuilderState::Init | BuilderState::None => BlockPresence::None,
+            BuilderState::Init | BuilderState::None => MultiBlockPresence::None,
             BuilderState::Some => {
-                BlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
+                MultiBlockPresence::Some(clamp(self.hasher.finish_ext()).to_le_bytes())
             }
-            BuilderState::Full => BlockPresence::Full,
+            BuilderState::Full => MultiBlockPresence::Full,
         }
     }
 }
