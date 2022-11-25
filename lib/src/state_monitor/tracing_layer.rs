@@ -154,7 +154,13 @@ impl TraceLayerInner {
         assert!(!overwritten);
     }
 
-    fn on_event(&mut self, event: &Event<'_>, span_id: Option<u64>) {
+    fn on_event(&mut self, event: &Event<'_>, current_span_id: Option<u64>) {
+        // `event.parent()` is the span that is explicitly passed to a tracing macro (if any).
+        let span_id = event
+            .parent()
+            .map(|span_id| span_id.into_u64())
+            .or(current_span_id);
+
         // It sometimes happens that we get an event that doesn't have a span. We shove it all into
         // the root monitor, although this may not be 100% correct.
         let (span, message) = match span_id {
