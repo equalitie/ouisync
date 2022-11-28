@@ -13,7 +13,7 @@ task_local! {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum Payload {
+pub enum Payload {
     /// A new snapshot was created or a block received in the specified branch.
     BranchChanged(PublicKey),
     /// A file was closed
@@ -24,7 +24,7 @@ pub(crate) enum Payload {
 #[derive(Copy, Clone, Debug)]
 pub struct Event {
     /// Event payload.
-    pub(crate) payload: Payload,
+    pub payload: Payload,
     /// Event scope. Can be used to distinguish which part of the code the event was emitted from.
     /// Scope can be set by running the event-emitting task with `EventScope::apply`. If no scope
     /// is set, uses `EventScope::DEFAULT`.
@@ -55,33 +55,6 @@ impl EventScope {
 
     pub async fn apply<F: Future>(self, f: F) -> F::Output {
         CURRENT_SCOPE.scope(self, f).await
-    }
-}
-
-/// Receiver adapter that receives only `BranchChanged` events.
-pub struct BranchChangedReceiver {
-    inner: broadcast::Receiver<Event>,
-}
-
-impl BranchChangedReceiver {
-    pub(crate) fn new(inner: broadcast::Receiver<Event>) -> Self {
-        Self { inner }
-    }
-
-    pub async fn recv(&mut self) -> Result<PublicKey, broadcast::error::RecvError> {
-        loop {
-            match self.inner.recv().await {
-                Ok(Event {
-                    payload: Payload::BranchChanged(branch_id),
-                    ..
-                }) => break Ok(branch_id),
-                Ok(Event {
-                    payload: Payload::FileClosed,
-                    ..
-                }) => continue,
-                Err(error) => break Err(error),
-            }
-        }
     }
 }
 

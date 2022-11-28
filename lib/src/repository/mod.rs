@@ -20,7 +20,7 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, EntryType},
     error::{Error, Result},
-    event::BranchChangedReceiver,
+    event::Event,
     file::{File, FileCache},
     index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
@@ -427,9 +427,9 @@ impl Repository {
             .inflate(self.shared.store.index.get_branch(remote_id))
     }
 
-    /// Subscribe to change notification from all current and future branches.
-    pub fn subscribe(&self) -> BranchChangedReceiver {
-        BranchChangedReceiver::new(self.shared.store.index.subscribe())
+    /// Subscribe to event notifications.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.shared.store.index.subscribe()
     }
 
     /// Gets the access mode this repository is opened in.

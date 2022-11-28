@@ -5,8 +5,8 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, MasterSecret, Repository, Result,
-    ShareToken,
+    path, AccessMode, AccessSecrets, EntryType, Error, Event, MasterSecret, Payload, Repository,
+    Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
@@ -236,10 +236,19 @@ pub unsafe extern "C" fn repository_subscribe(
             match rx.recv().await {
                 // Only notify about events from remote branches because any local branch event
                 // must have been triggered by the frontend and so it already knows about it.
-                Ok(branch_id) if Some(branch_id) == local_branch_id => continue,
-                Ok(_) | Err(RecvError::Lagged(_)) => sender.send(port, ()),
+                Ok(Event {
+                    payload: Payload::BranchChanged(branch_id),
+                    ..
+                }) if Some(branch_id) != local_branch_id => (),
+                Ok(Event {
+                    payload: Payload::BranchChanged(_) | Payload::FileClosed,
+                    ..
+                }) => continue,
+                Err(RecvError::Lagged(_)) => (),
                 Err(RecvError::Closed) => break,
             }
+
+            sender.send(port, ());
         }
     });
 
