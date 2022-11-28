@@ -2,6 +2,7 @@ use super::Shared;
 use crate::{
     branch::Branch,
     error::{Error, Result},
+    event::Payload,
     event::{EventScope, IgnoreScopeReceiver},
     joint_directory::JointDirectory,
 };
@@ -111,51 +112,77 @@ impl Inner {
     async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
         let mut event_rx =
             IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope);
-        let mut wait = false;
+
+        enum State {
+            Working,
+            Waiting,
+            Terminated,
+        }
+
+        let mut state = State::Working;
 
         loop {
-            // Wait for notification or command.
-            if wait {
-                select! {
-                    event = event_rx.recv() => {
-                        match event {
-                            Ok(_) | Err(RecvError::Lagged(_)) => (),
-                            Err(RecvError::Closed) => break,
-                        }
-                    }
-                    command = command_rx.recv() => {
-                        if let Some(command) = command {
-                            if self.handle_command(command).await {
-                                continue;
-                            } else {
-                                break;
+            match state {
+                State::Working => {
+                    state = State::Waiting;
+
+                    let work = async {
+                        self.merge().await.ok();
+                        self.prune().await.ok();
+                        self.scan(scan::Mode::RequireAndCollect).await.ok();
+                    };
+
+                    let wait = async {
+                        loop {
+                            match event_rx.recv().await {
+                                Ok(Payload::BranchChanged(_)) => {
+                                    // On `BranchChanged`, interrupt the current job and
+                                    // immediately start a new one.
+                                    state = State::Working;
+                                    break;
+                                }
+                                Ok(Payload::BlockReceived { .. } | Payload::FileClosed)
+                                | Err(RecvError::Lagged(_)) => {
+                                    // On any other event, let the current job run to completion
+                                    // and then start a new one.
+                                    state = State::Working;
+                                }
+                                Err(RecvError::Closed) => {
+                                    state = State::Terminated;
+                                    break;
+                                }
                             }
-                        } else {
-                            break;
+                        }
+                    };
+
+                    select! {
+                        _ = work => (),
+                        _ = wait => (),
+                    }
+                }
+                State::Waiting => {
+                    state = select! {
+                        event = event_rx.recv() => {
+                            match event {
+                                Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
+                                Err(RecvError::Closed) => State::Terminated,
+                            }
+                        }
+                        command = command_rx.recv() => {
+                            if let Some(command) = command {
+                                if self.handle_command(command).await {
+                                    State::Waiting
+                                } else {
+                                    State::Terminated
+                                }
+                            } else {
+                                State::Terminated
+                            }
                         }
                     }
                 }
+                State::Terminated => break,
             }
-
-            // Run the merge job but interrupt and restart it when we receive another notification.
-            select! {
-                event = event_rx.recv() => {
-                    match event {
-                        Ok(_) | Err(RecvError::Lagged(_)) => {
-                            wait = false;
-                            continue
-                        }
-                        Err(RecvError::Closed) => break,
-                    }
-                }
-                result = self.merge() => result.unwrap_or(()),
-            }
-
-            // Run the remaining jobs without interruption
-            self.prune().await.unwrap_or(());
-            self.scan(scan::Mode::RequireAndCollect).await.unwrap_or(());
-
-            wait = true;
         }
     }
 
