@@ -5,8 +5,8 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, MasterSecret, Repository, Result,
-    ShareToken,
+    path, AccessMode, AccessSecrets, EntryType, Error, Event, MasterSecret, Payload, Repository,
+    Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
@@ -225,21 +225,24 @@ pub unsafe extern "C" fn repository_subscribe(
     let holder = handle.get();
 
     let mut rx = holder.repository.subscribe();
-    let local_branch_id = holder
-        .repository
-        .local_branch()
-        .ok()
-        .map(|branch| *branch.id());
 
     let handle = session.runtime().spawn(async move {
         loop {
             match rx.recv().await {
-                // Only notify about events from remote branches because any local branch event
-                // must have been triggered by the frontend and so it already knows about it.
-                Ok(branch_id) if Some(branch_id) == local_branch_id => continue,
-                Ok(_) | Err(RecvError::Lagged(_)) => sender.send(port, ()),
+                // Only `BlockReceived` events cause user-observable changes
+                Ok(Event {
+                    payload: Payload::BlockReceived { .. },
+                    ..
+                }) => (),
+                Ok(Event {
+                    payload: Payload::BranchChanged(_) | Payload::FileClosed,
+                    ..
+                }) => continue,
+                Err(RecvError::Lagged(_)) => (),
                 Err(RecvError::Closed) => break,
             }
+
+            sender.send(port, ());
         }
     });
 

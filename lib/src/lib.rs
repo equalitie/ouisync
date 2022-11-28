@@ -50,7 +50,7 @@ pub use self::{
     debug::DebugPrinter,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
-    event::BranchChangedReceiver,
+    event::{Event, Payload},
     file::File,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,

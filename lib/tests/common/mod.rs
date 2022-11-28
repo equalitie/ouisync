@@ -1,5 +1,5 @@
 use ouisync::{
-    network::Network, AccessSecrets, BranchChangedReceiver, ConfigStore, MasterSecret, PeerAddr,
+    network::Network, AccessSecrets, ConfigStore, Event, MasterSecret, Payload, PeerAddr,
     Repository,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -11,7 +11,10 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::{sync::broadcast::error::RecvError, time};
+use tokio::{
+    sync::broadcast::{self, error::RecvError},
+    time,
+};
 use tracing::Instrument;
 
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -162,11 +165,21 @@ where
     }
 }
 
-pub(crate) async fn wait(rx: &mut BranchChangedReceiver) {
-    match time::timeout(DEFAULT_TIMEOUT, rx.recv()).await {
-        Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => (),
-        Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
-        Err(_) => panic!("timeout waiting for notification"),
+pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
+    loop {
+        match time::timeout(DEFAULT_TIMEOUT, rx.recv()).await {
+            Ok(Ok(Event {
+                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                ..
+            }))
+            | Ok(Err(RecvError::Lagged(_))) => return,
+            Ok(Ok(Event {
+                payload: Payload::FileClosed,
+                ..
+            })) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
+            Err(_) => panic!("timeout waiting for notification"),
+        }
     }
 }
 
