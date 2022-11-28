@@ -235,7 +235,6 @@ async fn setup() -> (TempDir, MountGuard) {
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        true,
     )
     .instrument(span)
     .await

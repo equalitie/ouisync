@@ -41,7 +41,6 @@ async fn main() -> Result<()> {
             device_id,
             secret,
             AccessSecrets::random_write(),
-            !options.disable_merger,
         )
         .await?;
 
@@ -63,7 +62,6 @@ async fn main() -> Result<()> {
                 options.repository_path(name)?,
                 device_id,
                 options.secret_for_repo(name).ok(),
-                false,
             )
             .await?
             .secrets()
@@ -102,7 +100,6 @@ async fn main() -> Result<()> {
                 device_id,
                 master_secret,
                 access_secrets.clone(),
-                !options.disable_merger,
             )
             .await?;
 
@@ -145,7 +142,6 @@ async fn main() -> Result<()> {
                 options.repository_path(name)?,
                 device_id,
                 options.secret_for_repo(name).ok(),
-                !options.disable_merger,
             )
             .await?
         };

@@ -15,7 +15,6 @@ async fn root_directory_always_exists() {
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -40,7 +39,6 @@ async fn count_leaf_nodes_sanity_checks() {
         device_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -88,7 +86,6 @@ async fn merge() {
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        true,
     )
     .await
     .unwrap();
@@ -127,7 +124,6 @@ async fn recreate_previously_deleted_file() {
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -166,7 +162,6 @@ async fn recreate_previously_deleted_directory() {
         local_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -198,7 +193,6 @@ async fn concurrent_read_and_create_dir() {
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -251,7 +245,6 @@ async fn concurrent_write_and_read_file() {
         writer_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
     )
     .await
     .unwrap();
@@ -341,7 +334,6 @@ async fn blind_access_non_empty_repo() {
         device_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
         Span::none(),
     )
     .await
@@ -366,7 +358,6 @@ async fn blind_access_non_empty_repo() {
             device_id,
             master_secret,
             access_mode,
-            false,
             Span::none(),
         )
         .await
@@ -406,7 +397,6 @@ async fn blind_access_empty_repo() {
         device_id,
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        false,
         Span::none(),
     )
     .await
@@ -418,7 +408,6 @@ async fn blind_access_empty_repo() {
         device_id,
         Some(MasterSecret::random()),
         AccessMode::Read,
-        false,
         Span::none(),
     )
     .await
@@ -439,7 +428,6 @@ async fn read_access_same_replica() {
         device_id,
         master_secret.clone(),
         AccessSecrets::random_write(),
-        false,
         Span::none(),
     )
     .await
@@ -458,7 +446,6 @@ async fn read_access_same_replica() {
         device_id,
         Some(master_secret),
         AccessMode::Read,
-        false,
         Span::none(),
     )
     .await
@@ -504,7 +491,6 @@ async fn read_access_different_replica() {
         device_id_a,
         master_secret.clone(),
         AccessSecrets::random_write(),
-        false,
         Span::none(),
     )
     .await
@@ -523,7 +509,6 @@ async fn read_access_different_replica() {
         device_id_b,
         Some(master_secret),
         AccessMode::Read,
-        false,
         Span::none(),
     )
     .await
@@ -908,7 +893,6 @@ async fn setup() -> (TempDir, Repository) {
         rand::random(),
         MasterSecret::random(),
         AccessSecrets::random_write(),
-        true,
     )
     .await
     .unwrap();

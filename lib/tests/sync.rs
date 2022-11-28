@@ -382,7 +382,6 @@ async fn recreate_local_branch() {
         device_id_a,
         master_secret_a.clone(),
         access_secrets.clone(),
-        true,
     )
     .await
     .unwrap();
@@ -409,7 +408,6 @@ async fn recreate_local_branch() {
         device_id_a,
         Some(master_secret_a.clone()),
         AccessMode::Read,
-        true,
     )
     .await
     .unwrap();
@@ -443,7 +441,7 @@ async fn recreate_local_branch() {
 
     // A: Reopen in write mode
     drop(repo_a);
-    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a), true)
+    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a))
         .await
         .unwrap();
 

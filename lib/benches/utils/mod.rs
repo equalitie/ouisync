@@ -10,7 +10,6 @@ pub async fn create_repo(rng: &mut StdRng, store: &Path) -> RepositoryGuard {
         rng.gen(),
         MasterSecret::generate(rng),
         AccessSecrets::generate_write(rng),
-        true,
     )
     .await
     .unwrap();

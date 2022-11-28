@@ -28,10 +28,6 @@ pub(crate) struct Options {
     #[clap(long, value_name = "PATH")]
     pub config_dir: Option<PathBuf>,
 
-    /// Disable Merger (experimental, will likely be removed in the future)
-    #[clap(long)]
-    pub disable_merger: bool,
-
     /// Addresses to bind to. The expected format is {tcp,quic}/IP:PORT. Note that there may be at
     /// most one of each (protoco x IP-version) combinations. If more are specified, only the first
     /// one is used.

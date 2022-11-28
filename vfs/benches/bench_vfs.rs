@@ -49,7 +49,6 @@ mod utils {
             rng.gen(),
             MasterSecret::generate(&mut rng),
             AccessSecrets::generate_write(&mut rng),
-            true,
         )
         .await
         .unwrap();

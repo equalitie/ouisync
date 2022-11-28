@@ -53,20 +53,11 @@ impl Repository {
         device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
-        enable_merger: bool,
     ) -> Result<Self> {
         let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::create(store).await?;
 
-        Self::create_in(
-            pool,
-            device_id,
-            master_secret,
-            access_secrets,
-            enable_merger,
-            span,
-        )
-        .await
+        Self::create_in(pool, device_id, master_secret, access_secrets, span).await
     }
 
     /// Creates a new repository in an already opened database.
@@ -75,7 +66,6 @@ impl Repository {
         device_id: DeviceId,
         master_secret: MasterSecret,
         access_secrets: AccessSecrets,
-        enable_merger: bool,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
@@ -86,7 +76,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger, span).await
+        Self::new(pool, this_writer_id, access_secrets, span).await
     }
 
     /// Opens an existing repository.
@@ -99,16 +89,8 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
-        enable_merger: bool,
     ) -> Result<Self> {
-        Self::open_with_mode(
-            store,
-            device_id,
-            master_secret,
-            AccessMode::Write,
-            enable_merger,
-        )
-        .await
+        Self::open_with_mode(store, device_id, master_secret, AccessMode::Write).await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
@@ -118,20 +100,11 @@ impl Repository {
         device_id: DeviceId,
         master_secret: Option<MasterSecret>,
         max_access_mode: AccessMode,
-        enable_merger: bool,
     ) -> Result<Self> {
         let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::open(store).await?;
 
-        Self::open_in(
-            pool,
-            device_id,
-            master_secret,
-            max_access_mode,
-            enable_merger,
-            span,
-        )
-        .await
+        Self::open_in(pool, device_id, master_secret, max_access_mode, span).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -142,7 +115,6 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
-        enable_merger: bool,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
@@ -181,14 +153,13 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, enable_merger, span).await
+        Self::new(pool, this_writer_id, access_secrets, span).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
-        enable_merger: bool,
         span: Span,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -218,7 +189,7 @@ impl Repository {
             file_cache: Arc::new(FileCache::new(event_tx)),
         });
 
-        let local_branch = if shared.secrets.can_write() && enable_merger {
+        let local_branch = if shared.secrets.can_write() {
             shared.local_branch().ok()
         } else {
             None

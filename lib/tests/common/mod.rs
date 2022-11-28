@@ -64,7 +64,6 @@ impl Env {
             self.rng.gen(),
             MasterSecret::generate(&mut self.rng),
             secrets,
-            true,
         )
         .await
         .unwrap()
