@@ -1,8 +1,8 @@
 mod access_mode;
-mod master_secret;
+mod local_secret;
 mod share_token;
 
-pub use self::{access_mode::AccessMode, master_secret::MasterSecret, share_token::ShareToken};
+pub use self::{access_mode::AccessMode, local_secret::LocalSecret, share_token::ShareToken};
 
 use crate::{
     crypto::{cipher, sign},

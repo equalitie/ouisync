@@ -5,7 +5,7 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, Event, MasterSecret, Payload, Repository,
+    path, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload, Repository,
     Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
@@ -29,7 +29,7 @@ pub struct RepositoryHolder {
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
     store: *const c_char,
-    master_password: *const c_char,
+    local_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
@@ -38,7 +38,11 @@ pub unsafe extern "C" fn repository_create(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let master_password = Password::new(utils::ptr_to_str(master_password)?);
+        let local_password = if local_password.is_null() {
+            None
+        } else {
+            Some(Password::new(utils::ptr_to_str(local_password)?))
+        };
 
         let access_secrets = if share_token.is_null() {
             AccessSecrets::random_write()
@@ -55,7 +59,7 @@ pub unsafe extern "C" fn repository_create(
                 let repository = Repository::create(
                     store.into_std_path_buf(),
                     device_id,
-                    MasterSecret::Password(master_password),
+                    local_password.map(LocalSecret::Password),
                     access_secrets,
                 )
                 .await?;
@@ -82,7 +86,7 @@ pub unsafe extern "C" fn repository_create(
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
-    master_password: *const c_char,
+    local_password: *const c_char,
     port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
     session::with(port, |ctx| {
@@ -90,10 +94,10 @@ pub unsafe extern "C" fn repository_open(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let master_password = if master_password.is_null() {
+        let local_password = if local_password.is_null() {
             None
         } else {
-            Some(Password::new(utils::ptr_to_str(master_password)?))
+            Some(Password::new(utils::ptr_to_str(local_password)?))
         };
 
         let span = ctx.repos_span().clone();
@@ -103,7 +107,7 @@ pub unsafe extern "C" fn repository_open(
                 let repository = Repository::open(
                     store.into_std_path_buf(),
                     device_id,
-                    master_password.map(MasterSecret::Password),
+                    local_password.map(LocalSecret::Password),
                 )
                 .await?;
 

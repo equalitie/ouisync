@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
             Repository::open(
                 options.repository_path(name)?,
                 device_id,
-                options.secret_for_repo(name).ok(),
+                options.secret_for_repo(name)?,
             )
             .await?
             .secrets()
@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
             Repository::open(
                 options.repository_path(name)?,
                 device_id,
-                options.secret_for_repo(name).ok(),
+                options.secret_for_repo(name)?,
             )
             .await?
         };

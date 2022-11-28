@@ -13,7 +13,7 @@ async fn root_directory_always_exists() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         writer_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -37,7 +37,7 @@ async fn count_leaf_nodes_sanity_checks() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         device_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -84,7 +84,7 @@ async fn merge() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         rand::random(),
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -122,7 +122,7 @@ async fn recreate_previously_deleted_file() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         local_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -160,7 +160,7 @@ async fn recreate_previously_deleted_directory() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         local_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -191,7 +191,7 @@ async fn concurrent_read_and_create_dir() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         writer_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -243,7 +243,7 @@ async fn concurrent_write_and_read_file() {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         writer_id,
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
@@ -332,7 +332,7 @@ async fn blind_access_non_empty_repo() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        MasterSecret::random(),
+        Some(LocalSecret::random()),
         AccessSecrets::random_write(),
         Span::none(),
     )
@@ -348,20 +348,23 @@ async fn blind_access_non_empty_repo() {
 
     // Reopen the repo first explicitly in blind mode and then using incorrect secret. The two ways
     // should be indistinguishable from each other.
-    for (master_secret, access_mode) in [
+    for (local_secret, access_mode) in [
         (None, AccessMode::Blind),
-        (Some(MasterSecret::random()), AccessMode::Write),
+        (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
         let repo = Repository::open_in(
             pool.clone(),
             device_id,
-            master_secret,
+            local_secret.clone(),
             access_mode,
             Span::none(),
         )
         .await
-        .unwrap();
+        .expect(&format!(
+            "Repo should open in blind mode (local_secret.is_some:{:?})",
+            local_secret.is_some(),
+        ));
 
         // Reading files is not allowed.
         assert_matches!(
@@ -395,7 +398,7 @@ async fn blind_access_empty_repo() {
     Repository::create_in(
         pool.clone(),
         device_id,
-        MasterSecret::random(),
+        Some(LocalSecret::random()),
         AccessSecrets::random_write(),
         Span::none(),
     )
@@ -406,7 +409,7 @@ async fn blind_access_empty_repo() {
     let repo = Repository::open_in(
         pool.clone(),
         device_id,
-        Some(MasterSecret::random()),
+        Some(LocalSecret::random()),
         AccessMode::Read,
         Span::none(),
     )
@@ -421,12 +424,11 @@ async fn blind_access_empty_repo() {
 async fn read_access_same_replica() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
-    let master_secret = MasterSecret::random();
 
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        master_secret.clone(),
+        None,
         AccessSecrets::random_write(),
         Span::none(),
     )
@@ -441,15 +443,9 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(
-        pool,
-        device_id,
-        Some(master_secret),
-        AccessMode::Read,
-        Span::none(),
-    )
-    .await
-    .unwrap();
+    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, Span::none())
+        .await
+        .unwrap();
 
     // Reading files is allowed.
     let mut file = repo.open_file("public.txt").await.unwrap();
@@ -483,13 +479,12 @@ async fn read_access_same_replica() {
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let master_secret = MasterSecret::random();
 
     let device_id_a = rand::random();
     let repo = Repository::create_in(
         pool.clone(),
         device_id_a,
-        master_secret.clone(),
+        None,
         AccessSecrets::random_write(),
         Span::none(),
     )
@@ -504,15 +499,9 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let device_id_b = rand::random();
-    let repo = Repository::open_in(
-        pool,
-        device_id_b,
-        Some(master_secret),
-        AccessMode::Read,
-        Span::none(),
-    )
-    .await
-    .unwrap();
+    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, Span::none())
+        .await
+        .unwrap();
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();
@@ -891,7 +880,7 @@ async fn setup() -> (TempDir, Repository) {
     let repo = Repository::create(
         base_dir.path().join("repo.db"),
         rand::random(),
-        MasterSecret::random(),
+        None,
         AccessSecrets::random_write(),
     )
     .await
