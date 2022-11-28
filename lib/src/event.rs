@@ -1,7 +1,7 @@
 // Probably false positive triggered by `task_local`
 #![allow(clippy::declare_interior_mutable_const)]
 
-use crate::crypto::sign::PublicKey;
+use crate::{block::BlockId, crypto::sign::PublicKey};
 use std::{
     future::Future,
     sync::atomic::{AtomicUsize, Ordering},
@@ -14,8 +14,14 @@ task_local! {
 
 #[derive(Copy, Clone, Debug)]
 pub enum Payload {
-    /// A new snapshot was created or a block received in the specified branch.
+    /// A new snapshot was created in the specified branch.
     BranchChanged(PublicKey),
+    /// A block with the specified id referenced from the specified branch was received from a
+    /// remote replica.
+    BlockReceived {
+        block_id: BlockId,
+        branch_id: PublicKey,
+    },
     /// A file was closed
     FileClosed,
 }

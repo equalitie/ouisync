@@ -4,6 +4,7 @@ use crate::{
     block::{self, BlockData, BlockNonce, BlockTracker},
     db,
     error::{Error, Result},
+    event::{Event, Payload},
     index::{self, Index},
     progress::Progress,
     repository::LocalId,
@@ -82,7 +83,10 @@ impl Store {
 
         // Notify affected branches.
         for writer_id in writer_ids {
-            self.index.get_branch(writer_id).notify()
+            self.index.notify(Event::new(Payload::BlockReceived {
+                block_id: data.id,
+                branch_id: writer_id,
+            }));
         }
 
         Ok(())

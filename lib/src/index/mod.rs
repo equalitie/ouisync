@@ -84,6 +84,10 @@ impl Index {
         self.shared.notify_tx.subscribe()
     }
 
+    pub(crate) fn notify(&self, event: Event) {
+        self.shared.notify_tx.send(event).unwrap_or(0);
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         let mut conn = self.pool.acquire().await.unwrap();
         RootNode::debug_print(&mut conn, print).await;

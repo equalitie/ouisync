@@ -169,7 +169,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(DEFAULT_TIMEOUT, rx.recv()).await {
             Ok(Ok(Event {
-                payload: Payload::BranchChanged(_),
+                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
                 ..
             }))
             | Ok(Err(RecvError::Lagged(_))) => return,

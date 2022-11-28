@@ -171,7 +171,8 @@ impl<'a> Monitor<'a> {
         loop {
             match subscription.recv().await {
                 Ok(Event {
-                    payload: Payload::BranchChanged(branch_id),
+                    payload:
+                        Payload::BranchChanged(branch_id) | Payload::BlockReceived { branch_id, .. },
                     ..
                 }) => self.handle_branch_changed(branch_id).await?,
                 Ok(Event {
