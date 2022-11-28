@@ -455,13 +455,7 @@ mod scan {
         Ok(())
     }
 
-    async fn remove_unreachable_blocks(_shared: &Shared) -> Result<()> {
-        // HACK: prevents `unused` warning
-        let _ = block::remove_unreachable;
-
-        // FIXME!
-
-        /*
+    async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
         let mut tx = shared.store.db().begin().await?;
         let count = block::remove_unreachable(&mut tx).await?;
         tx.commit().await?;
@@ -469,7 +463,6 @@ mod scan {
         if count > 0 {
             tracing::debug!("unreachable blocks removed: {}", count);
         }
-        */
 
         Ok(())
     }
