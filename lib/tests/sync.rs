@@ -626,6 +626,32 @@ async fn remote_rename_non_empty_directory() {
 // FIXME: https://github.com/equalitie/ouisync/issues/95
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
+async fn remote_rename_directory_during_conflict() {
+    let mut env = Env::with_seed(0);
+
+    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+
+    // Create a conflict so the branches stay concurrent. This prevents the remote branch from
+    // being pruned.
+    repo_a.create_file("dummy.txt").await.unwrap();
+    repo_b.create_file("dummy.txt").await.unwrap();
+
+    repo_b.create_directory("foo").await.unwrap();
+
+    expect_in_sync(&repo_a, &repo_b).await;
+
+    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
+
+    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
+    expect_entry_not_found(&repo_a, "foo").await;
+}
+
+// FIXME: https://github.com/equalitie/ouisync/issues/95
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
     let mut env = Env::with_seed(0);
 
@@ -654,6 +680,62 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
     expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File).await;
     expect_entry_not_found(&repo_a, "data.txt").await;
     expect_entry_not_found(&repo_a, "archive").await;
+}
+
+// FIXME: https://github.com/equalitie/ouisync/issues/45
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_update_and_delete_during_conflict() {
+    let mut env = Env::with_seed(0);
+
+    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let reg_b = node_b.network.handle().register(repo_b.store().clone());
+
+    let id_a = *repo_a.local_branch().unwrap().id();
+    let id_b = *repo_b.local_branch().unwrap().id();
+
+    // Create a conflict so the branches stay concurrent. This prevents the remote branch from
+    // being pruned.
+    repo_a.create_file("dummy.txt").await.unwrap();
+    repo_b.create_file("dummy.txt").await.unwrap();
+
+    let mut file = repo_b.create_file("data.txt").await.unwrap();
+    let mut content = vec![0u8; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE]; // exactly 2 blocks
+    env.rng.fill(&mut content[..]);
+    file.write(&content).await.unwrap();
+    file.flush().await.unwrap();
+
+    expect_file_version_content(&repo_a, "data.txt", Some(&id_a), &content).await;
+
+    // Disconnect to allow concurrent operations on the file
+    drop(reg_a);
+    drop(reg_b);
+
+    // A removes it (this garbage-collects its blocks)
+    repo_a.remove_entry("data.txt").await.unwrap();
+
+    // B writes to it in such a way that the first block remains unchanged
+    let chunk = {
+        let offset = content.len() - 64;
+        &mut content[offset..]
+    };
+
+    env.rng.fill(chunk);
+
+    file.seek(SeekFrom::End(-(chunk.len() as i64)))
+        .await
+        .unwrap();
+    file.write(chunk).await.unwrap();
+    file.flush().await.unwrap();
+
+    // Reconnect
+    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+
+    // A is able to read the whole file again including the previously gc-ed blocks.
+    expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
 }
 
 // Wait until the file at `path` has the expected content. Panics if timeout elapses before the

@@ -5,7 +5,6 @@ mod common;
 use self::common::{Env, Proto};
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use rand::{rngs::StdRng, Rng};
-use std::io::SeekFrom;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_local_file() {
@@ -139,50 +138,6 @@ async fn remote_truncate_remote_file() {
 
     // 1 block for the file + 1 block for the remote root
     expect_block_count(&repo_l, 2).await;
-}
-
-// FIXME: this currently fails because the first block of the file is not changed by the update and
-// so is never redownloaded.
-#[ignore]
-#[tokio::test(flavor = "multi_thread")]
-async fn concurrent_delete_update() {
-    let mut env = Env::with_seed(0);
-
-    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
-    let (repo_l, repo_r) = env.create_linked_repos().await;
-    let reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let reg_r = node_r.network.handle().register(repo_r.store().clone());
-
-    let mut file = repo_r.create_file("test.dat").await.unwrap();
-    write_to_file(&mut env.rng, &mut file, BLOCK_SIZE - BLOB_HEADER_SIZE).await;
-    file.flush().await.unwrap();
-
-    // 1 for the remote root + 1 for the file
-    expect_block_count(&repo_l, 2).await;
-
-    // Disconnect to allow concurrent modifications.
-    drop(reg_l);
-    drop(reg_r);
-
-    // Local delete
-    repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.force_garbage_collection().await.unwrap();
-
-    // Sanity check
-    assert_eq!(repo_l.count_blocks().await.unwrap(), 1);
-
-    // Remote update. Don't change the length of the file so the first block (where the length it
-    // stored) remains unchanged.
-    file.seek(SeekFrom::End(-64)).await.unwrap();
-    write_to_file(&mut env.rng, &mut file, 64).await;
-    file.flush().await.unwrap();
-
-    // Re-connect
-    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
-
-    // 1 for the local root + 1 for the remote root + 2 for the file
-    expect_block_count(&repo_l, 4).await;
 }
 
 async fn expect_block_count(repo: &Repository, expected_count: usize) {
