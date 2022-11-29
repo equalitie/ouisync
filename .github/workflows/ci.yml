@@ -1,6 +1,9 @@
+name: CI
+
 on: [push]
 
-name: CI
+env:
+  PROPTEST_CASES: 32
 
 jobs:
   build_and_test:
@@ -29,7 +32,14 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: "Run clippy"
-        run: cargo clippy
+        run: cargo clippy --all-targets
 
-      - name: "Run tests"
-        run: PROPTEST_CASES=32 cargo test
+      - name: "Run unit tests"
+        run: cargo test --lib
+
+      - name: "Run lib integration tests"
+        run: cargo test -p ouisync --test gc --test network --test sync
+
+      - name: "Run cli integration tests"
+        run: cargo test -p ouisync-cli --test cli
+
