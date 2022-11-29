@@ -39,6 +39,8 @@ jobs:
         run: cargo test --lib
 
       - name: "Run lib integration tests"
+        env:
+          RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
         run: cargo test -p ouisync --test gc --test network --test sync
 
       - name: "Run cli integration tests"
