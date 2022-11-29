@@ -152,6 +152,30 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
+#[cfg(test)]
+impl PartialEq for AccessSecrets {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AccessSecrets::Blind { id: id1 }, AccessSecrets::Blind { id: id2 }) => id1.eq(id2),
+            (
+                AccessSecrets::Read {
+                    id: id1,
+                    read_key: k1,
+                },
+                AccessSecrets::Read {
+                    id: id2,
+                    read_key: k2,
+                },
+            ) => id1.eq(id2) && k1 == k2,
+            (AccessSecrets::Write(ss), AccessSecrets::Write(os)) => ss.eq(os),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Eq for AccessSecrets {}
+
 /// Secrets for write access.
 #[derive(Clone)]
 pub struct WriteSecrets {
@@ -171,6 +195,18 @@ impl WriteSecrets {
         Self::generate(&mut OsRng)
     }
 }
+
+#[cfg(test)]
+impl PartialEq for WriteSecrets {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.read_key == other.read_key
+            && self.write_keys.public == other.write_keys.public
+    }
+}
+
+#[cfg(test)]
+impl Eq for WriteSecrets {}
 
 impl From<sign::Keypair> for WriteSecrets {
     fn from(keys: sign::Keypair) -> Self {

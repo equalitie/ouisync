@@ -369,6 +369,7 @@ async fn set(
 mod tests {
     use super::*;
     use crate::db;
+    use assert_matches::assert_matches;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, db::PoolConnection) {
@@ -422,7 +423,41 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn no_password() {
+    async fn store_with_local_secret() {
+        use crate::access_control::AccessMode;
+
+        for access_mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
+            let (_base_dir, pool) = db::create_temp().await.unwrap();
+
+            let local_secret = cipher::SecretKey::random();
+
+            let access = AccessSecrets::random_write().with_mode(access_mode);
+            assert_eq!(access.access_mode(), access_mode);
+
+            let mut tx = pool.begin().await.unwrap();
+            set_access_secrets(&mut tx, &access, Some(&local_secret))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+
+            let mut tx = pool.begin().await.unwrap();
+            let access_stored = get_access_secrets(&mut tx, Some(&local_secret))
+                .await
+                .unwrap();
+            drop(tx);
+
+            assert_eq!(access, access_stored);
+
+            let mut tx = pool.begin().await.unwrap();
+            assert_matches!(
+                get_access_secrets(&mut tx, None).await,
+                Ok(AccessSecrets::Blind { .. })
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn store_without_local_secret() {
         use crate::access_control::AccessMode;
 
         for access_mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
@@ -437,7 +472,6 @@ mod tests {
 
             let mut tx = pool.begin().await.unwrap();
             let access_stored = get_access_secrets(&mut tx, None).await.unwrap();
-            tx.commit().await.unwrap();
 
             assert_eq!(access_mode, access_stored.access_mode());
         }
