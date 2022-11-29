@@ -1,17 +1,30 @@
+name: CI
+
 on: [push]
 
-name: CI
+env:
+  PROPTEST_CASES: 32
 
 jobs:
   build_and_test:
     name: OuiSync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
+          profile: minimal
           toolchain: stable
           components: clippy
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
       - name: "Install dependencies"
         # NOTE: libfuse-dev is required only to build and run the ouisync
@@ -20,7 +33,16 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: "Run clippy"
-        run: cargo clippy
+        run: cargo clippy --all-targets
 
-      - name: "Run tests"
-        run: PROPTEST_CASES=32 cargo test
+      - name: "Run unit tests"
+        run: cargo test --lib
+
+      - name: "Run lib integration tests"
+        env:
+          RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
+        run: cargo test -p ouisync --test gc --test network --test sync
+
+      - name: "Run cli integration tests"
+        run: cargo test -p ouisync-cli --test cli
+
