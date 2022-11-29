@@ -12,6 +12,15 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
       - name: "Install dependencies"
         # NOTE: libfuse-dev is required only to build and run the ouisync

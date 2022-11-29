@@ -49,6 +49,8 @@ impl BlockTracker {
             "`require` can be called only in lazy mode"
         );
 
+        tracing::debug!(?block_id, "require");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_block = inner
@@ -66,6 +68,8 @@ impl BlockTracker {
 
     /// Mark the block request as successfuly completed.
     pub fn complete(&self, block_id: &BlockId) {
+        tracing::debug!(?block_id, "complete");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
@@ -109,6 +113,8 @@ pub(crate) struct BlockTrackerClient {
 impl BlockTrackerClient {
     /// Offer to request the given block if it is, or will become, required.
     pub fn offer(&self, block_id: BlockId) {
+        tracing::debug!(?block_id, "offer");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].insert(block_id) {
@@ -138,6 +144,8 @@ impl BlockTrackerClient {
 
     /// Cancel a previously accepted request so it can be attempted by another client.
     pub fn cancel(&self, block_id: &BlockId) {
+        tracing::debug!(?block_id, "cancel");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].remove(block_id) {
@@ -166,6 +174,7 @@ impl BlockTrackerClient {
     pub async fn accept(&mut self) -> BlockId {
         loop {
             if let Some(block_id) = self.try_accept() {
+                tracing::debug!(?block_id, "accept");
                 return block_id;
             }
 

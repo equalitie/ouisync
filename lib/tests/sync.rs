@@ -468,7 +468,6 @@ async fn recreate_local_branch() {
     .await;
 }
 
-// FIXME: this test occasionally fails
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_many_files() {
     let mut env = Env::with_seed(0);
