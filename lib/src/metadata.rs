@@ -111,16 +111,21 @@ pub(crate) async fn set_access_secrets(
 
     // Insert a dummy key for plausible deniability.
     let dummy_write_key = sign::SecretKey::random();
-    let dummy_read_key = cipher::SecretKey::random();
 
     match (local_key, secrets) {
         (Some(local_key), AccessSecrets::Blind { id }) => {
-            set_secret(tx, READ_KEY, dummy_read_key.as_ref(), local_key).await?;
+            let dummy_read_key1 = cipher::SecretKey::random();
+            let dummy_read_key2 = cipher::SecretKey::random();
+
+            set_secret(tx, READ_KEY, dummy_read_key1.as_ref(), local_key).await?;
+            // Using a different dummy key for the validator because we don't want it to validate.
+            // If it did validate, the adversary could hold us hostage until we give them local_key
+            // that validates.
             set_secret(
                 tx,
                 READ_KEY_VALIDATOR,
                 read_key_validator(id).as_ref(),
-                &dummy_read_key,
+                &dummy_read_key2,
             )
             .await?;
             set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), local_key).await?;
