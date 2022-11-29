@@ -102,6 +102,53 @@ pub(crate) async fn check_device_id(
 // -------------------------------------------------------------------
 // Access secrets
 // -------------------------------------------------------------------
+async fn set_secret_read_key(
+    tx: &mut db::Transaction<'_>,
+    id: &RepositoryId,
+    read_key: &cipher::SecretKey,
+    local_key: &cipher::SecretKey,
+) -> Result<()> {
+    set_secret(tx, READ_KEY, read_key.as_ref(), local_key).await?;
+    set_secret(
+        tx,
+        READ_KEY_VALIDATOR,
+        read_key_validator(id).as_ref(),
+        read_key,
+    )
+    .await
+}
+
+async fn set_secret_write_key(
+    tx: &mut db::Transaction<'_>,
+    secrets: &WriteSecrets,
+    local_key: &cipher::SecretKey,
+) -> Result<()> {
+    set_secret(tx, WRITE_KEY, secrets.write_keys.secret.as_ref(), local_key).await
+}
+
+async fn remove_secret_read_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+    let dummy_id = RepositoryId::random();
+    let dummy_local_key = cipher::SecretKey::random();
+    let dummy_read_key = cipher::SecretKey::random();
+
+    set_secret(tx, READ_KEY, dummy_read_key.as_ref(), &dummy_local_key).await?;
+    set_secret(
+        tx,
+        READ_KEY_VALIDATOR,
+        read_key_validator(&dummy_id).as_ref(),
+        &dummy_read_key,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn remove_secret_write_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+    let dummy_local_key = cipher::SecretKey::random();
+    let dummy_write_key = sign::SecretKey::random();
+    set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), &dummy_local_key).await
+}
+
 pub(crate) async fn set_access_secrets(
     tx: &mut db::Transaction<'_>,
     secrets: &AccessSecrets,
@@ -109,48 +156,18 @@ pub(crate) async fn set_access_secrets(
 ) -> Result<()> {
     set_public(tx, REPOSITORY_ID, secrets.id().as_ref()).await?;
 
-    // Insert a dummy key for plausible deniability.
-    let dummy_write_key = sign::SecretKey::random();
-
     match (local_key, secrets) {
-        (Some(local_key), AccessSecrets::Blind { id }) => {
-            let dummy_read_key1 = cipher::SecretKey::random();
-            let dummy_read_key2 = cipher::SecretKey::random();
-
-            set_secret(tx, READ_KEY, dummy_read_key1.as_ref(), local_key).await?;
-            // Using a different dummy key for the validator because we don't want it to validate.
-            // If it did validate, the adversary could hold us hostage until we give them local_key
-            // that validates.
-            set_secret(
-                tx,
-                READ_KEY_VALIDATOR,
-                read_key_validator(id).as_ref(),
-                &dummy_read_key2,
-            )
-            .await?;
-            set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), local_key).await?;
+        (Some(_), AccessSecrets::Blind { id: _ }) => {
+            remove_secret_read_key(tx).await?;
+            remove_secret_write_key(tx).await?;
         }
         (Some(local_key), AccessSecrets::Read { id, read_key }) => {
-            set_secret(tx, READ_KEY, read_key.as_ref(), local_key).await?;
-            set_secret(
-                tx,
-                READ_KEY_VALIDATOR,
-                read_key_validator(id).as_ref(),
-                read_key,
-            )
-            .await?;
-            set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), local_key).await?;
+            set_secret_read_key(tx, id, read_key, local_key).await?;
+            remove_secret_write_key(tx).await?;
         }
         (Some(local_key), AccessSecrets::Write(secrets)) => {
-            set_secret(tx, READ_KEY, secrets.read_key.as_ref(), local_key).await?;
-            set_secret(
-                tx,
-                READ_KEY_VALIDATOR,
-                read_key_validator(&secrets.id).as_ref(),
-                &secrets.read_key,
-            )
-            .await?;
-            set_secret(tx, WRITE_KEY, secrets.write_keys.secret.as_ref(), local_key).await?;
+            set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_key).await?;
+            set_secret_write_key(tx, &secrets, local_key).await?;
         }
         (None, AccessSecrets::Blind { id: _ }) => {}
         (None, AccessSecrets::Read { id: _, read_key }) => {
