@@ -28,7 +28,7 @@ async fn local_delete_local_file() {
 async fn local_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = node_l.network.handle().register(repo_l.store().clone());
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
@@ -53,7 +53,7 @@ async fn local_delete_remote_file() {
 async fn remote_delete_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = node_l.network.handle().register(repo_l.store().clone());
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
@@ -92,7 +92,7 @@ async fn local_truncate_local_file() {
 async fn local_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = node_l.network.handle().register(repo_l.store().clone());
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
@@ -121,7 +121,7 @@ async fn local_truncate_remote_file() {
 async fn remote_truncate_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_l, node_r) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
     let _reg_l = node_l.network.handle().register(repo_l.store().clone());
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());

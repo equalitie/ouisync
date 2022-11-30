@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Node, Proto, DEFAULT_TIMEOUT};
+use self::common::{Env, Proto, DEFAULT_TIMEOUT};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::{select, time};
 
@@ -12,9 +12,9 @@ async fn peer_exchange() {
     let proto = Proto::Quic;
 
     // B and C are initially connected only to A...
-    let node_a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_c = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node_c = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
     node_b
         .network
@@ -60,11 +60,11 @@ async fn peer_exchange() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_disable_enable_idle() {
-    let _env = Env::with_seed(0);
+    let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(bind).await;
+    let node = env.create_node(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
     node.network.handle().bind(&[]).await;
@@ -76,11 +76,11 @@ async fn network_disable_enable_idle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_disable_enable_pending_connection() {
-    let _env = Env::with_seed(0);
+    let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(bind).await;
+    let node = env.create_node(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
     let remote_addr = proto.wrap((Ipv4Addr::LOCALHOST, 12345));
@@ -111,11 +111,11 @@ async fn network_disable_enable_pending_connection() {
 async fn network_disable_enable_addr_takeover() {
     use tokio::net::UdpSocket;
 
-    let _env = Env::with_seed(0);
+    let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = Node::new(bind).await;
+    let node = env.create_node(bind).await;
     let local_addr_0 = proto.listener_local_addr_v4(&node.network);
 
     node.network.handle().bind(&[]).await;
@@ -146,7 +146,7 @@ async fn dht_toggle() {
     let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
 
-    let node = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let node = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
 
     let repo = env.create_repo().await;
     let reg = node.network.handle().register(repo.store().clone());
@@ -158,12 +158,16 @@ async fn dht_toggle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_discovery() {
-    let _env = Env::with_seed(0);
+    let mut env = Env::with_seed(0);
     let proto = Proto::Quic;
 
     // A and B are initially disconnected and don't know each other's socket addesses.
-    let node_a = Node::new(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
-    let node_b = Node::new(proto.wrap((Ipv4Addr::UNSPECIFIED, 0))).await;
+    let node_a = env
+        .create_node(proto.wrap((Ipv4Addr::UNSPECIFIED, 0)))
+        .await;
+    let node_b = env
+        .create_node(proto.wrap((Ipv4Addr::UNSPECIFIED, 0)))
+        .await;
 
     node_a.network.enable_local_discovery();
     node_b.network.enable_local_discovery();
