@@ -266,6 +266,7 @@ impl Index {
             .collect();
 
         for branch in completed {
+            tracing::debug!(branch.id = ?branch.id(), "new snapshot");
             branch.notify();
         }
 

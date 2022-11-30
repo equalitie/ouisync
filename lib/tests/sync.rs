@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Node, Proto};
+use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
@@ -19,7 +19,7 @@ async fn relink_repository() {
     let mut env = Env::with_seed(0);
 
     // Create two peers and connect them together.
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
     let (repo_a, repo_b) = env.create_linked_repos().await;
 
@@ -53,7 +53,7 @@ async fn relink_repository() {
 async fn remove_remote_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -89,40 +89,41 @@ async fn relay_blind() {
 async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
     let mut env = Env::with_seed(0);
 
-    // The "relay" peer.
-    let node_r = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-
-    let node_a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    node_a
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
-
-    let node_b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    node_b
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
-
+    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
     let repo_a = env.create_repo().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
 
+    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
     let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
+    // The "relay" peer.
+    let node_r = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
     let repo_r = env
         .create_repo_with_secrets(repo_a.secrets().with_mode(relay_access_mode))
         .await;
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+
+    // Connect A and B to the relay only
+    node_a
+        .network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
+    node_b
+        .network
+        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
 
     let mut content = vec![0; file_size];
     env.rng.fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
+    tracing::info!("writing");
     let mut file = repo_a.create_file("test.dat").await.unwrap();
     write_in_chunks(&mut file, &content, 4096).await;
     file.flush().await.unwrap();
     drop(file);
 
+    tracing::info!("reading");
     expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
@@ -132,7 +133,7 @@ async fn transfer_large_file() {
 
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -154,7 +155,7 @@ async fn transfer_multiple_files_sequentially() {
     let mut env = Env::with_seed(0);
     let file_sizes = [512 * 1024, 1024];
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -190,7 +191,7 @@ async fn transfer_multiple_files_sequentially() {
 async fn sync_during_file_write() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -238,7 +239,7 @@ async fn sync_during_file_read() {
     let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
     env.rng.fill(&mut content_a[..]);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
     loop {
         let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -313,7 +314,7 @@ async fn sync_during_file_read() {
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -371,7 +372,7 @@ async fn concurrent_modify_open_file() {
 async fn recreate_local_branch() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
     let store_a = env.next_store();
     let device_id_a = env.rng.gen();
@@ -472,7 +473,7 @@ async fn recreate_local_branch() {
 async fn transfer_many_files() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Quic).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Quic).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -535,7 +536,7 @@ async fn transfer_many_files() {
 async fn transfer_directory_with_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -550,7 +551,7 @@ async fn transfer_directory_with_file() {
 async fn transfer_directory_with_subdirectory() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -565,7 +566,7 @@ async fn transfer_directory_with_subdirectory() {
 async fn remote_rename_file() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -588,7 +589,7 @@ async fn remote_rename_file() {
 async fn remote_rename_empty_directory() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -607,7 +608,7 @@ async fn remote_rename_empty_directory() {
 async fn remote_rename_non_empty_directory() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -629,7 +630,7 @@ async fn remote_rename_non_empty_directory() {
 async fn remote_rename_directory_during_conflict() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -655,7 +656,7 @@ async fn remote_rename_directory_during_conflict() {
 async fn remote_move_file_to_directory_then_rename_that_directory() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -688,7 +689,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
 async fn concurrent_update_and_delete_during_conflict() {
     let mut env = Env::with_seed(0);
 
-    let (node_a, node_b) = common::create_connected_nodes(Proto::Tcp).await;
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let reg_a = node_a.network.handle().register(repo_a.store().clone());
     let reg_b = node_b.network.handle().register(repo_b.store().clone());
@@ -778,7 +779,7 @@ async fn check_file_version_content(
         //
         // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
         Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-            tracing::debug!(path, ?error, "open failed");
+            tracing::warn!(path, ?error, "open failed");
             return false;
         }
         Err(error) => panic!("unexpected error: {:?}", error),
@@ -799,7 +800,7 @@ async fn check_file_version_content(
         //
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
         Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-            tracing::debug!(path, ?error, "read failed");
+            tracing::warn!(path, ?error, "read failed");
             return false;
         }
         Err(error) => panic!("unexpected error: {:?}", error),
@@ -809,7 +810,7 @@ async fn check_file_version_content(
         tracing::debug!(path, "content matches");
         true
     } else {
-        tracing::debug!(path, "content does not match");
+        tracing::warn!(path, "content does not match");
         false
     }
 }

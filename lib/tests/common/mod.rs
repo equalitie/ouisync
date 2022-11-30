@@ -17,13 +17,14 @@ use tokio::{
 };
 use tracing::Instrument;
 
-pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Test environment
 pub(crate) struct Env {
     pub rng: StdRng,
     base_dir: TempDir,
     next_repo_num: u64,
+    next_peer_num: u64,
     _span: tracing::span::EnteredSpan,
 }
 
@@ -42,6 +43,7 @@ impl Env {
             rng,
             base_dir,
             next_repo_num: 0,
+            next_peer_num: 0,
             _span: span,
         }
     }
@@ -78,6 +80,29 @@ impl Env {
 
         (repo_a, repo_b)
     }
+
+    pub(crate) async fn create_node(&mut self, bind: PeerAddr) -> Node {
+        let id = self.next_peer_num();
+        Node::new(id, bind).await
+    }
+
+    // Create two nodes connected together.
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    pub(crate) async fn create_connected_nodes(&mut self, proto: Proto) -> (Node, Node) {
+        let a = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+        let b = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+
+        b.network
+            .add_user_provided_peer(&proto.listener_local_addr_v4(&a.network));
+
+        (a, b)
+    }
+
+    fn next_peer_num(&mut self) -> u64 {
+        let num = self.next_peer_num;
+        self.next_peer_num += 1;
+        num
+    }
 }
 
 pub(crate) struct Node {
@@ -86,12 +111,8 @@ pub(crate) struct Node {
 }
 
 impl Node {
-    pub async fn new(bind: PeerAddr) -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        static NEXT_PEER_ID: AtomicU64 = AtomicU64::new(0);
-        let peer_id = NEXT_PEER_ID.fetch_add(1, Ordering::Relaxed);
-        let span = tracing::info_span!("peer", id = peer_id);
+    pub async fn new(id: u64, bind: PeerAddr) -> Self {
+        let span = tracing::info_span!("peer", id);
 
         let config_store = TempDir::new().unwrap();
 
@@ -132,18 +153,6 @@ impl Proto {
             Self::Quic => PeerAddr::Quic(network.quic_listener_local_addr_v4().unwrap()),
         }
     }
-}
-
-// Create two nodes connected together.
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) async fn create_connected_nodes(proto: Proto) -> (Node, Node) {
-    let a = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let b = Node::new(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-
-    b.network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&a.network));
-
-    (a, b)
 }
 
 // Keep calling `f` until it returns `true`. Wait for repo notification between calls.
