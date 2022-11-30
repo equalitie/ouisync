@@ -116,6 +116,17 @@ impl LeafNode {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Marks all leaf nodes that point to the specified block as missing.
+    pub async fn set_missing(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<()> {
+        sqlx::query("UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ?")
+            .bind(SingleBlockPresence::Missing)
+            .bind(block_id)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
     /// Checks whether the block with the specified id is present.
     pub async fn is_present(conn: &mut db::Connection, block_id: &BlockId) -> Result<bool> {
         Ok(sqlx::query(

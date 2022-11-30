@@ -31,7 +31,7 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 /// Update summary of the nodes with the specified hash and all their ancestor nodes.
 /// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they
 /// became complete.
-pub(super) async fn update_summaries(
+pub(crate) async fn update_summaries(
     tx: &mut db::Transaction<'_>,
     hash: Hash,
 ) -> Result<Vec<(PublicKey, bool)>> {
