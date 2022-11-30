@@ -11,7 +11,7 @@ pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::BranchData,
     node::{
-        receive_block, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
+        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
         SingleBlockPresence, Summary,
     },
     proof::UntrustedProof,

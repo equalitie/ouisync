@@ -456,9 +456,7 @@ mod scan {
     }
 
     async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut tx = shared.store.db().begin().await?;
-        let count = block::remove_unreachable(&mut tx).await?;
-        tx.commit().await?;
+        let count = shared.store.remove_unreachable_blocks().await?;
 
         if count > 0 {
             tracing::debug!("unreachable blocks removed: {}", count);
