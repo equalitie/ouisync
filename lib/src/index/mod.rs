@@ -39,7 +39,8 @@ type SnapshotId = u32;
 #[derive(Clone)]
 pub(crate) struct Index {
     pub pool: db::Pool,
-    shared: Arc<Shared>,
+    repository_id: RepositoryId,
+    notify_tx: broadcast::Sender<Event>,
 }
 
 impl Index {
@@ -50,42 +51,40 @@ impl Index {
     ) -> Self {
         Self {
             pool,
-            shared: Arc::new(Shared {
-                repository_id,
-                notify_tx,
-            }),
+            repository_id,
+            notify_tx,
         }
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
-        &self.shared.repository_id
+        &self.repository_id
     }
 
     pub fn get_branch(&self, writer_id: PublicKey) -> Arc<BranchData> {
-        Arc::new(BranchData::new(writer_id, self.shared.notify_tx.clone()))
+        Arc::new(BranchData::new(writer_id, self.notify_tx.clone()))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Arc<BranchData>>> {
         let mut conn = self.pool.acquire().await?;
-        BranchData::load_all(&mut conn, self.shared.notify_tx.clone())
+        BranchData::load_all(&mut conn, self.notify_tx.clone())
             .try_collect()
             .await
     }
 
     /// Load latest snapshots of all branches.
     pub async fn load_snapshots(&self, conn: &mut db::Connection) -> Result<Vec<SnapshotData>> {
-        SnapshotData::load_all(conn, self.shared.notify_tx.clone())
+        SnapshotData::load_all(conn, self.notify_tx.clone())
             .try_collect()
             .await
     }
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.notify_tx.subscribe()
+        self.notify_tx.subscribe()
     }
 
     pub(crate) fn notify(&self, event: Event) {
-        self.shared.notify_tx.send(event).unwrap_or(0);
+        self.notify_tx.send(event).unwrap_or(0);
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -284,11 +283,6 @@ impl Index {
             Err(ReceiveError::ParentNodeNotFound)
         }
     }
-}
-
-struct Shared {
-    repository_id: RepositoryId,
-    notify_tx: broadcast::Sender<Event>,
 }
 
 #[derive(Debug, Error)]
