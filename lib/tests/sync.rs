@@ -639,7 +639,7 @@ async fn remote_rename_directory_during_conflict() {
     repo_b.create_file("dummy.txt").await.unwrap();
 
     repo_b.create_directory("foo").await.unwrap();
-    expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
+    expect_local_directory_exists(&repo_a, "foo").await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
     expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
@@ -863,6 +863,17 @@ async fn expect_entry_not_found(repo: &Repository, path: &str) {
         match parent.lookup_unique(name) {
             Ok(_) => false,
             Err(Error::EntryNotFound) => true,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        }
+    })
+    .await
+}
+
+async fn expect_local_directory_exists(repo: &Repository, path: &str) {
+    common::eventually(repo, || async {
+        match repo.open_directory(path).await {
+            Ok(dir) => dir.has_local_version(),
+            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
             Err(error) => panic!("unexpected error: {:?}", error),
         }
     })

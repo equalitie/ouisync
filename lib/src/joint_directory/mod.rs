@@ -143,6 +143,13 @@ impl JointDirectory {
         self.versions.values().map(|dir| dir.len()).sum()
     }
 
+    pub fn has_local_version(&self) -> bool {
+        self.local_branch
+            .as_ref()
+            .map(|local_branch| self.versions.contains_key(local_branch.id()))
+            .unwrap_or(false)
+    }
+
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
