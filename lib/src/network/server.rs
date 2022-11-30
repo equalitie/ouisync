@@ -7,15 +7,11 @@ use crate::{
     index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
-use std::time::Duration;
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc},
-    time::{self, MissedTickBehavior},
 };
 use tracing::instrument;
-
-const REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Server {
     index: Index,
@@ -50,36 +46,16 @@ struct Responder<'a> {
     index: &'a Index,
     tx: &'a Sender,
     rx: &'a mut Receiver,
-    stats: Stats,
 }
 
 impl<'a> Responder<'a> {
     fn new(index: &'a Index, tx: &'a Sender, rx: &'a mut Receiver) -> Self {
-        Self {
-            index,
-            tx,
-            rx,
-            stats: Stats::new(),
-        }
+        Self { index, tx, rx }
     }
 
     async fn run(mut self) -> Result<()> {
-        let mut report_interval = time::interval(REPORT_INTERVAL);
-        report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        loop {
-            select! {
-                request = self.rx.recv() => {
-                    if let Some(request) = request {
-                        self.handle_request(request).await?;
-                    } else {
-                        break;
-                    }
-                }
-                _ = report_interval.tick() => {
-                    self.stats.report()
-                }
-            }
+        while let Some(request) = self.rx.recv().await {
+            self.handle_request(request).await?;
         }
 
         Ok(())
@@ -95,8 +71,6 @@ impl<'a> Responder<'a> {
 
     #[instrument(skip(self))]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
-        self.stats.node();
-
         let mut conn = self.index.pool.acquire().await?;
 
         // At most one of these will be non-empty.
@@ -125,8 +99,6 @@ impl<'a> Responder<'a> {
 
     #[instrument(skip(self))]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
-        self.stats.block();
-
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let mut conn = self.index.pool.acquire().await?;
         let result = block::read(&mut conn, &id, &mut content).await;
@@ -261,46 +233,5 @@ struct Sender(mpsc::Sender<Content>);
 impl Sender {
     async fn send(&self, response: Response) -> bool {
         self.0.send(Content::Response(response)).await.is_ok()
-    }
-}
-
-struct Stats {
-    nodes: u64,
-    blocks: u64,
-    report: bool,
-}
-
-impl Stats {
-    fn new() -> Self {
-        Self {
-            nodes: 0,
-            blocks: 0,
-            report: true,
-        }
-    }
-
-    fn node(&mut self) {
-        self.nodes += 1;
-        self.report = true;
-    }
-
-    fn block(&mut self) {
-        self.blocks += 1;
-        self.report = true;
-    }
-
-    fn report(&mut self) {
-        if !self.report {
-            return;
-        }
-
-        tracing::debug!(
-            nodes = self.nodes,
-            blocks = self.blocks,
-            total = self.nodes + self.blocks,
-            "request stats",
-        );
-
-        self.report = false;
     }
 }

@@ -121,27 +121,21 @@ impl Inner {
 
         let mut state = State::Working;
 
-        tracing::debug!("worker started");
-
         loop {
             match state {
                 State::Working => {
                     state = State::Waiting;
 
                     let work = async {
-                        tracing::debug!("job started");
                         self.merge().await.ok();
                         self.prune().await.ok();
                         self.scan(scan::Mode::RequireAndCollect).await.ok();
-                        tracing::debug!("job completed");
                     };
 
                     let wait = async {
                         loop {
                             match event_rx.recv().await {
                                 Ok(Payload::BranchChanged(_)) => {
-                                    tracing::debug!("job cancelled");
-
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
                                     state = State::Working;
@@ -190,8 +184,6 @@ impl Inner {
                 State::Terminated => break,
             }
         }
-
-        tracing::debug!("worker terminated");
     }
 
     async fn handle_command(&self, command: Command) -> bool {
