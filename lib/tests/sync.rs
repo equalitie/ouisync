@@ -624,8 +624,6 @@ async fn remote_rename_non_empty_directory() {
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
-// FIXME: https://github.com/equalitie/ouisync/issues/95
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_directory_during_conflict() {
     let mut env = Env::with_seed(0);
@@ -641,11 +639,9 @@ async fn remote_rename_directory_during_conflict() {
     repo_b.create_file("dummy.txt").await.unwrap();
 
     repo_b.create_directory("foo").await.unwrap();
-
-    expect_in_sync(&repo_a, &repo_b).await;
+    expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
-
     expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
     expect_entry_not_found(&repo_a, "foo").await;
 }
@@ -683,8 +679,6 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
     expect_entry_not_found(&repo_a, "archive").await;
 }
 
-// FIXME: https://github.com/equalitie/ouisync/issues/45
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_update_and_delete_during_conflict() {
     let mut env = Env::with_seed(0);
