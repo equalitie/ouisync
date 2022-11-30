@@ -26,6 +26,7 @@ pub struct RepositoryHolder {
 }
 
 /// Creates a new repository.
+/// If the `local_password` argument is null the write and read keys will not be stored encrypted.
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
     store: *const c_char,
@@ -138,6 +139,40 @@ pub unsafe extern "C" fn repository_close(
     session::with(port, |ctx| {
         let holder = handle.release();
         ctx.spawn(async move { holder.repository.close().await })
+    })
+}
+
+/// Returns true if the repository requires a local password to be opened for reading.
+#[no_mangle]
+pub unsafe extern "C" fn repository_requires_local_password_for_reading(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<bool>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+        ctx.spawn(async move {
+            holder
+                .repository
+                .requires_local_password_for_reading()
+                .await
+        })
+    })
+}
+
+/// Returns true if the repository requires a local password to be opened for writing.
+#[no_mangle]
+pub unsafe extern "C" fn repository_requires_local_password_for_writing(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<bool>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+        ctx.spawn(async move {
+            holder
+                .repository
+                .requires_local_password_for_writing()
+                .await
+        })
     })
 }
 

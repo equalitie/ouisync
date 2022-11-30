@@ -149,6 +149,28 @@ async fn remove_secret_write_key(tx: &mut db::Transaction<'_>) -> Result<()> {
     set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), &dummy_local_key).await
 }
 
+pub(crate) async fn requires_local_password_for_reading(conn: &mut db::Connection) -> Result<bool> {
+    match get_public::<cipher::SecretKey>(conn, READ_KEY).await {
+        Ok(_) => return Ok(false),
+        Err(Error::EntryNotFound) => (),
+        Err(err) => return Err(err),
+    }
+
+    match get_public::<sign::SecretKey>(conn, WRITE_KEY).await {
+        Ok(_) => Ok(false),
+        Err(Error::EntryNotFound) => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connection) -> Result<bool> {
+    match get_public::<sign::SecretKey>(conn, WRITE_KEY).await {
+        Ok(_) => Ok(false),
+        Err(Error::EntryNotFound) => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
 pub(crate) async fn set_access_secrets(
     tx: &mut db::Transaction<'_>,
     secrets: &AccessSecrets,

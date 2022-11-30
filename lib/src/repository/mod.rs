@@ -202,6 +202,16 @@ impl Repository {
         })
     }
 
+    pub async fn requires_local_password_for_reading(&self) -> Result<bool> {
+        let mut conn = self.db().acquire().await?;
+        metadata::requires_local_password_for_reading(&mut conn).await
+    }
+
+    pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
+        let mut conn = self.db().acquire().await?;
+        metadata::requires_local_password_for_writing(&mut conn).await
+    }
+
     pub fn secrets(&self) -> &AccessSecrets {
         &self.shared.secrets
     }
