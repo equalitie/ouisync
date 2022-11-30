@@ -17,7 +17,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Test environment
 pub(crate) struct Env {
