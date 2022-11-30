@@ -169,11 +169,22 @@ pub(crate) async fn set_access_secrets(
             set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_key).await?;
             set_secret_write_key(tx, &secrets, local_key).await?;
         }
-        (None, AccessSecrets::Blind { id: _ }) => {}
+        // Note: we "remove" the read and write secrets to add dummy entries into the database.
+        // This serves so that the states 1:"initially public repository" and 2:"repository that
+        // first got initialized with a password but then changed to not have one" are
+        // indistinguishable to the adversary.
+        (None, AccessSecrets::Blind { id: _ }) => {
+            remove_secret_read_key(tx).await?;
+            remove_secret_write_key(tx).await?;
+        }
         (None, AccessSecrets::Read { id: _, read_key }) => {
+            remove_secret_read_key(tx).await?;
+            remove_secret_write_key(tx).await?;
             set_public(tx, READ_KEY, read_key.as_ref()).await?;
         }
         (None, AccessSecrets::Write(secrets)) => {
+            remove_secret_read_key(tx).await?;
+            remove_secret_write_key(tx).await?;
             set_public(tx, READ_KEY, secrets.read_key.as_ref()).await?;
             set_public(tx, WRITE_KEY, secrets.write_keys.secret.as_ref()).await?;
         }
