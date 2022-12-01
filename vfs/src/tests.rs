@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{LocalAccess, Repository, RepositoryDb, WriteSecrets};
+use ouisync_lib::{Access, Repository, RepositoryDb, WriteSecrets};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -237,7 +237,7 @@ async fn setup() -> (TempDir, MountGuard) {
     let repo = Repository::create(
         db,
         rand::random(),
-        LocalAccess::ReadWriteLocallyPublic {
+        Access::ReadWriteLocallyPublic {
             secrets: WriteSecrets::random(),
         },
     )

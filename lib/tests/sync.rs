@@ -6,8 +6,8 @@ use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, AccessMode, AccessSecrets, EntryType, Error, File, LocalAccess,
-    Repository, RepositoryDb, WriteSecrets, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, Access, AccessMode, AccessSecrets, EntryType, Error, File, Repository,
+    RepositoryDb, WriteSecrets, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
@@ -380,7 +380,7 @@ async fn recreate_local_branch() {
     let repo_a = Repository::create(
         RepositoryDb::create(&store_a).await.unwrap(),
         device_id_a,
-        LocalAccess::ReadWriteLocallyPublic {
+        Access::ReadWriteLocallyPublic {
             secrets: write_secrets.clone(),
         },
     )

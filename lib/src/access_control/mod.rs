@@ -314,7 +314,7 @@ impl From<DecodeError> for Error {
     }
 }
 
-pub enum LocalAccess {
+pub enum Access {
     // User has no read nor write access, can only sync.
     Blind {
         id: RepositoryId,
@@ -352,13 +352,13 @@ pub enum LocalAccess {
     },
 }
 
-impl LocalAccess {
+impl Access {
     pub fn default_for_creation(
         local_key: Option<cipher::SecretKey>,
         secrets: AccessSecrets,
     ) -> Result<Self> {
         let access = match (local_key, secrets) {
-            (None, AccessSecrets::Blind { id }) => LocalAccess::Blind { id },
+            (None, AccessSecrets::Blind { id }) => Access::Blind { id },
             (Some(_), AccessSecrets::Blind { .. }) => {
                 // TODO: This might be an interesting case to implement in the future. It would be
                 // for people who don't want anyone to be able to find out they have a particular
@@ -367,20 +367,16 @@ impl LocalAccess {
                 return Err(Error::OperationNotSupported);
             }
             (None, AccessSecrets::Read { id, read_key }) => {
-                LocalAccess::ReadLocallyPublic { id, read_key }
+                Access::ReadLocallyPublic { id, read_key }
             }
-            (Some(local_key), AccessSecrets::Read { id, read_key }) => {
-                LocalAccess::ReadLocallyPrivate {
-                    id,
-                    local_key,
-                    read_key,
-                }
-            }
-            (None, AccessSecrets::Write(secrets)) => {
-                LocalAccess::ReadWriteLocallyPublic { secrets }
-            }
+            (Some(local_key), AccessSecrets::Read { id, read_key }) => Access::ReadLocallyPrivate {
+                id,
+                local_key,
+                read_key,
+            },
+            (None, AccessSecrets::Write(secrets)) => Access::ReadWriteLocallyPublic { secrets },
             (Some(local_key), AccessSecrets::Write(secrets)) => {
-                LocalAccess::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
+                Access::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
             }
         };
         Ok(access)

@@ -1,5 +1,5 @@
 use crate::{
-    access_control::{AccessSecrets, LocalAccess, WriteSecrets},
+    access_control::{Access, AccessSecrets, WriteSecrets},
     crypto::{
         cipher::{self, Nonce},
         sign, Hash, Password, PasswordSalt,
@@ -196,30 +196,27 @@ pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connectio
 
 pub(crate) async fn initialize_access_secrets(
     tx: &mut db::Transaction<'_>,
-    local_access: &LocalAccess,
+    access: &Access,
 ) -> Result<()> {
-    set_public(tx, REPOSITORY_ID, local_access.id().as_ref()).await?;
-    set_local_access(tx, local_access).await
+    set_public(tx, REPOSITORY_ID, access.id().as_ref()).await?;
+    set_access(tx, access).await
 }
 
-pub(crate) async fn set_local_access(
-    tx: &mut db::Transaction<'_>,
-    local_access: &LocalAccess,
-) -> Result<()> {
-    match local_access {
-        LocalAccess::Blind { .. } => {
+pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) -> Result<()> {
+    match access {
+        Access::Blind { .. } => {
             remove_public_read_key(tx).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        LocalAccess::ReadLocallyPublic { id: _, read_key } => {
+        Access::ReadLocallyPublic { id: _, read_key } => {
             set_public_read_key(tx, read_key).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        LocalAccess::ReadLocallyPrivate {
+        Access::ReadLocallyPrivate {
             id,
             local_key,
             read_key,
@@ -229,19 +226,19 @@ pub(crate) async fn set_local_access(
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        LocalAccess::ReadWriteLocallyPublic { secrets } => {
+        Access::ReadWriteLocallyPublic { secrets } => {
             set_public_read_key(tx, &secrets.read_key).await?;
             remove_secret_read_key(tx).await?;
             set_public_write_key(tx, secrets).await?;
             remove_secret_write_key(tx).await?;
         }
-        LocalAccess::ReadWriteLocallyPrivateSingleKey { local_key, secrets } => {
+        Access::ReadWriteLocallyPrivateSingleKey { local_key, secrets } => {
             remove_public_read_key(tx).await?;
             set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_key).await?;
             remove_public_write_key(tx).await?;
             set_secret_write_key(tx, secrets, local_key).await?;
         }
-        LocalAccess::ReadLocallyPublicWriteLocallyPrivate {
+        Access::ReadLocallyPublicWriteLocallyPrivate {
             local_write_key,
             secrets,
         } => {
@@ -250,7 +247,7 @@ pub(crate) async fn set_local_access(
             remove_public_write_key(tx).await?;
             set_secret_write_key(tx, secrets, local_write_key).await?;
         }
-        LocalAccess::ReadWriteLocallyPrivateDistinctKeys {
+        Access::ReadWriteLocallyPrivateDistinctKeys {
             local_read_key,
             local_write_key,
             secrets,
@@ -524,30 +521,30 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn store_restore() {
         let accesses = [
-            LocalAccess::Blind {
+            Access::Blind {
                 id: RepositoryId::random(),
             },
-            LocalAccess::ReadLocallyPublic {
+            Access::ReadLocallyPublic {
                 id: RepositoryId::random(),
                 read_key: cipher::SecretKey::random(),
             },
-            LocalAccess::ReadLocallyPrivate {
+            Access::ReadLocallyPrivate {
                 id: RepositoryId::random(),
                 local_key: cipher::SecretKey::random(),
                 read_key: cipher::SecretKey::random(),
             },
-            LocalAccess::ReadWriteLocallyPublic {
+            Access::ReadWriteLocallyPublic {
                 secrets: WriteSecrets::random(),
             },
-            LocalAccess::ReadWriteLocallyPrivateSingleKey {
+            Access::ReadWriteLocallyPrivateSingleKey {
                 local_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
-            LocalAccess::ReadLocallyPublicWriteLocallyPrivate {
+            Access::ReadLocallyPublicWriteLocallyPrivate {
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
-            LocalAccess::ReadWriteLocallyPrivateDistinctKeys {
+            Access::ReadWriteLocallyPrivateDistinctKeys {
                 local_read_key: cipher::SecretKey::random(),
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),

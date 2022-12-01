@@ -8,7 +8,7 @@ pub use self::id::RepositoryId;
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
-    access_control::{AccessMode, AccessSecrets, LocalAccess, LocalSecret},
+    access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
@@ -67,11 +67,7 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(
-        db: RepositoryDb,
-        device_id: DeviceId,
-        access: LocalAccess,
-    ) -> Result<Self> {
+    pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
         Self::create_in(db.pool, device_id, access, db.span).await
     }
 
@@ -79,7 +75,7 @@ impl Repository {
     pub(crate) async fn create_in(
         pool: db::Pool,
         device_id: DeviceId,
-        access: LocalAccess,
+        access: Access,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
@@ -232,13 +228,13 @@ impl Repository {
         metadata::requires_local_password_for_writing(&mut conn).await
     }
 
-    pub async fn set_local_access(&self, local_access: &LocalAccess) -> Result<()> {
-        if local_access.id() != self.shared.secrets.id() {
+    pub async fn set_access(&self, access: &Access) -> Result<()> {
+        if access.id() != self.shared.secrets.id() {
             return Err(Error::PermissionDenied);
         }
 
         let mut tx = self.db().begin().await?;
-        metadata::set_local_access(&mut tx, local_access).await?;
+        metadata::set_access(&mut tx, access).await?;
         tx.commit().await?;
         Ok(())
     }

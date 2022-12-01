@@ -268,7 +268,7 @@ async fn blind_access_non_empty_repo() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        LocalAccess::ReadWriteLocallyPrivateSingleKey {
+        Access::ReadWriteLocallyPrivateSingleKey {
             local_key: SecretKey::random(),
             secrets: WriteSecrets::random(),
         },
@@ -336,7 +336,7 @@ async fn blind_access_empty_repo() {
     Repository::create_in(
         pool.clone(),
         device_id,
-        LocalAccess::ReadWriteLocallyPrivateSingleKey {
+        Access::ReadWriteLocallyPrivateSingleKey {
             local_key: SecretKey::random(),
             secrets: WriteSecrets::random(),
         },
@@ -368,7 +368,7 @@ async fn read_access_same_replica() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        LocalAccess::ReadWriteLocallyPublic {
+        Access::ReadWriteLocallyPublic {
             secrets: WriteSecrets::random(),
         },
         Span::none(),
@@ -425,7 +425,7 @@ async fn read_access_different_replica() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id_a,
-        LocalAccess::ReadWriteLocallyPublic {
+        Access::ReadWriteLocallyPublic {
             secrets: WriteSecrets::random(),
         },
         Span::none(),
@@ -824,7 +824,7 @@ async fn setup() -> (TempDir, Repository) {
             .await
             .unwrap(),
         rand::random(),
-        LocalAccess::ReadWriteLocallyPublic {
+        Access::ReadWriteLocallyPublic {
             secrets: WriteSecrets::random(),
         },
     )

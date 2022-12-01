@@ -1,6 +1,6 @@
 use ouisync::{
-    network::Network, AccessSecrets, ConfigStore, Event, LocalAccess, Payload, PeerAddr,
-    Repository, RepositoryDb,
+    network::Network, Access, AccessSecrets, ConfigStore, Event, Payload, PeerAddr, Repository,
+    RepositoryDb,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -64,7 +64,7 @@ impl Env {
         Repository::create(
             RepositoryDb::create(&self.next_store()).await.unwrap(),
             self.rng.gen(),
-            LocalAccess::default_for_creation(None, secrets).unwrap(),
+            Access::default_for_creation(None, secrets).unwrap(),
         )
         .await
         .unwrap()

@@ -4,8 +4,8 @@ use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
 use ouisync_lib::{
-    crypto::cipher::SecretKey, device_id, network::Network, AccessSecrets, ConfigStore,
-    LocalAccess, LocalSecret, Repository, RepositoryDb, ShareToken,
+    crypto::cipher::SecretKey, device_id, network::Network, Access, AccessSecrets, ConfigStore,
+    LocalSecret, Repository, RepositoryDb, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     for name in &options.create {
         let db = RepositoryDb::create(options.repository_path(name)?).await?;
         let local_key = secret_to_key(&db, options.secret_for_repo(name)?).await?;
-        let access = LocalAccess::default_for_creation(local_key, AccessSecrets::random_write())?;
+        let access = Access::default_for_creation(local_key, AccessSecrets::random_write())?;
         let repo = Repository::create(db, device_id, access).await?;
 
         repos.insert(name.clone(), repo);
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
             let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
             let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
-            let access = LocalAccess::default_for_creation(local_key, token.secrets().clone())?;
+            let access = Access::default_for_creation(local_key, token.secrets().clone())?;
             let repo = Repository::create(db, device_id, access).await?;
 
             entry.insert(repo);

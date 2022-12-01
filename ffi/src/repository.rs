@@ -5,7 +5,7 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, Event, LocalAccess, LocalSecret, Payload,
+    path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn repository_create(
                     None
                 };
 
-                let access = LocalAccess::default_for_creation(local_key, access_secrets)?;
+                let access = Access::default_for_creation(local_key, access_secrets)?;
 
                 let repository = Repository::create(db, device_id, access).await?;
 

@@ -42,9 +42,7 @@ mod test_utils;
 mod version_vector;
 
 pub use self::{
-    access_control::{
-        AccessMode, AccessSecrets, LocalAccess, LocalSecret, ShareToken, WriteSecrets,
-    },
+    access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     block::BLOCK_SIZE,
     branch::Branch,
