@@ -30,7 +30,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -60,11 +60,11 @@ impl Index {
         &self.repository_id
     }
 
-    pub fn get_branch(&self, writer_id: PublicKey) -> Arc<BranchData> {
-        Arc::new(BranchData::new(writer_id, self.notify_tx.clone()))
+    pub fn get_branch(&self, writer_id: PublicKey) -> BranchData {
+        BranchData::new(writer_id, self.notify_tx.clone())
     }
 
-    pub async fn load_branches(&self) -> Result<Vec<Arc<BranchData>>> {
+    pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.pool.acquire().await?;
         BranchData::load_all(&mut conn, self.notify_tx.clone())
             .try_collect()

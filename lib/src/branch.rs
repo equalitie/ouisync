@@ -19,7 +19,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
-    branch_data: Arc<BranchData>,
+    branch_data: BranchData,
     keys: AccessKeys,
     file_cache: Arc<FileCache>,
 }
@@ -27,7 +27,7 @@ pub struct Branch {
 impl Branch {
     pub(crate) fn new(
         pool: db::Pool,
-        branch_data: Arc<BranchData>,
+        branch_data: BranchData,
         keys: AccessKeys,
         file_cache: Arc<FileCache>,
     ) -> Self {

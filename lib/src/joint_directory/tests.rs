@@ -1015,7 +1015,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, Vec<B
             let file_cache = file_cache.clone();
 
             let data = BranchData::new(id, event_tx);
-            Branch::new(pool.clone(), Arc::new(data), secrets.into(), file_cache)
+            Branch::new(pool.clone(), data, secrets.into(), file_cache)
         })
         .collect();
 

@@ -283,7 +283,7 @@ mod prune {
                 continue;
             }
 
-            match shared.inflate(Arc::new(snapshot.to_branch_data())) {
+            match shared.inflate(snapshot.to_branch_data()) {
                 Ok(branch) => {
                     // Don't remove branches that are in use. We get notified when they stop being
                     // used so we can try again.

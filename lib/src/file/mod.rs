@@ -370,7 +370,7 @@ mod tests {
         file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(pool, Arc::new(branch_data), keys, file_cache)
+        Branch::new(pool, branch_data, keys, file_cache)
     }
 }
 

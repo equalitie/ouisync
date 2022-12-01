@@ -17,11 +17,11 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
 
+#[derive(Clone)]
 pub(crate) struct BranchData {
     writer_id: PublicKey,
     notify_tx: broadcast::Sender<Event>,
@@ -40,9 +40,8 @@ impl BranchData {
     pub fn load_all(
         conn: &mut db::Connection,
         notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Arc<Self>>> + '_ {
-        SnapshotData::load_all(conn, notify_tx)
-            .map_ok(move |snapshot| Arc::new(snapshot.to_branch_data()))
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {

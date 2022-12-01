@@ -668,7 +668,7 @@ impl Shared {
     }
 
     // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
+    fn inflate(&self, data: BranchData) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.
