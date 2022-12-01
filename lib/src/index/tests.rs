@@ -3,7 +3,7 @@ use crate::{
     block::{self, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     repository::LocalId,
-    store::Store,
+    store::{BlockRequestMode, Store},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -292,7 +292,8 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let (_base_dir, index, write_keys) = setup().await;
     let store = Store {
         index,
-        block_tracker: BlockTracker::lazy(),
+        block_tracker: BlockTracker::new(),
+        block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
         span: Span::none(),
     };

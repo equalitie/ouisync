@@ -329,8 +329,7 @@ mod scan {
     use crate::{
         blob::BlockIds,
         blob_id::BlobId,
-        block::{self, BlockId},
-        db,
+        block,
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
@@ -477,22 +476,11 @@ mod scan {
             }
 
             if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
-                require_missing_block(shared, &mut conn, block_id).await?;
+                shared
+                    .store
+                    .require_missing_block(&mut conn, block_id)
+                    .await?;
             }
-        }
-
-        Ok(())
-    }
-
-    async fn require_missing_block(
-        shared: &Shared,
-        conn: &mut db::Connection,
-        block_id: BlockId,
-    ) -> Result<()> {
-        // TODO: check whether the block is already required to avoid the potentially expensive db
-        // lookup.
-        if !block::exists(conn, &block_id).await? {
-            shared.store.block_tracker.require(block_id);
         }
 
         Ok(())

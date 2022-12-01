@@ -27,7 +27,7 @@ use crate::{
     metadata, path,
     progress::Progress,
     scoped_task::{self, ScopedJoinHandle},
-    store::Store,
+    store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
@@ -165,19 +165,18 @@ impl Repository {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
 
-        // Lazy block downloading requires at least read access because it needs to be able to
-        // traverse the repository in order to enumarate reachable blocks.
-        let block_tracker = if secrets.can_read() {
-            BlockTracker::lazy()
+        let block_request_mode = if secrets.can_read() {
+            BlockRequestMode::Lazy
         } else {
-            BlockTracker::greedy()
+            BlockRequestMode::Greedy
         };
 
         span.in_scope(|| tracing::trace!(access = ?secrets.access_mode()));
 
         let store = Store {
             index,
-            block_tracker,
+            block_tracker: BlockTracker::new(),
+            block_request_mode,
             local_id: LocalId::new(),
             span: span.clone(),
         };
