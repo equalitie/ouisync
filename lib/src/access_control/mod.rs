@@ -312,3 +312,71 @@ impl From<DecodeError> for Error {
         Self::MalformedData
     }
 }
+
+pub enum LocalAccess {
+    // User has no read nor write access, can only sync.
+    Blind {
+        id: RepositoryId,
+    },
+    // User doesn't need a secret to read the repository, there's no write access.
+    ReadLocallyPublic {
+        id: RepositoryId,
+        read_key: cipher::SecretKey,
+    },
+    // Providing a secret will grant the user read access, there's no write access.
+    ReadLocallyPrivate {
+        id: RepositoryId,
+        local_key: cipher::SecretKey,
+        read_key: cipher::SecretKey,
+    },
+    // User doesn't need a secret to read nor write.
+    ReadWriteLocallyPublic {
+        secrets: WriteSecrets,
+    },
+    // Providing a secret user will grant read and write access.
+    ReadWriteLocallyPrivateSingleKey {
+        local_key: cipher::SecretKey,
+        secrets: WriteSecrets,
+    },
+    // User doesn't need a secret to read, but a secret will grant access to write.
+    ReadLocallyPublicWriteLocallyPrivate {
+        local_write_key: cipher::SecretKey,
+        secrets: WriteSecrets,
+    },
+    // User needs one secret for reading and another one for writing.
+    ReadWriteLocallyPrivateDistinctKeys {
+        local_read_key: cipher::SecretKey,
+        local_write_key: cipher::SecretKey,
+        secrets: WriteSecrets,
+    },
+}
+
+impl LocalAccess {
+    pub fn id(&self) -> &RepositoryId {
+        match self {
+            Self::Blind { id } => id,
+            Self::ReadLocallyPublic { id, .. } => id,
+            Self::ReadLocallyPrivate { id, .. } => id,
+            Self::ReadWriteLocallyPublic { secrets } => &secrets.id,
+            Self::ReadWriteLocallyPrivateSingleKey { secrets, .. } => &secrets.id,
+            Self::ReadLocallyPublicWriteLocallyPrivate { secrets, .. } => &secrets.id,
+            Self::ReadWriteLocallyPrivateDistinctKeys { secrets, .. } => &secrets.id,
+        }
+    }
+
+    pub fn secrets(self) -> AccessSecrets {
+        match self {
+            Self::Blind { id } => AccessSecrets::Blind { id },
+            Self::ReadLocallyPublic { id, read_key } => AccessSecrets::Read { id, read_key },
+            Self::ReadLocallyPrivate { id, read_key, .. } => AccessSecrets::Read { id, read_key },
+            Self::ReadWriteLocallyPublic { secrets } => AccessSecrets::Write(secrets),
+            Self::ReadWriteLocallyPrivateSingleKey { secrets, .. } => AccessSecrets::Write(secrets),
+            Self::ReadLocallyPublicWriteLocallyPrivate { secrets, .. } => {
+                AccessSecrets::Write(secrets)
+            }
+            Self::ReadWriteLocallyPrivateDistinctKeys { secrets, .. } => {
+                AccessSecrets::Write(secrets)
+            }
+        }
+    }
+}

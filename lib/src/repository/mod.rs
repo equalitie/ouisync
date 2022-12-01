@@ -8,7 +8,7 @@ pub use self::id::RepositoryId;
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
-    access_control::{AccessMode, AccessSecrets, LocalSecret},
+    access_control::{AccessMode, AccessSecrets, LocalAccess, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
@@ -77,11 +77,39 @@ impl Repository {
         };
 
         let this_writer_id = generate_writer_id(&mut tx, &device_id, local_key.as_ref()).await?;
-        metadata::set_access_secrets(&mut tx, &access_secrets, local_key.as_ref()).await?;
+
+        let local_access = match (local_key, access_secrets) {
+            (None, AccessSecrets::Blind { id }) => LocalAccess::Blind { id },
+            (Some(_), AccessSecrets::Blind { .. }) => {
+                // TODO: This might be an interesting case to implement in the future. It would be
+                // for people who don't want anyone to be able to find out they have a particular
+                // repository on their device.  The drawback is that unless it's unlocked with a
+                // local secret it won't be syncing.
+                return Err(Error::OperationNotSupported);
+            }
+            (None, AccessSecrets::Read { id, read_key }) => {
+                LocalAccess::ReadLocallyPublic { id, read_key }
+            }
+            (Some(local_key), AccessSecrets::Read { id, read_key }) => {
+                LocalAccess::ReadLocallyPrivate {
+                    id,
+                    local_key,
+                    read_key,
+                }
+            }
+            (None, AccessSecrets::Write(secrets)) => {
+                LocalAccess::ReadWriteLocallyPublic { secrets }
+            }
+            (Some(local_key), AccessSecrets::Write(secrets)) => {
+                LocalAccess::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
+            }
+        };
+
+        metadata::initialize_access_secrets(&mut tx, &local_access).await?;
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, span).await
+        Self::new(pool, this_writer_id, local_access.secrets(), span).await
     }
 
     /// Opens an existing repository.
@@ -210,6 +238,17 @@ impl Repository {
     pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
         let mut conn = self.db().acquire().await?;
         metadata::requires_local_password_for_writing(&mut conn).await
+    }
+
+    pub async fn set_local_access(&self, local_access: &LocalAccess) -> Result<()> {
+        if local_access.id() != self.shared.secrets.id() {
+            return Err(Error::PermissionDenied);
+        }
+
+        let mut tx = self.db().begin().await?;
+        metadata::set_local_access(&mut tx, local_access).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     pub fn secrets(&self) -> &AccessSecrets {
