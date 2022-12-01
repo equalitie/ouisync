@@ -1,5 +1,5 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, db, scoped_task};
+use crate::{blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, scoped_task, WriteSecrets};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -8,16 +8,7 @@ use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
-    let base_dir = TempDir::new().unwrap();
-    let writer_id = rand::random();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        writer_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
     let _ = repo.open_directory("/").await.unwrap();
 }
 
@@ -31,17 +22,7 @@ async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn count_leaf_nodes_sanity_checks() {
-    let base_dir = TempDir::new().unwrap();
-    let device_id = rand::random();
-
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        device_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let file_name = "test.txt";
 
@@ -80,15 +61,7 @@ async fn count_leaf_nodes_sanity_checks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
-    let base_dir = TempDir::new().unwrap();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     // Create remote branch and create a file in it.
     let remote_id = PublicKey::random();
@@ -117,16 +90,7 @@ async fn merge() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_file() {
-    let base_dir = TempDir::new().unwrap();
-    let local_id = rand::random();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        local_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
@@ -155,16 +119,7 @@ async fn recreate_previously_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_directory() {
-    let base_dir = TempDir::new().unwrap();
-    let local_id = rand::random();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        local_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     // Create dir
     repo.create_directory("test").await.unwrap();
@@ -186,16 +141,7 @@ async fn recreate_previously_deleted_directory() {
 // This one used to deadlock
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_read_and_create_dir() {
-    let base_dir = TempDir::new().unwrap();
-    let writer_id = rand::random();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        writer_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
+    let (_base_dir, repo) = setup().await;
 
     let path = "/dir";
     let repo = Arc::new(repo);
@@ -238,17 +184,7 @@ async fn concurrent_read_and_create_dir() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_write_and_read_file() {
-    let base_dir = TempDir::new().unwrap();
-    let writer_id = rand::random();
-    let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        writer_id,
-        None,
-        AccessSecrets::random_write(),
-    )
-    .await
-    .unwrap();
-
+    let (_base_dir, repo) = setup().await;
     let repo = Arc::new(repo);
 
     let chunk_size = 1024;
@@ -332,8 +268,10 @@ async fn blind_access_non_empty_repo() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        Some(LocalSecret::random()),
-        AccessSecrets::random_write(),
+        LocalAccess::ReadWriteLocallyPrivateSingleKey {
+            local_key: SecretKey::random(),
+            secrets: WriteSecrets::random(),
+        },
         Span::none(),
     )
     .await
@@ -398,8 +336,10 @@ async fn blind_access_empty_repo() {
     Repository::create_in(
         pool.clone(),
         device_id,
-        Some(LocalSecret::random()),
-        AccessSecrets::random_write(),
+        LocalAccess::ReadWriteLocallyPrivateSingleKey {
+            local_key: SecretKey::random(),
+            secrets: WriteSecrets::random(),
+        },
         Span::none(),
     )
     .await
@@ -428,8 +368,9 @@ async fn read_access_same_replica() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
-        None,
-        AccessSecrets::random_write(),
+        LocalAccess::ReadWriteLocallyPublic {
+            secrets: WriteSecrets::random(),
+        },
         Span::none(),
     )
     .await
@@ -484,8 +425,9 @@ async fn read_access_different_replica() {
     let repo = Repository::create_in(
         pool.clone(),
         device_id_a,
-        None,
-        AccessSecrets::random_write(),
+        LocalAccess::ReadWriteLocallyPublic {
+            secrets: WriteSecrets::random(),
+        },
         Span::none(),
     )
     .await
@@ -878,10 +820,13 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        base_dir.path().join("repo.db"),
+        RepositoryDb::create(base_dir.path().join("repo.db"))
+            .await
+            .unwrap(),
         rand::random(),
-        None,
-        AccessSecrets::random_write(),
+        LocalAccess::ReadWriteLocallyPublic {
+            secrets: WriteSecrets::random(),
+        },
     )
     .await
     .unwrap();

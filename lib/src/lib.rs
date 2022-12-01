@@ -42,7 +42,9 @@ mod test_utils;
 mod version_vector;
 
 pub use self::{
-    access_control::{AccessMode, AccessSecrets, LocalSecret, ShareToken},
+    access_control::{
+        AccessMode, AccessSecrets, LocalAccess, LocalSecret, ShareToken, WriteSecrets,
+    },
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     block::BLOCK_SIZE,
     branch::Branch,
@@ -55,7 +57,7 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     joint_entry::JointEntry,
     network::peer_addr::PeerAddr,
-    repository::Repository,
+    repository::{Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };

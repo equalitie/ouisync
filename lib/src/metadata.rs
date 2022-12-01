@@ -1,8 +1,8 @@
 use crate::{
-    access_control::{AccessSecrets, LocalAccess, LocalSecret, WriteSecrets},
+    access_control::{AccessSecrets, LocalAccess, WriteSecrets},
     crypto::{
         cipher::{self, Nonce},
-        sign, Hash, PasswordSalt,
+        sign, Hash, Password, PasswordSalt,
     },
     db,
     device_id::DeviceId,
@@ -32,19 +32,15 @@ const DEPRECATED_ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
 const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
-pub(crate) async fn secret_to_key(
+pub(crate) async fn password_to_key(
     tx: &mut db::Transaction<'_>,
-    secret: LocalSecret,
+    password: &Password,
 ) -> Result<cipher::SecretKey> {
-    let key = match secret {
-        LocalSecret::SecretKey(key) => key,
-        LocalSecret::Password(pwd) => {
-            let salt = get_or_generate_password_salt(tx).await?;
-            cipher::SecretKey::derive_from_password(pwd.as_ref(), &salt)
-        }
-    };
-
-    Ok(key)
+    let salt = get_or_generate_password_salt(tx).await?;
+    Ok(cipher::SecretKey::derive_from_password(
+        password.as_ref(),
+        &salt,
+    ))
 }
 
 // -------------------------------------------------------------------

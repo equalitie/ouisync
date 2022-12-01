@@ -8,6 +8,7 @@ use crate::{
     crypto::{cipher, sign},
     error::Error,
     repository::RepositoryId,
+    Result,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
@@ -186,12 +187,12 @@ pub struct WriteSecrets {
 
 impl WriteSecrets {
     /// Generates random write secrets using the provided RNG.
-    pub(crate) fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
         Self::from(sign::Keypair::generate(rng))
     }
 
     /// Generates random write secrets using OsRng.
-    pub(crate) fn random() -> Self {
+    pub fn random() -> Self {
         Self::generate(&mut OsRng)
     }
 }
@@ -352,6 +353,39 @@ pub enum LocalAccess {
 }
 
 impl LocalAccess {
+    pub fn default_for_creation(
+        local_key: Option<cipher::SecretKey>,
+        secrets: AccessSecrets,
+    ) -> Result<Self> {
+        let access = match (local_key, secrets) {
+            (None, AccessSecrets::Blind { id }) => LocalAccess::Blind { id },
+            (Some(_), AccessSecrets::Blind { .. }) => {
+                // TODO: This might be an interesting case to implement in the future. It would be
+                // for people who don't want anyone to be able to find out they have a particular
+                // repository on their device.  The drawback is that unless it's unlocked with a
+                // local secret it won't be syncing.
+                return Err(Error::OperationNotSupported);
+            }
+            (None, AccessSecrets::Read { id, read_key }) => {
+                LocalAccess::ReadLocallyPublic { id, read_key }
+            }
+            (Some(local_key), AccessSecrets::Read { id, read_key }) => {
+                LocalAccess::ReadLocallyPrivate {
+                    id,
+                    local_key,
+                    read_key,
+                }
+            }
+            (None, AccessSecrets::Write(secrets)) => {
+                LocalAccess::ReadWriteLocallyPublic { secrets }
+            }
+            (Some(local_key), AccessSecrets::Write(secrets)) => {
+                LocalAccess::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
+            }
+        };
+        Ok(access)
+    }
+
     pub fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } => id,
@@ -377,6 +411,19 @@ impl LocalAccess {
             Self::ReadWriteLocallyPrivateDistinctKeys { secrets, .. } => {
                 AccessSecrets::Write(secrets)
             }
+        }
+    }
+
+    pub fn local_write_key(&self) -> Option<&cipher::SecretKey> {
+        match self {
+            Self::ReadWriteLocallyPrivateSingleKey { local_key, .. } => Some(local_key),
+            Self::ReadLocallyPublicWriteLocallyPrivate {
+                local_write_key, ..
+            } => Some(local_write_key),
+            Self::ReadWriteLocallyPrivateDistinctKeys {
+                local_write_key, ..
+            } => Some(local_write_key),
+            _ => None,
         }
     }
 

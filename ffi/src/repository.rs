@@ -5,8 +5,8 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload, Repository,
-    Result, ShareToken,
+    path, AccessMode, AccessSecrets, EntryType, Error, Event, LocalAccess, LocalSecret, Payload,
+    Repository, RepositoryDb, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
@@ -57,13 +57,17 @@ pub unsafe extern "C" fn repository_create(
 
         ctx.spawn(
             async move {
-                let repository = Repository::create(
-                    store.into_std_path_buf(),
-                    device_id,
-                    local_password.map(LocalSecret::Password),
-                    access_secrets,
-                )
-                .await?;
+                let db = RepositoryDb::create(store.into_std_path_buf()).await?;
+
+                let local_key = if let Some(local_password) = local_password {
+                    Some(db.password_to_key(local_password).await?)
+                } else {
+                    None
+                };
+
+                let access = LocalAccess::default_for_creation(local_key, access_secrets)?;
+
+                let repository = Repository::create(db, device_id, access).await?;
 
                 let registration = network_handle.register(repository.store().clone());
 

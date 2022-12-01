@@ -1,4 +1,7 @@
-use ouisync::{network::Network, AccessSecrets, ConfigStore, Event, Payload, PeerAddr, Repository};
+use ouisync::{
+    network::Network, AccessSecrets, ConfigStore, Event, LocalAccess, Payload, PeerAddr,
+    Repository, RepositoryDb,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
     future::Future,
@@ -58,9 +61,13 @@ impl Env {
     }
 
     pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
-        Repository::create(&self.next_store(), self.rng.gen(), None, secrets)
-            .await
-            .unwrap()
+        Repository::create(
+            RepositoryDb::create(&self.next_store()).await.unwrap(),
+            self.rng.gen(),
+            LocalAccess::default_for_creation(None, secrets).unwrap(),
+        )
+        .await
+        .unwrap()
     }
 
     #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379

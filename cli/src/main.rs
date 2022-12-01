@@ -4,7 +4,8 @@ use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
 use ouisync_lib::{
-    device_id, network::Network, AccessSecrets, ConfigStore, Repository, ShareToken,
+    crypto::cipher::SecretKey, device_id, network::Network, AccessSecrets, ConfigStore,
+    LocalAccess, LocalSecret, Repository, RepositoryDb, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -15,6 +16,23 @@ use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 pub(crate) const APP_NAME: &str = "ouisync";
+
+async fn secret_to_key(
+    db: &RepositoryDb,
+    secret: Option<LocalSecret>,
+) -> Result<Option<SecretKey>> {
+    let secret = if let Some(secret) = secret {
+        secret
+    } else {
+        return Ok(None);
+    };
+
+    let key = match secret {
+        LocalSecret::Password(pwd) => db.password_to_key(pwd).await?,
+        LocalSecret::SecretKey(key) => key,
+    };
+    Ok(Some(key))
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,14 +53,10 @@ async fn main() -> Result<()> {
     let mut repos = HashMap::new();
 
     for name in &options.create {
-        let secret = options.secret_for_repo(name)?;
-        let repo = Repository::create(
-            options.repository_path(name)?,
-            device_id,
-            secret,
-            AccessSecrets::random_write(),
-        )
-        .await?;
+        let db = RepositoryDb::create(options.repository_path(name)?).await?;
+        let local_key = secret_to_key(&db, options.secret_for_repo(name)?).await?;
+        let access = LocalAccess::default_for_creation(local_key, AccessSecrets::random_write())?;
+        let repo = Repository::create(db, device_id, access).await?;
 
         repos.insert(name.clone(), repo);
     }
@@ -91,17 +105,12 @@ async fn main() -> Result<()> {
 
     for token in options.accept.iter().chain(&accept_file_tokens) {
         let name = token.suggested_name();
-        let access_secrets = token.secrets();
-        let master_secret = options.secret_for_repo(&name)?;
 
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
-            let repo = Repository::create(
-                options.repository_path(name.as_ref())?,
-                device_id,
-                master_secret,
-                access_secrets.clone(),
-            )
-            .await?;
+            let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
+            let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
+            let access = LocalAccess::default_for_creation(local_key, token.secrets().clone())?;
+            let repo = Repository::create(db, device_id, access).await?;
 
             entry.insert(repo);
 

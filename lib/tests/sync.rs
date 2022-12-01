@@ -6,8 +6,8 @@ use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, AccessMode, AccessSecrets, EntryType, Error, File, Repository,
-    BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, AccessMode, AccessSecrets, EntryType, Error, File, LocalAccess,
+    Repository, RepositoryDb, WriteSecrets, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
@@ -376,12 +376,20 @@ async fn recreate_local_branch() {
 
     let store_a = env.next_store();
     let device_id_a = env.rng.gen();
-    let access_secrets = AccessSecrets::generate_write(&mut env.rng);
-    let repo_a = Repository::create(&store_a, device_id_a, None, access_secrets.clone())
-        .await
-        .unwrap();
+    let write_secrets = WriteSecrets::generate(&mut env.rng);
+    let repo_a = Repository::create(
+        RepositoryDb::create(&store_a).await.unwrap(),
+        device_id_a,
+        LocalAccess::ReadWriteLocallyPublic {
+            secrets: write_secrets.clone(),
+        },
+    )
+    .await
+    .unwrap();
 
-    let repo_b = env.create_repo_with_secrets(access_secrets.clone()).await;
+    let repo_b = env
+        .create_repo_with_secrets(AccessSecrets::Write(write_secrets.clone()))
+        .await;
 
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
     file.write(b"hello from A\n").await.unwrap();

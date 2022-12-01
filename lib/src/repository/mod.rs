@@ -14,6 +14,7 @@ use crate::{
     crypto::{
         cipher,
         sign::{self, PublicKey},
+        Password,
     },
     db,
     debug::DebugPrinter,
@@ -40,6 +41,24 @@ use tracing::{instrument, instrument::Instrument, Span};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+pub struct RepositoryDb {
+    pool: db::Pool,
+    span: Span,
+}
+
+impl RepositoryDb {
+    pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
+        let span = tracing::info_span!("repository", db = %store.as_ref().display());
+        let pool = db::create(store).await?;
+        Ok(Self { pool, span })
+    }
+
+    pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
+        let mut tx = self.pool.begin().await?;
+        metadata::password_to_key(&mut tx, &password).await
+    }
+}
+
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
@@ -49,67 +68,36 @@ pub struct Repository {
 impl Repository {
     /// Creates a new repository.
     pub async fn create(
-        store: impl AsRef<Path>,
+        db: RepositoryDb,
         device_id: DeviceId,
-        local_secret: Option<LocalSecret>,
-        access_secrets: AccessSecrets,
+        access: LocalAccess,
     ) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
-        let pool = db::create(store).await?;
-
-        Self::create_in(pool, device_id, local_secret, access_secrets, span).await
+        Self::create_in(db.pool, device_id, access, db.span).await
     }
 
     /// Creates a new repository in an already opened database.
     pub(crate) async fn create_in(
         pool: db::Pool,
         device_id: DeviceId,
-        local_secret: Option<LocalSecret>,
-        access_secrets: AccessSecrets,
+        access: LocalAccess,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let local_key = if let Some(local_secret) = local_secret {
-            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
-        } else {
-            None
-        };
+        //let local_key = if let Some(local_secret) = local_secret {
+        //    Some(metadata::secret_to_key(&mut tx, local_secret).await?)
+        //} else {
+        //    None
+        //};
 
-        let this_writer_id = generate_writer_id(&mut tx, &device_id, local_key.as_ref()).await?;
+        let this_writer_id =
+            generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
 
-        let local_access = match (local_key, access_secrets) {
-            (None, AccessSecrets::Blind { id }) => LocalAccess::Blind { id },
-            (Some(_), AccessSecrets::Blind { .. }) => {
-                // TODO: This might be an interesting case to implement in the future. It would be
-                // for people who don't want anyone to be able to find out they have a particular
-                // repository on their device.  The drawback is that unless it's unlocked with a
-                // local secret it won't be syncing.
-                return Err(Error::OperationNotSupported);
-            }
-            (None, AccessSecrets::Read { id, read_key }) => {
-                LocalAccess::ReadLocallyPublic { id, read_key }
-            }
-            (Some(local_key), AccessSecrets::Read { id, read_key }) => {
-                LocalAccess::ReadLocallyPrivate {
-                    id,
-                    local_key,
-                    read_key,
-                }
-            }
-            (None, AccessSecrets::Write(secrets)) => {
-                LocalAccess::ReadWriteLocallyPublic { secrets }
-            }
-            (Some(local_key), AccessSecrets::Write(secrets)) => {
-                LocalAccess::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
-            }
-        };
-
-        metadata::initialize_access_secrets(&mut tx, &local_access).await?;
+        metadata::initialize_access_secrets(&mut tx, &access).await?;
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, local_access.secrets(), span).await
+        Self::new(pool, this_writer_id, access.secrets(), span).await
     }
 
     /// Opens an existing repository.
@@ -153,7 +141,11 @@ impl Repository {
         let mut tx = pool.begin().await?;
 
         let local_key = if let Some(local_secret) = local_secret {
-            Some(metadata::secret_to_key(&mut tx, local_secret).await?)
+            let key = match local_secret {
+                LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
+                LocalSecret::SecretKey(key) => key,
+            };
+            Some(key)
         } else {
             None
         };
