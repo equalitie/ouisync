@@ -127,15 +127,18 @@ impl Inner {
                     state = State::Waiting;
 
                     let work = async {
+                        tracing::debug!("job started");
                         self.merge().await.ok();
                         self.prune().await.ok();
                         self.scan(scan::Mode::RequireAndCollect).await.ok();
+                        tracing::debug!("job completed");
                     };
 
                     let wait = async {
                         loop {
                             match event_rx.recv().await {
                                 Ok(Payload::BranchChanged(_)) => {
+                                    tracing::debug!("job interrupted");
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
                                     state = State::Working;

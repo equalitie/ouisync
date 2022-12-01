@@ -133,7 +133,10 @@ impl Index {
             let hash = proof.hash;
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
-                Ok(_) => self.update_summaries(tx, hash).await?,
+                Ok(node) => {
+                    tracing::debug!(branch.id = ?node.proof.writer_id, "snapshot started");
+                    self.update_summaries(tx, hash).await?;
+                }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }
@@ -265,7 +268,7 @@ impl Index {
             .collect();
 
         for branch in completed {
-            tracing::debug!(branch.id = ?branch.id(), "new snapshot");
+            tracing::debug!(branch.id = ?branch.id(), "snapshot complete");
             branch.notify();
         }
 
