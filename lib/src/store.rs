@@ -17,6 +17,7 @@ use tracing::Span;
 pub struct Store {
     pub(crate) index: Index,
     pub(crate) block_tracker: BlockTracker,
+    pub(crate) block_request_mode: BlockRequestMode,
     pub(crate) local_id: LocalId,
     pub(crate) span: Span,
 }
@@ -53,6 +54,20 @@ impl Store {
             value: present,
             total,
         })
+    }
+
+    pub(crate) async fn require_missing_block(
+        &self,
+        conn: &mut db::Connection,
+        block_id: BlockId,
+    ) -> Result<()> {
+        // TODO: check whether the block is already required to avoid the potentially expensive db
+        // lookup.
+        if !block::exists(conn, &block_id).await? {
+            self.block_tracker.require(block_id);
+        }
+
+        Ok(())
     }
 
     /// Write a block received from a remote replica to the block store. The block must already be
@@ -145,6 +160,14 @@ impl Store {
 
         Ok(total_count)
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BlockRequestMode {
+    // Request only required blocks
+    Lazy,
+    // Request all blocks
+    Greedy,
 }
 
 #[cfg(test)]
@@ -308,7 +331,8 @@ mod tests {
         let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             index,
-            block_tracker: BlockTracker::lazy(),
+            block_tracker: BlockTracker::new(),
+            block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
             span: Span::none(),
         };
@@ -346,7 +370,8 @@ mod tests {
         let index = Index::new(pool, repository_id, event_tx);
         let store = Store {
             index,
-            block_tracker: BlockTracker::lazy(),
+            block_tracker: BlockTracker::new(),
+            block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
             span: Span::none(),
         };
@@ -385,7 +410,8 @@ mod tests {
         let index = Index::new(pool.clone(), repository_id, event_tx);
         let store = Store {
             index,
-            block_tracker: BlockTracker::lazy(),
+            block_tracker: BlockTracker::new(),
+            block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
             span: Span::none(),
         };

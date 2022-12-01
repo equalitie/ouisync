@@ -1,7 +1,7 @@
 use super::BlockId;
 use slab::Slab;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::{Arc, Mutex as BlockingMutex},
 };
 use tokio::sync::watch;
@@ -13,22 +13,11 @@ pub(crate) struct BlockTracker {
 }
 
 impl BlockTracker {
-    /// Create block tracker with lazy block request mode.
-    pub fn lazy() -> Self {
-        Self::new(Mode::Lazy)
-    }
-
-    /// Create block tracker with greedy block request mode.
-    pub fn greedy() -> Self {
-        Self::new(Mode::Greedy)
-    }
-
-    fn new(mode: Mode) -> Self {
+    pub fn new() -> Self {
         let (notify_tx, _) = watch::channel(());
 
         Self {
             shared: Arc::new(Shared {
-                mode,
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::new(),
                     clients: Slab::new(),
@@ -44,27 +33,25 @@ impl BlockTracker {
     ///
     /// Panics if this tracker is in greedy mode.
     pub fn require(&self, block_id: BlockId) {
-        assert!(
-            matches!(self.shared.mode, Mode::Lazy),
-            "`require` can be called only in lazy mode"
-        );
-
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let missing_block = inner
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashSet::new(),
-                state: MissingBlockState::Required,
-            });
-
-        if missing_block.state.switch_offered_to_required() {
-            self.shared.notify();
+        match inner.missing_blocks.entry(block_id) {
+            Entry::Occupied(mut entry) => {
+                if entry.get_mut().state.switch_offered_to_required() {
+                    self.shared.notify();
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(MissingBlock {
+                    offers: HashSet::new(),
+                    state: MissingBlockState::Required,
+                });
+                self.shared.notify();
+            }
         }
     }
 
-    /// Mark the block request as successfuly completed.
+    /// Mark the block request as successfully completed.
     pub fn complete(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
@@ -107,13 +94,15 @@ pub(crate) struct BlockTrackerClient {
 }
 
 impl BlockTrackerClient {
-    /// Offer to request the given block if it is, or will become, required.
-    pub fn offer(&self, block_id: BlockId) {
+    /// Offer to request the given block if it is, or will become, required. Returns `true` if this
+    /// block was offered for the first time, `false` if it was already offered before but not yet
+    /// accepted or cancelled.
+    pub fn offer(&self, block_id: BlockId) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].insert(block_id) {
             // Already offered
-            return;
+            return false;
         }
 
         let missing_block = inner
@@ -126,26 +115,16 @@ impl BlockTrackerClient {
 
         missing_block.offers.insert(self.client_id);
 
-        match self.shared.mode {
-            Mode::Greedy => {
-                if missing_block.state.switch_offered_to_required() {
-                    self.shared.notify()
-                }
-            }
-            Mode::Lazy => (),
-        }
+        true
     }
 
     /// Cancel a previously accepted request so it can be attempted by another client.
     pub fn cancel(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.clients[self.client_id].remove(block_id) {
-            return;
-        }
+        inner.clients[self.client_id].remove(block_id);
 
-        // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+        let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else { return };
 
         missing_block.offers.remove(&self.client_id);
 
@@ -180,10 +159,47 @@ impl BlockTrackerClient {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
+        // First try to accept a required block offered by this client.
         // TODO: OPTIMIZE (but profile first) this linear lookup
         for block_id in &inner.clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+
+            if missing_block
+                .state
+                .switch_required_to_accepted(self.client_id)
+            {
+                return Some(*block_id);
+            }
+        }
+
+        // If none, try to accept a required block with no offers. This is because there are some
+        // edge cases where a block might be required even before any replica offered it.
+        //
+        // Example of such edge case:
+        //
+        // A block is initially present, but is part of a an outdated file/directory. A new snapshot
+        // is in the process of being downloaded from a remote replica. During this download, the
+        // block is still present and so is not marked as offered (because at least one of its
+        // local ancestor nodes is still seen as up-to-date). Then before the download completes,
+        // the worker garbage-collects the block. Then the download completes and triggers another
+        // worker run. During this run the block might be marked as required again (because e.g.
+        // the file was modified by the remote replica). But the block hasn't been marked as
+        // offered (because it was still present during the last snapshot download) and so is not
+        // requested. We now have to wait for the next snapshot update from the remote replica
+        // before the block is marked as offered and only then we proceed with requesting it. This
+        // can take arbitrarily long (even indefinitely).
+        //
+        // By accepting also non-offered blocks, we ensure that the missing block is requested as
+        // soon as possible.
+        //
+        // One downside of this is we might send block requests to replicas that don't have then,
+        // wasting some traffic. This situation should not happen too often so this is considered
+        // acceptable.
+        for (block_id, missing_block) in &mut inner.missing_blocks {
+            if !missing_block.offers.is_empty() {
+                continue;
+            }
 
             if missing_block
                 .state
@@ -224,7 +240,6 @@ impl Drop for BlockTrackerClient {
 }
 
 struct Shared {
-    mode: Mode,
     inner: BlockingMutex<Inner>,
     notify_tx: watch::Sender<()>,
 }
@@ -254,6 +269,7 @@ struct MissingBlock {
     state: MissingBlockState,
 }
 
+#[derive(Debug)]
 enum MissingBlockState {
     Offered,
     Required,
@@ -294,14 +310,6 @@ impl MissingBlockState {
 
 type ClientId = usize;
 
-#[derive(Copy, Clone)]
-enum Mode {
-    // Blocks are downloaded only when needed.
-    Lazy,
-    // Blocks are downloaded as soon as we learn about them from the index.
-    Greedy,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -316,26 +324,21 @@ mod tests {
     use tokio::{sync::Barrier, task};
 
     #[test]
-    fn lazy_simple() {
-        let tracker = BlockTracker::lazy();
+    fn simple() {
+        let tracker = BlockTracker::new();
 
         let client = tracker.client();
 
         // Initially no blocks are returned
         assert_eq!(client.try_accept(), None);
 
-        // Required but not offered blocks are not returned
-        let block0 = make_block();
-        tracker.require(block0.id);
-        assert_eq!(client.try_accept(), None);
-
         // Offered but not required blocks are not returned
-        let block1 = make_block();
-        client.offer(block1.id);
+        let block0 = make_block();
+        client.offer(block0.id);
         assert_eq!(client.try_accept(), None);
 
         // Required + offered blocks are returned...
-        client.offer(block0.id);
+        tracker.require(block0.id);
         assert_eq!(client.try_accept(), Some(block0.id));
 
         // ...but only once.
@@ -343,50 +346,27 @@ mod tests {
     }
 
     #[test]
-    fn greedy_simple() {
-        let tracker = BlockTracker::greedy();
-
+    fn required_unoffered() {
+        let tracker = BlockTracker::new();
         let client = tracker.client();
 
-        // Initially no blocks are returned
-        assert_eq!(client.try_accept(), None);
+        let block0 = make_block();
+        let block1 = make_block();
 
-        // Offered blocks are returned...
-        let block = make_block();
-        client.offer(block.id);
-        assert_eq!(client.try_accept(), Some(block.id));
+        tracker.require(block0.id);
+        tracker.require(block1.id);
 
-        // ...but only once.
-        assert_eq!(client.try_accept(), None);
+        // Required + offered blocks are returned first...
+        client.offer(block1.id);
+        assert_eq!(client.try_accept(), Some(block1.id));
+
+        // ...but required + non offered blocks are eventually returned as well
+        assert_eq!(client.try_accept(), Some(block0.id));
     }
 
     #[test]
-    fn greedy_multiple_offers() {
-        let num_blocks = 10;
-
-        let tracker = BlockTracker::greedy();
-        let client = tracker.client();
-
-        let mut blocks: HashSet<BlockId> = rand::thread_rng()
-            .sample_iter(Standard)
-            .take(num_blocks)
-            .collect();
-
-        for block_id in &blocks {
-            client.offer(*block_id);
-        }
-
-        for _ in 0..num_blocks {
-            let block_id = client.try_accept().unwrap();
-            assert!(blocks.remove(&block_id));
-        }
-
-        assert!(blocks.is_empty());
-    }
-
-    #[test]
-    fn lazy_fallback_on_cancel_before_next() {
-        let tracker = BlockTracker::lazy();
+    fn fallback_on_cancel_before_next() {
+        let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -404,26 +384,8 @@ mod tests {
     }
 
     #[test]
-    fn greedy_fallback_on_cancel_before_next() {
-        let tracker = BlockTracker::greedy();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        client0.offer(block.id);
-        client1.offer(block.id);
-
-        client0.cancel(&block.id);
-
-        assert_eq!(client0.try_accept(), None);
-        assert_eq!(client1.try_accept(), Some(block.id));
-    }
-
-    #[test]
-    fn lazy_fallback_on_cancel_after_next() {
-        let tracker = BlockTracker::lazy();
+    fn fallback_on_cancel_after_next() {
+        let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -444,29 +406,8 @@ mod tests {
     }
 
     #[test]
-    fn greedy_fallback_on_cancel_after_next() {
-        let tracker = BlockTracker::greedy();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        client0.offer(block.id);
-        client1.offer(block.id);
-
-        assert_eq!(client0.try_accept(), Some(block.id));
-        assert_eq!(client1.try_accept(), None);
-
-        client0.cancel(&block.id);
-
-        assert_eq!(client0.try_accept(), None);
-        assert_eq!(client1.try_accept(), Some(block.id));
-    }
-
-    #[test]
-    fn lazy_fallback_on_client_drop_after_require_before_next() {
-        let tracker = BlockTracker::lazy();
+    fn fallback_on_client_drop_after_require_before_next() {
+        let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -484,8 +425,8 @@ mod tests {
     }
 
     #[test]
-    fn lazy_fallback_on_client_drop_after_require_after_next() {
-        let tracker = BlockTracker::lazy();
+    fn fallback_on_client_drop_after_require_after_next() {
+        let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -506,8 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn lazy_fallback_on_client_drop_before_request() {
-        let tracker = BlockTracker::lazy();
+    fn fallback_on_client_drop_before_request() {
+        let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
         let client1 = tracker.client();
@@ -520,43 +461,6 @@ mod tests {
         drop(client0);
 
         tracker.require(block.id);
-
-        assert_eq!(client1.try_accept(), Some(block.id));
-    }
-
-    #[test]
-    fn greedy_fallback_on_client_drop_before_next() {
-        let tracker = BlockTracker::greedy();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        client0.offer(block.id);
-        client1.offer(block.id);
-
-        drop(client0);
-
-        assert_eq!(client1.try_accept(), Some(block.id));
-    }
-
-    #[test]
-    fn greedy_fallback_on_client_drop_after_next() {
-        let tracker = BlockTracker::greedy();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        client0.offer(block.id);
-        client1.offer(block.id);
-
-        assert_eq!(client0.try_accept(), Some(block.id));
-        assert_eq!(client1.try_accept(), None);
-
-        drop(client0);
 
         assert_eq!(client1.try_accept(), Some(block.id));
     }
@@ -565,10 +469,12 @@ mod tests {
     async fn race() {
         let num_clients = 10;
 
-        let tracker = BlockTracker::greedy();
+        let tracker = BlockTracker::new();
         let clients: Vec<_> = (0..num_clients).map(|_| tracker.client()).collect();
 
         let block = make_block();
+
+        tracker.require(block.id);
 
         for client in &clients {
             client.offer(block.id);
@@ -609,7 +515,7 @@ mod tests {
     fn stress_case(num_blocks: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
-        let tracker = BlockTracker::lazy();
+        let tracker = BlockTracker::new();
         let client = tracker.client();
 
         let block_ids: Vec<BlockId> = (&mut rng).sample_iter(Standard).take(num_blocks).collect();
@@ -628,8 +534,12 @@ mod tests {
 
         for (op, block_id) in ops {
             match op {
-                Op::Require => tracker.require(block_id),
-                Op::Offer => client.offer(block_id),
+                Op::Require => {
+                    tracker.require(block_id);
+                }
+                Op::Offer => {
+                    client.offer(block_id);
+                }
             }
         }
 

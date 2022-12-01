@@ -8,7 +8,7 @@ use crate::{
     crypto::{CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
-    store::Store,
+    store::{BlockRequestMode, Store},
 };
 use std::{collections::VecDeque, sync::Arc};
 use tokio::{
@@ -212,8 +212,23 @@ impl Client {
 
         tracing::trace!("received {}/{} leaf nodes", updated.len(), total);
 
-        for block_id in updated {
-            self.block_tracker.offer(block_id);
+        match self.store.block_request_mode {
+            BlockRequestMode::Lazy => {
+                for block_id in updated {
+                    self.block_tracker.offer(block_id);
+                }
+            }
+            BlockRequestMode::Greedy => {
+                let mut conn = self.store.db().acquire().await?;
+
+                for block_id in updated {
+                    if self.block_tracker.offer(block_id) {
+                        self.store
+                            .require_missing_block(&mut conn, block_id)
+                            .await?;
+                    }
+                }
+            }
         }
 
         Ok(())

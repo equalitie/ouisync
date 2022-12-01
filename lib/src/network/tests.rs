@@ -15,7 +15,7 @@ use crate::{
         BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
     repository::{LocalId, RepositoryId},
-    store::Store,
+    store::{BlockRequestMode, Store},
     test_utils,
     version_vector::VersionVector,
 };
@@ -371,7 +371,8 @@ async fn create_store<R: Rng + CryptoRng>(
 
     let store = Store {
         index,
-        block_tracker: BlockTracker::greedy(),
+        block_tracker: BlockTracker::new(),
+        block_request_mode: BlockRequestMode::Greedy,
         local_id: LocalId::new(),
         span: Span::none(),
     };
