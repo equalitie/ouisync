@@ -237,7 +237,7 @@ async fn setup() -> (TempDir, MountGuard) {
     let repo = Repository::create(
         db,
         rand::random(),
-        Access::ReadWriteLocallyPublic {
+        Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
     )

@@ -380,7 +380,7 @@ async fn recreate_local_branch() {
     let repo_a = Repository::create(
         RepositoryDb::create(&store_a).await.unwrap(),
         device_id_a,
-        Access::ReadWriteLocallyPublic {
+        Access::WriteUnlocked {
             secrets: write_secrets.clone(),
         },
     )

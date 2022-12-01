@@ -210,13 +210,13 @@ pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) ->
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        Access::ReadLocallyPublic { id: _, read_key } => {
+        Access::ReadUnlocked { id: _, read_key } => {
             set_public_read_key(tx, read_key).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        Access::ReadLocallyPrivate {
+        Access::ReadLocked {
             id,
             local_key,
             read_key,
@@ -226,19 +226,19 @@ pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) ->
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
         }
-        Access::ReadWriteLocallyPublic { secrets } => {
+        Access::WriteUnlocked { secrets } => {
             set_public_read_key(tx, &secrets.read_key).await?;
             remove_secret_read_key(tx).await?;
             set_public_write_key(tx, secrets).await?;
             remove_secret_write_key(tx).await?;
         }
-        Access::ReadWriteLocallyPrivateSingleKey { local_key, secrets } => {
+        Access::WriteLocked { local_key, secrets } => {
             remove_public_read_key(tx).await?;
             set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_key).await?;
             remove_public_write_key(tx).await?;
             set_secret_write_key(tx, secrets, local_key).await?;
         }
-        Access::ReadLocallyPublicWriteLocallyPrivate {
+        Access::WriteLockedReadUnlocked {
             local_write_key,
             secrets,
         } => {
@@ -247,7 +247,7 @@ pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) ->
             remove_public_write_key(tx).await?;
             set_secret_write_key(tx, secrets, local_write_key).await?;
         }
-        Access::ReadWriteLocallyPrivateDistinctKeys {
+        Access::LockedWithDistinctKeys {
             local_read_key,
             local_write_key,
             secrets,
@@ -524,27 +524,27 @@ mod tests {
             Access::Blind {
                 id: RepositoryId::random(),
             },
-            Access::ReadLocallyPublic {
+            Access::ReadUnlocked {
                 id: RepositoryId::random(),
                 read_key: cipher::SecretKey::random(),
             },
-            Access::ReadLocallyPrivate {
+            Access::ReadLocked {
                 id: RepositoryId::random(),
                 local_key: cipher::SecretKey::random(),
                 read_key: cipher::SecretKey::random(),
             },
-            Access::ReadWriteLocallyPublic {
+            Access::WriteUnlocked {
                 secrets: WriteSecrets::random(),
             },
-            Access::ReadWriteLocallyPrivateSingleKey {
+            Access::WriteLocked {
                 local_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
-            Access::ReadLocallyPublicWriteLocallyPrivate {
+            Access::WriteLockedReadUnlocked {
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
-            Access::ReadWriteLocallyPrivateDistinctKeys {
+            Access::LockedWithDistinctKeys {
                 local_read_key: cipher::SecretKey::random(),
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),

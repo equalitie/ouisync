@@ -320,32 +320,32 @@ pub enum Access {
         id: RepositoryId,
     },
     // User doesn't need a secret to read the repository, there's no write access.
-    ReadLocallyPublic {
+    ReadUnlocked {
         id: RepositoryId,
         read_key: cipher::SecretKey,
     },
     // Providing a secret will grant the user read access, there's no write access.
-    ReadLocallyPrivate {
+    ReadLocked {
         id: RepositoryId,
         local_key: cipher::SecretKey,
         read_key: cipher::SecretKey,
     },
     // User doesn't need a secret to read nor write.
-    ReadWriteLocallyPublic {
+    WriteUnlocked {
         secrets: WriteSecrets,
     },
     // Providing a secret user will grant read and write access.
-    ReadWriteLocallyPrivateSingleKey {
+    WriteLocked {
         local_key: cipher::SecretKey,
         secrets: WriteSecrets,
     },
     // User doesn't need a secret to read, but a secret will grant access to write.
-    ReadLocallyPublicWriteLocallyPrivate {
+    WriteLockedReadUnlocked {
         local_write_key: cipher::SecretKey,
         secrets: WriteSecrets,
     },
     // User needs one secret for reading and another one for writing.
-    ReadWriteLocallyPrivateDistinctKeys {
+    LockedWithDistinctKeys {
         local_read_key: cipher::SecretKey,
         local_write_key: cipher::SecretKey,
         secrets: WriteSecrets,
@@ -366,17 +366,15 @@ impl Access {
                 // local secret it won't be syncing.
                 return Err(Error::OperationNotSupported);
             }
-            (None, AccessSecrets::Read { id, read_key }) => {
-                Access::ReadLocallyPublic { id, read_key }
-            }
-            (Some(local_key), AccessSecrets::Read { id, read_key }) => Access::ReadLocallyPrivate {
+            (None, AccessSecrets::Read { id, read_key }) => Access::ReadUnlocked { id, read_key },
+            (Some(local_key), AccessSecrets::Read { id, read_key }) => Access::ReadLocked {
                 id,
                 local_key,
                 read_key,
             },
-            (None, AccessSecrets::Write(secrets)) => Access::ReadWriteLocallyPublic { secrets },
+            (None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
             (Some(local_key), AccessSecrets::Write(secrets)) => {
-                Access::ReadWriteLocallyPrivateSingleKey { local_key, secrets }
+                Access::WriteLocked { local_key, secrets }
             }
         };
         Ok(access)
@@ -385,38 +383,34 @@ impl Access {
     pub fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } => id,
-            Self::ReadLocallyPublic { id, .. } => id,
-            Self::ReadLocallyPrivate { id, .. } => id,
-            Self::ReadWriteLocallyPublic { secrets } => &secrets.id,
-            Self::ReadWriteLocallyPrivateSingleKey { secrets, .. } => &secrets.id,
-            Self::ReadLocallyPublicWriteLocallyPrivate { secrets, .. } => &secrets.id,
-            Self::ReadWriteLocallyPrivateDistinctKeys { secrets, .. } => &secrets.id,
+            Self::ReadUnlocked { id, .. } => id,
+            Self::ReadLocked { id, .. } => id,
+            Self::WriteUnlocked { secrets } => &secrets.id,
+            Self::WriteLocked { secrets, .. } => &secrets.id,
+            Self::WriteLockedReadUnlocked { secrets, .. } => &secrets.id,
+            Self::LockedWithDistinctKeys { secrets, .. } => &secrets.id,
         }
     }
 
     pub fn secrets(self) -> AccessSecrets {
         match self {
             Self::Blind { id } => AccessSecrets::Blind { id },
-            Self::ReadLocallyPublic { id, read_key } => AccessSecrets::Read { id, read_key },
-            Self::ReadLocallyPrivate { id, read_key, .. } => AccessSecrets::Read { id, read_key },
-            Self::ReadWriteLocallyPublic { secrets } => AccessSecrets::Write(secrets),
-            Self::ReadWriteLocallyPrivateSingleKey { secrets, .. } => AccessSecrets::Write(secrets),
-            Self::ReadLocallyPublicWriteLocallyPrivate { secrets, .. } => {
-                AccessSecrets::Write(secrets)
-            }
-            Self::ReadWriteLocallyPrivateDistinctKeys { secrets, .. } => {
-                AccessSecrets::Write(secrets)
-            }
+            Self::ReadUnlocked { id, read_key } => AccessSecrets::Read { id, read_key },
+            Self::ReadLocked { id, read_key, .. } => AccessSecrets::Read { id, read_key },
+            Self::WriteUnlocked { secrets } => AccessSecrets::Write(secrets),
+            Self::WriteLocked { secrets, .. } => AccessSecrets::Write(secrets),
+            Self::WriteLockedReadUnlocked { secrets, .. } => AccessSecrets::Write(secrets),
+            Self::LockedWithDistinctKeys { secrets, .. } => AccessSecrets::Write(secrets),
         }
     }
 
     pub fn local_write_key(&self) -> Option<&cipher::SecretKey> {
         match self {
-            Self::ReadWriteLocallyPrivateSingleKey { local_key, .. } => Some(local_key),
-            Self::ReadLocallyPublicWriteLocallyPrivate {
+            Self::WriteLocked { local_key, .. } => Some(local_key),
+            Self::WriteLockedReadUnlocked {
                 local_write_key, ..
             } => Some(local_write_key),
-            Self::ReadWriteLocallyPrivateDistinctKeys {
+            Self::LockedWithDistinctKeys {
                 local_write_key, ..
             } => Some(local_write_key),
             _ => None,
@@ -427,14 +421,14 @@ impl Access {
     pub fn highest_local_key(&self) -> Option<&cipher::SecretKey> {
         match self {
             Self::Blind { .. } => None,
-            Self::ReadLocallyPublic { .. } => None,
-            Self::ReadLocallyPrivate { local_key, .. } => Some(local_key),
-            Self::ReadWriteLocallyPublic { .. } => None,
-            Self::ReadWriteLocallyPrivateSingleKey { local_key, .. } => Some(local_key),
-            Self::ReadLocallyPublicWriteLocallyPrivate {
+            Self::ReadUnlocked { .. } => None,
+            Self::ReadLocked { local_key, .. } => Some(local_key),
+            Self::WriteUnlocked { .. } => None,
+            Self::WriteLocked { local_key, .. } => Some(local_key),
+            Self::WriteLockedReadUnlocked {
                 local_write_key, ..
             } => Some(local_write_key),
-            Self::ReadWriteLocallyPrivateDistinctKeys {
+            Self::LockedWithDistinctKeys {
                 local_write_key, ..
             } => Some(local_write_key),
         }
