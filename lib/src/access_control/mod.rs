@@ -379,4 +379,21 @@ impl LocalAccess {
             }
         }
     }
+
+    #[cfg(test)]
+    pub fn highest_local_key(&self) -> Option<&cipher::SecretKey> {
+        match self {
+            Self::Blind { .. } => None,
+            Self::ReadLocallyPublic { .. } => None,
+            Self::ReadLocallyPrivate { local_key, .. } => Some(local_key),
+            Self::ReadWriteLocallyPublic { .. } => None,
+            Self::ReadWriteLocallyPrivateSingleKey { local_key, .. } => Some(local_key),
+            Self::ReadLocallyPublicWriteLocallyPrivate {
+                local_write_key, ..
+            } => Some(local_write_key),
+            Self::ReadWriteLocallyPrivateDistinctKeys {
+                local_write_key, ..
+            } => Some(local_write_key),
+        }
+    }
 }
