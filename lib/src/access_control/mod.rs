@@ -334,19 +334,15 @@ pub enum Access {
     WriteUnlocked {
         secrets: WriteSecrets,
     },
-    // Providing a secret user will grant read and write access.
+    // Providing a secret user will grant read and write access. The secret may be different for
+    // reading or writing.
     WriteLocked {
-        local_key: cipher::SecretKey,
+        local_read_key: cipher::SecretKey,
+        local_write_key: cipher::SecretKey,
         secrets: WriteSecrets,
     },
     // User doesn't need a secret to read, but a secret will grant access to write.
     WriteLockedReadUnlocked {
-        local_write_key: cipher::SecretKey,
-        secrets: WriteSecrets,
-    },
-    // User needs one secret for reading and another one for writing.
-    LockedWithDistinctKeys {
-        local_read_key: cipher::SecretKey,
         local_write_key: cipher::SecretKey,
         secrets: WriteSecrets,
     },
@@ -373,9 +369,11 @@ impl Access {
                 read_key,
             },
             (None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
-            (Some(local_key), AccessSecrets::Write(secrets)) => {
-                Access::WriteLocked { local_key, secrets }
-            }
+            (Some(local_key), AccessSecrets::Write(secrets)) => Access::WriteLocked {
+                local_read_key: local_key.clone(),
+                local_write_key: local_key,
+                secrets,
+            },
         };
         Ok(access)
     }
@@ -388,7 +386,6 @@ impl Access {
             Self::WriteUnlocked { secrets } => &secrets.id,
             Self::WriteLocked { secrets, .. } => &secrets.id,
             Self::WriteLockedReadUnlocked { secrets, .. } => &secrets.id,
-            Self::LockedWithDistinctKeys { secrets, .. } => &secrets.id,
         }
     }
 
@@ -400,17 +397,15 @@ impl Access {
             Self::WriteUnlocked { secrets } => AccessSecrets::Write(secrets),
             Self::WriteLocked { secrets, .. } => AccessSecrets::Write(secrets),
             Self::WriteLockedReadUnlocked { secrets, .. } => AccessSecrets::Write(secrets),
-            Self::LockedWithDistinctKeys { secrets, .. } => AccessSecrets::Write(secrets),
         }
     }
 
     pub fn local_write_key(&self) -> Option<&cipher::SecretKey> {
         match self {
-            Self::WriteLocked { local_key, .. } => Some(local_key),
-            Self::WriteLockedReadUnlocked {
+            Self::WriteLocked {
                 local_write_key, ..
             } => Some(local_write_key),
-            Self::LockedWithDistinctKeys {
+            Self::WriteLockedReadUnlocked {
                 local_write_key, ..
             } => Some(local_write_key),
             _ => None,
@@ -424,11 +419,10 @@ impl Access {
             Self::ReadUnlocked { .. } => None,
             Self::ReadLocked { local_key, .. } => Some(local_key),
             Self::WriteUnlocked { .. } => None,
-            Self::WriteLocked { local_key, .. } => Some(local_key),
-            Self::WriteLockedReadUnlocked {
+            Self::WriteLocked {
                 local_write_key, ..
             } => Some(local_write_key),
-            Self::LockedWithDistinctKeys {
+            Self::WriteLockedReadUnlocked {
                 local_write_key, ..
             } => Some(local_write_key),
         }

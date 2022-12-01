@@ -264,12 +264,14 @@ async fn blind_access_non_empty_repo() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
+    let local_key = SecretKey::random();
     // Create the repo and put a file in it.
     let repo = Repository::create_in(
         pool.clone(),
         device_id,
         Access::WriteLocked {
-            local_key: SecretKey::random(),
+            local_read_key: local_key.clone(),
+            local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
         Span::none(),
@@ -332,12 +334,15 @@ async fn blind_access_empty_repo() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
+    let local_key = SecretKey::random();
+
     // Create an empty repo.
     Repository::create_in(
         pool.clone(),
         device_id,
         Access::WriteLocked {
-            local_key: SecretKey::random(),
+            local_read_key: local_key.clone(),
+            local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
         Span::none(),

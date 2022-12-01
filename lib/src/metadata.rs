@@ -232,11 +232,15 @@ pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) ->
             set_public_write_key(tx, secrets).await?;
             remove_secret_write_key(tx).await?;
         }
-        Access::WriteLocked { local_key, secrets } => {
+        Access::WriteLocked {
+            local_read_key,
+            local_write_key,
+            secrets,
+        } => {
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_key).await?;
+            set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_read_key).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, local_key).await?;
+            set_secret_write_key(tx, secrets, local_write_key).await?;
         }
         Access::WriteLockedReadUnlocked {
             local_write_key,
@@ -244,16 +248,6 @@ pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) ->
         } => {
             set_public_read_key(tx, &secrets.read_key).await?;
             remove_secret_read_key(tx).await?;
-            remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, local_write_key).await?;
-        }
-        Access::LockedWithDistinctKeys {
-            local_read_key,
-            local_write_key,
-            secrets,
-        } => {
-            remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_read_key).await?;
             remove_public_write_key(tx).await?;
             set_secret_write_key(tx, secrets, local_write_key).await?;
         }
@@ -537,15 +531,11 @@ mod tests {
                 secrets: WriteSecrets::random(),
             },
             Access::WriteLocked {
-                local_key: cipher::SecretKey::random(),
-                secrets: WriteSecrets::random(),
-            },
-            Access::WriteLockedReadUnlocked {
+                local_read_key: cipher::SecretKey::random(),
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
-            Access::LockedWithDistinctKeys {
-                local_read_key: cipher::SecretKey::random(),
+            Access::WriteLockedReadUnlocked {
                 local_write_key: cipher::SecretKey::random(),
                 secrets: WriteSecrets::random(),
             },
@@ -567,27 +557,4 @@ mod tests {
             assert_eq!(access.secrets(), access_secrets);
         }
     }
-
-    //#[tokio::test(flavor = "multi_thread")]
-    //async fn store_without_local_secret() {
-    //    use crate::access_control::AccessMode;
-
-    //    for access_mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
-    //        let (_base_dir, pool) = db::create_temp().await.unwrap();
-
-    //        let access = AccessSecrets::random_write().with_mode(access_mode);
-    //        assert_eq!(access.access_mode(), access_mode);
-
-    //        let mut tx = pool.begin().await.unwrap();
-    //        initialize_access_secrets(&mut tx, &access, None)
-    //            .await
-    //            .unwrap();
-    //        tx.commit().await.unwrap();
-
-    //        let mut tx = pool.begin().await.unwrap();
-    //        let access_stored = get_access_secrets(&mut tx, None).await.unwrap();
-
-    //        assert_eq!(access_mode, access_stored.access_mode());
-    //    }
-    //}
 }
