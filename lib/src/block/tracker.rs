@@ -1,7 +1,7 @@
 use super::BlockId;
 use slab::Slab;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     sync::{Arc, Mutex as BlockingMutex},
 };
 use tokio::sync::watch;
@@ -49,27 +49,26 @@ impl BlockTracker {
             "`require` can be called only in lazy mode"
         );
 
-        // tracing::debug!(?block_id, "require");
-
         let mut inner = self.shared.inner.lock().unwrap();
 
-        let missing_block = inner
-            .missing_blocks
-            .entry(block_id)
-            .or_insert_with(|| MissingBlock {
-                offers: HashSet::new(),
-                state: MissingBlockState::Required,
-            });
-
-        if missing_block.state.switch_offered_to_required() {
-            self.shared.notify();
+        match inner.missing_blocks.entry(block_id) {
+            Entry::Occupied(mut entry) => {
+                if entry.get_mut().state.switch_offered_to_required() {
+                    self.shared.notify();
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(MissingBlock {
+                    offers: HashSet::new(),
+                    state: MissingBlockState::Required,
+                });
+                self.shared.notify();
+            }
         }
     }
 
-    /// Mark the block request as successfuly completed.
+    /// Mark the block request as successfully completed.
     pub fn complete(&self, block_id: &BlockId) {
-        // tracing::debug!(?block_id, "complete");
-
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
@@ -113,8 +112,6 @@ pub(crate) struct BlockTrackerClient {
 impl BlockTrackerClient {
     /// Offer to request the given block if it is, or will become, required.
     pub fn offer(&self, block_id: BlockId) {
-        // tracing::debug!(?block_id, "offer");
-
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].insert(block_id) {
@@ -146,12 +143,9 @@ impl BlockTrackerClient {
     pub fn cancel(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.clients[self.client_id].remove(block_id) {
-            return;
-        }
+        inner.clients[self.client_id].remove(block_id);
 
-        // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+        let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else { return };
 
         missing_block.offers.remove(&self.client_id);
 
@@ -186,10 +180,45 @@ impl BlockTrackerClient {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
+        // First try to accept a required block offered by this client.
         // TODO: OPTIMIZE (but profile first) this linear lookup
         for block_id in &inner.clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+
+            if missing_block
+                .state
+                .switch_required_to_accepted(self.client_id)
+            {
+                return Some(*block_id);
+            }
+        }
+
+        // If none, try to accept a required block with no offers. We do this to prevent the
+        // following situation:
+        //
+        // A block is initially present, but is part of a an outdated file/directory. A new snapshot
+        // is in the process of being downloaded from a remote replica. During this download, the
+        // block is still present and so is not marked as offered (because at least one of its
+        // local ancestor nodes is still seen as up-to-date). Then before the download completes,
+        // the worker garbage-collects the block. Then the download completes and triggers another
+        // worker run. During this run the block might be marked as required again (because e.g.
+        // the file was modified by the remote replica). But the block hasn't been marked as
+        // offered (because it was still present during the last snapshot download) and so is not
+        // requested. We now have to wait for the next snapshot update from the remote replica
+        // before the block is marked as offered and only then we proceed with requesting it. This
+        // can take arbitrarily long (even indefinitely).
+        //
+        // By accepting also non-offered blocks, we ensure that the missing block is requested as
+        // soon as possible.
+        //
+        // One downside of this is we might send block requests to replicas that don't have then,
+        // wasting some traffic. This situation should not happen too often so this should be
+        // acceptable.
+        for (block_id, missing_block) in &mut inner.missing_blocks {
+            if !missing_block.offers.is_empty() {
+                continue;
+            }
 
             if missing_block
                 .state
@@ -260,6 +289,7 @@ struct MissingBlock {
     state: MissingBlockState,
 }
 
+#[derive(Debug)]
 enum MissingBlockState {
     Offered,
     Required,
@@ -330,22 +360,36 @@ mod tests {
         // Initially no blocks are returned
         assert_eq!(client.try_accept(), None);
 
-        // Required but not offered blocks are not returned
-        let block0 = make_block();
-        tracker.require(block0.id);
-        assert_eq!(client.try_accept(), None);
-
         // Offered but not required blocks are not returned
-        let block1 = make_block();
-        client.offer(block1.id);
+        let block0 = make_block();
+        client.offer(block0.id);
         assert_eq!(client.try_accept(), None);
 
         // Required + offered blocks are returned...
-        client.offer(block0.id);
+        tracker.require(block0.id);
         assert_eq!(client.try_accept(), Some(block0.id));
 
         // ...but only once.
         assert_eq!(client.try_accept(), None);
+    }
+
+    #[test]
+    fn lazy_required_unoffered() {
+        let tracker = BlockTracker::lazy();
+        let client = tracker.client();
+
+        let block0 = make_block();
+        let block1 = make_block();
+
+        tracker.require(block0.id);
+        tracker.require(block1.id);
+
+        // Required + offered blocks are returned first...
+        client.offer(block1.id);
+        assert_eq!(client.try_accept(), Some(block1.id));
+
+        // ...but required + non offered blocks are eventually returned as well
+        assert_eq!(client.try_accept(), Some(block0.id));
     }
 
     #[test]
