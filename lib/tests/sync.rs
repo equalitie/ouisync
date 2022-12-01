@@ -646,8 +646,6 @@ async fn remote_rename_directory_during_conflict() {
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
-// FIXME: https://github.com/equalitie/ouisync/issues/95
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
     let mut env = Env::with_seed(0);
