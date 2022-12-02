@@ -301,10 +301,12 @@ async fn blind_access_non_empty_repo() {
             Span::none(),
         )
         .await
-        .expect(&format!(
-            "Repo should open in blind mode (local_secret.is_some:{:?})",
-            local_secret.is_some(),
-        ));
+        .unwrap_or_else(|_| {
+            panic!(
+                "Repo should open in blind mode (local_secret.is_some:{:?})",
+                local_secret.is_some(),
+            )
+        });
 
         // Reading files is not allowed.
         assert_matches!(

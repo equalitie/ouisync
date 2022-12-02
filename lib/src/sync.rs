@@ -24,7 +24,9 @@ pub mod broadcast {
             Self {
                 rx: inner,
                 interval,
-                last_recv: Instant::now() - interval,
+                last_recv: Instant::now()
+                    .checked_sub(interval)
+                    .expect("Interval should be smaller than the time since epoch"),
             }
         }
 

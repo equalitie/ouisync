@@ -133,7 +133,11 @@ impl PortForwarder {
 
             // Cleanup: remove devices not seen in a while.
             job_handles.lock().unwrap().retain(|_uri, device| {
-                device.last_seen >= Instant::now() - (DISCOVERY_DURATION + SLEEP_DURATION) * 3
+                // Unwrap OK because we're not anywhere near the epoch.
+                device.last_seen
+                    >= Instant::now()
+                        .checked_sub((DISCOVERY_DURATION + SLEEP_DURATION) * 3)
+                        .unwrap()
             });
 
             let mut device_urls =

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
-use ouisync_lib::{AccessSecrets, MasterSecret, Repository};
+use ouisync_lib::{Access, Repository, RepositoryDb, WriteSecrets};
 use ouisync_vfs::MountGuard;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::path::Path;
@@ -45,10 +45,13 @@ mod utils {
         tokio::fs::create_dir_all(&mount_dir).await.unwrap();
 
         let repo = Repository::create(
-            base_dir.path().join("repo.db"),
+            RepositoryDb::create(base_dir.path().join("repo.db"))
+                .await
+                .unwrap(),
             rng.gen(),
-            MasterSecret::generate(&mut rng),
-            AccessSecrets::generate_write(&mut rng),
+            Access::WriteUnlocked {
+                secrets: WriteSecrets::generate(&mut rng),
+            },
         )
         .await
         .unwrap();
