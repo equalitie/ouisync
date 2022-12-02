@@ -2,12 +2,12 @@ use crate::crypto::{cipher::SecretKey, Password};
 use rand::{CryptoRng, Rng};
 
 #[derive(Clone)]
-pub enum MasterSecret {
+pub enum LocalSecret {
     Password(Password),
     SecretKey(SecretKey),
 }
 
-impl MasterSecret {
+impl LocalSecret {
     /// Generates random master secret containing a secret key.
     pub fn random() -> Self {
         Self::SecretKey(SecretKey::random())

@@ -5,8 +5,8 @@ use super::{
 use ouisync_lib::{
     crypto::Password,
     network::{self, Registration},
-    path, AccessMode, AccessSecrets, EntryType, Error, Event, MasterSecret, Payload, Repository,
-    Result, ShareToken,
+    path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
+    Repository, RepositoryDb, Result, ShareToken,
 };
 use std::{os::raw::c_char, ptr, slice, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
@@ -25,11 +25,22 @@ pub struct RepositoryHolder {
     registration: Registration,
 }
 
-/// Creates a new repository.
+/// Creates a new repository and set access to it based on the following table:
+///
+/// local_read_password  |  local_write_password  |  token access  |  result
+/// ---------------------+------------------------+----------------+------------------------------
+/// null or any          |  null or any           |  blind         |  blind replica
+/// null                 |  null or any           |  read          |  read without password
+/// read_pwd             |  null or any           |  read          |  read with read_pwd as password
+/// null                 |  null                  |  write         |  read and write without password
+/// any                  |  null                  |  write         |  read (only!) with password
+/// null                 |  any                   |  write         |  read without password, require password for writing
+/// any                  |  any                   |  write         |  read with one password, write with (possibly same) one
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
     store: *const c_char,
-    master_password: *const c_char,
+    local_read_password: *const c_char,
+    local_write_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
@@ -38,7 +49,17 @@ pub unsafe extern "C" fn repository_create(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let master_password = Password::new(utils::ptr_to_str(master_password)?);
+        let local_read_password = if local_read_password.is_null() {
+            None
+        } else {
+            Some(Password::new(utils::ptr_to_str(local_read_password)?))
+        };
+
+        let local_write_password = if local_write_password.is_null() {
+            None
+        } else {
+            Some(Password::new(utils::ptr_to_str(local_write_password)?))
+        };
 
         let access_secrets = if share_token.is_null() {
             AccessSecrets::random_write()
@@ -52,13 +73,23 @@ pub unsafe extern "C" fn repository_create(
 
         ctx.spawn(
             async move {
-                let repository = Repository::create(
-                    store.into_std_path_buf(),
-                    device_id,
-                    MasterSecret::Password(master_password),
-                    access_secrets,
-                )
-                .await?;
+                let db = RepositoryDb::create(store.into_std_path_buf()).await?;
+
+                let local_read_key = if let Some(local_read_password) = local_read_password {
+                    Some(db.password_to_key(local_read_password).await?)
+                } else {
+                    None
+                };
+
+                let local_write_key = if let Some(local_write_password) = local_write_password {
+                    Some(db.password_to_key(local_write_password).await?)
+                } else {
+                    None
+                };
+
+                let access = Access::new(local_read_key, local_write_key, access_secrets);
+
+                let repository = Repository::create(db, device_id, access).await?;
 
                 let registration = network_handle.register(repository.store().clone());
 
@@ -82,7 +113,7 @@ pub unsafe extern "C" fn repository_create(
 #[no_mangle]
 pub unsafe extern "C" fn repository_open(
     store: *const c_char,
-    master_password: *const c_char,
+    local_password: *const c_char,
     port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
     session::with(port, |ctx| {
@@ -90,10 +121,10 @@ pub unsafe extern "C" fn repository_open(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let master_password = if master_password.is_null() {
+        let local_password = if local_password.is_null() {
             None
         } else {
-            Some(Password::new(utils::ptr_to_str(master_password)?))
+            Some(Password::new(utils::ptr_to_str(local_password)?))
         };
 
         let span = ctx.repos_span().clone();
@@ -103,7 +134,7 @@ pub unsafe extern "C" fn repository_open(
                 let repository = Repository::open(
                     store.into_std_path_buf(),
                     device_id,
-                    master_password.map(MasterSecret::Password),
+                    local_password.map(LocalSecret::Password),
                 )
                 .await?;
 
@@ -134,6 +165,40 @@ pub unsafe extern "C" fn repository_close(
     session::with(port, |ctx| {
         let holder = handle.release();
         ctx.spawn(async move { holder.repository.close().await })
+    })
+}
+
+/// Returns true if the repository requires a local password to be opened for reading.
+#[no_mangle]
+pub unsafe extern "C" fn repository_requires_local_password_for_reading(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<bool>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+        ctx.spawn(async move {
+            holder
+                .repository
+                .requires_local_password_for_reading()
+                .await
+        })
+    })
+}
+
+/// Returns true if the repository requires a local password to be opened for writing.
+#[no_mangle]
+pub unsafe extern "C" fn repository_requires_local_password_for_writing(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<bool>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+        ctx.spawn(async move {
+            holder
+                .repository
+                .requires_local_password_for_writing()
+                .await
+        })
     })
 }
 

@@ -4,7 +4,10 @@ use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
 use ouisync_lib::{
-    device_id, network::Network, AccessSecrets, ConfigStore, Repository, ShareToken,
+    crypto::cipher::SecretKey,
+    device_id::{self, DeviceId},
+    network::Network,
+    Access, AccessSecrets, ConfigStore, LocalSecret, Repository, RepositoryDb, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -15,6 +18,38 @@ use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 pub(crate) const APP_NAME: &str = "ouisync";
+
+async fn secret_to_key(
+    db: &RepositoryDb,
+    secret: Option<LocalSecret>,
+) -> Result<Option<SecretKey>> {
+    let secret = if let Some(secret) = secret {
+        secret
+    } else {
+        return Ok(None);
+    };
+
+    let key = match secret {
+        LocalSecret::Password(pwd) => db.password_to_key(pwd).await?,
+        LocalSecret::SecretKey(key) => key,
+    };
+    Ok(Some(key))
+}
+
+async fn create_repository(
+    name: &str,
+    device_id: DeviceId,
+    secrets: AccessSecrets,
+    options: &Options,
+) -> Result<Repository> {
+    let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
+    let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
+    // TODO: In CLI we currently support only a single (optional) user secret for writing and
+    // reading, but the code allows for having them distinct.
+    let access = Access::new(local_key.clone(), local_key, secrets);
+    let repo = Repository::create(db, device_id, access).await?;
+    Ok(repo)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,14 +70,8 @@ async fn main() -> Result<()> {
     let mut repos = HashMap::new();
 
     for name in &options.create {
-        let secret = options.secret_for_repo(name)?;
-        let repo = Repository::create(
-            options.repository_path(name)?,
-            device_id,
-            secret,
-            AccessSecrets::random_write(),
-        )
-        .await?;
+        let repo =
+            create_repository(name, device_id, AccessSecrets::random_write(), &options).await?;
 
         repos.insert(name.clone(), repo);
     }
@@ -61,7 +90,7 @@ async fn main() -> Result<()> {
             Repository::open(
                 options.repository_path(name)?,
                 device_id,
-                options.secret_for_repo(name).ok(),
+                options.secret_for_repo(name)?,
             )
             .await?
             .secrets()
@@ -91,17 +120,11 @@ async fn main() -> Result<()> {
 
     for token in options.accept.iter().chain(&accept_file_tokens) {
         let name = token.suggested_name();
-        let access_secrets = token.secrets();
-        let master_secret = options.secret_for_repo(&name)?;
 
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
-            let repo = Repository::create(
-                options.repository_path(name.as_ref())?,
-                device_id,
-                master_secret,
-                access_secrets.clone(),
-            )
-            .await?;
+            let repo =
+                create_repository(name.as_ref(), device_id, token.secrets().clone(), &options)
+                    .await?;
 
             entry.insert(repo);
 
@@ -141,7 +164,7 @@ async fn main() -> Result<()> {
             Repository::open(
                 options.repository_path(name)?,
                 device_id,
-                options.secret_for_repo(name).ok(),
+                options.secret_for_repo(name)?,
             )
             .await?
         };

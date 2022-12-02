@@ -1,6 +1,6 @@
 use ouisync::{
-    network::Network, AccessSecrets, ConfigStore, Event, MasterSecret, Payload, PeerAddr,
-    Repository,
+    network::Network, Access, AccessSecrets, ConfigStore, Event, Payload, PeerAddr, Repository,
+    RepositoryDb,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
@@ -62,10 +62,9 @@ impl Env {
 
     pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
         Repository::create(
-            &self.next_store(),
+            RepositoryDb::create(&self.next_store()).await.unwrap(),
             self.rng.gen(),
-            MasterSecret::generate(&mut self.rng),
-            secrets,
+            Access::new(None, None, secrets),
         )
         .await
         .unwrap()

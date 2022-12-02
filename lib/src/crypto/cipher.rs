@@ -28,6 +28,7 @@ pub(crate) const NONCE_SIZE: usize =
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 pub struct SecretKey(Arc<Zeroizing<[u8; Self::SIZE]>>);
 
 impl SecretKey {

@@ -8,12 +8,13 @@ pub use self::id::RepositoryId;
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
-    access_control::{AccessMode, AccessSecrets, MasterSecret},
+    access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher,
         sign::{self, PublicKey},
+        Password,
     },
     db,
     debug::DebugPrinter,
@@ -40,6 +41,24 @@ use tracing::{instrument, instrument::Instrument, Span};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+pub struct RepositoryDb {
+    pool: db::Pool,
+    span: Span,
+}
+
+impl RepositoryDb {
+    pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
+        let span = tracing::info_span!("repository", db = %store.as_ref().display());
+        let pool = db::create(store).await?;
+        Ok(Self { pool, span })
+    }
+
+    pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
+        let mut tx = self.pool.begin().await?;
+        metadata::password_to_key(&mut tx, &password).await
+    }
+}
+
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
@@ -48,49 +67,47 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(
-        store: impl AsRef<Path>,
-        device_id: DeviceId,
-        master_secret: MasterSecret,
-        access_secrets: AccessSecrets,
-    ) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
-        let pool = db::create(store).await?;
-
-        Self::create_in(pool, device_id, master_secret, access_secrets, span).await
+    pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
+        Self::create_in(db.pool, device_id, access, db.span).await
     }
 
     /// Creates a new repository in an already opened database.
     pub(crate) async fn create_in(
         pool: db::Pool,
         device_id: DeviceId,
-        master_secret: MasterSecret,
-        access_secrets: AccessSecrets,
+        access: Access,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let master_key = metadata::secret_to_key(&mut tx, master_secret).await?;
-        let this_writer_id = generate_writer_id(&mut tx, &device_id, &master_key).await?;
-        metadata::set_access_secrets(&mut tx, &access_secrets, &master_key).await?;
+        //let local_key = if let Some(local_secret) = local_secret {
+        //    Some(metadata::secret_to_key(&mut tx, local_secret).await?)
+        //} else {
+        //    None
+        //};
+
+        let this_writer_id =
+            generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
+
+        metadata::initialize_access_secrets(&mut tx, &access).await?;
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access_secrets, span).await
+        Self::new(pool, this_writer_id, access.secrets(), span).await
     }
 
     /// Opens an existing repository.
     ///
     /// # Arguments
     ///
-    /// * `master_secret` - A user provided secret to encrypt the access secrets. If not provided,
-    ///                     the repository will be opened as a blind replica.
+    /// * `local_secret` - A user provided secret to encrypt the access secrets. If not provided,
+    ///                    the repository will be opened as a blind replica.
     pub async fn open(
         store: impl AsRef<Path>,
         device_id: DeviceId,
-        master_secret: Option<MasterSecret>,
+        local_secret: Option<LocalSecret>,
     ) -> Result<Self> {
-        Self::open_with_mode(store, device_id, master_secret, AccessMode::Write).await
+        Self::open_with_mode(store, device_id, local_secret, AccessMode::Write).await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
@@ -98,52 +115,46 @@ impl Repository {
     pub async fn open_with_mode(
         store: impl AsRef<Path>,
         device_id: DeviceId,
-        master_secret: Option<MasterSecret>,
+        local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
     ) -> Result<Self> {
         let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::open(store).await?;
 
-        Self::open_in(pool, device_id, master_secret, max_access_mode, span).await
+        Self::open_in(pool, device_id, local_secret, max_access_mode, span).await
     }
 
     /// Opens an existing repository in an already opened database.
     pub(crate) async fn open_in(
         pool: db::Pool,
         device_id: DeviceId,
-        master_secret: Option<MasterSecret>,
-        // Allows to reduce the access mode (e.g. open in read-only mode even if the master secret
+        local_secret: Option<LocalSecret>,
+        // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
         span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        let master_key = if let Some(master_secret) = master_secret {
-            Some(metadata::secret_to_key(&mut tx, master_secret).await?)
+        let local_key = if let Some(local_secret) = local_secret {
+            let key = match local_secret {
+                LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
+                LocalSecret::SecretKey(key) => key,
+            };
+            Some(key)
         } else {
             None
         };
 
-        let access_secrets = if let Some(master_key) = &master_key {
-            metadata::get_access_secrets(&mut tx, master_key).await?
-        } else {
-            let id = metadata::get_repository_id(&mut tx).await?;
-            AccessSecrets::Blind { id }
-        };
+        let access_secrets = metadata::get_access_secrets(&mut tx, local_key.as_ref()).await?;
 
         // If we are writer, load the writer id from the db, otherwise use a dummy random one.
         let this_writer_id = if access_secrets.can_write() {
-            // This unwrap is ok because the fact that we have write access means the access
-            // secrets must have been successfully decrypted and thus we must have a valid
-            // master secret.
-            let master_key = master_key.as_ref().unwrap();
-
             if metadata::check_device_id(&mut tx, &device_id).await? {
-                metadata::get_writer_id(&mut tx, master_key).await?
+                metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&mut tx, &device_id, master_key).await?
+                generate_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
@@ -205,6 +216,27 @@ impl Repository {
             worker_handle,
             _progress_reporter_handle,
         })
+    }
+
+    pub async fn requires_local_password_for_reading(&self) -> Result<bool> {
+        let mut conn = self.db().acquire().await?;
+        metadata::requires_local_password_for_reading(&mut conn).await
+    }
+
+    pub async fn requires_local_password_for_writing(&self) -> Result<bool> {
+        let mut conn = self.db().acquire().await?;
+        metadata::requires_local_password_for_writing(&mut conn).await
+    }
+
+    pub async fn set_access(&self, access: &Access) -> Result<()> {
+        if access.id() != self.shared.secrets.id() {
+            return Err(Error::PermissionDenied);
+        }
+
+        let mut tx = self.db().begin().await?;
+        metadata::set_access(&mut tx, access).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     pub fn secrets(&self) -> &AccessSecrets {
@@ -578,12 +610,12 @@ impl Shared {
 async fn generate_writer_id(
     tx: &mut db::Transaction<'_>,
     device_id: &DeviceId,
-    master_key: &cipher::SecretKey,
+    local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {
     // TODO: we should be storing the SK in the db, not the PK.
     let writer_id = sign::SecretKey::random();
     let writer_id = PublicKey::from(&writer_id);
-    metadata::set_writer_id(tx, &writer_id, device_id, master_key).await?;
+    metadata::set_writer_id(tx, &writer_id, device_id, local_key).await?;
 
     Ok(writer_id)
 }

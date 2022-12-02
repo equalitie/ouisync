@@ -2,11 +2,11 @@
 #![allow(deprecated)]
 
 use crate::APP_NAME;
-use anyhow::{format_err, Context, Error, Result};
+use anyhow::{Context, Error, Result};
 use clap::Parser;
 use ouisync_lib::{
     crypto::{cipher::SecretKey, Password},
-    AccessMode, MasterSecret, PeerAddr, ShareToken,
+    AccessMode, LocalSecret, PeerAddr, ShareToken,
 };
 use std::{
     path::{Path, PathBuf},
@@ -69,10 +69,10 @@ pub(crate) struct Options {
     #[clap(long, value_name = "NAME:PASSWD")]
     pub password: Vec<Named<String>>,
 
-    /// Pre-hashed 32 byte long (64 hexadecimal characters) master secret per repository. This is
-    /// mainly intended for testing as password derivation is rather slow and some of the tests may
-    /// timeout if the `password` argument is used instead. For all other use cases, prefer to use
-    /// the `password` argument instead.
+    /// Pre-hashed 32 byte long (64 hexadecimal characters) local secret per repository. This is
+    /// mainly intended for testing as password derivation is intentionally slow and some of the
+    /// tests may timeout if the `password` argument is used instead. For all other use cases,
+    /// prefer to use the `password` argument instead.
     // TODO: Zeroize
     #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
@@ -141,22 +141,20 @@ impl Options {
             .with_extension("db"))
     }
 
-    pub fn secret_for_repo(&self, repo_name: &str) -> Result<MasterSecret> {
+    pub fn secret_for_repo(&self, repo_name: &str) -> Result<Option<LocalSecret>> {
         let key = self
             .key
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
-            .map(|k| {
-                MasterSecret::SecretKey(SecretKey::parse_hex(k).expect("failed to parse key"))
-            });
+            .map(|k| LocalSecret::SecretKey(SecretKey::parse_hex(k).expect("failed to parse key")));
 
         let pwd = self
             .password
             .iter()
             .find(|e| e.name == repo_name)
             .map(|e| e.value.as_str())
-            .map(|k| MasterSecret::Password(Password::new(k)));
+            .map(|k| LocalSecret::Password(Password::new(k)));
 
         match (key, pwd) {
             (Some(_), Some(_)) => {
@@ -165,12 +163,9 @@ impl Options {
                     repo_name
                 );
             }
-            (Some(k), None) => Ok(k),
-            (None, Some(p)) => Ok(p),
-            (None, None) => Err(format_err!(
-                "missing password or key for repository {:?}",
-                repo_name
-            )),
+            (Some(k), None) => Ok(Some(k)),
+            (None, Some(p)) => Ok(Some(p)),
+            (None, None) => Ok(None),
         }
     }
 }

@@ -6,8 +6,8 @@ use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, AccessMode, AccessSecrets, EntryType, Error, File, MasterSecret,
-    Repository, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    crypto::sign::PublicKey, Access, AccessMode, AccessSecrets, EntryType, Error, File, Repository,
+    RepositoryDb, WriteSecrets, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
@@ -376,18 +376,20 @@ async fn recreate_local_branch() {
 
     let store_a = env.next_store();
     let device_id_a = env.rng.gen();
-    let master_secret_a = MasterSecret::generate(&mut env.rng);
-    let access_secrets = AccessSecrets::generate_write(&mut env.rng);
+    let write_secrets = WriteSecrets::generate(&mut env.rng);
     let repo_a = Repository::create(
-        &store_a,
+        RepositoryDb::create(&store_a).await.unwrap(),
         device_id_a,
-        master_secret_a.clone(),
-        access_secrets.clone(),
+        Access::WriteUnlocked {
+            secrets: write_secrets.clone(),
+        },
     )
     .await
     .unwrap();
 
-    let repo_b = env.create_repo_with_secrets(access_secrets.clone()).await;
+    let repo_b = env
+        .create_repo_with_secrets(AccessSecrets::Write(write_secrets.clone()))
+        .await;
 
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
     file.write(b"hello from A\n").await.unwrap();
@@ -404,14 +406,9 @@ async fn recreate_local_branch() {
 
     // A: Reopen the repo in read mode to disable merger
     drop(repo_a);
-    let repo_a = Repository::open_with_mode(
-        &store_a,
-        device_id_a,
-        Some(master_secret_a.clone()),
-        AccessMode::Read,
-    )
-    .await
-    .unwrap();
+    let repo_a = Repository::open_with_mode(&store_a, device_id_a, None, AccessMode::Read)
+        .await
+        .unwrap();
 
     // A + B: establish link
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
@@ -442,9 +439,7 @@ async fn recreate_local_branch() {
 
     // A: Reopen in write mode
     drop(repo_a);
-    let repo_a = Repository::open(&store_a, device_id_a, Some(master_secret_a))
-        .await
-        .unwrap();
+    let repo_a = Repository::open(&store_a, device_id_a, None).await.unwrap();
 
     // A: Modify the repo
     repo_a.create_file("bar.txt").await.unwrap();

@@ -1,13 +1,14 @@
 mod access_mode;
-mod master_secret;
+mod local_secret;
 mod share_token;
 
-pub use self::{access_mode::AccessMode, master_secret::MasterSecret, share_token::ShareToken};
+pub use self::{access_mode::AccessMode, local_secret::LocalSecret, share_token::ShareToken};
 
 use crate::{
     crypto::{cipher, sign},
     error::Error,
     repository::RepositoryId,
+    Result,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
@@ -152,6 +153,30 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
+#[cfg(test)]
+impl PartialEq for AccessSecrets {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AccessSecrets::Blind { id: id1 }, AccessSecrets::Blind { id: id2 }) => id1.eq(id2),
+            (
+                AccessSecrets::Read {
+                    id: id1,
+                    read_key: k1,
+                },
+                AccessSecrets::Read {
+                    id: id2,
+                    read_key: k2,
+                },
+            ) => id1.eq(id2) && k1 == k2,
+            (AccessSecrets::Write(ss), AccessSecrets::Write(os)) => ss.eq(os),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Eq for AccessSecrets {}
+
 /// Secrets for write access.
 #[derive(Clone)]
 pub struct WriteSecrets {
@@ -162,15 +187,27 @@ pub struct WriteSecrets {
 
 impl WriteSecrets {
     /// Generates random write secrets using the provided RNG.
-    pub(crate) fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
+    pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
         Self::from(sign::Keypair::generate(rng))
     }
 
     /// Generates random write secrets using OsRng.
-    pub(crate) fn random() -> Self {
+    pub fn random() -> Self {
         Self::generate(&mut OsRng)
     }
 }
+
+#[cfg(test)]
+impl PartialEq for WriteSecrets {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.read_key == other.read_key
+            && self.write_keys.public == other.write_keys.public
+    }
+}
+
+#[cfg(test)]
+impl Eq for WriteSecrets {}
 
 impl From<sign::Keypair> for WriteSecrets {
     fn from(keys: sign::Keypair) -> Self {
@@ -274,5 +311,128 @@ impl From<cipher::SecretKeyLengthError> for DecodeError {
 impl From<DecodeError> for Error {
     fn from(_: DecodeError) -> Self {
         Self::MalformedData
+    }
+}
+
+pub enum Access {
+    // User has no read nor write access, can only sync.
+    Blind {
+        id: RepositoryId,
+    },
+    // User doesn't need a secret to read the repository, there's no write access.
+    ReadUnlocked {
+        id: RepositoryId,
+        read_key: cipher::SecretKey,
+    },
+    // Providing a secret will grant the user read access, there's no write access.
+    ReadLocked {
+        id: RepositoryId,
+        local_key: cipher::SecretKey,
+        read_key: cipher::SecretKey,
+    },
+    // User doesn't need a secret to read nor write.
+    WriteUnlocked {
+        secrets: WriteSecrets,
+    },
+    // Providing a secret user will grant read and write access. The secret may be different for
+    // reading or writing.
+    WriteLocked {
+        local_read_key: cipher::SecretKey,
+        local_write_key: cipher::SecretKey,
+        secrets: WriteSecrets,
+    },
+    // User doesn't need a secret to read, but a secret will grant access to write.
+    WriteLockedReadUnlocked {
+        local_write_key: cipher::SecretKey,
+        secrets: WriteSecrets,
+    },
+}
+
+impl Access {
+    pub fn new(
+        local_read_key: Option<cipher::SecretKey>,
+        local_write_key: Option<cipher::SecretKey>,
+        secrets: AccessSecrets,
+    ) -> Self {
+        match (local_read_key, local_write_key, secrets) {
+            (_, _, AccessSecrets::Blind { id }) => Access::Blind { id },
+            (None, _, AccessSecrets::Read { id, read_key }) => {
+                Access::ReadUnlocked { id, read_key }
+            }
+            (Some(local_read_key), _, AccessSecrets::Read { id, read_key }) => Access::ReadLocked {
+                id,
+                local_key: local_read_key,
+                read_key,
+            },
+            (None, None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
+            (Some(local_read_key), None, AccessSecrets::Write(secrets)) => Access::ReadLocked {
+                id: secrets.id,
+                local_key: local_read_key,
+                read_key: secrets.read_key,
+            },
+            (None, Some(local_write_key), AccessSecrets::Write(secrets)) => {
+                Access::WriteLockedReadUnlocked {
+                    local_write_key,
+                    secrets,
+                }
+            }
+            (Some(local_read_key), Some(local_write_key), AccessSecrets::Write(secrets)) => {
+                Access::WriteLocked {
+                    local_read_key,
+                    local_write_key,
+                    secrets,
+                }
+            }
+        }
+    }
+
+    pub fn id(&self) -> &RepositoryId {
+        match self {
+            Self::Blind { id } => id,
+            Self::ReadUnlocked { id, .. } => id,
+            Self::ReadLocked { id, .. } => id,
+            Self::WriteUnlocked { secrets } => &secrets.id,
+            Self::WriteLocked { secrets, .. } => &secrets.id,
+            Self::WriteLockedReadUnlocked { secrets, .. } => &secrets.id,
+        }
+    }
+
+    pub fn secrets(self) -> AccessSecrets {
+        match self {
+            Self::Blind { id } => AccessSecrets::Blind { id },
+            Self::ReadUnlocked { id, read_key } => AccessSecrets::Read { id, read_key },
+            Self::ReadLocked { id, read_key, .. } => AccessSecrets::Read { id, read_key },
+            Self::WriteUnlocked { secrets } => AccessSecrets::Write(secrets),
+            Self::WriteLocked { secrets, .. } => AccessSecrets::Write(secrets),
+            Self::WriteLockedReadUnlocked { secrets, .. } => AccessSecrets::Write(secrets),
+        }
+    }
+
+    pub fn local_write_key(&self) -> Option<&cipher::SecretKey> {
+        match self {
+            Self::WriteLocked {
+                local_write_key, ..
+            } => Some(local_write_key),
+            Self::WriteLockedReadUnlocked {
+                local_write_key, ..
+            } => Some(local_write_key),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn highest_local_key(&self) -> Option<&cipher::SecretKey> {
+        match self {
+            Self::Blind { .. } => None,
+            Self::ReadUnlocked { .. } => None,
+            Self::ReadLocked { local_key, .. } => Some(local_key),
+            Self::WriteUnlocked { .. } => None,
+            Self::WriteLocked {
+                local_write_key, ..
+            } => Some(local_write_key),
+            Self::WriteLockedReadUnlocked {
+                local_write_key, ..
+            } => Some(local_write_key),
+        }
     }
 }
