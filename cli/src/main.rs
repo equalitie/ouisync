@@ -4,8 +4,10 @@ use self::options::{Named, Options};
 use anyhow::{format_err, Result};
 use clap::Parser;
 use ouisync_lib::{
-    crypto::cipher::SecretKey, device_id, network::Network, Access, AccessSecrets, ConfigStore,
-    LocalSecret, Repository, RepositoryDb, ShareToken,
+    crypto::cipher::SecretKey,
+    device_id::{self, DeviceId},
+    network::Network,
+    Access, AccessSecrets, ConfigStore, LocalSecret, Repository, RepositoryDb, ShareToken,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -34,6 +36,21 @@ async fn secret_to_key(
     Ok(Some(key))
 }
 
+async fn create_repository(
+    name: &str,
+    device_id: DeviceId,
+    secrets: AccessSecrets,
+    options: &Options,
+) -> Result<Repository> {
+    let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
+    let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
+    // TODO: In CLI we currently support only a single (optional) user secret for writing and
+    // reading, but the code allows for having them distinct.
+    let access = Access::new(local_key.clone(), local_key, secrets);
+    let repo = Repository::create(db, device_id, access).await?;
+    Ok(repo)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let options = Options::parse();
@@ -53,10 +70,8 @@ async fn main() -> Result<()> {
     let mut repos = HashMap::new();
 
     for name in &options.create {
-        let db = RepositoryDb::create(options.repository_path(name)?).await?;
-        let local_key = secret_to_key(&db, options.secret_for_repo(name)?).await?;
-        let access = Access::default_for_creation(local_key, AccessSecrets::random_write())?;
-        let repo = Repository::create(db, device_id, access).await?;
+        let repo =
+            create_repository(name, device_id, AccessSecrets::random_write(), &options).await?;
 
         repos.insert(name.clone(), repo);
     }
@@ -107,10 +122,9 @@ async fn main() -> Result<()> {
         let name = token.suggested_name();
 
         if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
-            let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
-            let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
-            let access = Access::default_for_creation(local_key, token.secrets().clone())?;
-            let repo = Repository::create(db, device_id, access).await?;
+            let repo =
+                create_repository(name.as_ref(), device_id, token.secrets().clone(), &options)
+                    .await?;
 
             entry.insert(repo);
 

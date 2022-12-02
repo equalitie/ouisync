@@ -65,7 +65,7 @@ pub unsafe extern "C" fn repository_create(
                     None
                 };
 
-                let access = Access::default_for_creation(local_key, access_secrets)?;
+                let access = Access::new(local_key.clone(), local_key, access_secrets);
 
                 let repository = Repository::create(db, device_id, access).await?;
 

@@ -349,33 +349,41 @@ pub enum Access {
 }
 
 impl Access {
-    pub fn default_for_creation(
-        local_key: Option<cipher::SecretKey>,
+    pub fn new(
+        local_read_key: Option<cipher::SecretKey>,
+        local_write_key: Option<cipher::SecretKey>,
         secrets: AccessSecrets,
-    ) -> Result<Self> {
-        let access = match (local_key, secrets) {
-            (None, AccessSecrets::Blind { id }) => Access::Blind { id },
-            (Some(_), AccessSecrets::Blind { .. }) => {
-                // TODO: This might be an interesting case to implement in the future. It would be
-                // for people who don't want anyone to be able to find out they have a particular
-                // repository on their device.  The drawback is that unless it's unlocked with a
-                // local secret it won't be syncing.
-                return Err(Error::OperationNotSupported);
+    ) -> Self {
+        match (local_read_key, local_write_key, secrets) {
+            (_, _, AccessSecrets::Blind { id }) => Access::Blind { id },
+            (None, _, AccessSecrets::Read { id, read_key }) => {
+                Access::ReadUnlocked { id, read_key }
             }
-            (None, AccessSecrets::Read { id, read_key }) => Access::ReadUnlocked { id, read_key },
-            (Some(local_key), AccessSecrets::Read { id, read_key }) => Access::ReadLocked {
+            (Some(local_read_key), _, AccessSecrets::Read { id, read_key }) => Access::ReadLocked {
                 id,
-                local_key,
+                local_key: local_read_key,
                 read_key,
             },
-            (None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
-            (Some(local_key), AccessSecrets::Write(secrets)) => Access::WriteLocked {
-                local_read_key: local_key.clone(),
-                local_write_key: local_key,
-                secrets,
+            (None, None, AccessSecrets::Write(secrets)) => Access::WriteUnlocked { secrets },
+            (Some(local_read_key), None, AccessSecrets::Write(secrets)) => Access::ReadLocked {
+                id: secrets.id,
+                local_key: local_read_key,
+                read_key: secrets.read_key,
             },
-        };
-        Ok(access)
+            (None, Some(local_write_key), AccessSecrets::Write(secrets)) => {
+                Access::WriteLockedReadUnlocked {
+                    local_write_key,
+                    secrets,
+                }
+            }
+            (Some(local_read_key), Some(local_write_key), AccessSecrets::Write(secrets)) => {
+                Access::WriteLocked {
+                    local_read_key,
+                    local_write_key,
+                    secrets,
+                }
+            }
+        }
     }
 
     pub fn id(&self) -> &RepositoryId {

@@ -64,7 +64,7 @@ impl Env {
         Repository::create(
             RepositoryDb::create(&self.next_store()).await.unwrap(),
             self.rng.gen(),
-            Access::default_for_creation(None, secrets).unwrap(),
+            Access::new(None, None, secrets),
         )
         .await
         .unwrap()
