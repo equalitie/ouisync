@@ -25,12 +25,22 @@ pub struct RepositoryHolder {
     registration: Registration,
 }
 
-/// Creates a new repository.
-/// If the `local_password` argument is null the write and read keys will not be stored encrypted.
+/// Creates a new repository and set access to it based on the following table:
+///
+/// local_read_password  |  local_write_password  |  token access  |  result
+/// ---------------------+------------------------+----------------+------------------------------
+/// null or any          |  null or any           |  blind         |  blind replica
+/// null                 |  null or any           |  read          |  read without password
+/// read_pwd             |  null or any           |  read          |  read with read_pwd as password
+/// null                 |  null                  |  write         |  read and write without password
+/// any                  |  null                  |  write         |  read (only!) with password
+/// null                 |  any                   |  write         |  read without password, require password for writing
+/// any                  |  any                   |  write         |  read with one password, write with (possibly same) one
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
     store: *const c_char,
-    local_password: *const c_char,
+    local_read_password: *const c_char,
+    local_write_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<SharedHandle<RepositoryHolder>>>,
 ) {
@@ -39,10 +49,16 @@ pub unsafe extern "C" fn repository_create(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let local_password = if local_password.is_null() {
+        let local_read_password = if local_read_password.is_null() {
             None
         } else {
-            Some(Password::new(utils::ptr_to_str(local_password)?))
+            Some(Password::new(utils::ptr_to_str(local_read_password)?))
+        };
+
+        let local_write_password = if local_write_password.is_null() {
+            None
+        } else {
+            Some(Password::new(utils::ptr_to_str(local_write_password)?))
         };
 
         let access_secrets = if share_token.is_null() {
@@ -59,13 +75,19 @@ pub unsafe extern "C" fn repository_create(
             async move {
                 let db = RepositoryDb::create(store.into_std_path_buf()).await?;
 
-                let local_key = if let Some(local_password) = local_password {
-                    Some(db.password_to_key(local_password).await?)
+                let local_read_key = if let Some(local_read_password) = local_read_password {
+                    Some(db.password_to_key(local_read_password).await?)
                 } else {
                     None
                 };
 
-                let access = Access::new(local_key.clone(), local_key, access_secrets);
+                let local_write_key = if let Some(local_write_password) = local_write_password {
+                    Some(db.password_to_key(local_write_password).await?)
+                } else {
+                    None
+                };
+
+                let access = Access::new(local_read_key, local_write_key, access_secrets);
 
                 let repository = Repository::create(db, device_id, access).await?;
 
