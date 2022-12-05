@@ -197,50 +197,25 @@ impl Inner {
         }
     }
 
-    async fn merge(&self) -> Result<()> {
-        let local_branch = if let Some(local_branch) = &self.local_branch {
-            local_branch
-        } else {
-            return Ok(());
-        };
-
-        self.event_scope
-            .apply(merge::run(&self.shared, local_branch))
-            .await
-    }
-
-    async fn prune(&self) -> Result<()> {
-        self.event_scope.apply(prune::run(&self.shared)).await
-    }
-
-    async fn scan(&self, mode: scan::Mode) -> Result<()> {
-        if !self.shared.secrets.can_read() {
-            return Ok(());
-        }
-
-        scan::run(&self.shared, mode).await
-    }
-
     async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
-        match (self.merge().await, error_handling) {
-            (Ok(()), _) => (),
-            (Err(_), ErrorHandling::Ignore) => (),
-            (Err(error), ErrorHandling::Return) => return Err(error),
+        // Merge
+        if let Some(local_branch) = &self.local_branch {
+            let result = self
+                .event_scope
+                .apply(merge::run(&self.shared, local_branch))
+                .await;
+
+            error_handling.apply(result)?;
         }
 
-        match (self.prune().await, error_handling) {
-            (Ok(()), _) => (),
-            (Err(_), ErrorHandling::Ignore) => (),
-            (Err(error), ErrorHandling::Return) => return Err(error),
-        }
+        // Prune
+        let result = self.event_scope.apply(prune::run(&self.shared)).await;
+        error_handling.apply(result)?;
 
-        match (
-            self.scan(scan::Mode::RequireAndCollect).await,
-            error_handling,
-        ) {
-            (Ok(()), _) => (),
-            (Err(_), ErrorHandling::Ignore) => (),
-            (Err(error), ErrorHandling::Return) => return Err(error),
+        // Scan
+        if self.shared.secrets.can_read() {
+            let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
+            error_handling.apply(result)?;
         }
 
         Ok(())
@@ -251,6 +226,15 @@ impl Inner {
 enum ErrorHandling {
     Return,
     Ignore,
+}
+
+impl ErrorHandling {
+    fn apply(self, result: Result<()>) -> Result<()> {
+        match (self, result) {
+            (_, Ok(())) | (Self::Ignore, Err(_)) => Ok(()),
+            (Self::Return, Err(error)) => Err(error),
+        }
+    }
 }
 
 /// Merge remote branches into the local one.
@@ -328,9 +312,11 @@ mod prune {
             snapshot.remove_all_older(&mut conn).await?;
         }
 
-        // TODO: is this notification necessary? There are currently some tests which rely on it
+        // TODO: is this notification necessary? There are currently some tests* which rely on it
         // but it doesn't seem to serve any purpose in the production code. We should probably
         // rewrite those tests so they don't need this.
+        //
+        // *) lib/tests/gc.rs:remote_truncate_remote_file
         for snapshot in removed {
             snapshot.notify()
         }
