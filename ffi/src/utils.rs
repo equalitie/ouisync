@@ -1,6 +1,6 @@
 use super::dart::{self, DartCObject};
 use camino::Utf8PathBuf;
-use ouisync_lib::{Error, Result};
+use ouisync_lib::{crypto::Password, Error, Result};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{
@@ -155,6 +155,14 @@ pub unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
     CStr::from_ptr(ptr)
         .to_str()
         .map_err(|_| Error::MalformedData)
+}
+
+pub unsafe fn ptr_to_pwd<'a>(ptr: *const c_char) -> Result<Option<Password>> {
+    if ptr.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(Password::new(ptr_to_str(ptr)?)))
+    }
 }
 
 pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {

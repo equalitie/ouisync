@@ -3,7 +3,6 @@ use super::{
     utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
 };
 use ouisync_lib::{
-    crypto::Password,
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
@@ -35,7 +34,7 @@ pub struct RepositoryHolder {
 /// null                 |  null                  |  write         |  read and write without password
 /// any                  |  null                  |  write         |  read (only!) with password
 /// null                 |  any                   |  write         |  read without password, require password for writing
-/// any                  |  any                   |  write         |  read with one password, write with (possibly same) one
+/// any                  |  any                   |  write         |  read with password, write with (same or different) password
 #[no_mangle]
 pub unsafe extern "C" fn repository_create(
     store: *const c_char,
@@ -49,17 +48,8 @@ pub unsafe extern "C" fn repository_create(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let local_read_password = if local_read_password.is_null() {
-            None
-        } else {
-            Some(Password::new(utils::ptr_to_str(local_read_password)?))
-        };
-
-        let local_write_password = if local_write_password.is_null() {
-            None
-        } else {
-            Some(Password::new(utils::ptr_to_str(local_write_password)?))
-        };
+        let local_read_password = utils::ptr_to_pwd(local_read_password)?;
+        let local_write_password = utils::ptr_to_pwd(local_write_password)?;
 
         let access_secrets = if share_token.is_null() {
             AccessSecrets::random_write()
@@ -121,11 +111,7 @@ pub unsafe extern "C" fn repository_open(
         let device_id = *ctx.device_id();
         let network_handle = ctx.network().handle();
 
-        let local_password = if local_password.is_null() {
-            None
-        } else {
-            Some(Password::new(utils::ptr_to_str(local_password)?))
-        };
+        let local_password = utils::ptr_to_pwd(local_password)?;
 
         let span = ctx.repos_span().clone();
 
@@ -153,6 +139,114 @@ pub unsafe extern "C" fn repository_open(
             }
             .instrument(span),
         )
+    })
+}
+
+/// If `share_token` is null, the function will try with the currently active access secrets in the
+/// repository. Note that passing `share_token` explicitly (as opposed to implicitly using the
+/// currently active secrets) may be used to increase access permissions.
+///
+/// Attempting to change the secret without enough permissions will fail with PermissionDenied
+/// error.
+///
+/// If `local_read_password` is null, the repository will become readable without a password.
+/// To remove the read (and write) permission use the `repository_remove_read_access`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn repository_set_read_access(
+    handle: SharedHandle<RepositoryHolder>,
+    local_read_password: *const c_char,
+    share_token: *const c_char,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+
+        let access_secrets = if share_token.is_null() {
+            // Repository shall attempt to use the one it's currently using.
+            None
+        } else {
+            let share_token = utils::ptr_to_str(share_token)?;
+            let share_token: ShareToken = share_token.parse()?;
+            Some(share_token.into_secrets())
+        };
+
+        let local_read_secret = utils::ptr_to_pwd(local_read_password)?.map(LocalSecret::Password);
+
+        ctx.spawn(async move {
+            holder
+                .repository
+                .set_read_access(local_read_secret, access_secrets)
+                .await
+        })
+    })
+}
+
+/// If `share_token` is null, the function will try with the currently active access secrets in the
+/// repository. Note that passing `share_token` explicitly (as opposed to implicitly using the
+/// currently active secrets) may be used to increase access permissions.
+///
+/// Attempting to change the secret without enough permissions will fail with PermissionDenied
+/// error.
+///
+/// If `local_write_password` is null, the repository will become read and writable without a
+/// password.  To remove the read and write access use the
+/// `repository_remove_read_and_write_access` function.
+#[no_mangle]
+pub unsafe extern "C" fn repository_set_read_and_write_access(
+    handle: SharedHandle<RepositoryHolder>,
+    local_write_password: *const c_char,
+    share_token: *const c_char,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+
+        let access_secrets = if share_token.is_null() {
+            // Repository shall attempt to use the one it's currently using.
+            None
+        } else {
+            let share_token = utils::ptr_to_str(share_token)?;
+            let share_token: ShareToken = share_token.parse()?;
+            Some(share_token.into_secrets())
+        };
+
+        let local_write_secret =
+            utils::ptr_to_pwd(local_write_password)?.map(LocalSecret::Password);
+
+        ctx.spawn(async move {
+            holder
+                .repository
+                .set_write_access(local_write_secret, access_secrets)
+                .await
+        })
+    })
+}
+
+/// Note that after removing read key the user may still read the repository if they previously had
+/// write key set up.
+#[no_mangle]
+pub unsafe extern "C" fn repository_remove_read_key(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+
+        ctx.spawn(async move { holder.repository.remove_read_key().await })
+    })
+}
+
+/// Note that removing the write key will leave read key intact.
+#[no_mangle]
+pub unsafe extern "C" fn repository_remove_write_key(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<()>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.release();
+
+        ctx.spawn(async move { holder.repository.remove_write_key().await })
     })
 }
 

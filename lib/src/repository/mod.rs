@@ -80,12 +80,6 @@ impl Repository {
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
 
-        //let local_key = if let Some(local_secret) = local_secret {
-        //    Some(metadata::secret_to_key(&mut tx, local_secret).await?)
-        //} else {
-        //    None
-        //};
-
         let this_writer_id =
             generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
 
@@ -235,6 +229,92 @@ impl Repository {
 
         let mut tx = self.db().begin().await?;
         metadata::set_access(&mut tx, access).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn set_read_access(
+        &self,
+        local_read_secret: Option<LocalSecret>,
+        secrets: Option<AccessSecrets>,
+    ) -> Result<()> {
+        let secrets = match secrets.as_ref() {
+            Some(secrets) => &secrets,
+            None => self.secrets(),
+        };
+
+        if secrets.id() != self.shared.secrets.id() {
+            return Err(Error::PermissionDenied);
+        }
+
+        let read_key = match secrets.read_key() {
+            Some(read_key) => read_key,
+            None => return Err(Error::PermissionDenied),
+        };
+
+        let mut tx = self.db().begin().await?;
+
+        let local_read_key = if let Some(secret) = local_read_secret {
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
+        } else {
+            None
+        };
+
+        metadata::set_read_key(&mut tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    pub async fn set_write_access(
+        &self,
+        local_write_secret: Option<LocalSecret>,
+        secrets: Option<AccessSecrets>,
+    ) -> Result<()> {
+        let secrets = match secrets.as_ref() {
+            Some(secrets) => &secrets,
+            None => self.secrets(),
+        };
+
+        if secrets.id() != self.shared.secrets.id() {
+            return Err(Error::PermissionDenied);
+        }
+
+        let write_key = match secrets.write_key() {
+            Some(write_key) => write_key,
+            None => return Err(Error::PermissionDenied),
+        };
+
+        let mut tx = self.db().begin().await?;
+
+        let local_write_key = if let Some(secret) = local_write_secret {
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
+        } else {
+            None
+        };
+
+        metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// After running this command, the user won't be able to obtain read access to the repository
+    /// using their local read secret.
+    pub async fn remove_read_key(&self) -> Result<()> {
+        let mut tx = self.db().begin().await?;
+        metadata::remove_read_key(&mut tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// After running this command, the user won't be able to obtain write access to the repository
+    /// using their local write secret.
+    pub async fn remove_write_key(&self) -> Result<()> {
+        let mut tx = self.db().begin().await?;
+        metadata::remove_write_key(&mut tx).await?;
         tx.commit().await?;
         Ok(())
     }

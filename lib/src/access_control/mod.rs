@@ -128,6 +128,22 @@ impl AccessSecrets {
         matches!(self, Self::Read { .. } | Self::Write(_))
     }
 
+    pub(crate) fn read_key(&self) -> Option<&cipher::SecretKey> {
+        match self {
+            Self::Blind { .. } => None,
+            Self::Read { read_key, .. } => Some(read_key),
+            Self::Write(secrets) => Some(&secrets.read_key),
+        }
+    }
+
+    pub(crate) fn write_key(&self) -> Option<&WriteSecrets> {
+        match self {
+            Self::Blind { .. } => None,
+            Self::Read { .. } => None,
+            Self::Write(secrets) => Some(secrets),
+        }
+    }
+
     pub(crate) fn keys(&self) -> Option<AccessKeys> {
         match self {
             Self::Blind { .. } => None,
