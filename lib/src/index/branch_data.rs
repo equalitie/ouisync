@@ -303,15 +303,6 @@ impl SnapshotData {
         self.root_node.remove_recursively_all_older(conn).await
     }
 
-    /// Trigger a notification event from the branch of this snapshot.
-    pub fn notify(&self) {
-        self.notify_tx
-            .send(Event::new(Payload::BranchChanged(
-                self.root_node.proof.writer_id,
-            )))
-            .unwrap_or(0);
-    }
-
     async fn load_path(
         &self,
         conn: &mut db::Connection,

@@ -6,8 +6,8 @@ use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use ouisync::{
-    crypto::sign::PublicKey, Access, AccessMode, AccessSecrets, EntryType, Error, File, Repository,
-    RepositoryDb, WriteSecrets, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, AccessSecrets, EntryType, Error, Repository, RepositoryDb, WriteSecrets,
+    BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
@@ -32,7 +32,7 @@ async fn relink_repository() {
     file_a.flush().await.unwrap();
 
     // Wait until the file is seen by B
-    expect_file_content(&repo_b, "test.txt", b"first").await;
+    common::expect_file_content(&repo_b, "test.txt", b"first").await;
 
     // Unlink B's repo
     drop(reg_b);
@@ -46,7 +46,7 @@ async fn relink_repository() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // Wait until the file is updated
-    expect_file_content(&repo_b, "test.txt", b"second").await;
+    common::expect_file_content(&repo_b, "test.txt", b"second").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -62,7 +62,7 @@ async fn remove_remote_file() {
     let mut file = repo_a.create_file("test.txt").await.unwrap();
     file.flush().await.unwrap();
 
-    expect_file_content(&repo_b, "test.txt", &[]).await;
+    common::expect_file_content(&repo_b, "test.txt", &[]).await;
 
     // Delete the file by B
     repo_b.remove_entry("test.txt").await.unwrap();
@@ -119,12 +119,12 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
     // are not connected to each other.
     tracing::info!("writing");
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    write_in_chunks(&mut file, &content, 4096).await;
+    common::write_in_chunks(&mut file, &content, 4096).await;
     file.flush().await.unwrap();
     drop(file);
 
     tracing::info!("reading");
-    expect_file_content(&repo_b, "test.dat", &content).await;
+    common::expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -143,11 +143,11 @@ async fn transfer_large_file() {
 
     // Create a file by A and wait until B sees it.
     let mut file = repo_a.create_file("test.dat").await.unwrap();
-    write_in_chunks(&mut file, &content, 4096).await;
+    common::write_in_chunks(&mut file, &content, 4096).await;
     file.flush().await.unwrap();
     drop(file);
 
-    expect_file_content(&repo_b, "test.dat", &content).await;
+    common::expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -172,14 +172,14 @@ async fn transfer_multiple_files_sequentially() {
     for (index, content) in contents.iter().enumerate() {
         let name = format!("file-{}.dat", index);
         let mut file = repo_a.create_file(&name).await.unwrap();
-        write_in_chunks(&mut file, content, 4096).await;
+        common::write_in_chunks(&mut file, content, 4096).await;
         file.flush().await.unwrap();
         drop(file);
 
         // Wait until we see all the already transfered files
         for (index, content) in contents.iter().take(index + 1).enumerate() {
             let name = format!("file-{}.dat", index);
-            expect_file_content(&repo_b, &name, content).await;
+            common::expect_file_content(&repo_b, &name, content).await;
         }
     }
 }
@@ -206,7 +206,7 @@ async fn sync_during_file_write() {
     expect_in_sync(&repo_b, &repo_a).await;
 
     // A: Write half of the file content but don't flush yet.
-    write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
+    common::write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
 
     // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
     // A's.
@@ -216,10 +216,10 @@ async fn sync_during_file_write() {
     drop(file_b);
 
     // A: Wait until we see the file created by B
-    expect_file_content(&repo_a, "bar.txt", b"bar").await;
+    common::expect_file_content(&repo_a, "bar.txt", b"bar").await;
 
     // A: Write the second half of the content and flush.
-    write_in_chunks(&mut file_a, &content[content.len() / 2..], 4096).await;
+    common::write_in_chunks(&mut file_a, &content[content.len() / 2..], 4096).await;
     file_a.flush().await.unwrap();
 
     // A: Reopen the file and verify it has the expected full content
@@ -228,7 +228,7 @@ async fn sync_during_file_write() {
     assert_eq!(actual_content, content);
 
     // B: Wait until we see the file as well
-    expect_file_content(&repo_b, "foo.txt", &content).await;
+    common::expect_file_content(&repo_b, "foo.txt", &content).await;
 }
 
 // Test that merge is not affected by files from remote branches being open while it's ongoing.
@@ -293,7 +293,7 @@ async fn sync_during_file_read() {
         // B: Keep the file open
 
         // A: write at least two blocks worth of data to the file
-        write_in_chunks(&mut file_a, &content_a, 4096).await;
+        common::write_in_chunks(&mut file_a, &content_a, 4096).await;
         file_a.flush().await.unwrap();
 
         // B: Wait until we are synced with A, still keeping the file open
@@ -304,7 +304,8 @@ async fn sync_during_file_read() {
         drop(file_b);
 
         let branch_id_b = *repo_b.local_branch().unwrap().id();
-        expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a).await;
+        common::expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a)
+            .await;
 
         break;
     }
@@ -331,11 +332,11 @@ async fn concurrent_modify_open_file() {
     expect_in_sync(&repo_b, &repo_a).await;
 
     // A: Write to file but don't flush yet
-    write_in_chunks(&mut file_a, &content_a, 4096).await;
+    common::write_in_chunks(&mut file_a, &content_a, 4096).await;
 
     // B: Write to the same file and flush
     let mut file_b = repo_b.open_file("file.txt").await.unwrap();
-    write_in_chunks(&mut file_b, &content_b, 4096).await;
+    common::write_in_chunks(&mut file_b, &content_b, 4096).await;
     file_b.flush().await.unwrap();
 
     drop(file_b);
@@ -344,7 +345,7 @@ async fn concurrent_modify_open_file() {
     let id_b = *repo_b.local_branch().unwrap().id();
 
     // A: Wait until we see B's writes
-    expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
+    common::expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
 
     // A: Flush the file
     file_a.flush().await.unwrap();
@@ -435,7 +436,7 @@ async fn recreate_local_branch() {
     assert!(vv_b > vv_a_0);
 
     // A: Sync with B. Afterwards our local branch will become outdated compared to B's
-    expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n").await;
+    common::expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n").await;
 
     // A: Reopen in write mode
     drop(repo_a);
@@ -494,7 +495,7 @@ async fn transfer_many_files() {
                 let name = format!("file-{}.dat", index);
                 let mut file = repo_a.create_file(&name).await.unwrap();
 
-                write_in_chunks(&mut file, content, 4096).await;
+                common::write_in_chunks(&mut file, content, 4096).await;
                 file.flush().await.unwrap();
 
                 tracing::info!("put {:?}", name);
@@ -509,7 +510,7 @@ async fn transfer_many_files() {
                 for (index, content) in contents.iter().enumerate() {
                     let name = format!("file-{}.dat", index);
 
-                    if !check_file_version_content(&repo_b, &name, None, content).await {
+                    if !common::check_file_version_content(&repo_b, &name, None, content).await {
                         return false;
                     }
 
@@ -695,7 +696,7 @@ async fn concurrent_update_and_delete_during_conflict() {
     file.write(&content).await.unwrap();
     file.flush().await.unwrap();
 
-    expect_file_version_content(&repo_a, "data.txt", Some(&id_a), &content).await;
+    common::expect_file_version_content(&repo_a, "data.txt", Some(&id_a), &content).await;
 
     // Disconnect to allow concurrent operations on the file
     drop(reg_a);
@@ -723,83 +724,7 @@ async fn concurrent_update_and_delete_during_conflict() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // A is able to read the whole file again including the previously gc-ed blocks.
-    expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
-}
-
-// Wait until the file at `path` has the expected content. Panics if timeout elapses before the
-// file content matches.
-async fn expect_file_content(repo: &Repository, path: &str, expected_content: &[u8]) {
-    expect_file_version_content(repo, path, None, expected_content).await
-}
-
-async fn expect_file_version_content(
-    repo: &Repository,
-    path: &str,
-    branch_id: Option<&PublicKey>,
-    expected_content: &[u8],
-) {
-    common::eventually(repo, || {
-        check_file_version_content(repo, path, branch_id, expected_content)
-            .instrument(Span::current())
-    })
-    .await
-}
-
-async fn check_file_version_content(
-    repo: &Repository,
-    path: &str,
-    branch_id: Option<&PublicKey>,
-    expected_content: &[u8],
-) -> bool {
-    tracing::debug!(path, "opening");
-
-    let result = if let Some(branch_id) = branch_id {
-        repo.open_file_version(path, branch_id).await
-    } else {
-        repo.open_file(path).await
-    };
-
-    let mut file = match result {
-        Ok(file) => file,
-        // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
-        // and so the file entry is not in it yet.
-        //
-        // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-            tracing::warn!(path, ?error, "open failed");
-            return false;
-        }
-        Err(error) => panic!("unexpected error: {:?}", error),
-    };
-
-    tracing::debug!(path, "opened");
-
-    let actual_content = match read_in_chunks(&mut file, 4096).await {
-        Ok(content) => content,
-        // `EntryNotFound` can still happen even here if merge runs in the middle of reading
-        // the file - we opened the file while it was still in the remote branch but then that
-        // branch got merged into the local one and deleted. That means the file no longer
-        // exists in the remote branch and attempt to read from it further results in this
-        // error.
-        // TODO: this is not ideal as the only way to resolve this problem is to reopen the
-        // file (unlike the `BlockNotFound` error where we just need to read it again when the
-        // block gets downloaded). This should probably be considered a bug.
-        //
-        // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-            tracing::warn!(path, ?error, "read failed");
-            return false;
-        }
-        Err(error) => panic!("unexpected error: {:?}", error),
-    };
-
-    if actual_content == expected_content {
-        tracing::debug!(path, "content matches");
-        true
-    } else {
-        tracing::warn!(path, "content does not match");
-        false
-    }
+    common::expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
 }
 
 // Wait until A is in sync with B, that is: both repos have local branches, they have non-empty
@@ -871,36 +796,4 @@ async fn expect_local_directory_exists(repo: &Repository, path: &str) {
         }
     })
     .await
-}
-
-async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
-    for offset in (0..content.len()).step_by(chunk_size) {
-        let end = (offset + chunk_size).min(content.len());
-        file.write(&content[offset..end]).await.unwrap();
-
-        if to_megabytes(end) > to_megabytes(offset) {
-            tracing::debug!(
-                "file write progress: {}/{} MB",
-                to_megabytes(end),
-                to_megabytes(content.len())
-            );
-        }
-    }
-}
-
-async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result<Vec<u8>, Error> {
-    let mut content = vec![0; file.len() as usize];
-    let mut offset = 0;
-
-    while offset < content.len() {
-        let end = (offset + chunk_size).min(content.len());
-        let size = file.read(&mut content[offset..end]).await?;
-        offset += size;
-    }
-
-    Ok(content)
-}
-
-fn to_megabytes(bytes: usize) -> usize {
-    bytes / 1024 / 1024
 }

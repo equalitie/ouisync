@@ -209,7 +209,7 @@ impl Inner {
         }
 
         // Prune
-        let result = self.event_scope.apply(prune::run(&self.shared)).await;
+        let result = prune::run(&self.shared).await;
         error_handling.apply(result)?;
 
         // Scan
@@ -274,7 +274,6 @@ mod prune {
         let all = shared.store.index.load_snapshots(&mut conn).await?;
         let (uptodate, outdated): (_, Vec<_>) =
             versioned::partition(all, Some(&shared.this_writer_id));
-        let mut removed = Vec::new();
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -303,22 +302,11 @@ mod prune {
 
             snapshot.remove_all_older(&mut conn).await?;
             snapshot.remove(&mut conn).await?;
-
-            removed.push(snapshot);
         }
 
         // Remove outdated snapshots
         for snapshot in uptodate {
             snapshot.remove_all_older(&mut conn).await?;
-        }
-
-        // TODO: is this notification necessary? There are currently some tests* which rely on it
-        // but it doesn't seem to serve any purpose in the production code. We should probably
-        // rewrite those tests so they don't need this.
-        //
-        // *) lib/tests/gc.rs:remote_truncate_remote_file
-        for snapshot in removed {
-            snapshot.notify()
         }
 
         Ok(())
