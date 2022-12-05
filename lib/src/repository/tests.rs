@@ -71,7 +71,7 @@ async fn merge() {
     let local_branch = repo.local_branch().unwrap();
     let mut local_root = local_branch.open_or_create_root().await.unwrap();
 
-    repo.force_merge().await.unwrap();
+    repo.force_work().await.unwrap();
 
     local_root.refresh().await.unwrap();
     let content = local_root

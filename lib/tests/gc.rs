@@ -41,8 +41,7 @@ async fn local_delete_remote_file() {
     expect_block_count(&repo_l, 3).await;
 
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.force_merge().await.unwrap();
-    repo_l.force_garbage_collection().await.unwrap();
+    repo_l.force_work().await.unwrap();
 
     // Both the file and the remote root are deleted, only the local root remains to track the
     // tombstone.
@@ -109,8 +108,7 @@ async fn local_truncate_remote_file() {
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
-    repo_l.force_merge().await.unwrap();
-    repo_l.force_garbage_collection().await.unwrap();
+    repo_l.force_work().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)

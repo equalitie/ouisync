@@ -525,20 +525,12 @@ impl Repository {
         self.shared.store.sync_progress().await
     }
 
-    /// Force the garbage collection to run and wait for it to complete, returning its result.
+    /// Force the background worker to run one job and wait for it to complete, returning its result.
     ///
-    /// It's usually not necessary to call this method because the gc runs automatically in the
-    /// background.
-    pub async fn force_garbage_collection(&self) -> Result<()> {
-        self.worker_handle.collect().await
-    }
-
-    /// Force the merge to run and wait for it to complete, returning its result.
-    ///
-    /// It's usually not necessary to call this method because the merger runs automatically in the
-    /// background.
-    pub async fn force_merge(&self) -> Result<()> {
-        self.worker_handle.merge().await
+    /// It's usually not necessary to call this method because the worker runs automatically in the
+    /// background. It might still e.g. be usefull for testing/debugging.
+    pub async fn force_work(&self) -> Result<()> {
+        self.worker_handle.work().await
     }
 
     // Opens the root directory across all branches as JointDirectory.

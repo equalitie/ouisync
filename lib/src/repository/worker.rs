@@ -63,12 +63,8 @@ pub(super) struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub async fn merge(&self) -> Result<()> {
-        self.oneshot(Command::Merge).await
-    }
-
-    pub async fn collect(&self) -> Result<()> {
-        self.oneshot(Command::Collect).await
+    pub async fn work(&self) -> Result<()> {
+        self.oneshot(Command::Work).await
     }
 
     pub async fn shutdown(&self) {
@@ -97,8 +93,7 @@ impl WorkerHandle {
 }
 
 enum Command {
-    Merge(oneshot::Sender<Result<()>>),
-    Collect(oneshot::Sender<Result<()>>),
+    Work(oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -128,9 +123,7 @@ impl Inner {
 
                     let work = async {
                         tracing::debug!("job started");
-                        self.merge().await.ok();
-                        self.prune().await.ok();
-                        self.scan(scan::Mode::RequireAndCollect).await.ok();
+                        self.work(ErrorHandling::Ignore).await.ok();
                         tracing::debug!("job completed");
                     };
 
@@ -191,12 +184,10 @@ impl Inner {
 
     async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::Merge(result_tx) => {
-                result_tx.send(self.merge().await).unwrap_or(());
-                true
-            }
-            Command::Collect(result_tx) => {
-                result_tx.send(self.collect().await).unwrap_or(());
+            Command::Work(result_tx) => {
+                result_tx
+                    .send(self.work(ErrorHandling::Return).await)
+                    .unwrap_or(());
                 true
             }
             Command::Shutdown(result_tx) => {
@@ -230,11 +221,36 @@ impl Inner {
         scan::run(&self.shared, mode).await
     }
 
-    async fn collect(&self) -> Result<()> {
-        self.prune().await?;
-        self.scan(scan::Mode::Collect).await?;
+    async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
+        match (self.merge().await, error_handling) {
+            (Ok(()), _) => (),
+            (Err(_), ErrorHandling::Ignore) => (),
+            (Err(error), ErrorHandling::Return) => return Err(error),
+        }
+
+        match (self.prune().await, error_handling) {
+            (Ok(()), _) => (),
+            (Err(_), ErrorHandling::Ignore) => (),
+            (Err(error), ErrorHandling::Return) => return Err(error),
+        }
+
+        match (
+            self.scan(scan::Mode::RequireAndCollect).await,
+            error_handling,
+        ) {
+            (Ok(()), _) => (),
+            (Err(_), ErrorHandling::Ignore) => (),
+            (Err(error), ErrorHandling::Return) => return Err(error),
+        }
+
         Ok(())
     }
+}
+
+#[derive(Copy, Clone)]
+enum ErrorHandling {
+    Return,
+    Ignore,
 }
 
 /// Merge remote branches into the local one.
