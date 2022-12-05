@@ -157,7 +157,7 @@ pub unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
         .map_err(|_| Error::MalformedData)
 }
 
-pub unsafe fn ptr_to_pwd<'a>(ptr: *const c_char) -> Result<Option<Password>> {
+pub unsafe fn ptr_to_pwd(ptr: *const c_char) -> Result<Option<Password>> {
     if ptr.is_null() {
         Ok(None)
     } else {

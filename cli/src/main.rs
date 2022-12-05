@@ -43,7 +43,7 @@ async fn create_repository(
     options: &Options,
 ) -> Result<Repository> {
     let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
-    let local_key = secret_to_key(&db, options.secret_for_repo(&name)?).await?;
+    let local_key = secret_to_key(&db, options.secret_for_repo(name)?).await?;
     // TODO: In CLI we currently support only a single (optional) user secret for writing and
     // reading, but the code allows for having them distinct.
     let access = Access::new(local_key.clone(), local_key, secrets);

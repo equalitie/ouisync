@@ -239,7 +239,7 @@ impl Repository {
         secrets: Option<AccessSecrets>,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
-            Some(secrets) => &secrets,
+            Some(secrets) => secrets,
             None => self.secrets(),
         };
 
@@ -273,7 +273,7 @@ impl Repository {
         secrets: Option<AccessSecrets>,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
-            Some(secrets) => &secrets,
+            Some(secrets) => secrets,
             None => self.secrets(),
         };
 
