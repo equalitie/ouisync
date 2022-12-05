@@ -755,19 +755,20 @@ async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
 }
 
 async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
-    common::eventually(repo, || async {
-        let result = match entry_type {
-            EntryType::File => repo.open_file(path).await.map(|_| ()),
-            EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
-        };
+    common::eventually(repo, || check_entry_exists(repo, path, entry_type)).await
+}
 
-        match result {
-            Ok(()) => true,
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
-            Err(error) => panic!("unexpected error: {:?}", error),
-        }
-    })
-    .await
+async fn check_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) -> bool {
+    let result = match entry_type {
+        EntryType::File => repo.open_file(path).await.map(|_| ()),
+        EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
+    };
+
+    match result {
+        Ok(()) => true,
+        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+        Err(error) => panic!("unexpected error: {:?}", error),
+    }
 }
 
 async fn expect_entry_not_found(repo: &Repository, path: &str) {
