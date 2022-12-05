@@ -12,7 +12,7 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::{SingleBlockPresence, Summary},
+    summary::{MultiBlockPresence, SingleBlockPresence, Summary},
 };
 
 use crate::{

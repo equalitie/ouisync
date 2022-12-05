@@ -1,5 +1,7 @@
 use super::{
-    node::{InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
+    node::{
+        InnerNode, LeafNode, MultiBlockPresence, RootNode, SingleBlockPresence, INNER_LAYER_COUNT,
+    },
     path::Path,
     proof::Proof,
     VersionVectorOp,
@@ -204,6 +206,11 @@ impl SnapshotData {
     /// Gets the version vector of this snapshot.
     pub fn version_vector(&self) -> &VersionVector {
         &self.root_node.proof.version_vector
+    }
+
+    /// All all blocks present in this snapshot?
+    pub fn is_full(&self) -> bool {
+        self.root_node.summary.block_presence == MultiBlockPresence::Full
     }
 
     /// Inserts a new block into the index.

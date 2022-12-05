@@ -208,12 +208,12 @@ impl Inner {
             error_handling.apply(result)?;
         }
 
-        // Prune
+        // Prune outdated branches and snapshots
         let result = prune::run(&self.shared).await;
         error_handling.apply(result)?;
 
-        // Scan
         if self.shared.secrets.can_read() {
+            // Scan for missing and unreachable blocks
             let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
             error_handling.apply(result)?;
         }
@@ -269,11 +269,11 @@ mod prune {
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-
-        let all = shared.store.index.load_snapshots(&mut conn).await?;
-        let (uptodate, outdated): (_, Vec<_>) =
+        let all = shared.store.index.load_snapshots().await?;
+        let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, Some(&shared.this_writer_id));
+
+        let mut conn = shared.store.db().acquire().await?;
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -304,8 +304,10 @@ mod prune {
             snapshot.remove(&mut conn).await?;
         }
 
-        // Remove outdated snapshots
-        for snapshot in uptodate {
+        // Remove outdated snapshots, but only if the latest snapshot has all the blocks so that we
+        // can fallback on a previous snapshot when opening a blob whose blocks are missing in the
+        // latest snapshot.
+        for snapshot in uptodate.into_iter().filter(|snapshot| snapshot.is_full()) {
             snapshot.remove_all_older(&mut conn).await?;
         }
 
