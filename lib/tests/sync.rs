@@ -196,6 +196,8 @@ async fn sync_during_file_write() {
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
+    let id_b = *repo_b.local_branch().unwrap().id();
+
     let mut content = vec![0; 3 * BLOCK_SIZE - BLOB_HEADER_SIZE];
     env.rng.fill(&mut content[..]);
 
@@ -203,7 +205,7 @@ async fn sync_during_file_write() {
     let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
 
     // B: Wait until everything gets merged
-    expect_in_sync(&repo_b, &repo_a).await;
+    common::expect_file_version_content(&repo_b, "foo.txt", Some(&id_b), &[]).await;
 
     // A: Write half of the file content but don't flush yet.
     common::write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
@@ -231,86 +233,6 @@ async fn sync_during_file_write() {
     common::expect_file_content(&repo_b, "foo.txt", &content).await;
 }
 
-// Test that merge is not affected by files from remote branches being open while it's ongoing.
-#[tokio::test(flavor = "multi_thread")]
-async fn sync_during_file_read() {
-    let mut env = Env::with_seed(0);
-
-    let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content_a[..]);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-
-    loop {
-        let (repo_a, repo_b) = env.create_linked_repos().await;
-
-        // A: create an initially empty file
-        let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
-        let branch_id_a = *file_a.branch().id();
-
-        // B: Establish the link and wait until the file gets synced but not merged.
-        let reg_a = node_a.network.handle().register(repo_a.store().clone());
-        let reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-        let mut file_b = None;
-        let mut tx = repo_b.subscribe();
-
-        loop {
-            match repo_b.open_file("foo.txt").await {
-                Ok(file) => {
-                    // Only use the file if it's still in the remote branch, otherwise the test
-                    // preconditions are not met and we need to restart the test.
-                    if file.branch().id() == &branch_id_a {
-                        file_b = Some(file);
-                    }
-
-                    break;
-                }
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => common::wait(&mut tx).await,
-                Err(error) => panic!("unexpected error: {:?}", error),
-            }
-        }
-
-        let file_b = if let Some(file) = file_b {
-            file
-        } else {
-            // File was already forked which breaks the preconditions of this test. Need to try
-            // again.
-            // TODO: a better way would be to initially somehow pause B's merger and resume it
-            // after the file is opened.
-
-            tracing::warn!("precondition failed, trying again");
-
-            drop(reg_a);
-            drop(reg_b);
-
-            repo_a.close().await.unwrap();
-            repo_b.close().await.unwrap();
-
-            continue;
-        };
-
-        // B: Keep the file open
-
-        // A: write at least two blocks worth of data to the file
-        common::write_in_chunks(&mut file_a, &content_a, 4096).await;
-        file_a.flush().await.unwrap();
-
-        // B: Wait until we are synced with A, still keeping the file open
-        expect_in_sync(&repo_b, &repo_a).await;
-
-        // B: Drop and reopen the file and verify that the fact we held the file open did not
-        // interfere with the merging and that the file is now identical to A's file.
-        drop(file_b);
-
-        let branch_id_b = *repo_b.local_branch().unwrap().id();
-        common::expect_file_version_content(&repo_b, "foo.txt", Some(&branch_id_b), &content_a)
-            .await;
-
-        break;
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
     let mut env = Env::with_seed(0);
@@ -319,6 +241,9 @@ async fn concurrent_modify_open_file() {
     let (repo_a, repo_b) = env.create_linked_repos().await;
     let _reg_a = node_a.network.handle().register(repo_a.store().clone());
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+
+    let id_a = *repo_a.local_branch().unwrap().id();
+    let id_b = *repo_b.local_branch().unwrap().id();
 
     let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
     let mut content_b = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
@@ -329,7 +254,7 @@ async fn concurrent_modify_open_file() {
     let mut file_a = repo_a.create_file("file.txt").await.unwrap();
 
     // B: Wait until everything gets merged
-    expect_in_sync(&repo_b, &repo_a).await;
+    common::expect_file_version_content(&repo_b, "file.txt", Some(&id_b), &[]).await;
 
     // A: Write to file but don't flush yet
     common::write_in_chunks(&mut file_a, &content_a, 4096).await;
@@ -340,9 +265,6 @@ async fn concurrent_modify_open_file() {
     file_b.flush().await.unwrap();
 
     drop(file_b);
-
-    let id_a = *repo_a.local_branch().unwrap().id();
-    let id_b = *repo_b.local_branch().unwrap().id();
 
     // A: Wait until we see B's writes
     common::expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
@@ -392,6 +314,8 @@ async fn recreate_local_branch() {
         .create_repo_with_secrets(AccessSecrets::Write(write_secrets.clone()))
         .await;
 
+    let id_b = *repo_b.local_branch().unwrap().id();
+
     let mut file = repo_a.create_file("foo.txt").await.unwrap();
     file.write(b"hello from A\n").await.unwrap();
     file.flush().await.unwrap();
@@ -416,7 +340,7 @@ async fn recreate_local_branch() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // B: Sync with A
-    expect_in_sync(&repo_b, &repo_a).await;
+    common::expect_file_version_content(&repo_b, "foo.txt", Some(&id_b), b"hello from A\n").await;
 
     // B: Modify the repo. This makes B's branch newer than A's
     let mut file = repo_b.open_file("foo.txt").await.unwrap();
@@ -725,33 +649,6 @@ async fn concurrent_update_and_delete_during_conflict() {
 
     // A is able to read the whole file again including the previously gc-ed blocks.
     common::expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
-}
-
-// Wait until A is in sync with B, that is: both repos have local branches, they have non-empty
-// version vectors and A's version vector is greater or equal to B's.
-async fn expect_in_sync(repo_a: &Repository, repo_b: &Repository) {
-    common::eventually(repo_a, || async {
-        let vv_a = repo_a
-            .local_branch()
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap();
-
-        let vv_b = repo_b
-            .local_branch()
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap();
-
-        if vv_a.is_empty() || vv_b.is_empty() {
-            return false;
-        }
-
-        vv_a >= vv_b
-    })
-    .await
 }
 
 async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {

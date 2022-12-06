@@ -277,50 +277,6 @@ impl Blob {
         Ok(true)
     }
 
-    /// Creates a shallow copy (only the index nodes are copied, not blocks) of this blob into the
-    /// specified destination branch. This function is idempotent.
-    pub async fn try_fork(&self, tx: &mut db::Transaction<'_>, dst_branch: Branch) -> Result<Self> {
-        // If the blob is already forked, do nothing but still return a clone of the original blob
-        // to maintain idempotency.
-        if self.branch.id() != dst_branch.id() {
-            let read_key = self.branch.keys().read();
-            // Take the write key from the dst branch, not the src branch, to protect us against
-            // accidentally forking into remote branch (remote branches don't have write access).
-            let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
-
-            let locators = self
-                .head_locator
-                .sequence()
-                .take(self.block_count() as usize);
-
-            for locator in locators {
-                let encoded_locator = locator.encode(read_key);
-
-                let (block_id, block_presence) =
-                    self.branch.data().get(tx, &encoded_locator).await?;
-
-                // It can happen that the current and dst branches are different, but the blob has
-                // already been forked by some other task in the meantime (after we loaded this
-                // blob but before the `tx` transaction has been created). In that case this
-                // `insert` is a no-op. We still proceed normally to maintain idempotency.
-                dst_branch
-                    .data()
-                    .insert(tx, &encoded_locator, &block_id, block_presence, write_keys)
-                    .await?;
-            }
-        }
-
-        let forked = Self {
-            branch: dst_branch,
-            head_locator: self.head_locator,
-            current_block: self.current_block.clone(),
-            len: self.len,
-            len_dirty: self.len_dirty,
-        };
-
-        Ok(forked)
-    }
-
     /// Was this blob modified and not flushed yet?
     pub fn is_dirty(&self) -> bool {
         self.current_block.dirty || self.len_dirty
@@ -453,6 +409,50 @@ impl Blob {
             Err(error) => Err(error),
         }
     }
+}
+
+/// Creates a shallow copy (only the index nodes are copied, not blocks) of the specified blob into
+/// the specified destination branch. This function is idempotent.
+pub(crate) async fn fork(
+    tx: &mut db::Transaction<'_>,
+    blob_id: BlobId,
+    src_branch: &Branch,
+    dst_branch: &Branch,
+) -> Result<()> {
+    // If the blob is already forked, do nothing but still return Ok to maintain idempotency.
+    if src_branch.id() == dst_branch.id() {
+        return Ok(());
+    }
+
+    let read_key = src_branch.keys().read();
+    // Take the write key from the dst branch, not the src branch, to protect us against
+    // accidentally forking into remote branch (remote branches don't have write access).
+    let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
+
+    let locators = Locator::head(blob_id).sequence();
+
+    for locator in locators {
+        let encoded_locator = locator.encode(read_key);
+
+        let (block_id, block_presence) = match src_branch.data().get(tx, &encoded_locator).await {
+            Ok(block) => block,
+            Err(Error::EntryNotFound) => {
+                // end of the blob
+                break;
+            }
+            Err(error) => return Err(error),
+        };
+
+        // It can happen that the current and dst branches are different, but the blob has
+        // already been forked by some other task in the meantime. In that case this
+        // `insert` is a no-op. We still proceed normally to maintain idempotency.
+        dst_branch
+            .data()
+            .insert(tx, &encoded_locator, &block_id, block_presence, write_keys)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Pseudo-stream that yields the block ids of the given blob in their sequential order.

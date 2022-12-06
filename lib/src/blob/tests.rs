@@ -567,14 +567,14 @@ async fn write_reopen_and_read() {
 }
 
 #[proptest]
-fn fork(
+fn fork_and_write(
     #[strategy(0..2 * BLOCK_SIZE)] src_len: usize,
     #[strategy(0..=#src_len)] seek_pos: usize,
     #[strategy(1..BLOCK_SIZE)] write_len: usize,
     src_locator_is_root: bool,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
-    test_utils::run(fork_case(
+    test_utils::run(fork_and_write_case(
         src_len,
         seek_pos,
         write_len,
@@ -583,7 +583,7 @@ fn fork(
     ))
 }
 
-async fn fork_case(
+async fn fork_and_write_case(
     src_len: usize,
     seek_pos: usize,
     write_len: usize,
@@ -614,14 +614,19 @@ async fn fork_case(
     blob.write(&mut tx, &src_content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    blob.seek(&mut tx, SeekFrom::Start(seek_pos as u64))
+    fork(&mut tx, *src_locator.blob_id(), &src_branch, &dst_branch)
         .await
         .unwrap();
 
-    blob = blob.try_fork(&mut tx, dst_branch.clone()).await.unwrap();
+    let mut blob = Blob::open(&mut tx, dst_branch.clone(), src_locator)
+        .await
+        .unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
+    blob.seek(&mut tx, SeekFrom::Start(seek_pos as u64))
+        .await
+        .unwrap();
     blob.write(&mut tx, &write_content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
@@ -675,14 +680,10 @@ async fn fork_is_idempotent() {
 
     for i in 0..2 {
         let mut tx = pool.begin().await.unwrap();
-        let blob_fork = blob
-            .try_fork(&mut tx, dst_branch.clone())
+        fork(&mut tx, *locator.blob_id(), &src_branch, &dst_branch)
             .await
             .unwrap_or_else(|error| panic!("try_fork failed in iteration {}: {:?}", i, error));
         tx.commit().await.unwrap();
-
-        assert_eq!(blob_fork.branch().id(), dst_branch.id());
-        assert_eq!(blob_fork.locator(), &locator);
     }
 }
 
@@ -713,7 +714,9 @@ async fn fork_then_remove_src_branch() {
     tx.commit().await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    blob_0.try_fork(&mut tx, dst_branch.clone()).await.unwrap();
+    fork(&mut tx, *locator_0.blob_id(), &src_branch, &dst_branch)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     drop(blob_0);

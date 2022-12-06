@@ -260,7 +260,7 @@ impl JointDirectory {
                     for entry in existing {
                         match entry {
                             JointEntryRef::File(entry) => {
-                                match entry.fork(local_branch.clone()).await {
+                                match entry.fork(&local_branch).await {
                                     Ok(()) => (),
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
@@ -442,7 +442,7 @@ impl<'a> JointFileRef<'a> {
         self.file.open().await
     }
 
-    pub(crate) async fn fork(&self, dst_branch: Branch) -> Result<()> {
+    pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         self.file.fork(dst_branch).await
     }
 

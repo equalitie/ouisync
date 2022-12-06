@@ -9,7 +9,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
-    file::{self, File},
+    file::File,
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -142,12 +142,15 @@ impl<'a> FileRef<'a> {
     }
 
     /// Fork the file without opening it.
-    pub(crate) async fn fork(&self, dst_branch: Branch) -> Result<()> {
+    /// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
+    /// write concurrency is implemented.
+    pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         let parent_context = self.inner.parent_context();
-        let src_branch = self.branch().clone();
-        let locator = self.locator();
+        let src_branch = self.branch();
 
-        file::fork(src_branch, dst_branch, locator, parent_context).await
+        parent_context.fork(src_branch, dst_branch).await?;
+
+        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
