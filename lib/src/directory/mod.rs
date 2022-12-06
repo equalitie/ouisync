@@ -24,7 +24,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    index::VersionVectorOp,
+    index::{SnapshotData, VersionVectorOp},
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -610,13 +610,41 @@ impl fmt::Debug for Directory {
     }
 }
 
+// Load directory content. On missing block, fallback to previous snapshot (if any).
 async fn load(
     conn: &mut db::Connection,
     branch: Branch,
     locator: Locator,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open(conn, branch, locator).await?;
-    let buffer = blob.read_to_end(conn).await?;
+    let mut snapshot = branch.data().load_snapshot(conn).await?;
+
+    loop {
+        let missing_block_id = match load_in(conn, branch.clone(), &snapshot, locator).await {
+            Ok((blob, content)) => return Ok((blob, content)),
+            Err(Error::BlockNotFound(id)) => id,
+            Err(error) => return Err(error),
+        };
+
+        match snapshot.load_prev(conn).await {
+            Ok(prev_snapshot) => {
+                snapshot = prev_snapshot;
+            }
+            Err(Error::EntryNotFound) => {
+                return Err(Error::BlockNotFound(missing_block_id));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn load_in(
+    conn: &mut db::Connection,
+    branch: Branch,
+    snapshot: &SnapshotData,
+    locator: Locator,
+) -> Result<(Blob, Content)> {
+    let mut blob = Blob::open_in(conn, branch, snapshot, locator).await?;
+    let buffer = blob.read_to_end_in(conn, snapshot).await?;
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))

@@ -193,6 +193,14 @@ impl SnapshotData {
         })
     }
 
+    /// Load previous snapshot
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Self> {
+        Ok(Self {
+            root_node: self.root_node.load_prev(conn).await?,
+            notify_tx: self.notify_tx.clone(),
+        })
+    }
+
     /// Returns the id of the replica that owns this branch.
     pub fn branch_id(&self) -> &PublicKey {
         &self.root_node.proof.writer_id
