@@ -98,6 +98,7 @@ impl BranchData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[cfg(test)] // currently used only in tests
     pub async fn insert(
         &self,
         tx: &mut db::Transaction<'_>,
@@ -118,13 +119,14 @@ impl BranchData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[cfg(test)] // currently used only in tests
     pub async fn remove(
         &self,
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        self.load_or_create_snapshot(tx, write_keys)
+        self.load_snapshot(tx)
             .await?
             .remove_block(tx, encoded_locator, write_keys)
             .await
@@ -192,7 +194,7 @@ impl SnapshotData {
     }
 
     /// Returns the id of the replica that owns this branch.
-    pub fn id(&self) -> &PublicKey {
+    pub fn branch_id(&self) -> &PublicKey {
         &self.root_node.proof.writer_id
     }
 
@@ -286,7 +288,7 @@ impl SnapshotData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut new_vv = self.root_node.proof.version_vector.clone();
-        op.apply(self.id(), &mut new_vv);
+        op.apply(self.branch_id(), &mut new_vv);
 
         let new_proof = Proof::new(
             self.root_node.proof.writer_id,
@@ -381,7 +383,7 @@ impl Versioned for SnapshotData {
     }
 
     fn branch_id(&self) -> &PublicKey {
-        self.id()
+        self.branch_id()
     }
 }
 

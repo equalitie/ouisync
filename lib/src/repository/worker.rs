@@ -275,7 +275,7 @@ mod prune {
         // Remove outdated branches
         for snapshot in outdated {
             // Never remove local branch
-            if snapshot.id() == &shared.this_writer_id {
+            if snapshot.branch_id() == &shared.this_writer_id {
                 continue;
             }
 
@@ -295,7 +295,7 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!("removing outdated branch {:?}", snapshot.id());
+            tracing::trace!("removing outdated branch {:?}", snapshot.branch_id());
 
             snapshot.remove_all_older(&mut conn).await?;
             snapshot.remove(&mut conn).await?;
@@ -309,7 +309,7 @@ mod prune {
             //
             // This does not apply to the local branch because local branch can never contain a
             // directory with missing blocks and so we never need to do the fallback there.
-            if snapshot.id() == &shared.this_writer_id || snapshot.is_full() {
+            if snapshot.branch_id() == &shared.this_writer_id || snapshot.is_full() {
                 snapshot.remove_all_older(&mut conn).await?;
             }
         }

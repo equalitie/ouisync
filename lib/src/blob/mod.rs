@@ -4,6 +4,7 @@ mod tests;
 
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
+    access_control::AccessKeys,
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -13,7 +14,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    index::{BranchData, SingleBlockPresence},
+    index::{SingleBlockPresence, SnapshotData},
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
@@ -39,7 +40,21 @@ impl Blob {
         branch: Branch,
         head_locator: Locator,
     ) -> Result<Self> {
-        let mut current_block = OpenBlock::open_head(conn, &branch, head_locator).await?;
+        let snapshot = branch.data().load_snapshot(conn).await?;
+        Self::open_in(conn, branch, &snapshot, head_locator).await
+    }
+
+    /// Opens an existing blob in the given snapshot
+    pub async fn open_in(
+        conn: &mut db::Connection,
+        branch: Branch,
+        snapshot: &SnapshotData,
+        head_locator: Locator,
+    ) -> Result<Self> {
+        assert_eq!(branch.id(), snapshot.branch_id());
+
+        let mut current_block =
+            OpenBlock::open_head(conn, snapshot, branch.keys().read(), head_locator).await?;
         let len = current_block.content.read_u64();
 
         Ok(Self {
@@ -70,7 +85,9 @@ impl Blob {
         branch: &Branch,
         head_locator: Locator,
     ) -> Result<()> {
-        match remove_blocks(tx, branch, head_locator.sequence()).await {
+        let mut snapshot = branch.data().load_snapshot(tx).await?;
+
+        match remove_blocks(tx, &mut snapshot, branch.keys(), head_locator.sequence()).await {
             // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
             // we should never get `Ok` because the locator sequence we are passing to
             // `remove_blocks` is unbounded).
@@ -97,11 +114,20 @@ impl Blob {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(
+    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
+        let snapshot = self.branch.data().load_snapshot(conn).await?;
+        self.read_in(conn, &snapshot, buffer).await
+    }
+
+    /// Reads data from this blob in the given snapshot.
+    pub async fn read_in(
         &mut self,
         conn: &mut db::Connection,
+        snapshot: &SnapshotData,
         mut buffer: &mut [u8],
     ) -> Result<usize> {
+        assert_eq!(self.branch.id(), snapshot.branch_id());
+
         let mut total_len = 0;
 
         loop {
@@ -126,13 +152,8 @@ impl Blob {
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to read pass its end. In that case we should
             // update `self.len` and try the loop again.
-            let (id, content) = read_block(
-                conn,
-                self.branch.data(),
-                self.branch.keys().read(),
-                &locator,
-            )
-            .await?;
+            let (id, content) =
+                read_block(conn, snapshot, self.branch.keys().read(), &locator).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -143,6 +164,18 @@ impl Blob {
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
+        let snapshot = self.branch.data().load_snapshot(conn).await?;
+        self.read_to_end_in(conn, &snapshot).await
+    }
+
+    /// Read all data from this blob in the given snapshot.
+    pub async fn read_to_end_in(
+        &mut self,
+        conn: &mut db::Connection,
+        snapshot: &SnapshotData,
+    ) -> Result<Vec<u8>> {
+        assert_eq!(self.branch.id(), snapshot.branch_id());
+
         let mut buffer = vec![
             0;
             (self.len - self.seek_position())
@@ -150,7 +183,7 @@ impl Blob {
                 .unwrap_or(usize::MAX)
         ];
 
-        let len = self.read(conn, &mut buffer).await?;
+        let len = self.read_in(conn, snapshot, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -158,6 +191,8 @@ impl Blob {
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
+        let mut snapshot = None;
+
         loop {
             let len = self.current_block.content.write(buffer);
 
@@ -180,13 +215,26 @@ impl Blob {
             }
 
             let locator = self.current_block.locator.next();
+
+            let snapshot = if let Some(snapshot) = &mut snapshot {
+                snapshot
+            } else {
+                let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
+                snapshot.get_or_insert(
+                    self.branch
+                        .data()
+                        .load_or_create_snapshot(tx, write_keys)
+                        .await?,
+                )
+            };
+
             let (id, content) = if locator.number() < self.block_count() {
-                read_block(tx, self.branch.data(), self.branch.keys().read(), &locator).await?
+                read_block(tx, snapshot, self.branch.keys().read(), &locator).await?
             } else {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
-            self.write_current_block(tx).await?;
+            self.write_current_block(tx, snapshot).await?;
             self.replace_current_block(locator, id, content)?;
         }
 
@@ -224,17 +272,13 @@ impl Blob {
 
         if block_number != self.current_block.locator.number() {
             let locator = self.head_locator.nth(block_number);
+            let snapshot = self.branch.data().load_snapshot(conn).await?;
 
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
             // update `self.len` and try again.
-            let (id, content) = read_block(
-                conn,
-                self.branch.data(),
-                self.branch.keys().read(),
-                &locator,
-            )
-            .await?;
+            let (id, content) =
+                read_block(conn, &snapshot, self.branch.keys().read(), &locator).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -270,9 +314,16 @@ impl Blob {
             return Ok(false);
         }
 
-        self.write_len(tx).await?;
-        self.write_current_block(tx).await?;
-        self.trim(tx).await?;
+        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
+        let mut snapshot = self
+            .branch
+            .data()
+            .load_or_create_snapshot(tx, write_keys)
+            .await?;
+
+        self.write_len(tx, &mut snapshot).await?;
+        self.write_current_block(tx, &mut snapshot).await?;
+        self.trim(tx, &mut snapshot).await?;
 
         Ok(true)
     }
@@ -324,7 +375,11 @@ impl Blob {
     }
 
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn write_len(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        snapshot: &mut SnapshotData,
+    ) -> Result<()> {
         if !self.len_dirty {
             return Ok(());
         }
@@ -339,13 +394,8 @@ impl Blob {
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
         } else {
-            let (_, buffer) = read_block(
-                tx,
-                self.branch.data(),
-                self.branch.keys().read(),
-                &self.head_locator,
-            )
-            .await?;
+            let (_, buffer) =
+                read_block(tx, snapshot, self.branch.keys().read(), &self.head_locator).await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
@@ -353,7 +403,7 @@ impl Blob {
 
             write_block(
                 tx,
-                self.branch.data(),
+                snapshot,
                 read_key,
                 write_keys,
                 &self.head_locator,
@@ -368,7 +418,11 @@ impl Blob {
     }
 
     // Write the current block into the store.
-    async fn write_current_block(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn write_current_block(
+        &mut self,
+        tx: &mut db::Transaction<'_>,
+        snapshot: &mut SnapshotData,
+    ) -> Result<()> {
         if !self.current_block.dirty {
             return Ok(());
         }
@@ -378,7 +432,7 @@ impl Blob {
 
         let block_id = write_block(
             tx,
-            self.branch.data(),
+            snapshot,
             read_key,
             write_keys,
             &self.current_block.locator,
@@ -392,10 +446,11 @@ impl Blob {
         Ok(())
     }
 
-    async fn trim(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    async fn trim(&self, tx: &mut db::Transaction<'_>, snapshot: &mut SnapshotData) -> Result<()> {
         match remove_blocks(
             tx,
-            &self.branch,
+            snapshot,
+            self.branch.keys(),
             self.head_locator
                 .sequence()
                 .skip(self.block_count() as usize),
@@ -429,12 +484,18 @@ pub(crate) async fn fork(
     // accidentally forking into remote branch (remote branches don't have write access).
     let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
+    let src_snapshot = src_branch.data().load_snapshot(tx).await?;
+    let mut dst_snapshot = dst_branch
+        .data()
+        .load_or_create_snapshot(tx, write_keys)
+        .await?;
+
     let locators = Locator::head(blob_id).sequence();
 
     for locator in locators {
         let encoded_locator = locator.encode(read_key);
 
-        let (block_id, block_presence) = match src_branch.data().get(tx, &encoded_locator).await {
+        let (block_id, block_presence) = match src_snapshot.get_block(tx, &encoded_locator).await {
             Ok(block) => block,
             Err(Error::EntryNotFound) => {
                 // end of the blob
@@ -446,9 +507,8 @@ pub(crate) async fn fork(
         // It can happen that the current and dst branches are different, but the blob has
         // already been forked by some other task in the meantime. In that case this
         // `insert` is a no-op. We still proceed normally to maintain idempotency.
-        dst_branch
-            .data()
-            .insert(tx, &encoded_locator, &block_id, block_presence, write_keys)
+        dst_snapshot
+            .insert_block(tx, &encoded_locator, &block_id, block_presence, write_keys)
             .await?;
     }
 
@@ -490,11 +550,11 @@ fn block_count(len: u64) -> u32 {
 
 async fn read_block(
     conn: &mut db::Connection,
-    branch: &BranchData,
+    snapshot: &SnapshotData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, nonce) = load_block(conn, branch, read_key, locator).await?;
+    let (id, mut buffer, nonce) = load_block(conn, snapshot, read_key, locator).await?;
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
@@ -502,23 +562,11 @@ async fn read_block(
 
 async fn load_block(
     conn: &mut db::Connection,
-    branch: &BranchData,
+    snapshot: &SnapshotData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer, BlockNonce)> {
-    // TODO: there is a small (but non-zero) chance that the block might be deleted in between the
-    // `BranchData::get` and `block::read` calls by another thread. To avoid this, we should make
-    // the two operations atomic. This can be done either by running them in a transaction or by
-    // rewriting them as a single query (which can be done using "recursive common table
-    // expressions" (https://www.sqlite.org/lang_with.html)). If we decide to use transactions, we
-    // need to be extra careful to not cause deadlock due the order tables are locked when shared
-    // cache is enabled. The recursive query seems like the safer option.
-    //
-    // NOTE: the above comment was written when we were still using multiple db connections. Now
-    // with just one connection this function has exclusive access to the db and so the described
-    // situation is impossible. Leaving it here in case we ever go back to multiple connections.
-
-    let (id, _) = branch.get(conn, &locator.encode(read_key)).await?;
+    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
     let mut content = Buffer::new();
     let nonce = block::read(conn, &id, &mut content).await?;
 
@@ -527,7 +575,7 @@ async fn load_block(
 
 async fn write_block(
     tx: &mut db::Transaction<'_>,
-    branch: &BranchData,
+    snapshot: &mut SnapshotData,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,
     locator: &Locator,
@@ -540,8 +588,8 @@ async fn write_block(
     // NOTE: make sure the index and block store operations run in the same order as in
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
-    let inserted = branch
-        .insert(
+    let inserted = snapshot
+        .insert_block(
             tx,
             &locator.encode(read_key),
             &id,
@@ -569,17 +617,21 @@ fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content
     block_key.encrypt_no_aead(&Nonce::default(), content);
 }
 
-async fn remove_blocks<T>(tx: &mut db::Transaction<'_>, branch: &Branch, locators: T) -> Result<()>
+async fn remove_blocks<T>(
+    tx: &mut db::Transaction<'_>,
+    snapshot: &mut SnapshotData,
+    keys: &AccessKeys,
+    locators: T,
+) -> Result<()>
 where
     T: IntoIterator<Item = Locator>,
 {
-    let read_key = branch.keys().read();
-    let write_keys = branch.keys().write().ok_or(Error::PermissionDenied)?;
+    let read_key = keys.read();
+    let write_keys = keys.write().ok_or(Error::PermissionDenied)?;
 
     for locator in locators {
-        branch
-            .data()
-            .remove(tx, &locator.encode(read_key), write_keys)
+        snapshot
+            .remove_block(tx, &locator.encode(read_key), write_keys)
             .await?;
     }
 

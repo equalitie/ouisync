@@ -1,8 +1,9 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
-    branch::Branch,
+    crypto::cipher,
     db,
     error::Result,
+    index::SnapshotData,
     locator::Locator,
 };
 use std::{
@@ -39,12 +40,12 @@ impl OpenBlock {
 
     pub async fn open_head(
         conn: &mut db::Connection,
-        branch: &Branch,
+        snapshot: &SnapshotData,
+        read_key: &cipher::SecretKey,
         locator: Locator,
     ) -> Result<Self> {
-        let (id, mut buffer, nonce) =
-            super::load_block(conn, branch.data(), branch.keys().read(), &locator).await?;
-        super::decrypt_block(branch.keys().read(), &nonce, &mut buffer);
+        let (id, mut buffer, nonce) = super::load_block(conn, snapshot, read_key, &locator).await?;
+        super::decrypt_block(read_key, &nonce, &mut buffer);
 
         let content = Cursor::new(buffer);
 
