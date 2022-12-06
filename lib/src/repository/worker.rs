@@ -122,16 +122,13 @@ impl Inner {
                     state = State::Waiting;
 
                     let work = async {
-                        tracing::debug!("job started");
                         self.work(ErrorHandling::Ignore).await.ok();
-                        tracing::debug!("job completed");
                     };
 
                     let wait = async {
                         loop {
                             match event_rx.recv().await {
                                 Ok(Payload::BranchChanged(_)) => {
-                                    tracing::debug!("job interrupted");
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
                                     state = State::Working;
@@ -212,8 +209,8 @@ impl Inner {
         let result = prune::run(&self.shared).await;
         error_handling.apply(result)?;
 
+        // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            // Scan for missing and unreachable blocks
             let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
             error_handling.apply(result)?;
         }

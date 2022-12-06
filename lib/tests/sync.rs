@@ -5,6 +5,7 @@ mod common;
 use self::common::{Env, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
+use futures_util::future;
 use ouisync::{
     Access, AccessMode, AccessSecrets, EntryType, Error, Repository, RepositoryDb, WriteSecrets,
     BLOB_HEADER_SIZE, BLOCK_SIZE,
@@ -649,6 +650,69 @@ async fn concurrent_update_and_delete_during_conflict() {
 
     // A is able to read the whole file again including the previously gc-ed blocks.
     common::expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
+}
+
+// https://github.com/equalitie/ouisync/issues/86
+#[ignore] // FIXME
+#[tokio::test(flavor = "multi_thread")]
+async fn content_stays_available_during_sync() {
+    let mut env = Env::with_seed(0);
+
+    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
+
+    let repo_a = env.create_repo().await;
+
+    // B is read-only to disable the merger which could otherwise interfere with this test.
+    let repo_b = env
+        .create_repo_with_secrets(repo_a.secrets().with_mode(AccessMode::Read))
+        .await;
+
+    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+
+    let mut content0 = vec![0; 32];
+    env.rng.fill(&mut content0[..]);
+
+    let mut content1 = vec![0; 128 * 1024];
+    env.rng.fill(&mut content1[..]);
+
+    // First create and sync "b/c.dat"
+    let mut file = repo_a.create_file("b/c.dat").await.unwrap();
+    file.write(&content0).await.unwrap();
+    file.flush().await.unwrap();
+
+    common::expect_file_content(&repo_b, "b/c.dat", &content0).await;
+
+    // Then create "a.dat" and "b/d.dat". Because the entries are processed in lexicographical
+    // order, the blocks of "a.dat" are requested before the blocks of "b". Thus there is a period
+    // of time after the snapshot is completed but before the blocks of "b" are downloaded during
+    // which the latest version of "b" can't be opened because its blocks haven't been downloaded
+    // yet (because the blocks of "a.dat" must be downloaded first). This test verifies that the
+    // previous content of "b" can still be accessed even during this period.
+
+    let task_a = async {
+        let mut file = repo_a.create_file("a.dat").await.unwrap();
+        file.write(&content1).await.unwrap();
+        file.flush().await.unwrap();
+
+        repo_a.create_file("b/d.dat").await.unwrap();
+    };
+
+    let task_b = common::eventually(&repo_b, || async {
+        // The first file stays available at all times...
+        assert!(common::check_file_version_content(&repo_b, "b/c.dat", None, &content0).await);
+
+        // ...until the new files are transfered
+        for (name, content) in [("a.dat", &content1[..]), ("b/d.dat", &[])] {
+            if !common::check_file_version_content(&repo_b, name, None, content).await {
+                return false;
+            }
+        }
+
+        true
+    });
+
+    future::join(task_a, task_b).await;
 }
 
 async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {

@@ -237,7 +237,7 @@ pub(crate) async fn check_file_version_content(
         Err(error) => panic!("unexpected error: {:?}", error),
     };
 
-    tracing::debug!(path, "opened");
+    tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
 
     let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,

@@ -33,6 +33,7 @@ use futures_util::TryStreamExt;
 use std::{cmp::Ordering, collections::HashMap};
 use thiserror::Error;
 use tokio::sync::broadcast;
+use tracing::Level;
 
 type SnapshotId = u32;
 
@@ -135,7 +136,11 @@ impl Index {
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
-                    tracing::debug!(branch.id = ?node.proof.writer_id, "snapshot started");
+                    tracing::debug!(
+                        branch.id = ?node.proof.writer_id,
+                        vv = ?node.proof.version_vector,
+                        "snapshot started"
+                    );
                     self.update_summaries(tx, hash).await?;
                 }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
@@ -268,9 +273,16 @@ impl Index {
             .map(|(writer_id, _)| self.get_branch(writer_id))
             .collect();
 
-        for branch in completed {
-            tracing::debug!(branch.id = ?branch.id(), "snapshot complete");
-            branch.notify();
+        if !completed.is_empty() {
+            for branch in completed {
+                if tracing::enabled!(Level::DEBUG) {
+                    let mut conn = self.pool.acquire().await?;
+                    let vv = branch.load_version_vector(&mut conn).await?;
+                    tracing::debug!(branch.id = ?branch.id(), ?vv, "snapshot complete");
+                }
+
+                branch.notify();
+            }
         }
 
         Ok(())
