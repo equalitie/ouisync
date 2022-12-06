@@ -52,7 +52,7 @@ pub use self::{
     error::{Error, Result},
     event::{Event, Payload},
     file::File,
-    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
+    joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::peer_addr::PeerAddr,
     repository::{Repository, RepositoryDb},

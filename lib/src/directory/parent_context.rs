@@ -1,6 +1,4 @@
-use std::cmp::Ordering;
-
-use super::{Error, OverwriteStrategy};
+use super::{Error, MissingBlockStrategy, OverwriteStrategy};
 use crate::{
     blob,
     blob_id::BlobId,
@@ -12,6 +10,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
+use std::cmp::Ordering;
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
@@ -108,6 +107,7 @@ impl ParentContext {
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),
+            MissingBlockStrategy::Fail,
         )
         .await
     }
@@ -118,6 +118,7 @@ impl ParentContext {
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),
+            MissingBlockStrategy::Fail,
         )
         .await
     }

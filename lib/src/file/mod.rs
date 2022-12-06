@@ -197,6 +197,7 @@ mod tests {
         access_control::{AccessKeys, WriteSecrets},
         crypto::sign::PublicKey,
         db,
+        directory::MissingBlockStrategy,
         event::Event,
         index::BranchData,
     };
@@ -217,7 +218,7 @@ mod tests {
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -234,7 +235,7 @@ mod tests {
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -249,7 +250,7 @@ mod tests {
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -274,7 +275,7 @@ mod tests {
         file0.flush().await.unwrap();
 
         let mut file1 = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("pig.jpg")
@@ -302,7 +303,7 @@ mod tests {
 
         let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("fox.txt")

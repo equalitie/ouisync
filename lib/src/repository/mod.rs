@@ -19,7 +19,7 @@ use crate::{
     db,
     debug::DebugPrinter,
     device_id::DeviceId,
-    directory::{Directory, EntryType},
+    directory::{Directory, EntryType, MissingBlockStrategy},
     error::{Error, Result},
     event::Event,
     file::{File, FileCache},
@@ -449,7 +449,9 @@ impl Repository {
                 (file.parent().await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;
+                let mut dir_to_move = entry
+                    .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                    .await?;
                 let dir_to_move = dir_to_move.merge().await?;
 
                 let src_dir = dir_to_move
@@ -540,7 +542,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root().await {
+            let dir = match branch.open_root(MissingBlockStrategy::Fallback).await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll

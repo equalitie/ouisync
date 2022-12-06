@@ -1,7 +1,7 @@
 use super::{
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
-    Directory,
+    Directory, MissingBlockStrategy,
 };
 use crate::{
     blob_id::BlobId,
@@ -199,17 +199,25 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(&self) -> Result<Directory> {
+    pub(crate) async fn open(
+        &self,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Directory> {
         let mut conn = self.branch().db().acquire().await?;
-        self.open_in(&mut conn).await
+        self.open_in(&mut conn, missing_block_strategy).await
     }
 
-    pub(crate) async fn open_in(&self, conn: &mut db::Connection) -> Result<Directory> {
+    pub(crate) async fn open_in(
+        &self,
+        conn: &mut db::Connection,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Directory> {
         Directory::open_in(
             conn,
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),
+            missing_block_strategy,
         )
         .await
     }

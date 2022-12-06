@@ -1,6 +1,7 @@
 use super::Shared;
 use crate::{
     branch::Branch,
+    directory::MissingBlockStrategy,
     error::{Error, Result},
     event::Payload,
     event::{EventScope, IgnoreScopeReceiver},
@@ -244,7 +245,7 @@ mod merge {
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            match branch.open_root().await {
+            match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
@@ -375,7 +376,7 @@ mod scan {
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root().await {
+            match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
@@ -419,7 +420,10 @@ mod scan {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    match entry.open(MissingVersionStrategy::Fail).await {
+                    match entry
+                        .open_with(MissingVersionStrategy::Fail, MissingBlockStrategy::Fail)
+                        .await
+                    {
                         Ok(dir) => subdirs.push(dir),
                         Err(error) => {
                             // On error, we can still proceed with finding missing blocks, but we
