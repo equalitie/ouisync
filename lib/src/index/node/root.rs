@@ -204,7 +204,7 @@ impl RootNode {
             .err_into()
     }
 
-    /// Load previous root node of the same writer.
+    /// Load the previous complete root node of the same writer.
     pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Self> {
         sqlx::query(
             "SELECT
@@ -212,10 +212,9 @@ impl RootNode {
                 versions,
                 hash,
                 signature,
-                is_complete,
                 block_presence
              FROM snapshot_root_nodes
-             WHERE writer_id = ? AND snapshot_id < ?
+             WHERE writer_id = ? AND is_complete = 1 AND snapshot_id < ?
              ORDER BY snapshot_id DESC
              LIMIT 1",
         )
@@ -227,8 +226,8 @@ impl RootNode {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(self.proof.writer_id, row.get(1), row.get(2), row.get(3)),
             summary: Summary {
-                is_complete: row.get(4),
-                block_presence: row.get(5),
+                is_complete: true,
+                block_presence: row.get(4),
             },
         })
         .ok_or(Error::EntryNotFound)

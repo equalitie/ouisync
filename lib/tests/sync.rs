@@ -653,7 +653,6 @@ async fn concurrent_update_and_delete_during_conflict() {
 }
 
 // https://github.com/equalitie/ouisync/issues/86
-#[ignore] // FIXME
 #[tokio::test(flavor = "multi_thread")]
 async fn content_stays_available_during_sync() {
     let mut env = Env::with_seed(0);
