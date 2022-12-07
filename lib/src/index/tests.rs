@@ -358,18 +358,20 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 }
 
 #[tokio::test]
-async fn prune_snapshots_no_missing() {
+async fn prune_snapshots_insert_present() {
     let mut rng = StdRng::seed_from_u64(0);
     let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
 
     let remote_id = PublicKey::generate(&mut rng);
 
+    // snapshot 1
     let mut blocks = vec![rng.gen()];
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
     receive_block(&index, blocks[0].1.id()).await;
 
+    // snapshot 2 (insert new block)
     blocks.push(rng.gen());
     let snapshot = Snapshot::new(blocks.clone());
 
@@ -380,6 +382,158 @@ async fn prune_snapshots_no_missing() {
 
     prune_snapshots(&index, &remote_id).await;
 
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_insert_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = vec![rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (insert new block)
+    blocks.push(rng.gen());
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has a locator pointing to a missing
+    // block, snapshot 1 doesn't have that locator and so can't serve as fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_present_to_present() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_present_to_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is not pruned because snapshot 2 has a locator pointing to a missing block while
+    // in snapshot 1 the same locator points to a present block and so snapshot 1 can serve as
+    // fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_missing_to_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the block
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has a locator pointing to a missing
+    // block, the same locator is also pointing to a missing block in snapshot 1 and so snapshot 1
+    // can't serve as fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_keep_missing_and_insert_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = vec![rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the block
+
+    // snapshot 2 (insert new block)
+    blocks.push(rng.gen());
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has locators pointing to a missing
+    // blocks, one of the locators points to the same missing block also in snapshot 1 and the
+    // other one doesn't even exists in snapshot 1. Thus, snapshot 1 can't serve as fallback for
+    // snapshot 2.
     assert_eq!(count_snapshots(&index, &remote_id).await, 1);
 }
 
