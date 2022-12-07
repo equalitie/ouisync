@@ -26,8 +26,8 @@ const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
 // How often to send keep-alive messages if no regular messages have been sent.
 const KEEP_ALIVE_SEND_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Reads/writes messages from/to the underlying TCP streams and dispatches them to individual
-/// streams/sinks based on their ids.
+/// Reads/writes messages from/to the underlying TCP or QUIC streams and dispatches them to
+/// individual streams/sinks based on their ids.
 #[derive(Clone)]
 pub(super) struct MessageDispatcher {
     recv: Arc<RecvState>,
@@ -48,8 +48,8 @@ impl MessageDispatcher {
         }
     }
 
-    /// Bind this dispatcher to the given TCP socket. Can be bound to multiple sockets and the
-    /// failed ones are automatically removed.
+    /// Bind this dispatcher to the given TCP of QUIC socket. Can be bound to multiple sockets and
+    /// the failed ones are automatically removed.
     pub fn bind(&self, stream: raw::Stream, permit: ConnectionPermit) {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();

@@ -134,7 +134,7 @@ impl MessageBroker {
                 _ = maintain_link(
                     role,
                     stream,
-                    sink.clone(),
+                    sink,//.clone(),
                     store,
                     request_limiter,
                     pex_discovery_tx,
