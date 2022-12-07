@@ -1,7 +1,7 @@
-use super::peer_exchange::PexPayload;
+use super::{crypto::Role, peer_exchange::PexPayload, runtime_id::PublicRuntimeId};
 use crate::{
     block::{BlockId, BlockNonce},
-    crypto::Hash,
+    crypto::{Hash, Hashable},
     format::Hex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
@@ -241,15 +241,27 @@ define_byte_array_wrapper! {
 }
 
 impl MessageChannel {
+    pub(super) fn new(
+        repo_id: &'_ RepositoryId,
+        this_runtime_id: &'_ PublicRuntimeId,
+        that_runtime_id: &'_ PublicRuntimeId,
+        role: Role,
+    ) -> Self {
+        let (id1, id2) = match role {
+            Role::Initiator => (this_runtime_id, that_runtime_id),
+            Role::Responder => (that_runtime_id, this_runtime_id),
+        };
+
+        Self(
+            (repo_id, id1, id2, b"ouisync message channel id")
+                .hash()
+                .into(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn random() -> Self {
         Self(rand::random())
-    }
-}
-
-impl<'a> From<&'a RepositoryId> for MessageChannel {
-    fn from(id: &'a RepositoryId) -> Self {
-        Self(id.salted_hash(b"ouisync message channel").into())
     }
 }
 

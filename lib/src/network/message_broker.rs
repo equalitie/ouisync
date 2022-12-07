@@ -95,7 +95,6 @@ impl MessageBroker {
 
         let span_enter = span.enter();
 
-        let channel = MessageChannel::from(store.index.repository_id());
         let (abort_tx, abort_rx) = oneshot::channel();
 
         match self.links.entry(store.local_id) {
@@ -120,8 +119,15 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        let stream = self.dispatcher.open_recv(channel);
-        let sink = self.dispatcher.open_send(channel);
+        let channel_id = MessageChannel::new(
+            store.index.repository_id(),
+            &self.this_runtime_id,
+            &self.that_runtime_id,
+            role,
+        );
+
+        let stream = self.dispatcher.open_recv(channel_id);
+        let sink = self.dispatcher.open_send(channel_id);
         let request_limiter = self.request_limiter.clone();
 
         let pex_discovery_tx = pex.discovery_sender();
@@ -134,7 +140,7 @@ impl MessageBroker {
                 _ = maintain_link(
                     role,
                     stream,
-                    sink,//.clone(),
+                    sink,
                     store,
                     request_limiter,
                     pex_discovery_tx,

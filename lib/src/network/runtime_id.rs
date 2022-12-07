@@ -1,4 +1,7 @@
-use crate::crypto::sign::{Keypair, PublicKey, SecretKey, Signature};
+use crate::crypto::{
+    sign::{Keypair, PublicKey, SecretKey, Signature},
+    Digest, Hashable,
+};
 use rand::{rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -58,6 +61,12 @@ impl PublicRuntimeId {
 impl AsRef<[u8]> for PublicRuntimeId {
     fn as_ref(&self) -> &[u8] {
         self.public.as_ref()
+    }
+}
+
+impl Hashable for PublicRuntimeId {
+    fn update_hash<S: Digest>(&self, state: &mut S) {
+        self.public.update_hash(state)
     }
 }
 
