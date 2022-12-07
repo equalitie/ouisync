@@ -19,7 +19,7 @@ use crate::{
     db,
     debug::DebugPrinter,
     device_id::DeviceId,
-    directory::{Directory, EntryType},
+    directory::{Directory, EntryType, MissingBlockStrategy},
     error::{Error, Result},
     event::Event,
     file::{File, FileCache},
@@ -449,7 +449,9 @@ impl Repository {
                 (file.parent().await?, Cow::Owned(src_name))
             }
             JointEntryRef::Directory(entry) => {
-                let mut dir_to_move = entry.open(MissingVersionStrategy::Skip).await?;
+                let mut dir_to_move = entry
+                    .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                    .await?;
                 let dir_to_move = dir_to_move.merge().await?;
 
                 let src_dir = dir_to_move
@@ -525,20 +527,12 @@ impl Repository {
         self.shared.store.sync_progress().await
     }
 
-    /// Force the garbage collection to run and wait for it to complete, returning its result.
+    /// Force the background worker to run one job and wait for it to complete, returning its result.
     ///
-    /// It's usually not necessary to call this method because the gc runs automatically in the
-    /// background.
-    pub async fn force_garbage_collection(&self) -> Result<()> {
-        self.worker_handle.collect().await
-    }
-
-    /// Force the merge to run and wait for it to complete, returning its result.
-    ///
-    /// It's usually not necessary to call this method because the merger runs automatically in the
-    /// background.
-    pub async fn force_merge(&self) -> Result<()> {
-        self.worker_handle.merge().await
+    /// It's usually not necessary to call this method because the worker runs automatically in the
+    /// background. It might still e.g. be usefull for testing/debugging.
+    pub async fn force_work(&self) -> Result<()> {
+        self.worker_handle.work().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -548,7 +542,7 @@ impl Repository {
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            let dir = match branch.open_root().await {
+            let dir = match branch.open_root(MissingBlockStrategy::Fallback).await {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll
@@ -668,7 +662,7 @@ impl Shared {
     }
 
     // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: Arc<BranchData>) -> Result<Branch> {
+    fn inflate(&self, data: BranchData) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.

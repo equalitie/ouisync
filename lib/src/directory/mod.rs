@@ -24,7 +24,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    index::VersionVectorOp,
+    index::{SnapshotData, VersionVectorOp},
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -42,8 +42,11 @@ pub struct Directory {
 impl Directory {
     /// Opens the root directory.
     /// For internal use only. Use [`Branch::open_root`] instead.
-    pub(crate) async fn open_root(branch: Branch) -> Result<Self> {
-        Self::open(branch, Locator::ROOT, None).await
+    pub(crate) async fn open_root(
+        branch: Branch,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Self> {
+        Self::open(branch, Locator::ROOT, None, missing_block_strategy).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -52,7 +55,7 @@ impl Directory {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(branch.clone(), locator, None).await {
+        match Self::open(branch.clone(), locator, None, MissingBlockStrategy::Fail).await {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -69,6 +72,7 @@ impl Directory {
             self.branch().clone(),
             *self.locator(),
             self.parent.as_ref().cloned(),
+            MissingBlockStrategy::Fail,
         )
         .await?;
 
@@ -269,7 +273,7 @@ impl Directory {
 
             match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    let mut dir = entry.open().await?;
+                    let mut dir = entry.open(MissingBlockStrategy::Fail).await?;
                     dir.merge_version_vector(vv).await?;
                     Ok(dir)
                 }
@@ -312,8 +316,9 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
+        missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
-        let (blob, entries) = load(conn, branch, locator).await?;
+        let (blob, entries) = load(conn, branch, locator, missing_block_strategy).await?;
 
         Ok(Self {
             blob,
@@ -322,9 +327,14 @@ impl Directory {
         })
     }
 
-    async fn open(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Result<Self> {
+    async fn open(
+        branch: Branch,
+        locator: Locator,
+        parent: Option<ParentContext>,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Self> {
         let mut conn = branch.db().acquire().await?;
-        Self::open_in(&mut conn, branch, locator, parent).await
+        Self::open_in(&mut conn, branch, locator, parent, missing_block_strategy).await
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
@@ -396,6 +406,7 @@ impl Directory {
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
+                        MissingBlockStrategy::Fail,
                     )
                     .await;
 
@@ -450,7 +461,7 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_in(tx)
+                        .open_in(tx, MissingBlockStrategy::Fail)
                         .await?
                         .entries()
                         .any(|entry| !entry.is_tombstone())
@@ -516,7 +527,13 @@ impl Directory {
         if self.blob.is_dirty() {
             Ok(self.entries.clone())
         } else {
-            let (blob, content) = load(conn, self.branch().clone(), *self.locator()).await?;
+            let (blob, content) = load(
+                conn,
+                self.branch().clone(),
+                *self.locator(),
+                MissingBlockStrategy::Fail,
+            )
+            .await?;
             self.blob = blob;
             Ok(content)
         }
@@ -610,13 +627,52 @@ impl fmt::Debug for Directory {
     }
 }
 
+/// What to do when opening a directory with a missing block.
+#[derive(Clone, Copy)]
+pub enum MissingBlockStrategy {
+    /// Attempt to fallback to the previous snapshot
+    Fallback,
+    /// Fail the whole open operation
+    Fail,
+}
+
+// Load directory content. On missing block, fallback to previous snapshot (if any).
 async fn load(
     conn: &mut db::Connection,
     branch: Branch,
     locator: Locator,
+    missing_block_strategy: MissingBlockStrategy,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open(conn, branch, locator).await?;
-    let buffer = blob.read_to_end(conn).await?;
+    let mut snapshot = branch.data().load_snapshot(conn).await?;
+
+    loop {
+        let error = match load_in(conn, branch.clone(), &snapshot, locator).await {
+            Ok((blob, content)) => return Ok((blob, content)),
+            Err(error @ Error::BlockNotFound(_)) => error,
+            Err(error) => return Err(error),
+        };
+
+        match missing_block_strategy {
+            MissingBlockStrategy::Fallback => (),
+            MissingBlockStrategy::Fail => return Err(error),
+        }
+
+        if let Some(prev_snapshot) = snapshot.load_prev(conn).await? {
+            snapshot = prev_snapshot;
+        } else {
+            return Err(error);
+        }
+    }
+}
+
+async fn load_in(
+    conn: &mut db::Connection,
+    branch: Branch,
+    snapshot: &SnapshotData,
+    locator: Locator,
+) -> Result<(Blob, Content)> {
+    let mut blob = Blob::open_in(conn, branch, snapshot, locator).await?;
+    let buffer = blob.read_to_end_in(conn, snapshot).await?;
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))

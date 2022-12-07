@@ -416,7 +416,7 @@ mod tests {
             span: Span::none(),
         };
 
-        let all_blocks: Vec<(Block, Hash)> =
+        let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
         let branches: Vec<(PublicKey, Snapshot)> = (0..branch_count)
             .map(|_| {

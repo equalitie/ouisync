@@ -1,7 +1,7 @@
 use super::{
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
-    Directory,
+    Directory, MissingBlockStrategy,
 };
 use crate::{
     blob_id::BlobId,
@@ -9,7 +9,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
-    file::{self, File},
+    file::File,
     locator::Locator,
     version_vector::VersionVector,
 };
@@ -142,12 +142,15 @@ impl<'a> FileRef<'a> {
     }
 
     /// Fork the file without opening it.
-    pub(crate) async fn fork(&self, dst_branch: Branch) -> Result<()> {
+    /// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
+    /// write concurrency is implemented.
+    pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         let parent_context = self.inner.parent_context();
-        let src_branch = self.branch().clone();
-        let locator = self.locator();
+        let src_branch = self.branch();
 
-        file::fork(src_branch, dst_branch, locator, parent_context).await
+        parent_context.fork(src_branch, dst_branch).await?;
+
+        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
@@ -196,17 +199,25 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(&self) -> Result<Directory> {
+    pub(crate) async fn open(
+        &self,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Directory> {
         let mut conn = self.branch().db().acquire().await?;
-        self.open_in(&mut conn).await
+        self.open_in(&mut conn, missing_block_strategy).await
     }
 
-    pub(crate) async fn open_in(&self, conn: &mut db::Connection) -> Result<Directory> {
+    pub(crate) async fn open_in(
+        &self,
+        conn: &mut db::Connection,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Directory> {
         Directory::open_in(
             conn,
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),
+            missing_block_strategy,
         )
         .await
     }

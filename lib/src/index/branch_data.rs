@@ -1,5 +1,7 @@
+use std::{collections::HashSet, future};
+
 use super::{
-    node::{InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
+    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
     VersionVectorOp,
@@ -17,11 +19,11 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
-use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::{pin, sync::broadcast};
 
 type LocatorHash = Hash;
 
+#[derive(Clone)]
 pub(crate) struct BranchData {
     writer_id: PublicKey,
     notify_tx: broadcast::Sender<Event>,
@@ -40,9 +42,8 @@ impl BranchData {
     pub fn load_all(
         conn: &mut db::Connection,
         notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Arc<Self>>> + '_ {
-        SnapshotData::load_all(conn, notify_tx)
-            .map_ok(move |snapshot| Arc::new(snapshot.to_branch_data()))
+    ) -> impl Stream<Item = Result<Self>> + '_ {
+        SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
@@ -97,6 +98,7 @@ impl BranchData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[cfg(test)] // currently used only in tests
     pub async fn insert(
         &self,
         tx: &mut db::Transaction<'_>,
@@ -117,13 +119,14 @@ impl BranchData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[cfg(test)] // currently used only in tests
     pub async fn remove(
         &self,
         tx: &mut db::Transaction<'_>,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
-        self.load_or_create_snapshot(tx, write_keys)
+        self.load_snapshot(tx)
             .await?
             .remove_block(tx, encoded_locator, write_keys)
             .await
@@ -190,8 +193,16 @@ impl SnapshotData {
         })
     }
 
+    /// Load previous snapshot
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
+        Ok(self.root_node.load_prev(conn).await?.map(|root_node| Self {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        }))
+    }
+
     /// Returns the id of the replica that owns this branch.
-    pub fn id(&self) -> &PublicKey {
+    pub fn branch_id(&self) -> &PublicKey {
         &self.root_node.proof.writer_id
     }
 
@@ -280,7 +291,7 @@ impl SnapshotData {
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut new_vv = self.root_node.proof.version_vector.clone();
-        op.apply(self.id(), &mut new_vv);
+        op.apply(self.branch_id(), &mut new_vv);
 
         let new_proof = Proof::new(
             self.root_node.proof.writer_id,
@@ -304,13 +315,36 @@ impl SnapshotData {
         self.root_node.remove_recursively_all_older(conn).await
     }
 
-    /// Trigger a notification event from the branch of this snapshot.
-    pub fn notify(&self) {
-        self.notify_tx
-            .send(Event::new(Payload::BranchChanged(
-                self.root_node.proof.writer_id,
-            )))
-            .unwrap_or(0);
+    /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
+    /// preserves older snapshots that can be used as fallback for the latest snapshot and only
+    // removed those that can't.
+    pub async fn prune(&self, conn: &mut db::Connection) -> Result<()> {
+        // First remove all incomplete snapshots
+        self.root_node
+            .remove_recursively_all_older_incomplete(conn)
+            .await?;
+
+        // Then remove those snapshots that can't serve as fallback for the current one.
+        let fallback_checker = FallbackChecker::new(conn, &self.root_node).await?;
+        let mut maybe_old = self.root_node.load_prev(conn).await?;
+
+        while let Some(old) = maybe_old {
+            if fallback_checker.check(conn, &old).await? {
+                // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
+                // previous snapshot.
+                maybe_old = old.load_prev(conn).await?;
+            } else {
+                // `old` can't serve as fallback for `self` and so we can safely remove it
+                // including all its predecessors.
+
+                old.remove_recursively(conn).await?;
+                old.remove_recursively_all_older(conn).await?;
+
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     async fn load_path(
@@ -384,7 +418,36 @@ impl Versioned for SnapshotData {
     }
 
     fn branch_id(&self) -> &PublicKey {
-        self.id()
+        self.branch_id()
+    }
+}
+
+// Helper to check whether an old snapshot can be used as fallback for the new snapshot.
+struct FallbackChecker {
+    new_missing_locators: HashSet<Hash>,
+}
+
+impl FallbackChecker {
+    async fn new(conn: &mut db::Connection, new: &RootNode) -> Result<Self> {
+        let new_missing_locators = node::leaf_nodes(conn, new, SingleBlockPresence::Missing)
+            .map_ok(|node| node.locator)
+            .try_collect()
+            .await?;
+
+        Ok(Self {
+            new_missing_locators,
+        })
+    }
+
+    async fn check(&self, conn: &mut db::Connection, old: &RootNode) -> Result<bool> {
+        let old_present_locators =
+            node::leaf_nodes(conn, old, SingleBlockPresence::Present).map_ok(|node| node.locator);
+
+        let stream = old_present_locators
+            .try_filter(|item| future::ready(self.new_missing_locators.contains(item)));
+        pin!(stream);
+
+        Ok(stream.try_next().await?.is_some())
     }
 }
 

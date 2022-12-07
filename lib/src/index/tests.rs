@@ -1,15 +1,23 @@
-use super::{node::RootNode, node_test_utils::Snapshot, proof::Proof, *};
+use super::{
+    branch_data::BranchData,
+    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, Summary, EMPTY_INNER_HASH},
+    node_test_utils::Snapshot,
+    proof::Proof,
+    Index, ReceiveError, ReceiveFilter,
+};
 use crate::{
-    block::{self, BlockTracker, BLOCK_SIZE},
+    block::{self, BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
-    repository::LocalId,
+    db,
+    repository::{LocalId, RepositoryId},
     store::{BlockRequestMode, Store},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
-use futures_util::{future, StreamExt};
+use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
+use tokio::sync::broadcast;
 use tracing::Span;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -127,7 +135,7 @@ async fn receive_duplicate_root_node() {
         .unwrap();
 
     assert_eq!(
-        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id, 2)
+        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id)
             .filter(|node| future::ready(node.is_ok()))
             .count()
             .await,
@@ -288,7 +296,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn does_not_delete_old_branch_until_new_branch_is_complete() {
+async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let (_base_dir, index, write_keys) = setup().await;
     let store = Store {
         index,
@@ -307,34 +315,7 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     let vv0 = VersionVector::first(remote_id);
 
     // Receive it all.
-    store
-        .index
-        .receive_root_node(
-            Proof::new(remote_id, vv0.clone(), *snapshot0.root_hash(), &write_keys).into(),
-            Summary::FULL,
-        )
-        .await
-        .unwrap();
-
-    let mut receive_filter = ReceiveFilter::new(store.db().clone());
-
-    for layer in snapshot0.inner_layers() {
-        for (_, nodes) in layer.inner_maps() {
-            store
-                .index
-                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
-                .await
-                .unwrap();
-        }
-    }
-
-    for (_, nodes) in snapshot0.leaf_sets() {
-        store
-            .index
-            .receive_leaf_nodes(nodes.clone().into())
-            .await
-            .unwrap();
-    }
+    receive_snapshot(&store.index, remote_id, &snapshot0, &write_keys).await;
 
     for block in snapshot0.blocks().values() {
         store
@@ -376,6 +357,186 @@ async fn does_not_delete_old_branch_until_new_branch_is_complete() {
     .await;
 }
 
+#[tokio::test]
+async fn prune_snapshots_insert_present() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = vec![rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (insert new block)
+    blocks.push(rng.gen());
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[1].1.id()).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_insert_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = vec![rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (insert new block)
+    blocks.push(rng.gen());
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has a locator pointing to a missing
+    // block, snapshot 1 doesn't have that locator and so can't serve as fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_present_to_present() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_present_to_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    receive_block(&index, blocks[0].1.id()).await;
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is not pruned because snapshot 2 has a locator pointing to a missing block while
+    // in snapshot 1 the same locator points to a present block and so snapshot 1 can serve as
+    // fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+}
+
+#[tokio::test]
+async fn prune_snapshots_update_from_missing_to_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = [rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the block
+
+    // snapshot 2 (update the first block)
+    blocks[0].1 = rng.gen();
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has a locator pointing to a missing
+    // block, the same locator is also pointing to a missing block in snapshot 1 and so snapshot 1
+    // can't serve as fallback for snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
+#[tokio::test]
+async fn prune_snapshots_keep_missing_and_insert_missing() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+
+    // snapshot 1
+    let mut blocks = vec![rng.gen()];
+    let snapshot = Snapshot::new(blocks.clone());
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the block
+
+    // snapshot 2 (insert new block)
+    blocks.push(rng.gen());
+    let snapshot = Snapshot::new(blocks);
+
+    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
+    // don't receive the new block
+
+    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+
+    prune_snapshots(&index, &remote_id).await;
+
+    // snapshot 1 is pruned because even though snapshot 2 has locators pointing to a missing
+    // blocks, one of the locators points to the same missing block also in snapshot 1 and the
+    // other one doesn't even exists in snapshot 1. Thus, snapshot 1 can't serve as fallback for
+    // snapshot 2.
+    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+}
+
 async fn setup() -> (TempDir, Index, Keypair) {
     setup_with_rng(&mut StdRng::from_entropy()).await
 }
@@ -400,4 +561,74 @@ async fn check_all_blocks_exist(
         let (block_id, _) = branch.get(conn, &node.locator).await.unwrap();
         assert!(block::exists(conn, &block_id).await.unwrap());
     }
+}
+
+async fn receive_snapshot(
+    index: &Index,
+    writer_id: PublicKey,
+    snapshot: &Snapshot,
+    write_keys: &Keypair,
+) {
+    let vv = {
+        let mut conn = index.pool.acquire().await.unwrap();
+        index
+            .get_branch(writer_id)
+            .load_version_vector(&mut conn)
+            .await
+            .unwrap()
+            .incremented(writer_id)
+    };
+
+    index
+        .receive_root_node(
+            Proof::new(writer_id, vv, *snapshot.root_hash(), write_keys).into(),
+            Summary::FULL,
+        )
+        .await
+        .unwrap();
+
+    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+
+    for layer in snapshot.inner_layers() {
+        for (_, nodes) in layer.inner_maps() {
+            index
+                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                .await
+                .unwrap();
+        }
+    }
+
+    for (_, nodes) in snapshot.leaf_sets() {
+        index
+            .receive_leaf_nodes(nodes.clone().into())
+            .await
+            .unwrap();
+    }
+}
+
+async fn receive_block(index: &Index, block_id: &BlockId) {
+    let mut tx = index.pool.begin().await.unwrap();
+    node::receive_block(&mut tx, block_id).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
+    let mut conn = index.pool.acquire().await.unwrap();
+    RootNode::load_all_by_writer(&mut conn, *writer_id)
+        .try_fold(0, |sum, _node| future::ready(Ok(sum + 1)))
+        .await
+        .unwrap()
+}
+
+async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
+    let mut tx = index.pool.begin().await.unwrap();
+    index
+        .get_branch(*writer_id)
+        .load_snapshot(&mut tx)
+        .await
+        .unwrap()
+        .prune(&mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 }

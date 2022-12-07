@@ -1,6 +1,7 @@
 use super::Shared;
 use crate::{
     branch::Branch,
+    directory::MissingBlockStrategy,
     error::{Error, Result},
     event::Payload,
     event::{EventScope, IgnoreScopeReceiver},
@@ -63,12 +64,8 @@ pub(super) struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub async fn merge(&self) -> Result<()> {
-        self.oneshot(Command::Merge).await
-    }
-
-    pub async fn collect(&self) -> Result<()> {
-        self.oneshot(Command::Collect).await
+    pub async fn work(&self) -> Result<()> {
+        self.oneshot(Command::Work).await
     }
 
     pub async fn shutdown(&self) {
@@ -97,8 +94,7 @@ impl WorkerHandle {
 }
 
 enum Command {
-    Merge(oneshot::Sender<Result<()>>),
-    Collect(oneshot::Sender<Result<()>>),
+    Work(oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -127,18 +123,13 @@ impl Inner {
                     state = State::Waiting;
 
                     let work = async {
-                        tracing::debug!("job started");
-                        self.merge().await.ok();
-                        self.prune().await.ok();
-                        self.scan(scan::Mode::RequireAndCollect).await.ok();
-                        tracing::debug!("job completed");
+                        self.work(ErrorHandling::Ignore).await.ok();
                     };
 
                     let wait = async {
                         loop {
                             match event_rx.recv().await {
                                 Ok(Payload::BranchChanged(_)) => {
-                                    tracing::debug!("job interrupted");
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
                                     state = State::Working;
@@ -191,12 +182,10 @@ impl Inner {
 
     async fn handle_command(&self, command: Command) -> bool {
         match command {
-            Command::Merge(result_tx) => {
-                result_tx.send(self.merge().await).unwrap_or(());
-                true
-            }
-            Command::Collect(result_tx) => {
-                result_tx.send(self.collect().await).unwrap_or(());
+            Command::Work(result_tx) => {
+                result_tx
+                    .send(self.work(ErrorHandling::Return).await)
+                    .unwrap_or(());
                 true
             }
             Command::Shutdown(result_tx) => {
@@ -206,34 +195,43 @@ impl Inner {
         }
     }
 
-    async fn merge(&self) -> Result<()> {
-        let local_branch = if let Some(local_branch) = &self.local_branch {
-            local_branch
-        } else {
-            return Ok(());
-        };
+    async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
+        // Merge
+        if let Some(local_branch) = &self.local_branch {
+            let result = self
+                .event_scope
+                .apply(merge::run(&self.shared, local_branch))
+                .await;
 
-        self.event_scope
-            .apply(merge::run(&self.shared, local_branch))
-            .await
-    }
-
-    async fn prune(&self) -> Result<()> {
-        self.event_scope.apply(prune::run(&self.shared)).await
-    }
-
-    async fn scan(&self, mode: scan::Mode) -> Result<()> {
-        if !self.shared.secrets.can_read() {
-            return Ok(());
+            error_handling.apply(result)?;
         }
 
-        scan::run(&self.shared, mode).await
-    }
+        // Prune outdated branches and snapshots
+        let result = prune::run(&self.shared).await;
+        error_handling.apply(result)?;
 
-    async fn collect(&self) -> Result<()> {
-        self.prune().await?;
-        self.scan(scan::Mode::Collect).await?;
+        // Scan for missing and unreachable blocks
+        if self.shared.secrets.can_read() {
+            let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
+            error_handling.apply(result)?;
+        }
+
         Ok(())
+    }
+}
+
+#[derive(Copy, Clone)]
+enum ErrorHandling {
+    Return,
+    Ignore,
+}
+
+impl ErrorHandling {
+    fn apply(self, result: Result<()>) -> Result<()> {
+        match (self, result) {
+            (_, Ok(())) | (Self::Ignore, Err(_)) => Ok(()),
+            (Self::Return, Err(error)) => Err(error),
+        }
     }
 }
 
@@ -247,7 +245,7 @@ mod merge {
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            match branch.open_root().await {
+            match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
@@ -269,21 +267,20 @@ mod prune {
 
     #[instrument(skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-
-        let all = shared.store.index.load_snapshots(&mut conn).await?;
-        let (uptodate, outdated): (_, Vec<_>) =
+        let all = shared.store.index.load_snapshots().await?;
+        let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, Some(&shared.this_writer_id));
-        let mut removed = Vec::new();
+
+        let mut conn = shared.store.db().acquire().await?;
 
         // Remove outdated branches
         for snapshot in outdated {
             // Never remove local branch
-            if snapshot.id() == &shared.this_writer_id {
+            if snapshot.branch_id() == &shared.this_writer_id {
                 continue;
             }
 
-            match shared.inflate(Arc::new(snapshot.to_branch_data())) {
+            match shared.inflate(snapshot.to_branch_data()) {
                 Ok(branch) => {
                     // Don't remove branches that are in use. We get notified when they stop being
                     // used so we can try again.
@@ -299,24 +296,15 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!("removing outdated branch {:?}", snapshot.id());
+            tracing::trace!("removing outdated branch {:?}", snapshot.branch_id());
 
             snapshot.remove_all_older(&mut conn).await?;
             snapshot.remove(&mut conn).await?;
-
-            removed.push(snapshot);
         }
 
-        // Remove outdated snapshots
+        // Remove outdated snapshots.
         for snapshot in uptodate {
-            snapshot.remove_all_older(&mut conn).await?;
-        }
-
-        // TODO: is this notification necessary? There are currently some tests which rely on it
-        // but it doesn't seem to serve any purpose in the production code. We should probably
-        // rewrite those tests so they don't need this.
-        for snapshot in removed {
-            snapshot.notify()
+            snapshot.prune(&mut conn).await?;
         }
 
         Ok(())
@@ -380,7 +368,7 @@ mod scan {
         for branch in branches {
             entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
 
-            match branch.open_root().await {
+            match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
@@ -424,7 +412,10 @@ mod scan {
                         entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
                     }
 
-                    match entry.open(MissingVersionStrategy::Fail).await {
+                    match entry
+                        .open_with(MissingVersionStrategy::Fail, MissingBlockStrategy::Fail)
+                        .await
+                    {
                         Ok(dir) => subdirs.push(dir),
                         Err(error) => {
                             // On error, we can still proceed with finding missing blocks, but we

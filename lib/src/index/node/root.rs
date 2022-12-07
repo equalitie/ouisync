@@ -145,13 +145,12 @@ impl RootNode {
         .err_into()
     }
 
-    /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
-    /// writer ordered from the most recent to the least recent.
+    /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
+    /// most recent to the least recent.
     #[cfg(test)]
     pub fn load_all_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
-        limit: u32,
     ) -> impl Stream<Item = Result<Self>> + '_ {
         sqlx::query(
             "SELECT
@@ -163,11 +162,9 @@ impl RootNode {
                  block_presence
              FROM snapshot_root_nodes
              WHERE writer_id = ?
-             ORDER BY snapshot_id DESC
-             LIMIT ?",
+             ORDER BY snapshot_id DESC",
         )
         .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
-        .bind(limit)
         .fetch(conn)
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
@@ -187,9 +184,7 @@ impl RootNode {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Option<Self>> {
-        Self::load_all_by_writer(conn, writer_id, 1)
-            .try_next()
-            .await
+        Self::load_all_by_writer(conn, writer_id).try_next().await
     }
 
     /// Returns the writer ids of the nodes with the specified hash.
@@ -202,6 +197,36 @@ impl RootNode {
             .fetch(conn)
             .map_ok(|row| row.get(0))
             .err_into()
+    }
+
+    /// Load the previous complete root node of the same writer.
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
+        sqlx::query(
+            "SELECT
+                snapshot_id,
+                versions,
+                hash,
+                signature,
+                block_presence
+             FROM snapshot_root_nodes
+             WHERE writer_id = ? AND is_complete = 1 AND snapshot_id < ?
+             ORDER BY snapshot_id DESC
+             LIMIT 1",
+        )
+        .bind(&self.proof.writer_id)
+        .bind(self.snapshot_id)
+        .fetch(conn)
+        .map_ok(|row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(self.proof.writer_id, row.get(1), row.get(2), row.get(3)),
+            summary: Summary {
+                is_complete: true,
+                block_presence: row.get(4),
+            },
+        })
+        .err_into()
+        .try_next()
+        .await
     }
 
     /// Updates the proof of this node.
@@ -302,6 +327,25 @@ impl RootNode {
             .bind(&self.proof.writer_id)
             .execute(conn)
             .await?;
+
+        Ok(())
+    }
+
+    /// Removes all root nodes, including their snapshots, that are older than this node and are
+    /// on the same branch and are not complete.
+    pub async fn remove_recursively_all_older_incomplete(
+        &self,
+        conn: &mut db::Connection,
+    ) -> Result<()> {
+        // This uses db triggers to delete the whole snapshot.
+        sqlx::query(
+            "DELETE FROM snapshot_root_nodes
+             WHERE snapshot_id < ? AND writer_id = ? AND is_complete = 0",
+        )
+        .bind(self.snapshot_id)
+        .bind(&self.proof.writer_id)
+        .execute(conn)
+        .await?;
 
         Ok(())
     }

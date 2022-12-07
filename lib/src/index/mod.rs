@@ -9,7 +9,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
-    branch_data::BranchData,
+    branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
         SingleBlockPresence, Summary,
@@ -18,7 +18,7 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::{branch_data::SnapshotData, proof::ProofError};
+use self::proof::ProofError;
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -30,9 +30,10 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+use std::{cmp::Ordering, collections::HashMap};
 use thiserror::Error;
 use tokio::sync::broadcast;
+use tracing::Level;
 
 type SnapshotId = u32;
 
@@ -60,11 +61,11 @@ impl Index {
         &self.repository_id
     }
 
-    pub fn get_branch(&self, writer_id: PublicKey) -> Arc<BranchData> {
-        Arc::new(BranchData::new(writer_id, self.notify_tx.clone()))
+    pub fn get_branch(&self, writer_id: PublicKey) -> BranchData {
+        BranchData::new(writer_id, self.notify_tx.clone())
     }
 
-    pub async fn load_branches(&self) -> Result<Vec<Arc<BranchData>>> {
+    pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.pool.acquire().await?;
         BranchData::load_all(&mut conn, self.notify_tx.clone())
             .try_collect()
@@ -72,8 +73,9 @@ impl Index {
     }
 
     /// Load latest snapshots of all branches.
-    pub async fn load_snapshots(&self, conn: &mut db::Connection) -> Result<Vec<SnapshotData>> {
-        SnapshotData::load_all(conn, self.notify_tx.clone())
+    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
+        let mut conn = self.pool.acquire().await?;
+        SnapshotData::load_all(&mut conn, self.notify_tx.clone())
             .try_collect()
             .await
     }
@@ -134,7 +136,11 @@ impl Index {
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
-                    tracing::debug!(branch.id = ?node.proof.writer_id, "snapshot started");
+                    tracing::debug!(
+                        branch.id = ?node.proof.writer_id,
+                        vv = ?node.proof.version_vector,
+                        "snapshot started"
+                    );
                     self.update_summaries(tx, hash).await?;
                 }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
@@ -267,9 +273,16 @@ impl Index {
             .map(|(writer_id, _)| self.get_branch(writer_id))
             .collect();
 
-        for branch in completed {
-            tracing::debug!(branch.id = ?branch.id(), "snapshot complete");
-            branch.notify();
+        if !completed.is_empty() {
+            for branch in completed {
+                if tracing::enabled!(Level::DEBUG) {
+                    let mut conn = self.pool.acquire().await?;
+                    let vv = branch.load_version_vector(&mut conn).await?;
+                    tracing::debug!(branch.id = ?branch.id(), ?vv, "snapshot complete");
+                }
+
+                branch.notify();
+            }
         }
 
         Ok(())

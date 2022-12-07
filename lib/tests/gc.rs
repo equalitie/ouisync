@@ -41,8 +41,7 @@ async fn local_delete_remote_file() {
     expect_block_count(&repo_l, 3).await;
 
     repo_l.remove_entry("test.dat").await.unwrap();
-    repo_l.force_merge().await.unwrap();
-    repo_l.force_garbage_collection().await.unwrap();
+    repo_l.force_work().await.unwrap();
 
     // Both the file and the remote root are deleted, only the local root remains to track the
     // tombstone.
@@ -109,8 +108,7 @@ async fn local_truncate_remote_file() {
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
-    repo_l.force_merge().await.unwrap();
-    repo_l.force_garbage_collection().await.unwrap();
+    repo_l.force_work().await.unwrap();
 
     //   1 block for the file (the original 2 blocks were removed)
     // + 1 block for the local root (created when the file was forked)
@@ -127,17 +125,27 @@ async fn remote_truncate_remote_file() {
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
-    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+
+    let mut content = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
+    env.rng.fill(&mut content[..]);
+
+    file.write(&content).await.unwrap();
     file.flush().await.unwrap();
 
+    common::expect_file_content(&repo_l, "test.dat", &content).await;
+    repo_l.force_work().await.unwrap();
+
     // 2 blocks for the file + 1 block for the remote root
-    expect_block_count(&repo_l, 3).await;
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 3);
 
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
 
+    common::expect_file_content(&repo_l, "test.dat", &[]).await;
+    repo_l.force_work().await.unwrap();
+
     // 1 block for the file + 1 block for the remote root
-    expect_block_count(&repo_l, 2).await;
+    assert_eq!(repo_l.count_blocks().await.unwrap(), 2);
 }
 
 async fn expect_block_count(repo: &Repository, expected_count: usize) {

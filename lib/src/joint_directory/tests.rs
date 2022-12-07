@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db, file::FileCache,
-    index::BranchData, version_vector::VersionVector,
+    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db,
+    directory::MissingBlockStrategy, file::FileCache, index::BranchData,
+    version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use rand::{rngs::StdRng, SeedableRng};
@@ -116,7 +117,10 @@ async fn conflict_forked_files() {
     file0.flush().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
-    let root1 = branches[1].open_root().await.unwrap();
+    let root1 = branches[1]
+        .open_root(MissingBlockStrategy::Fail)
+        .await
+        .unwrap();
 
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
 
@@ -267,7 +271,10 @@ async fn conflict_identical_versions() {
     let mut file1 = open_file(&root0, "file.txt").await;
     file1.fork(branches[1].clone()).await.unwrap();
 
-    let root1 = branches[1].open_root().await.unwrap();
+    let root1 = branches[1]
+        .open_root(MissingBlockStrategy::Fail)
+        .await
+        .unwrap();
 
     // Create joint directory using branch 1 as the local branch.
     let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
@@ -759,7 +766,10 @@ async fn merge_remote_only() {
         .await
         .unwrap();
 
-    let local_root = branches[0].open_root().await.unwrap();
+    let local_root = branches[0]
+        .open_root(MissingBlockStrategy::Fail)
+        .await
+        .unwrap();
     local_root.lookup("cat.jpg").unwrap();
 }
 
@@ -845,7 +855,12 @@ async fn merge_concurrent_directories() {
     // version vectors are merged
     assert_eq!(entry.version_vector(), &local_dir_vv.merged(&remote_dir_vv));
 
-    let dir = entry.directory().unwrap().open().await.unwrap();
+    let dir = entry
+        .directory()
+        .unwrap()
+        .open(MissingBlockStrategy::Fail)
+        .await
+        .unwrap();
     assert_eq!(dir.entries().count(), 2);
 
     dir.lookup("dog.jpg").unwrap().file().unwrap();
@@ -949,7 +964,7 @@ async fn merge_moved_file() {
         .unwrap()
         .directory()
         .unwrap()
-        .open()
+        .open(MissingBlockStrategy::Fail)
         .await
         .unwrap();
     let mut file = dir
@@ -1015,7 +1030,7 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, Vec<B
             let file_cache = file_cache.clone();
 
             let data = BranchData::new(id, event_tx);
-            Branch::new(pool.clone(), Arc::new(data), secrets.into(), file_cache)
+            Branch::new(pool.clone(), data, secrets.into(), file_cache)
         })
         .collect();
 

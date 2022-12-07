@@ -155,10 +155,12 @@ impl File {
             return Ok(());
         }
 
-        let (new_parent, new_blob) = self
-            .parent
-            .fork(&self.blob, self.branch().clone(), dst_branch.clone())
-            .await?;
+        let new_parent = self.parent.fork(self.branch(), &dst_branch).await?;
+
+        let new_blob = {
+            let mut conn = dst_branch.db().acquire().await?;
+            Blob::open(&mut conn, dst_branch.clone(), *self.blob.locator()).await?
+        };
 
         self.blob = new_blob;
         self.parent = new_parent;
@@ -188,29 +190,6 @@ impl File {
     }
 }
 
-/// Fork a file without opening it first.
-/// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
-/// write concurrency is implemented.
-pub(crate) async fn fork(
-    src_branch: Branch,
-    dst_branch: Branch,
-    locator: Locator,
-    parent: ParentContext,
-) -> Result<()> {
-    if src_branch.id() == dst_branch.id() {
-        return Ok(());
-    }
-
-    let blob = {
-        let mut conn = src_branch.db().acquire().await?;
-        Blob::open(&mut conn, src_branch.clone(), locator).await?
-    };
-
-    parent.fork(&blob, src_branch, dst_branch).await?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +197,7 @@ mod tests {
         access_control::{AccessKeys, WriteSecrets},
         crypto::sign::PublicKey,
         db,
+        directory::MissingBlockStrategy,
         event::Event,
         index::BranchData,
     };
@@ -238,7 +218,7 @@ mod tests {
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -255,7 +235,7 @@ mod tests {
 
         // Reopen orig file and verify it's unchanged
         let mut file = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -270,7 +250,7 @@ mod tests {
 
         // Reopen forked file and verify it's modified
         let mut file = branch1
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("dog.jpg")
@@ -295,7 +275,7 @@ mod tests {
         file0.flush().await.unwrap();
 
         let mut file1 = branch0
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("pig.jpg")
@@ -323,7 +303,7 @@ mod tests {
 
         let mut file0 = branch.ensure_file_exists("fox.txt".into()).await.unwrap();
         let mut file1 = branch
-            .open_root()
+            .open_root(MissingBlockStrategy::Fail)
             .await
             .unwrap()
             .lookup("fox.txt")
@@ -370,7 +350,7 @@ mod tests {
         file_cache: Arc<FileCache>,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(pool, Arc::new(branch_data), keys, file_cache)
+        Branch::new(pool, branch_data, keys, file_cache)
     }
 }
 

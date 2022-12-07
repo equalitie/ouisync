@@ -6,7 +6,10 @@ use crate::{
     branch::Branch,
     conflict,
     crypto::sign::PublicKey,
-    directory::{Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef},
+    directory::{
+        Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef,
+        MissingBlockStrategy,
+    },
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
@@ -164,7 +167,7 @@ impl JointDirectory {
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
                         .ok_or(Error::EntryNotFound)?
-                        .open(MissingVersionStrategy::Skip)
+                        .open()
                         .await?;
                     curr = Cow::Owned(next);
                 }
@@ -220,7 +223,9 @@ impl JointDirectory {
     #[async_recursion]
     async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
-            let mut dir = entry.open(MissingVersionStrategy::Skip).await?;
+            let mut dir = entry
+                .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                .await?;
             dir.remove_entries_recursively(Pattern::All).await?;
         }
 
@@ -260,7 +265,7 @@ impl JointDirectory {
                     for entry in existing {
                         match entry {
                             JointEntryRef::File(entry) => {
-                                match entry.fork(local_branch.clone()).await {
+                                match entry.fork(&local_branch).await {
                                     Ok(()) => (),
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
@@ -273,7 +278,12 @@ impl JointDirectory {
                                 }
                             }
                             JointEntryRef::Directory(entry) => {
-                                let mut dir = entry.open(MissingVersionStrategy::Fail).await?;
+                                let mut dir = entry
+                                    .open_with(
+                                        MissingVersionStrategy::Fail,
+                                        MissingBlockStrategy::Fail,
+                                    )
+                                    .await?;
                                 dir.merge().await?;
                             }
                         }
@@ -442,7 +452,7 @@ impl<'a> JointFileRef<'a> {
         self.file.open().await
     }
 
-    pub(crate) async fn fork(&self, dst_branch: Branch) -> Result<()> {
+    pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         self.file.fork(dst_branch).await
     }
 
@@ -510,13 +520,19 @@ impl<'a> JointDirectoryRef<'a> {
             })
     }
 
-    pub async fn open(
+    pub async fn open(&self) -> Result<JointDirectory> {
+        self.open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fallback)
+            .await
+    }
+
+    pub(crate) async fn open_with(
         &self,
         missing_version_strategy: MissingVersionStrategy,
+        missing_block_strategy: MissingBlockStrategy,
     ) -> Result<JointDirectory> {
         let mut versions = Vec::new();
         for version in &self.versions {
-            match version.open().await {
+            match version.open(missing_block_strategy).await {
                 Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self

@@ -17,8 +17,8 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
 };
 use ouisync_lib::{
-    DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef,
-    MissingVersionStrategy, Repository, Result,
+    DebugPrinter, EntryType, Error, File, JointDirectory, JointEntry, JointEntryRef, Repository,
+    Result,
 };
 use std::{
     convert::TryInto,
@@ -448,10 +448,9 @@ impl Inner {
                 entry.open().await?.len(),
                 Representation::File(*entry.branch().id()),
             ),
-            JointEntryRef::Directory(entry) => (
-                entry.open(MissingVersionStrategy::Skip).await?.len(),
-                Representation::Directory,
-            ),
+            JointEntryRef::Directory(entry) => {
+                (entry.open().await?.len(), Representation::Directory)
+            }
         };
 
         let inode = self.inodes.lookup(parent, entry.name(), name, repr);
