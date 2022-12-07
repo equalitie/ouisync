@@ -33,6 +33,8 @@ impl BlockTracker {
     ///
     /// Panics if this tracker is in greedy mode.
     pub fn require(&self, block_id: BlockId) {
+        tracing::trace!(?block_id, "require");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         match inner.missing_blocks.entry(block_id) {
@@ -53,6 +55,8 @@ impl BlockTracker {
 
     /// Mark the block request as successfully completed.
     pub fn complete(&self, block_id: &BlockId) {
+        tracing::trace!(?block_id, "complete");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
@@ -105,6 +109,8 @@ impl BlockTrackerClient {
             return false;
         }
 
+        tracing::trace!(?block_id, "offer");
+
         let missing_block = inner
             .missing_blocks
             .entry(block_id)
@@ -125,6 +131,8 @@ impl BlockTrackerClient {
         inner.clients[self.client_id].remove(block_id);
 
         let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else { return };
+
+        tracing::trace!(?block_id, "cancel");
 
         missing_block.offers.remove(&self.client_id);
 
@@ -169,6 +177,7 @@ impl BlockTrackerClient {
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
+                tracing::trace!(?block_id, "accept offered");
                 return Some(*block_id);
             }
         }
@@ -205,6 +214,7 @@ impl BlockTrackerClient {
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
+                tracing::trace!(?block_id, "accept unoffered");
                 return Some(*block_id);
             }
         }

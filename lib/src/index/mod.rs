@@ -136,11 +136,7 @@ impl Index {
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
-                    tracing::debug!(
-                        branch.id = ?node.proof.writer_id,
-                        vv = ?node.proof.version_vector,
-                        "snapshot started"
-                    );
+                    tracing::debug!(vv = ?node.proof.version_vector, "snapshot started");
                     self.update_summaries(tx, hash).await?;
                 }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
@@ -278,7 +274,7 @@ impl Index {
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
                     let vv = branch.load_version_vector(&mut conn).await?;
-                    tracing::debug!(branch.id = ?branch.id(), ?vv, "snapshot complete");
+                    tracing::debug!(?vv, "snapshot complete");
                 }
 
                 branch.notify();
