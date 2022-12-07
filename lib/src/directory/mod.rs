@@ -657,12 +657,10 @@ async fn load(
             MissingBlockStrategy::Fail => return Err(error),
         }
 
-        match snapshot.load_prev(conn).await {
-            Ok(prev_snapshot) => {
-                snapshot = prev_snapshot;
-            }
-            Err(Error::EntryNotFound) => return Err(error),
-            Err(error) => return Err(error),
+        if let Some(prev_snapshot) = snapshot.load_prev(conn).await? {
+            snapshot = prev_snapshot;
+        } else {
+            return Err(error);
         }
     }
 }

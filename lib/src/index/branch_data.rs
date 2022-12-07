@@ -1,7 +1,7 @@
+use std::{collections::HashSet, future};
+
 use super::{
-    node::{
-        InnerNode, LeafNode, MultiBlockPresence, RootNode, SingleBlockPresence, INNER_LAYER_COUNT,
-    },
+    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
     VersionVectorOp,
@@ -19,7 +19,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
-use tokio::sync::broadcast;
+use tokio::{pin, sync::broadcast};
 
 type LocatorHash = Hash;
 
@@ -194,11 +194,11 @@ impl SnapshotData {
     }
 
     /// Load previous snapshot
-    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Self> {
-        Ok(Self {
-            root_node: self.root_node.load_prev(conn).await?,
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
+        Ok(self.root_node.load_prev(conn).await?.map(|root_node| Self {
+            root_node,
             notify_tx: self.notify_tx.clone(),
-        })
+        }))
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -216,11 +216,6 @@ impl SnapshotData {
     /// Gets the version vector of this snapshot.
     pub fn version_vector(&self) -> &VersionVector {
         &self.root_node.proof.version_vector
-    }
-
-    /// All all blocks present in this snapshot?
-    pub fn is_full(&self) -> bool {
-        self.root_node.summary.block_presence == MultiBlockPresence::Full
     }
 
     /// Inserts a new block into the index.
@@ -320,6 +315,38 @@ impl SnapshotData {
         self.root_node.remove_recursively_all_older(conn).await
     }
 
+    /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
+    /// preserves older snapshots that can be used as fallback for the latest snapshot and only
+    // removed those that can't.
+    pub async fn prune(&self, conn: &mut db::Connection) -> Result<()> {
+        // First remove all incomplete snapshots
+        self.root_node
+            .remove_recursively_all_older_incomplete(conn)
+            .await?;
+
+        // Then remove those snapshots that can't serve as fallback for the current one.
+        let fallback_checker = FallbackChecker::new(conn, &self.root_node).await?;
+        let mut maybe_old = self.root_node.load_prev(conn).await?;
+
+        while let Some(old) = maybe_old {
+            if fallback_checker.check(conn, &old).await? {
+                // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
+                // previous snapshot.
+                maybe_old = old.load_prev(conn).await?;
+            } else {
+                // `old` can't serve as fallback for `self` and so we can safely remove it
+                // including all its predecessors.
+
+                old.remove_recursively(conn).await?;
+                old.remove_recursively_all_older(conn).await?;
+
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     async fn load_path(
         &self,
         conn: &mut db::Connection,
@@ -392,6 +419,35 @@ impl Versioned for SnapshotData {
 
     fn branch_id(&self) -> &PublicKey {
         self.branch_id()
+    }
+}
+
+// Helper to check whether an old snapshot can be used as fallback for the new snapshot.
+struct FallbackChecker {
+    new_missing_locators: HashSet<Hash>,
+}
+
+impl FallbackChecker {
+    async fn new(conn: &mut db::Connection, new: &RootNode) -> Result<Self> {
+        let new_missing_locators = node::leaf_nodes(conn, new, SingleBlockPresence::Missing)
+            .map_ok(|node| node.locator)
+            .try_collect()
+            .await?;
+
+        Ok(Self {
+            new_missing_locators,
+        })
+    }
+
+    async fn check(&self, conn: &mut db::Connection, old: &RootNode) -> Result<bool> {
+        let old_present_locators =
+            node::leaf_nodes(conn, old, SingleBlockPresence::Present).map_ok(|node| node.locator);
+
+        let stream = old_present_locators
+            .try_filter(|item| future::ready(self.new_missing_locators.contains(item)));
+        pin!(stream);
+
+        Ok(stream.try_next().await?.is_some())
     }
 }
 

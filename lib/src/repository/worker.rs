@@ -304,15 +304,7 @@ mod prune {
 
         // Remove outdated snapshots.
         for snapshot in uptodate {
-            // Do not remove the old snapshot if the latest snapshot has any missing blocks. This
-            // is so that we can fallback to the old snanpshot when opening a directory whose
-            // blocks are missing in the latest snapshot.
-            //
-            // This does not apply to the local branch because local branch can never contain a
-            // directory with missing blocks and so we never need to do the fallback there.
-            if snapshot.branch_id() == &shared.this_writer_id || snapshot.is_full() {
-                snapshot.remove_all_older(&mut conn).await?;
-            }
+            snapshot.prune(&mut conn).await?;
         }
 
         Ok(())

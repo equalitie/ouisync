@@ -35,11 +35,11 @@ impl Snapshot {
 
     // Create snapshot given an iterator of blocks where each block is associated to its encoded
     // locator.
-    pub fn new(blocks_and_locators: impl IntoIterator<Item = (Block, Hash)>) -> Self {
+    pub fn new(locators_and_blocks: impl IntoIterator<Item = (Hash, Block)>) -> Self {
         let mut blocks = HashMap::new();
         let mut leaves = HashMap::new();
 
-        for (block, locator) in blocks_and_locators {
+        for (locator, block) in locators_and_blocks {
             let id = block.data.id;
             blocks.insert(id, block);
 
@@ -136,6 +136,12 @@ impl<'a> InnerLayer<'a> {
 pub(crate) struct Block {
     pub data: BlockData,
     pub nonce: BlockNonce,
+}
+
+impl Block {
+    pub fn id(&self) -> &BlockId {
+        &self.data.id
+    }
 }
 
 impl Distribution<Block> for Standard {

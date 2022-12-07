@@ -200,7 +200,7 @@ impl RootNode {
     }
 
     /// Load the previous complete root node of the same writer.
-    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Self> {
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
         sqlx::query(
             "SELECT
                 snapshot_id,
@@ -215,9 +215,8 @@ impl RootNode {
         )
         .bind(&self.proof.writer_id)
         .bind(self.snapshot_id)
-        .fetch_optional(conn)
-        .await?
-        .map(|row| Self {
+        .fetch(conn)
+        .map_ok(|row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(self.proof.writer_id, row.get(1), row.get(2), row.get(3)),
             summary: Summary {
@@ -225,7 +224,9 @@ impl RootNode {
                 block_presence: row.get(4),
             },
         })
-        .ok_or(Error::EntryNotFound)
+        .err_into()
+        .try_next()
+        .await
     }
 
     /// Updates the proof of this node.
@@ -326,6 +327,25 @@ impl RootNode {
             .bind(&self.proof.writer_id)
             .execute(conn)
             .await?;
+
+        Ok(())
+    }
+
+    /// Removes all root nodes, including their snapshots, that are older than this node and are
+    /// on the same branch and are not complete.
+    pub async fn remove_recursively_all_older_incomplete(
+        &self,
+        conn: &mut db::Connection,
+    ) -> Result<()> {
+        // This uses db triggers to delete the whole snapshot.
+        sqlx::query(
+            "DELETE FROM snapshot_root_nodes
+             WHERE snapshot_id < ? AND writer_id = ? AND is_complete = 0",
+        )
+        .bind(self.snapshot_id)
+        .bind(&self.proof.writer_id)
+        .execute(conn)
+        .await?;
 
         Ok(())
     }
