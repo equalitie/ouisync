@@ -145,13 +145,12 @@ impl RootNode {
         .err_into()
     }
 
-    /// Returns a stream of all (but at most `limit`) root nodes corresponding to the specified
-    /// writer ordered from the most recent to the least recent.
+    /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
+    /// most recent to the least recent.
     #[cfg(test)]
     pub fn load_all_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
-        limit: u32,
     ) -> impl Stream<Item = Result<Self>> + '_ {
         sqlx::query(
             "SELECT
@@ -163,11 +162,9 @@ impl RootNode {
                  block_presence
              FROM snapshot_root_nodes
              WHERE writer_id = ?
-             ORDER BY snapshot_id DESC
-             LIMIT ?",
+             ORDER BY snapshot_id DESC",
         )
         .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
-        .bind(limit)
         .fetch(conn)
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
@@ -187,9 +184,7 @@ impl RootNode {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Option<Self>> {
-        Self::load_all_by_writer(conn, writer_id, 1)
-            .try_next()
-            .await
+        Self::load_all_by_writer(conn, writer_id).try_next().await
     }
 
     /// Returns the writer ids of the nodes with the specified hash.

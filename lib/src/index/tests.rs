@@ -127,7 +127,7 @@ async fn receive_duplicate_root_node() {
         .unwrap();
 
     assert_eq!(
-        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id, 2)
+        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id)
             .filter(|node| future::ready(node.is_ok()))
             .count()
             .await,

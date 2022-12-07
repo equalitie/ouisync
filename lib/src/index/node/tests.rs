@@ -44,7 +44,7 @@ async fn create_new_root_node() {
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id)
         .try_collect()
         .await
         .unwrap();
@@ -80,7 +80,7 @@ async fn attempt_to_create_existing_root_node() {
         Err(Error::EntryExists)
     );
 
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id, 2)
+    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id)
         .try_collect()
         .await
         .unwrap();
