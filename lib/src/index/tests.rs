@@ -17,7 +17,7 @@ use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, task};
 use tracing::Span;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -207,6 +207,145 @@ async fn receive_root_node_with_existing_hash() {
         .root_node
         .summary
         .is_complete());
+}
+
+mod receive_and_create_root_node {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_then_remove() {
+        case(TaskOrder::LocalThenRemote).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remote_then_local() {
+        case(TaskOrder::RemoteThenLocal).await
+    }
+
+    #[ignore] // FIXME
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent() {
+        case(TaskOrder::Concurrent).await
+    }
+
+    enum TaskOrder {
+        LocalThenRemote,
+        RemoteThenLocal,
+        Concurrent,
+    }
+
+    async fn case(order: TaskOrder) {
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+        let local_id = PublicKey::generate(&mut rng);
+        let local_branch = index.get_branch(local_id);
+
+        let locator_0 = rng.gen();
+        let block_id_0_0 = rng.gen();
+        let block_id_0_1 = rng.gen();
+
+        let locator_1 = rng.gen();
+        let block_id_1 = rng.gen();
+
+        let locator_2 = rng.gen();
+        let block_id_2 = rng.gen();
+
+        // Insert one present and two missing, so the root block presence is `Some`
+        let mut tx = index.pool.begin().await.unwrap();
+
+        for (locator, block_id, presence) in [
+            (locator_0, block_id_0_0, SingleBlockPresence::Present),
+            (locator_1, block_id_1, SingleBlockPresence::Missing),
+            (locator_2, block_id_2, SingleBlockPresence::Missing),
+        ] {
+            local_branch
+                .insert(&mut tx, &locator, &block_id, presence, &write_keys)
+                .await
+                .unwrap();
+        }
+
+        tx.commit().await.unwrap();
+
+        let mut conn = index.pool.acquire().await.unwrap();
+        let root_node_0 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(conn);
+
+        // Mark one of the missing block as present so the block presences are different (but still
+        // `Some`).
+        let mut tx = index.pool.begin().await.unwrap();
+        node::receive_block(&mut tx, &block_id_1).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // Receive the same node we already have. The hashes and version vectors are equal but the
+        // block presences are different (and both are `Some`) so the received node is considered
+        // up-to-date.
+        let remote_task = async {
+            index
+                .receive_root_node(root_node_0.proof.clone().into(), root_node_0.summary)
+                .await
+                .unwrap();
+        };
+
+        // Create a new snapshot locally
+        let local_task = async {
+            // This transaction will block `remote_task` until it is committed.
+            let mut tx = index.pool.begin().await.unwrap();
+
+            // yield a bit to give `remote_task` chance to run until it needs to begin its own
+            // transaction.
+            for _ in 0..100 {
+                task::yield_now().await;
+            }
+
+            local_branch
+                .insert(
+                    &mut tx,
+                    &locator_0,
+                    &block_id_0_1,
+                    SingleBlockPresence::Present,
+                    &write_keys,
+                )
+                .await
+                .unwrap();
+
+            tx.commit().await.unwrap();
+        };
+
+        match order {
+            TaskOrder::LocalThenRemote => {
+                local_task.await;
+                remote_task.await;
+            }
+            TaskOrder::RemoteThenLocal => {
+                remote_task.await;
+                local_task.await;
+            }
+            TaskOrder::Concurrent => {
+                future::join(remote_task, local_task).await;
+            }
+        }
+
+        let mut conn = index.pool.acquire().await.unwrap();
+        let root_node_1 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // In all three cases the locally created snapshot must be newer than the received one:
+        // - In the local-then-remote case, the remote is outdated by the time it's received and so
+        //   it's not even inserted.
+        // - In the remote-then-local case, the remote one is inserted first but then the local one
+        //   overwrites it
+        // - In the concurrent case, the remote is still up-to-date when its started to get received
+        //   but the local is holding a db transaction so the remote can't proceed until the local one
+        //   commits it, and so by the time the transaction is committed, the remote is no longer
+        //   up-to-date.
+        assert!(root_node_1.proof.version_vector > root_node_0.proof.version_vector);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
