@@ -132,6 +132,7 @@ impl Inner {
                                 Ok(Payload::BranchChanged(_)) => {
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
+                                    tracing::trace!("job interrupted");
                                     state = State::Working;
                                     break;
                                 }
@@ -196,25 +197,34 @@ impl Inner {
     }
 
     async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
+        tracing::trace!("job started");
+
         // Merge
         if let Some(local_branch) = &self.local_branch {
             let result = self
                 .event_scope
                 .apply(merge::run(&self.shared, local_branch))
                 .await;
+            tracing::trace!(?result, "merge completed");
 
             error_handling.apply(result)?;
         }
 
         // Prune outdated branches and snapshots
         let result = prune::run(&self.shared).await;
+        tracing::trace!(?result, "prune completed");
+
         error_handling.apply(result)?;
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
             let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
+            tracing::trace!(?result, "scan completed");
+
             error_handling.apply(result)?;
         }
+
+        tracing::trace!("job completed");
 
         Ok(())
     }
@@ -285,7 +295,7 @@ mod prune {
                     // Don't remove branches that are in use. We get notified when they stop being
                     // used so we can try again.
                     if branch.is_any_file_open() {
-                        tracing::trace!("not removing outdated branch {:?} - in use", branch.id());
+                        tracing::trace!(id = ?branch.id(), "not removing outdated branch - in use");
                         continue;
                     }
                 }
@@ -296,7 +306,7 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!("removing outdated branch {:?}", snapshot.branch_id());
+            tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
 
             snapshot.remove_all_older(&mut conn).await?;
             snapshot.remove(&mut conn).await?;

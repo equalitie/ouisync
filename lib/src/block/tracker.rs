@@ -33,6 +33,8 @@ impl BlockTracker {
     ///
     /// Panics if this tracker is in greedy mode.
     pub fn require(&self, block_id: BlockId) {
+        tracing::trace!(?block_id, "require");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         match inner.missing_blocks.entry(block_id) {
@@ -43,7 +45,7 @@ impl BlockTracker {
             }
             Entry::Vacant(entry) => {
                 entry.insert(MissingBlock {
-                    offers: HashSet::new(),
+                    clients: HashMap::new(),
                     state: MissingBlockState::Required,
                 });
                 self.shared.notify();
@@ -53,6 +55,8 @@ impl BlockTracker {
 
     /// Mark the block request as successfully completed.
     pub fn complete(&self, block_id: &BlockId) {
+        tracing::trace!(?block_id, "complete");
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
@@ -61,7 +65,7 @@ impl BlockTracker {
             return;
         };
 
-        for client_id in missing_block.offers {
+        for (client_id, _) in missing_block.clients {
             if let Some(block_ids) = inner.clients.get_mut(client_id) {
                 block_ids.remove(block_id);
             }
@@ -105,15 +109,19 @@ impl BlockTrackerClient {
             return false;
         }
 
+        tracing::trace!(?block_id, "offer");
+
         let missing_block = inner
             .missing_blocks
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
-                offers: HashSet::new(),
+                clients: HashMap::new(),
                 state: MissingBlockState::Offered,
             });
 
-        missing_block.offers.insert(self.client_id);
+        missing_block
+            .clients
+            .insert(self.client_id, ClientState::Offered);
 
         true
     }
@@ -126,7 +134,11 @@ impl BlockTrackerClient {
 
         let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else { return };
 
-        missing_block.offers.remove(&self.client_id);
+        tracing::trace!(?block_id, "cancel");
+
+        missing_block
+            .clients
+            .insert(self.client_id, ClientState::Cancelled);
 
         if missing_block
             .state
@@ -169,6 +181,7 @@ impl BlockTrackerClient {
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
+                tracing::trace!(?block_id, "accept offered");
                 return Some(*block_id);
             }
         }
@@ -196,15 +209,27 @@ impl BlockTrackerClient {
         // One downside of this is we might send block requests to replicas that don't have then,
         // wasting some traffic. This situation should not happen too often so this is considered
         // acceptable.
-        for (block_id, missing_block) in &mut inner.missing_blocks {
-            if !missing_block.offers.is_empty() {
-                continue;
+        'outer: for (block_id, missing_block) in &mut inner.missing_blocks {
+            for (client_id, state) in &missing_block.clients {
+                match state {
+                    ClientState::Offered => {
+                        // This block has offers
+                        continue 'outer;
+                    }
+                    ClientState::Cancelled if *client_id == self.client_id => {
+                        // This block was already requested by this client and cancelled. No point
+                        // trying it again.
+                        continue 'outer;
+                    }
+                    ClientState::Cancelled => (),
+                }
             }
 
             if missing_block
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
+                tracing::trace!(?block_id, "accept unoffered");
                 return Some(*block_id);
             }
         }
@@ -223,7 +248,7 @@ impl Drop for BlockTrackerClient {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(&block_id).unwrap();
 
-            missing_block.offers.remove(&self.client_id);
+            missing_block.clients.remove(&self.client_id);
 
             if missing_block
                 .state
@@ -252,7 +277,7 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_blocks[block_id].offers.contains(client_id)
+//     missing_blocks[block_id].clients.get(client_id) == Some(ClientState::Offered)
 //
 // it must hold that
 //
@@ -265,7 +290,7 @@ struct Inner {
 }
 
 struct MissingBlock {
-    offers: HashSet<ClientId>,
+    clients: HashMap<ClientId, ClientState>,
     state: MissingBlockState,
 }
 
@@ -274,6 +299,11 @@ enum MissingBlockState {
     Offered,
     Required,
     Accepted(ClientId),
+}
+
+enum ClientState {
+    Offered,
+    Cancelled,
 }
 
 impl MissingBlockState {
@@ -365,7 +395,23 @@ mod tests {
     }
 
     #[test]
-    fn fallback_on_cancel_before_next() {
+    fn required_unoffered_cancel() {
+        let tracker = BlockTracker::new();
+        let client0 = tracker.client();
+        let client1 = tracker.client();
+
+        let block = make_block();
+
+        tracker.require(block.id);
+        assert_eq!(client0.try_accept(), Some(block.id));
+
+        client0.cancel(&block.id);
+        assert_eq!(client0.try_accept(), None);
+        assert_eq!(client1.try_accept(), Some(block.id));
+    }
+
+    #[test]
+    fn fallback_on_cancel_before_accept() {
         let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
@@ -384,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_on_cancel_after_next() {
+    fn fallback_on_cancel_after_accept() {
         let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
@@ -406,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_on_client_drop_after_require_before_next() {
+    fn fallback_on_client_drop_after_require_before_accept() {
         let tracker = BlockTracker::new();
 
         let client0 = tracker.client();
@@ -425,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_on_client_drop_after_require_after_next() {
+    fn fallback_on_client_drop_after_require_after_accept() {
         let tracker = BlockTracker::new();
 
         let client0 = tracker.client();

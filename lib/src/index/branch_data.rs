@@ -332,10 +332,21 @@ impl SnapshotData {
             if fallback_checker.check(conn, &old).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
+                tracing::trace!(
+                    branch.id = ?old.proof.writer_id,
+                    vv = ?old.proof.version_vector,
+                    "not removing outdated snapshot - possible fallback"
+                );
+
                 maybe_old = old.load_prev(conn).await?;
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
                 // including all its predecessors.
+                tracing::trace!(
+                    branch.id = ?old.proof.writer_id,
+                    vv = ?old.proof.version_vector,
+                    "removing outdated snapshot"
+                );
 
                 old.remove_recursively(conn).await?;
                 old.remove_recursively_all_older(conn).await?;

@@ -30,7 +30,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::TryStreamExt;
-use std::{cmp::Ordering, collections::HashMap};
+use std::cmp::Ordering;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::Level;
@@ -108,17 +108,21 @@ impl Index {
             return Ok(false);
         }
 
+        // Make sure the loading of the existing nodes and the potential creation of the new node
+        // happens atomically. Otherwise we could conclude the incoming node is up-to-date but
+        // just before we start inserting it another snapshot might get created locally and the
+        // incoming node might become outdated. But because we already concluded it's up-to-date,
+        // we end up inserting it anyway which breaks the invariant that a node inserted later must
+        // be happens-after any node inserted earlier in the same branch.
+        let mut tx = self.pool.begin().await?;
+
         // Load latest complete root nodes of all known branches.
-        let nodes: HashMap<_, _> = {
-            let mut conn = self.pool.acquire().await?;
-            RootNode::load_all_latest_complete(&mut conn)
-                .map_ok(|node| (node.proof.writer_id, node))
-                .try_collect()
-                .await?
-        };
+        let nodes: Vec<_> = RootNode::load_all_latest_complete(&mut tx)
+            .try_collect()
+            .await?;
 
         // If the received node is outdated relative to any branch we have, ignore it.
-        let uptodate = nodes.values().all(|old_node| {
+        let uptodate = nodes.iter().all(|old_node| {
             match proof
                 .version_vector
                 .partial_cmp(&old_node.proof.version_vector)
@@ -131,16 +135,13 @@ impl Index {
         });
 
         if uptodate {
-            let mut tx = self.pool.begin().await?;
             let hash = proof.hash;
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
-                    tracing::debug!(
-                        branch.id = ?node.proof.writer_id,
-                        vv = ?node.proof.version_vector,
-                        "snapshot started"
-                    );
+                    tracing::debug!(vv = ?node.proof.version_vector, "snapshot started");
+
+                    // This also commits the transaction.
                     self.update_summaries(tx, hash).await?;
                 }
                 Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
@@ -149,6 +150,8 @@ impl Index {
 
             Ok(true)
         } else {
+            // The transaction is silently rolled back here which is ok because we haven't written
+            // anything to the db.
             Ok(false)
         }
     }
@@ -278,7 +281,7 @@ impl Index {
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
                     let vv = branch.load_version_vector(&mut conn).await?;
-                    tracing::debug!(branch.id = ?branch.id(), ?vv, "snapshot complete");
+                    tracing::debug!(?vv, "snapshot complete");
                 }
 
                 branch.notify();

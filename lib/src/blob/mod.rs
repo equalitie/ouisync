@@ -585,6 +585,8 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
+    tracing::trace!(?locator, ?id, "write block");
+
     // NOTE: make sure the index and block store operations run in the same order as in
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
