@@ -55,7 +55,9 @@ impl RepositoryDb {
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
         let mut tx = self.pool.begin().await?;
-        metadata::password_to_key(&mut tx, &password).await
+        let key = metadata::password_to_key(&mut tx, &password).await?;
+        tx.commit().await?;
+        Ok(key)
     }
 }
 
