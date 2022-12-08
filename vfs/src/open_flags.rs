@@ -52,18 +52,24 @@ impl fmt::Display for OpenFlags {
         write(libc::O_ASYNC, "ASYNC")?;
         write(libc::O_CLOEXEC, "CLOEXEC")?;
         write(libc::O_CREAT, "CREAT")?;
-        write(libc::O_DIRECT, "DIRECT")?;
         write(libc::O_DIRECTORY, "DIRECTORY")?;
         write(libc::O_DSYNC, "DSYNC")?;
         write(libc::O_EXCL, "EXCL")?;
-        write(libc::O_NOATIME, "NOATIME")?;
         write(libc::O_NOCTTY, "NOCTTY")?;
         write(libc::O_NOFOLLOW, "NOFOLLOW")?;
         write(libc::O_NONBLOCK, "NONBLOCK")?;
-        write(libc::O_PATH, "PATH")?;
         write(libc::O_SYNC, "SYNC")?;
-        write(libc::O_TMPFILE, "TMPFILE")?;
         write(libc::O_TRUNC, "TRUNC")?;
+
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "netbsd", target_os = "dragonfly"))]
+        write(libc::O_DIRECT, "DIRECT")?;
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            write(libc::O_NOATIME, "NOATIME")?;
+            write(libc::O_PATH, "PATH")?;
+            write(libc::O_TMPFILE, "TMPFILE")?;
+        }
 
         Ok(())
     }
