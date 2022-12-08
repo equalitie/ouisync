@@ -275,6 +275,9 @@ fn init_log() {
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
+        // log output is captured by default and only shown on failure. Run tests with
+        // `--nocapture` to override.
+        .with_test_writer()
         .try_init()
         .ok();
 }

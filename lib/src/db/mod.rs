@@ -99,7 +99,6 @@ impl Pool {
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
         if let Some(tx) = self.shared_tx.lock().await.take() {
-            // Ignore errors here
             tx.commit().await?
         }
 
@@ -212,14 +211,14 @@ impl Deref for SharedTransaction {
     type Target = Transaction<'static>;
 
     fn deref(&self) -> &Self::Target {
-        // `unwrap` is ok, see the NONE above.
+        // `unwrap` is ok, see the NOTE above.
         self.0.as_ref().unwrap()
     }
 }
 
 impl DerefMut for SharedTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // `unwrap` is ok, see the NONE above.
+        // `unwrap` is ok, see the NOTE above.
         self.0.as_mut().unwrap()
     }
 }

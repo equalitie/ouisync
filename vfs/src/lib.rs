@@ -433,7 +433,7 @@ struct Inner {
 }
 
 impl Inner {
-    #[instrument(skip(parent, name), fields(path), err)]
+    #[instrument(skip(parent, name), fields(path), err(Debug))]
     async fn lookup(&mut self, parent: Inode, name: &OsStr) -> Result<FileAttr> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
 
@@ -464,7 +464,7 @@ impl Inner {
         self.inodes.forget(inode, lookups)
     }
 
-    #[instrument(skip(inode), fields(path), err)]
+    #[instrument(skip(inode), fields(path), err(Debug))]
     async fn getattr(&mut self, inode: Inode) -> Result<FileAttr> {
         self.record_path(inode, None);
 
@@ -480,7 +480,7 @@ impl Inner {
             flags
         ),
         fields(path),
-        err
+        err(Debug)
     )]
     async fn setattr(
         &mut self,
@@ -556,7 +556,7 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::File, file.len()))
     }
 
-    #[instrument(skip(inode, flags), fields(path, %flags), err)]
+    #[instrument(skip(inode, flags), fields(path, %flags), err(Debug))]
     async fn opendir(&mut self, inode: Inode, flags: OpenFlags) -> Result<FileHandle> {
         self.record_path(inode, None);
 
@@ -566,7 +566,7 @@ impl Inner {
         Ok(handle)
     }
 
-    #[instrument(skip(inode, flags), fields(path, handle, %flags), err)]
+    #[instrument(skip(inode, flags), fields(path, handle, %flags), err(Debug))]
     fn releasedir(&mut self, inode: Inode, handle: FileHandle, flags: OpenFlags) -> Result<()> {
         self.record_path(inode, None);
 
@@ -578,7 +578,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(inode, reply), fields(path, handle), err)]
+    #[instrument(skip(inode, reply), fields(path, handle), err(Debug))]
     async fn readdir(
         &mut self,
         inode: Inode,
@@ -642,7 +642,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(parent, name), fields(path), err)]
+    #[instrument(skip(parent, name), fields(path), err(Debug))]
     async fn mkdir(
         &mut self,
         parent: Inode,
@@ -667,7 +667,7 @@ impl Inner {
         Ok(make_file_attr(inode, EntryType::Directory, len))
     }
 
-    #[instrument(skip(parent, name), fields(path), err)]
+    #[instrument(skip(parent, name), fields(path), err(Debug))]
     async fn rmdir(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
         self.record_path(parent, Some(name));
@@ -676,7 +676,7 @@ impl Inner {
         self.repository.remove_entry(parent_path.join(name)).await
     }
 
-    #[instrument(skip(inode), fields(path), err)]
+    #[instrument(skip(inode), fields(path), err(Debug))]
     async fn fsyncdir(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
         self.record_path(inode, None);
 
@@ -685,7 +685,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(parent, name, flags), fields(path, %flags), err)]
+    #[instrument(skip(parent, name, flags), fields(path, %flags), err(Debug))]
     async fn create(
         &mut self,
         parent: Inode,
@@ -715,7 +715,7 @@ impl Inner {
         Ok((attr, handle, 0))
     }
 
-    #[instrument(skip(inode, flags), fields(path, %flags), err)]
+    #[instrument(skip(inode, flags), fields(path, %flags), err(Debug))]
     async fn open(&mut self, inode: Inode, flags: OpenFlags) -> Result<(FileHandle, u32)> {
         self.record_path(inode, None);
 
@@ -738,7 +738,7 @@ impl Inner {
         Ok((handle, 0))
     }
 
-    #[instrument(skip(inode, flags), fields(path, %flags), err)]
+    #[instrument(skip(inode, flags), fields(path, %flags), err(Debug))]
     async fn release(
         &mut self,
         inode: Inode,
@@ -760,7 +760,7 @@ impl Inner {
         Ok(())
     }
 
-    #[instrument(skip(inode, flags), fields(path, %flags), err)]
+    #[instrument(skip(inode, flags), fields(path, %flags), err(Debug))]
     async fn read(
         &mut self,
         inode: Inode,
@@ -789,7 +789,7 @@ impl Inner {
     #[instrument(
         skip(inode, data, flags),
         fields(path, data.len = data.len(), %flags),
-        err
+        err(Debug)
     )]
     async fn write(
         &mut self,
@@ -812,14 +812,14 @@ impl Inner {
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 
-    #[instrument(skip(inode), fields(path), err)]
+    #[instrument(skip(inode), fields(path), err(Debug))]
     async fn flush(&mut self, inode: Inode, handle: FileHandle) -> Result<()> {
         self.record_path(inode, None);
 
         self.entries.get_file_mut(handle)?.flush().await
     }
 
-    #[instrument(skip(inode), fields(path), err)]
+    #[instrument(skip(inode), fields(path), err(Debug))]
     async fn fsync(&mut self, inode: Inode, handle: FileHandle, datasync: bool) -> Result<()> {
         self.record_path(inode, None);
 
@@ -827,7 +827,7 @@ impl Inner {
         self.entries.get_file_mut(handle)?.flush().await
     }
 
-    #[instrument(skip(parent, name), fields(path), err)]
+    #[instrument(skip(parent, name), fields(path), err(Debug))]
     async fn unlink(&mut self, parent: Inode, name: &OsStr) -> Result<()> {
         let name = name.to_str().ok_or(Error::NonUtf8FileName)?;
         self.record_path(parent, Some(name));
@@ -840,7 +840,7 @@ impl Inner {
     #[instrument(
         skip(src_parent, src_name, dst_parent, dst_name),
         fields(src_path, dst_path),
-        err
+        err(Debug)
     )]
     async fn rename(
         &mut self,

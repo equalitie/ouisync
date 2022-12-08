@@ -61,7 +61,13 @@ impl fmt::Display for OpenFlags {
         write(libc::O_SYNC, "SYNC")?;
         write(libc::O_TRUNC, "TRUNC")?;
 
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "netbsd", target_os = "dragonfly"))]
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
         write(libc::O_DIRECT, "DIRECT")?;
 
         #[cfg(any(target_os = "linux", target_os = "android"))]

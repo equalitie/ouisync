@@ -281,8 +281,6 @@ mod prune {
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
             versioned::partition(all, Some(&shared.this_writer_id));
 
-        let mut conn = shared.store.db().acquire().await?;
-
         // Remove outdated branches
         for snapshot in outdated {
             // Never remove local branch
@@ -308,13 +306,21 @@ mod prune {
 
             tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
 
-            snapshot.remove_all_older(&mut conn).await?;
-            snapshot.remove(&mut conn).await?;
+            let mut tx = shared.store.db().begin().await?;
+            snapshot.remove_all_older(&mut tx).await?;
+            snapshot.remove(&mut tx).await?;
+            tx.commit().await?;
         }
 
         // Remove outdated snapshots.
         for snapshot in uptodate {
-            snapshot.prune(&mut conn).await?;
+            // NOTE: it might seem that a transaction here is not needed but without it we were
+            // getting an issue where some queries inside the `prune` operation were sometimes
+            // extremely slow for some reason. It's unlear why, but running it within a transaction
+            // seems to fix the issue.
+            let mut tx = shared.store.db().begin().await?;
+            snapshot.prune(&mut tx).await?;
+            tx.commit().await?;
         }
 
         Ok(())
