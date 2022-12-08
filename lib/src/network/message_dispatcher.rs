@@ -238,16 +238,15 @@ impl RecvState {
         self.queues.lock().unwrap().get_mut(channel)?.pop_back()
     }
 
-    // Pushes the message into the corresponding queue, creating it if it didn't exist. Wakes up any
-    // waiting streams so they can grab the message if it is for them.
+    // Pushes the message into the corresponding queue. Wakes up any waiting streams so they can
+    // grab the message if it is for them. If there is currently no one waiting on the channel then
+    // the message shall be ignored. Note that it should be OK to miss some of those packets
+    // because the `Barrier` algorithm should take care of syncing the communication exchanges.
     fn push(&self, message: Message) {
-        self.queues
-            .lock()
-            .unwrap()
-            .entry(message.channel)
-            .or_default()
-            .push_front(message.content);
-        self.queues_changed_tx.send(()).unwrap_or(());
+        if let Some(value) = self.queues.lock().unwrap().get_mut(&message.channel) {
+            value.push_front(message.content);
+            self.queues_changed_tx.send(()).unwrap_or(());
+        }
     }
 }
 
