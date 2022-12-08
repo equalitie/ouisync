@@ -222,7 +222,6 @@ mod receive_and_create_root_node {
         case(TaskOrder::RemoteThenLocal).await
     }
 
-    #[ignore] // FIXME
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent() {
         case(TaskOrder::Concurrent).await

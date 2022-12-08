@@ -27,10 +27,10 @@ async fn create_new_root_node() {
     let write_keys = Keypair::random();
     let hash = rand::random();
 
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node0 = RootNode::create(
-        &mut conn,
+        &mut tx,
         Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
         Summary::FULL,
     )
@@ -38,13 +38,13 @@ async fn create_new_root_node() {
     .unwrap();
     assert_eq!(node0.proof.hash, hash);
 
-    let node1 = RootNode::load_latest_by_writer(&mut conn, writer_id)
+    let node1 = RootNode::load_latest_by_writer(&mut tx, writer_id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(node1, node0);
 
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id)
+    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut tx, writer_id)
         .try_collect()
         .await
         .unwrap();
@@ -60,10 +60,10 @@ async fn attempt_to_create_existing_root_node() {
     let write_keys = Keypair::random();
     let hash = rand::random();
 
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node = RootNode::create(
-        &mut conn,
+        &mut tx,
         Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
         Summary::FULL,
     )
@@ -72,7 +72,7 @@ async fn attempt_to_create_existing_root_node() {
 
     assert_matches!(
         RootNode::create(
-            &mut conn,
+            &mut tx,
             Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
             Summary::FULL,
         )
@@ -80,7 +80,7 @@ async fn attempt_to_create_existing_root_node() {
         Err(Error::EntryExists)
     );
 
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut conn, writer_id)
+    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut tx, writer_id)
         .try_collect()
         .await
         .unwrap();

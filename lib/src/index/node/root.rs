@@ -42,7 +42,37 @@ impl RootNode {
     }
 
     /// Creates a root node with the specified proof unless it already exists.
-    pub async fn create(conn: &mut db::Connection, proof: Proof, summary: Summary) -> Result<Self> {
+    ///
+    /// # Panics
+    ///
+    /// Contract: the version vector of the inserted node must be happens-after or equal to that of
+    /// any existing node in the same branch. Violating this contract results in panic.
+    pub async fn create(
+        tx: &mut db::Transaction<'_>,
+        proof: Proof,
+        summary: Summary,
+    ) -> Result<Self> {
+        // Load the latest vv in the same branch.
+        let latest_vv: Option<VersionVector> = sqlx::query(
+            "SELECT versions
+             FROM snapshot_root_nodes
+             WHERE
+                snapshot_id = (
+                    SELECT MAX(snapshot_id)
+                    FROM snapshot_root_nodes
+                    WHERE writer_id = ?
+                )",
+        )
+        .bind(&proof.writer_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .map(|row| row.get(0));
+
+        // Enfore the contact
+        if let Some(latest_vv) = latest_vv {
+            assert!(proof.version_vector >= latest_vv);
+        }
+
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
                  writer_id,
@@ -62,7 +92,7 @@ impl RootNode {
         .bind(&proof.signature)
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
-        .fetch_optional(conn)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or(Error::EntryExists)?
         .get(0);
