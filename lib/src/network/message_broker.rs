@@ -191,20 +191,6 @@ async fn maintain_link(
 
     let mut next_sleep = None;
 
-    // To confirm both peers have the same repository, we exchange any message. It only arrives
-    // when the remote peer's message has channel same as ours. Note: this job used to be part of
-    // the Barrier, but Barrier needs to have timeouts and so it can no longer be there.
-
-    tracing::trace!(state = "confirm send");
-    if sink.send(vec![]).await.is_err() {
-        return;
-    }
-
-    tracing::trace!(state = "confirm recv");
-    if stream.recv().await.is_err() {
-        return;
-    }
-
     loop {
         if let Some(sleep) = next_sleep {
             tracing::trace!(state = format!("sleeping {:?}", sleep));
@@ -217,7 +203,6 @@ async fn maintain_link(
 
         match Barrier::new(&mut stream, &sink).run().await {
             Ok(()) => (),
-            Err(BarrierError::Timeout) => continue,
             Err(BarrierError::Failure) => continue,
             Err(BarrierError::ChannelClosed) => break,
         }

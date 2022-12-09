@@ -1,8 +1,5 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
-use std::{mem::size_of, time::Duration};
-use tokio::time::timeout;
-
-const RECV_TIMEOUT: Duration = Duration::from_secs(3);
+use std::mem::size_of;
 
 type BarrierId = u64;
 type Round = u32;
@@ -89,7 +86,7 @@ impl<'a> Barrier<'a> {
             }
 
             let (their_barrier_id, their_round, their_step) =
-                self.exchange(self.barrier_id, round, 0).await?;
+                self.exchange0(self.barrier_id, round).await?;
 
             if their_step != 0 {
                 next_round = max(round, their_round) + 1;
@@ -108,7 +105,13 @@ impl<'a> Barrier<'a> {
             }
 
             let (our_barrier_id, their_round, their_step) =
-                self.exchange(their_barrier_id, round, 1).await?;
+                match self.exchange1(their_barrier_id, round).await? {
+                    Some(msg) => msg,
+                    None => {
+                        next_round += 1;
+                        continue;
+                    }
+                };
 
             if their_step != 1 {
                 next_round = max(round, their_round) + 1;
@@ -133,25 +136,29 @@ impl<'a> Barrier<'a> {
         Ok(())
     }
 
-    async fn exchange(
+    async fn exchange0(
         &mut self,
         barrier_id: BarrierId,
         our_round: Round,
-        our_step: Step,
     ) -> Result<Msg, BarrierError> {
+        let our_step = 0;
         self.send(barrier_id, our_round, our_step).await?;
 
         loop {
-            let (barrier_id, their_round, their_step) = self
+            let (barrier_id, their_round, their_step) = match self
                 .recv(
                     #[cfg(test)]
                     our_round,
                     #[cfg(test)]
                     our_step,
                 )
-                .await?;
+                .await?
+            {
+                Some(msg) => msg,
+                None => continue,
+            };
 
-            if their_step > our_step {
+            if their_step != 0 {
                 // We have a miss-step in `exchange`, we just sent them that our step is 0 so
                 // they'll see that and start a new round. Note that the next round will fail
                 // because then they'll receive our message from step 1. But at least we'll have a
@@ -164,51 +171,62 @@ impl<'a> Barrier<'a> {
         }
     }
 
+    async fn exchange1(
+        &mut self,
+        barrier_id: BarrierId,
+        our_round: Round,
+    ) -> Result<Option<Msg>, BarrierError> {
+        let our_step = 1;
+        self.send(barrier_id, our_round, our_step).await?;
+
+        match self
+            .recv(
+                #[cfg(test)]
+                our_round,
+                #[cfg(test)]
+                our_step,
+            )
+            .await?
+        {
+            Some(msg) => Ok(Some(msg)),
+            None => return Ok(None),
+        }
+    }
+
     async fn recv(
         &mut self,
         #[cfg(test)] round: Round,
         #[cfg(test)] our_step: Step,
-    ) -> Result<Msg, BarrierError> {
-        loop {
-            #[cfg(test)]
-            self.mark_step().await;
+    ) -> Result<Option<Msg>, BarrierError> {
+        #[cfg(test)]
+        self.mark_step().await;
 
-            let msg = match timeout(RECV_TIMEOUT, self.stream.recv()).await {
-                Ok(Ok(msg)) => msg,
-                Ok(Err(err)) => return Err(err.into()),
-                Err(_) => return Err(BarrierError::Timeout),
-            };
+        let msg = self.stream.recv().await?;
 
-            match parse_message(&msg) {
-                Some((barrier_id, their_round, their_step)) => {
-                    match their_step {
-                        0 => {
-                            #[cfg(test)]
-                            println!(
+        match parse_message(&msg) {
+            Some((barrier_id, their_round, their_step)) => {
+                match their_step {
+                    0 => {
+                        #[cfg(test)]
+                        println!(
                             "{:x} R{} S{} << their_barrier_id:{:x} their_round:{} their_step:{}",
                             self.barrier_id, round, our_step, barrier_id, their_round, their_step
                         )
-                        }
-                        1 => {
-                            #[cfg(test)]
-                            println!(
-                                "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
-                                self.barrier_id,
-                                round,
-                                our_step,
-                                barrier_id,
-                                their_round,
-                                their_step
-                            )
-                        }
-                        _ => continue,
                     }
-                    return Ok((barrier_id, their_round, their_step));
+                    1 => {
+                        #[cfg(test)]
+                        println!(
+                            "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
+                            self.barrier_id, round, our_step, barrier_id, their_round, their_step
+                        )
+                    }
+                    _ => return Ok(None),
                 }
-                // Ignore messages that belonged to whatever communication was going on prior us
-                // starting this barrier process.
-                None => continue,
-            };
+                Ok(Some((barrier_id, their_round, their_step)))
+            }
+            // Ignore messages that belonged to whatever communication was going on prior us
+            // starting this barrier process.
+            None => Ok(None),
         }
     }
 
@@ -318,8 +336,6 @@ pub enum BarrierError {
     Failure,
     #[error("Channel closed")]
     ChannelClosed,
-    #[error("Timed out")]
-    Timeout,
 }
 
 impl From<ChannelClosed> for BarrierError {
@@ -333,10 +349,11 @@ mod tests {
     use super::*;
     use crate::scoped_task::{self, ScopedJoinHandle};
     use async_trait::async_trait;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{mpsc, Mutex},
         task,
+        time::timeout,
     };
 
     struct Stepper {
