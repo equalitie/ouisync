@@ -189,7 +189,7 @@ impl<'a> Barrier<'a> {
             .await?
         {
             Some(msg) => Ok(Some(msg)),
-            None => return Ok(None),
+            None => Ok(None),
         }
     }
 

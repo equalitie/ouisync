@@ -314,13 +314,7 @@ mod prune {
 
         // Remove outdated snapshots.
         for snapshot in uptodate {
-            // NOTE: it might seem that a transaction here is not needed but without it we were
-            // getting an issue where some queries inside the `prune` operation were sometimes
-            // extremely slow for some reason. It's unlear why, but running it within a transaction
-            // seems to fix the issue.
-            let mut tx = shared.store.db().begin().await?;
-            snapshot.prune(&mut tx).await?;
-            tx.commit().await?;
+            snapshot.prune(shared.store.db()).await?;
         }
 
         Ok(())

@@ -318,18 +318,22 @@ impl SnapshotData {
     /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
     /// preserves older snapshots that can be used as fallback for the latest snapshot and only
     // removed those that can't.
-    pub async fn prune(&self, conn: &mut db::Connection) -> Result<()> {
+    pub async fn prune(&self, db: &db::Pool) -> Result<()> {
         // First remove all incomplete snapshots
+        let mut tx = db.begin().await?;
         self.root_node
-            .remove_recursively_all_older_incomplete(conn)
+            .remove_recursively_all_older_incomplete(&mut tx)
             .await?;
+        tx.commit().await?;
+
+        let mut conn = db.acquire().await?;
 
         // Then remove those snapshots that can't serve as fallback for the current one.
-        let fallback_checker = FallbackChecker::new(conn, &self.root_node).await?;
-        let mut maybe_old = self.root_node.load_prev(conn).await?;
+        let fallback_checker = FallbackChecker::new(&mut conn, &self.root_node).await?;
+        let mut maybe_old = self.root_node.load_prev(&mut conn).await?;
 
         while let Some(old) = maybe_old {
-            if fallback_checker.check(conn, &old).await? {
+            if fallback_checker.check(&mut conn, &old).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
@@ -338,7 +342,7 @@ impl SnapshotData {
                     "not removing outdated snapshot - possible fallback"
                 );
 
-                maybe_old = old.load_prev(conn).await?;
+                maybe_old = old.load_prev(&mut conn).await?;
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
                 // including all its predecessors.
@@ -348,8 +352,12 @@ impl SnapshotData {
                     "removing outdated snapshot"
                 );
 
-                old.remove_recursively(conn).await?;
-                old.remove_recursively_all_older(conn).await?;
+                drop(conn);
+
+                let mut tx = db.begin().await?;
+                old.remove_recursively(&mut tx).await?;
+                old.remove_recursively_all_older(&mut tx).await?;
+                tx.commit().await?;
 
                 break;
             }

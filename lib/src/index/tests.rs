@@ -759,14 +759,13 @@ async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
 }
 
 async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
-    let mut tx = index.pool.begin().await.unwrap();
-    index
+    let mut conn = index.pool.acquire().await.unwrap();
+    let snapshot = index
         .get_branch(*writer_id)
-        .load_snapshot(&mut tx)
-        .await
-        .unwrap()
-        .prune(&mut tx)
+        .load_snapshot(&mut conn)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
+    drop(conn);
+
+    snapshot.prune(&index.pool).await.unwrap();
 }
