@@ -43,7 +43,7 @@ impl LeafNode {
     }
 
     /// Saves the node to the db unless it already exists.
-    pub async fn save(&self, conn: &mut db::Connection, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, block_presence)
              VALUES (?, ?, ?, ?)
@@ -53,7 +53,7 @@ impl LeafNode {
         .bind(&self.locator)
         .bind(&self.block_id)
         .bind(self.block_presence)
-        .execute(conn)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())

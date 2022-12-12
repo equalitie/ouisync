@@ -469,19 +469,28 @@ mod scan {
     }
 
     async fn process_blocks(shared: &Shared, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
+        let mut commit = false;
 
-        while let Some(block_id) = block_ids.next(&mut conn).await? {
+        loop {
+            let mut tx = shared.store.db().begin_shared().await?;
+
+            let Some(block_id) = block_ids.next(&mut tx).await? else { break };
+
             if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
-                block::mark_reachable(&mut conn, &block_id).await?;
+                block::mark_reachable(&mut tx, &block_id).await?;
+                commit = true;
             }
 
             if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
                 shared
                     .store
-                    .require_missing_block(&mut conn, block_id)
+                    .require_missing_block(&mut tx, block_id)
                     .await?;
             }
+        }
+
+        if commit {
+            shared.store.db().begin_shared().await?.commit().await?;
         }
 
         Ok(())
