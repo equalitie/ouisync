@@ -33,7 +33,7 @@ const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
 pub(crate) async fn password_to_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     password: &Password,
 ) -> Result<cipher::SecretKey> {
     let salt = get_or_generate_password_salt(tx).await?;
@@ -44,7 +44,7 @@ pub(crate) async fn password_to_key(
 }
 
 pub(crate) async fn secret_to_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     secret: LocalSecret,
 ) -> Result<cipher::SecretKey> {
     match secret {
@@ -56,7 +56,7 @@ pub(crate) async fn secret_to_key(
 // -------------------------------------------------------------------
 // Salt
 // -------------------------------------------------------------------
-async fn get_or_generate_password_salt(tx: &mut db::Transaction<'_>) -> Result<PasswordSalt> {
+async fn get_or_generate_password_salt(tx: &mut db::Transaction) -> Result<PasswordSalt> {
     let salt = match get_public(tx, PASSWORD_SALT).await {
         Ok(salt) => salt,
         Err(Error::EntryNotFound) => {
@@ -81,7 +81,7 @@ pub(crate) async fn get_writer_id(
 }
 
 pub(crate) async fn set_writer_id(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     writer_id: &sign::PublicKey,
     device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
@@ -108,15 +108,12 @@ pub(crate) async fn check_device_id(
 // -------------------------------------------------------------------
 // Access secrets
 // -------------------------------------------------------------------
-async fn set_public_read_key(
-    tx: &mut db::Transaction<'_>,
-    read_key: &cipher::SecretKey,
-) -> Result<()> {
+async fn set_public_read_key(tx: &mut db::Transaction, read_key: &cipher::SecretKey) -> Result<()> {
     set_public(tx, READ_KEY, read_key.as_ref()).await
 }
 
 async fn set_secret_read_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
     local_key: &cipher::SecretKey,
@@ -132,7 +129,7 @@ async fn set_secret_read_key(
 }
 
 pub(crate) async fn set_read_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     id: &RepositoryId,
     read_key: &cipher::SecretKey,
     local_key: Option<&cipher::SecretKey>,
@@ -154,7 +151,7 @@ async fn remove_public_read_key(tx: &mut db::Connection) -> Result<()> {
     Ok(())
 }
 
-async fn remove_secret_read_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+async fn remove_secret_read_key(tx: &mut db::Transaction) -> Result<()> {
     let dummy_id = RepositoryId::random();
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_read_key = cipher::SecretKey::random();
@@ -171,19 +168,19 @@ async fn remove_secret_read_key(tx: &mut db::Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn remove_read_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+pub(crate) async fn remove_read_key(tx: &mut db::Transaction) -> Result<()> {
     remove_public_read_key(tx).await?;
     remove_secret_read_key(tx).await
 }
 
 // ------------------------------
 
-async fn set_public_write_key(tx: &mut db::Transaction<'_>, secrets: &WriteSecrets) -> Result<()> {
+async fn set_public_write_key(tx: &mut db::Transaction, secrets: &WriteSecrets) -> Result<()> {
     set_public(tx, WRITE_KEY, secrets.write_keys.secret.as_ref()).await
 }
 
 async fn set_secret_write_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     secrets: &WriteSecrets,
     local_key: &cipher::SecretKey,
 ) -> Result<()> {
@@ -191,7 +188,7 @@ async fn set_secret_write_key(
 }
 
 pub(crate) async fn set_write_key(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     secrets: &WriteSecrets,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<()> {
@@ -212,13 +209,13 @@ async fn remove_public_write_key(tx: &mut db::Connection) -> Result<()> {
     Ok(())
 }
 
-async fn remove_secret_write_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+async fn remove_secret_write_key(tx: &mut db::Transaction) -> Result<()> {
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_write_key = sign::SecretKey::random();
     set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), &dummy_local_key).await
 }
 
-pub(crate) async fn remove_write_key(tx: &mut db::Transaction<'_>) -> Result<()> {
+pub(crate) async fn remove_write_key(tx: &mut db::Transaction) -> Result<()> {
     remove_public_write_key(tx).await?;
     remove_secret_write_key(tx).await
 }
@@ -248,14 +245,14 @@ pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connectio
 }
 
 pub(crate) async fn initialize_access_secrets(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     access: &Access,
 ) -> Result<()> {
     set_public(tx, REPOSITORY_ID, access.id().as_ref()).await?;
     set_access(tx, access).await
 }
 
-pub(crate) async fn set_access(tx: &mut db::Transaction<'_>, access: &Access) -> Result<()> {
+pub(crate) async fn set_access(tx: &mut db::Transaction, access: &Access) -> Result<()> {
     match access {
         Access::Blind { .. } => {
             remove_public_read_key(tx).await?;
@@ -404,7 +401,7 @@ where
     bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
-async fn set_public(tx: &mut db::Transaction<'_>, id: &[u8], blob: &[u8]) -> Result<()> {
+async fn set_public(tx: &mut db::Transaction, id: &[u8], blob: &[u8]) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
         .bind(blob)
@@ -445,7 +442,7 @@ where
 }
 
 async fn set_secret(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     id: &[u8],
     blob: &[u8],
     local_key: &cipher::SecretKey,
@@ -496,7 +493,7 @@ where
 }
 
 async fn set(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     id: &[u8],
     blob: &[u8],
     local_key: Option<&cipher::SecretKey>,

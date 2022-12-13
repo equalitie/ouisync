@@ -684,7 +684,7 @@ impl Shared {
 }
 
 async fn generate_writer_id(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {

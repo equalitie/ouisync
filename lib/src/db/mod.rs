@@ -28,7 +28,7 @@ pub struct Pool {
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
-    shared_tx: Arc<AsyncMutex<Option<Transaction<'static>>>>,
+    shared_tx: Arc<AsyncMutex<Option<Transaction>>>,
 }
 
 impl Pool {
@@ -73,7 +73,7 @@ impl Pool {
     ///
     /// If an idle `SharedTransaction` exists in the pool when `begin` is called, it is
     /// automatically committed before the regular transaction is created.
-    pub async fn begin(&self) -> Result<Transaction<'static>, sqlx::Error> {
+    pub async fn begin(&self) -> Result<Transaction, sqlx::Error> {
         let mut shared_tx = self.shared_tx.lock().await;
 
         if let Some(tx) = shared_tx.take() {
@@ -136,10 +136,10 @@ impl DerefMut for PoolConnection {
 
 /// Database transaction
 #[derive(Debug)]
-pub struct Transaction<'a>(sqlx::Transaction<'a, Sqlite>);
+pub struct Transaction(sqlx::Transaction<'static, Sqlite>);
 
-impl<'a> Transaction<'a> {
-    async fn begin(pool: &SqlitePool) -> Result<Transaction<'a>, sqlx::Error> {
+impl Transaction {
+    async fn begin(pool: &SqlitePool) -> Result<Self, sqlx::Error> {
         pool.begin().await.map(Self)
     }
 
@@ -152,7 +152,7 @@ impl<'a> Transaction<'a> {
     }
 }
 
-impl Deref for Transaction<'_> {
+impl Deref for Transaction {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
@@ -160,7 +160,7 @@ impl Deref for Transaction<'_> {
     }
 }
 
-impl DerefMut for Transaction<'_> {
+impl DerefMut for Transaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.deref_mut()
     }
@@ -172,7 +172,7 @@ impl DerefMut for Transaction<'_> {
 
 // NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
 // `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub struct SharedTransaction(AsyncOwnedMutexGuard<Option<Transaction<'static>>>);
+pub struct SharedTransaction(AsyncOwnedMutexGuard<Option<Transaction>>);
 
 impl SharedTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
@@ -187,7 +187,7 @@ impl SharedTransaction {
 }
 
 impl Deref for SharedTransaction {
-    type Target = Transaction<'static>;
+    type Target = Transaction;
 
     fn deref(&self) -> &Self::Target {
         // `unwrap` is ok, see the NOTE above.

@@ -450,7 +450,7 @@ impl Directory {
 
     async fn begin_remove_entry(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
@@ -501,7 +501,7 @@ impl Directory {
 
     async fn begin_insert_entry(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         name: String,
         data: EntryData,
     ) -> Result<Content> {
@@ -541,7 +541,7 @@ impl Directory {
 
     async fn save(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         content: &Content,
         overwrite: OverwriteStrategy,
     ) -> Result<()> {
@@ -571,7 +571,7 @@ impl Directory {
     /// it and all its ancestors.
     async fn commit(
         &mut self,
-        mut tx: db::Transaction<'_>,
+        mut tx: db::Transaction,
         content: Content,
         op: &VersionVectorOp,
     ) -> Result<()> {
@@ -584,7 +584,7 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::Transaction<'_>, op: &VersionVectorOp) -> Result<()> {
+    async fn bump(&mut self, tx: &mut db::Transaction, op: &VersionVectorOp) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent.bump(tx, self.blob.branch().clone(), op).await

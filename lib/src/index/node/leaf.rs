@@ -43,7 +43,7 @@ impl LeafNode {
     }
 
     /// Saves the node to the db unless it already exists.
-    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
         sqlx::query(
             "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, block_presence)
              VALUES (?, ?, ?, ?)
@@ -92,7 +92,7 @@ impl LeafNode {
 
     /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
     /// whether at least one node was modified.
-    pub async fn set_present(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<bool> {
+    pub async fn set_present(tx: &mut db::Transaction, block_id: &BlockId) -> Result<bool> {
         // Check whether there is at least one node that references the given block.
         if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
             .bind(block_id)
@@ -117,7 +117,7 @@ impl LeafNode {
     }
 
     /// Marks all leaf nodes that point to the specified block as missing.
-    pub async fn set_missing(tx: &mut db::Transaction<'_>, block_id: &BlockId) -> Result<()> {
+    pub async fn set_missing(tx: &mut db::Transaction, block_id: &BlockId) -> Result<()> {
         sqlx::query("UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ?")
             .bind(SingleBlockPresence::Missing)
             .bind(block_id)
@@ -209,7 +209,7 @@ impl LeafNodeSet {
         Some(self.0.remove(index))
     }
 
-    pub async fn save(&self, tx: &mut db::Transaction<'_>, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::Transaction, parent: &Hash) -> Result<()> {
         for node in self {
             node.save(tx, parent).await?;
         }

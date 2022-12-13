@@ -101,7 +101,7 @@ impl BranchData {
     #[cfg(test)] // currently used only in tests
     pub async fn insert(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
@@ -122,7 +122,7 @@ impl BranchData {
     #[cfg(test)] // currently used only in tests
     pub async fn remove(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -165,7 +165,7 @@ impl BranchData {
     /// it doesn't execute at all.
     pub async fn bump(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -226,7 +226,7 @@ impl SnapshotData {
     /// presence of cancellation.
     pub async fn insert_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
@@ -253,7 +253,7 @@ impl SnapshotData {
     /// presence of cancellation.
     pub async fn remove_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -286,7 +286,7 @@ impl SnapshotData {
     /// it doesn't execute at all.
     pub async fn bump(
         self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -306,12 +306,12 @@ impl SnapshotData {
     }
 
     /// Remove this snapshot
-    pub async fn remove(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub async fn remove(&self, tx: &mut db::Transaction) -> Result<()> {
         self.root_node.remove_recursively(tx).await
     }
 
     /// Remove all snapshots of this branch older than this one.
-    pub async fn remove_all_older(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub async fn remove_all_older(&self, tx: &mut db::Transaction) -> Result<()> {
         self.root_node.remove_recursively_all_older(tx).await
     }
 
@@ -395,7 +395,7 @@ impl SnapshotData {
 
     async fn save_path(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         path: &Path,
         write_keys: &Keypair,
     ) -> Result<()> {
