@@ -404,11 +404,11 @@ where
     bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
-async fn set_public(conn: &mut db::Connection, id: &[u8], blob: &[u8]) -> Result<()> {
+async fn set_public(tx: &mut db::Transaction<'_>, id: &[u8], blob: &[u8]) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
         .bind(blob)
-        .execute(conn)
+        .execute(&mut **tx)
         .await?;
 
     Ok(())
@@ -445,7 +445,7 @@ where
 }
 
 async fn set_secret(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     id: &[u8],
     blob: &[u8],
     local_key: &cipher::SecretKey,
@@ -462,7 +462,7 @@ async fn set_secret(
     .bind(id)
     .bind(&nonce[..])
     .bind(&cypher)
-    .execute(conn)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
@@ -496,14 +496,14 @@ where
 }
 
 async fn set(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     id: &[u8],
     blob: &[u8],
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<()> {
     match local_key {
-        Some(local_key) => set_secret(conn, id, blob, local_key).await,
-        None => set_public(conn, id, blob).await,
+        Some(local_key) => set_secret(tx, id, blob, local_key).await,
+        None => set_public(tx, id, blob).await,
     }
 }
 
@@ -515,34 +515,32 @@ mod tests {
     use crate::db;
     use tempfile::TempDir;
 
-    async fn setup() -> (TempDir, db::PoolConnection) {
-        let (base_dir, pool) = db::create_temp().await.unwrap();
-        let conn = pool.acquire().await.unwrap();
-        (base_dir, conn)
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn store_plaintext() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
+        let mut tx = pool.begin().await.unwrap();
 
-        set_public(&mut conn, b"hello", b"world").await.unwrap();
+        set_public(&mut tx, b"hello", b"world").await.unwrap();
 
-        let v: [u8; 5] = get_public(&mut conn, b"hello").await.unwrap();
+        let v: [u8; 5] = get_public(&mut tx, b"hello").await.unwrap();
 
         assert_eq!(b"world", &v);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn store_cyphertext() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
+        let mut tx = pool.begin().await.unwrap();
 
         let key = cipher::SecretKey::random();
 
-        set_secret(&mut conn, b"hello", b"world", &key)
-            .await
-            .unwrap();
+        set_secret(&mut tx, b"hello", b"world", &key).await.unwrap();
 
-        let v: [u8; 5] = get_secret(&mut conn, b"hello", &key).await.unwrap();
+        let v: [u8; 5] = get_secret(&mut tx, b"hello", &key).await.unwrap();
 
         assert_eq!(b"world", &v);
     }
@@ -551,16 +549,17 @@ mod tests {
     // let user claim plausible deniability in not knowing the real secret key/password.
     #[tokio::test(flavor = "multi_thread")]
     async fn bad_key_is_not_error() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
+        let mut tx = pool.begin().await.unwrap();
 
         let good_key = cipher::SecretKey::random();
         let bad_key = cipher::SecretKey::random();
 
-        set_secret(&mut conn, b"hello", b"world", &good_key)
+        set_secret(&mut tx, b"hello", b"world", &good_key)
             .await
             .unwrap();
 
-        let v: [u8; 5] = get_secret(&mut conn, b"hello", &bad_key).await.unwrap();
+        let v: [u8; 5] = get_secret(&mut tx, b"hello", &bad_key).await.unwrap();
 
         assert_ne!(b"world", &v);
     }

@@ -1,19 +1,17 @@
 mod migrations;
 
-use crate::debug;
 use sqlx::{
     sqlite::{
         Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
-        SqliteSynchronous, SqliteTransactionBehavior,
+        SqliteSynchronous,
     },
-    Acquire, Row, SqlitePool,
+    Row, SqlitePool,
 };
 use std::{
     io,
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
-    time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -26,39 +24,45 @@ use tokio::{
 /// Database connection pool.
 #[derive(Clone)]
 pub struct Pool {
-    inner: SqlitePool,
+    // Pool with multiple read-only connections
+    reads: SqlitePool,
+    // Pool with a single writable connection.
+    write: SqlitePool,
     shared_tx: Arc<AsyncMutex<Option<Transaction<'static>>>>,
 }
 
 impl Pool {
     async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
-        let connect_options = connect_options
+        let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            .pragma("recursive_triggers", "ON")
-            // We assume that every transaction completes in a reasonable time (i.e., there are no
-            // deadlocks) so ideally we'd want to set infinite timeout. There is no easy way* to do
-            // that so setting this excessively large timeout is the next best thing.
-            //
-            // *) Using a custom [busy handler](https://www.sqlite.org/c3ref/busy_handler.html)
-            //    would be one such way.
-            .busy_timeout(Duration::from_secs(24 * 60 * 60));
+            .pragma("recursive_triggers", "ON");
 
-        let inner = SqlitePoolOptions::new()
+        let write_options = common_options.clone();
+        let write = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .test_before_acquire(false)
+            .connect_with(write_options)
+            .await?;
+
+        let read_options = common_options.read_only(true);
+        let reads = SqlitePoolOptions::new()
             .max_connections(8)
             .test_before_acquire(false)
-            .connect_with(connect_options)
+            .connect_with(read_options)
             .await?;
 
         Ok(Self {
-            inner,
+            reads,
+            write,
             shared_tx: Arc::new(AsyncMutex::new(None)),
         })
     }
 
-    /// Acquire a database connection.
+    /// Acquire a read-only database connection.
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
-        self.inner.acquire().await.map(PoolConnection)
+        self.reads.acquire().await.map(PoolConnection)
     }
 
     /// Begin a regular ("unique") transaction. At most one task can hold a transaction at any time.
@@ -76,7 +80,7 @@ impl Pool {
             tx.commit().await?;
         }
 
-        Transaction::begin(&self.inner).await
+        Transaction::begin(&self.write).await
     }
 
     /// Begin a shared transaction. Unlike regular transaction, a shared transaction is not
@@ -91,7 +95,7 @@ impl Pool {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
         if shared_tx.is_none() {
-            *shared_tx = Some(Transaction::begin(&self.inner).await?);
+            *shared_tx = Some(Transaction::begin(&self.write).await?);
         }
 
         Ok(SharedTransaction(shared_tx))
@@ -102,7 +106,8 @@ impl Pool {
             tx.commit().await?
         }
 
-        self.inner.close().await;
+        self.write.close().await;
+        self.reads.close().await;
 
         Ok(())
     }
@@ -129,39 +134,13 @@ impl DerefMut for PoolConnection {
     }
 }
 
-const BUSY_WARNING_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Database transaction
 #[derive(Debug)]
 pub struct Transaction<'a>(sqlx::Transaction<'a, Sqlite>);
 
 impl<'a> Transaction<'a> {
-    async fn begin<A>(db: A) -> Result<Transaction<'a>, sqlx::Error>
-    where
-        A: Acquire<'a, Database = Sqlite>,
-    {
-        // Use immediate transactions by default for simplicity. This is to avoid the following
-        // problem that could occur with deferred transactions:
-        //
-        // - Connection A begins a read transaction
-        // - Connection B begins a write transaction
-        // - Connection A trying to upgrade to a write transaction, but the previous reads it did
-        //   were invalidated by the writes by connection B which means connection A now returns
-        //   `SQLITE_BUSY`. The only way to resolve that is to retry the whole transaction.
-        //
-        // To keep things simpler, if we know we are going to write at some point, we start the
-        // transaction as a write transaction (this is what immediate does) which means the
-        // `SQLITE_BUSY` can now happen only in `begin` and in most cases would be automatically
-        // retried by sqlite itself. In case we still get `SQLITE_BUSY` from `begin`, all we need
-        // to do is to retry the `begin` call itself which is simpler than retrying the whole
-        // transaction.
-        debug::warn_slow(
-            BUSY_WARNING_TIMEOUT,
-            "database is busy",
-            db.begin_with(SqliteTransactionBehavior::Immediate.into()),
-        )
-        .await
-        .map(Transaction)
+    async fn begin(pool: &SqlitePool) -> Result<Transaction<'a>, sqlx::Error> {
+        pool.begin().await.map(Self)
     }
 
     pub async fn commit(self) -> Result<(), sqlx::Error> {
