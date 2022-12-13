@@ -19,7 +19,7 @@ use std::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::{select, sync::watch};
+use tokio::{select, sync::watch, task};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
@@ -81,9 +81,9 @@ impl MessageDispatcher {
         }
     }
 
-    pub fn close(&self) {
+    pub async fn close(&self) {
         self.recv.reader.close();
-        self.send.close();
+        self.send.close().await;
     }
 
     pub fn is_closed(&self) -> bool {
@@ -93,7 +93,14 @@ impl MessageDispatcher {
 
 impl Drop for MessageDispatcher {
     fn drop(&mut self) {
-        self.close();
+        if self.is_closed() {
+            return;
+        }
+
+        self.recv.reader.close();
+
+        let send = self.send.clone();
+        task::spawn(async move { send.close().await });
     }
 }
 
@@ -440,10 +447,25 @@ impl MultiSink {
         inner.wake();
     }
 
-    fn close(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sinks.clear();
-        inner.wake();
+    async fn close(&self) {
+        // TODO: Other functions should fail if called after the call to this function.
+
+        let (mut sinks, waker) = {
+            let mut inner = self.inner.lock().unwrap();
+            (std::mem::take(&mut inner.sinks), inner.waker.take())
+        };
+
+        let mut futures = Vec::with_capacity(sinks.len());
+
+        for mut sink in sinks.drain(..) {
+            futures.push(async move { sink.close().await.unwrap_or(()) });
+        }
+
+        futures_util::future::join_all(futures).await;
+
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 
     // Returns whether the send succeeded.

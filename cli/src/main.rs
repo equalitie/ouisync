@@ -207,6 +207,8 @@ async fn main() -> Result<()> {
 
     terminated().await?;
 
+    network.shutdown().await;
+
     Ok(())
 }
 

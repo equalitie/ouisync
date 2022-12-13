@@ -47,6 +47,7 @@ use crate::{
     config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle, store::Store,
     sync::uninitialized_watch,
 };
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
 use slab::Slab;
@@ -56,6 +57,7 @@ use std::{
     io, mem,
     net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
@@ -107,7 +109,7 @@ impl Network {
             gateway,
             this_runtime_id: SecretRuntimeId::generate(),
             state: BlockingMutex::new(State {
-                message_brokers: HashMap::new(),
+                message_brokers: Some(HashMap::new()),
                 registry: Slab::new(),
             }),
             port_forwarder,
@@ -235,6 +237,28 @@ impl Network {
     pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.connection_deduplicator.on_change()
     }
+
+    /// Gracefully disconnect from peers. Failing to call this function on app termination will
+    /// cause the peers to now learn that we disconnected just now. They will still find out later
+    /// once the keep-alive mechanism kicks in, but in the mean time we will not be able to
+    /// reconnect (by starting the app again) because the remote peer will keep dropping new
+    /// connections from us.
+    pub async fn shutdown(&self) {
+        // TODO: Would be a nice-to-have to also wait for all the spawned tasks here (e.g. dicovery
+        // mechanisms).
+        let mut message_brokers = {
+            let mut state = self.inner.state.lock().unwrap();
+            match state.message_brokers.take() {
+                Some(brokers) => brokers,
+                None => {
+                    tracing::warn!("Network already shut down");
+                    return;
+                }
+            }
+        };
+
+        shutdown_brokers(&mut message_brokers).await;
+    }
 }
 
 /// Handle for the network which can be cheaply cloned and sent to other threads.
@@ -342,8 +366,10 @@ impl Drop for Registration {
         let mut state = self.inner.state.lock().unwrap();
 
         if let Some(holder) = state.registry.try_remove(self.key) {
-            for broker in state.message_brokers.values_mut() {
-                broker.destroy_link(holder.store.local_id);
+            if let Some(brokers) = &mut state.message_brokers {
+                for broker in brokers.values_mut() {
+                    broker.destroy_link(holder.store.local_id);
+                }
             }
         }
     }
@@ -379,19 +405,26 @@ struct Inner {
 }
 
 struct State {
-    message_brokers: HashMap<PublicRuntimeId, MessageBroker>,
+    // This is None once the network calls shutdown.
+    message_brokers: Option<HashMap<PublicRuntimeId, MessageBroker>>,
     registry: Slab<RegistrationHolder>,
 }
 
 impl State {
     fn create_link(&mut self, store: Store, pex: &PexController, stats: Arc<RepositoryStats>) {
-        for broker in self.message_brokers.values_mut() {
-            broker.create_link(store.clone(), pex, stats.clone())
+        if let Some(brokers) = &mut self.message_brokers {
+            for broker in brokers.values_mut() {
+                broker.create_link(store.clone(), pex, stats.clone())
+            }
         }
     }
 }
 
 impl Inner {
+    fn is_shutdown(&self) -> bool {
+        self.state.lock().unwrap().message_brokers.is_none()
+    }
+
     async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
         let conn = Connectivity::infer(bind);
 
@@ -445,13 +478,25 @@ impl Inner {
         //   implementation is simpler this way and the trade-off doesn't seem to be too bad.
         // - If we are going to `Full`, keep all existing connections.
         if matches!(conn, Connectivity::LocalOnly | Connectivity::Disabled) {
-            self.disconnect_all();
+            self.disconnect_all().await;
         }
     }
 
     // Disconnect from all currently connected peers, regardless of their source.
-    fn disconnect_all(&self) {
-        self.state.lock().unwrap().message_brokers.clear();
+    async fn disconnect_all(&self) {
+        let mut message_brokers = {
+            let mut state = self.state.lock().unwrap();
+            match &mut state.message_brokers {
+                Some(brokers) => {
+                    let mut new = HashMap::new();
+                    std::mem::swap(brokers, &mut new);
+                    new
+                }
+                None => return,
+            }
+        };
+
+        shutdown_brokers(&mut message_brokers).await;
     }
 
     fn enable_port_forwarding(&self) {
@@ -506,6 +551,10 @@ impl Inner {
         loop {
             let peer = discovery.recv().await;
 
+            if self.is_shutdown() {
+                break;
+            }
+
             self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::LocalDiscovery),
@@ -520,6 +569,10 @@ impl Inner {
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {
         while let Some(seen_peer) = discovery_rx.recv().await {
+            if self.is_shutdown() {
+                break;
+            }
+
             self.spawn(self.clone().handle_peer_found(seen_peer, PeerSource::Dht));
         }
     }
@@ -528,6 +581,10 @@ impl Inner {
         let mut discovery = PexDiscovery::new(discovery_rx);
 
         while let Some(peer) = discovery.recv().await {
+            if self.is_shutdown() {
+                break;
+            }
+
             self.spawn(
                 self.clone()
                     .handle_peer_found(peer, PeerSource::PeerExchange),
@@ -557,6 +614,10 @@ impl Inner {
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
+                if self.is_shutdown() {
+                    break;
+                }
+
                 self.spawn(self.clone().handle_connection(stream, permit).map(|_| ()));
             }
         }
@@ -564,7 +625,22 @@ impl Inner {
 
     #[instrument(parent = &self.span, skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(100))
+            .with_max_interval(Duration::from_secs(8))
+            .with_max_elapsed_time(None)
+            .build();
+
+        let mut next_sleep = None;
+
         loop {
+            // TODO: We should also check whether the user still wants to accept connections from
+            // the given `source` (the preference may have changed in the mean time).
+
+            if self.is_shutdown() {
+                return;
+            }
+
             let addr = match peer.addr_if_seen() {
                 Some(addr) => *addr,
                 None => return,
@@ -574,6 +650,12 @@ impl Inner {
                 // Don't connect to self.
                 return;
             }
+
+            if let Some(sleep) = next_sleep {
+                tokio::time::sleep(sleep).await;
+            }
+
+            next_sleep = backoff.next_backoff();
 
             let permit = match self.connection_deduplicator.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
@@ -659,7 +741,13 @@ impl Inner {
             let mut state = self.state.lock().unwrap();
             let state = &mut *state;
 
-            match state.message_brokers.entry(that_runtime_id) {
+            let brokers = match &mut state.message_brokers {
+                Some(brokers) => brokers,
+                // Network has been shut down.
+                None => return false,
+            };
+
+            match brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
                     let mut broker = self.span.in_scope(|| {
@@ -773,9 +861,11 @@ struct MessageBrokerEntryGuard<'a> {
 impl Drop for MessageBrokerEntryGuard<'_> {
     fn drop(&mut self) {
         let mut state = self.state.lock().unwrap();
-        if let Entry::Occupied(entry) = state.message_brokers.entry(self.that_runtime_id) {
-            if !entry.get().has_connections() {
-                entry.remove();
+        if let Some(brokers) = &mut state.message_brokers {
+            if let Entry::Occupied(entry) = brokers.entry(self.that_runtime_id) {
+                if !entry.get().has_connections() {
+                    entry.remove();
+                }
             }
         }
     }
@@ -899,4 +989,16 @@ pub fn repository_info_hash(id: &RepositoryId) -> InfoHash {
     // `unwrap` is OK because the byte slice has the correct length.
     InfoHash::try_from(&id.salted_hash(b"ouisync repository info-hash").as_ref()[..INFO_HASH_LEN])
         .unwrap()
+}
+
+async fn shutdown_brokers(message_brokers: &mut HashMap<PublicRuntimeId, MessageBroker>) {
+    let mut futures = Vec::with_capacity(message_brokers.len());
+
+    for (_runtime_id, broker) in message_brokers.drain() {
+        futures.push(async move {
+            broker.shutdown().await;
+        });
+    }
+
+    futures_util::future::join_all(futures).await;
 }

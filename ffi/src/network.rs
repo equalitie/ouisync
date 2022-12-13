@@ -93,6 +93,18 @@ pub unsafe extern "C" fn network_subscribe(port: Port<u8>) -> UniqueHandle<JoinH
     UniqueHandle::new(Box::new(handle))
 }
 
+/// Gracefully disconnect from peers.
+#[no_mangle]
+pub unsafe extern "C" fn network_shutdown(port: Port<()>) {
+    let session = session::get();
+    let sender = session.sender();
+
+    session.runtime().spawn(async move {
+        session.network().shutdown().await;
+        sender.send(port, ());
+    });
+}
+
 /// Return the local TCP network endpoint as a string. The format is "<IPv4>:<PORT>". The
 /// returned pointer may be null if we did not bind to a TCP IPv4 address.
 ///

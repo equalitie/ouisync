@@ -162,6 +162,10 @@ impl MessageBroker {
     pub fn destroy_link(&mut self, id: LocalId) {
         self.links.remove(&id);
     }
+
+    pub async fn shutdown(&self) {
+        self.dispatcher.close().await;
+    }
 }
 
 impl Drop for MessageBroker {

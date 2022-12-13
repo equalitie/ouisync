@@ -196,6 +196,41 @@ pub unsafe extern "C" fn session_close() {
     }
 }
 
+/// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
+/// (`network_shutdown` then `session_close`), but in flutter when the engine is being detached
+/// from Android runtime then async wait for `network_shutdown` never completes (or does so
+/// randomly), and thus `session_close` is never invoked. My guess is that because the dart engine
+/// is being detached we can't do any async await on the dart side anymore, and thus need to do it
+/// here.
+#[no_mangle]
+pub unsafe extern "C" fn session_shutdown_network_and_close() {
+    let session = mem::replace(&mut SESSION, ptr::null_mut());
+
+    if session.is_null() {
+        return;
+    }
+
+    let session = Box::from_raw(session);
+
+    // Preserving lifetime of the unused variables as well so as to not interfere with the
+    // `shutdown` function.
+    let Session {
+        runtime,
+        device_id: _device_id,
+        network,
+        sender: _sender,
+        root_monitor,
+        repos_span: _repos_span,
+        _logger,
+    } = *session;
+
+    runtime.block_on(async move { network.shutdown().await });
+
+    // Force drop order
+    drop(runtime);
+    drop(root_monitor);
+}
+
 /// Cancel a notification subscription.
 #[no_mangle]
 pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {

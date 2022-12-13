@@ -111,6 +111,8 @@ impl Connection {
             return Err(Error::Write(quinn::WriteError::UnknownStream));
         }
 
+        self.can_finish = false;
+
         match self.tx.take() {
             Some(mut tx) => {
                 tx.finish().await?;
