@@ -27,7 +27,7 @@ impl ReceiveFilter {
 
     pub async fn check(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         hash: &Hash,
         new_summary: &Summary,
     ) -> Result<bool> {

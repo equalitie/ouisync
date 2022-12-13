@@ -55,7 +55,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
 pub(crate) async fn write(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     id: &BlockId,
     buffer: &[u8],
     nonce: &BlockNonce,
@@ -100,7 +100,7 @@ pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
 }
 
 /// Mark all blocks as unreachable.
-pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction<'_>) -> Result<()> {
+pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction) -> Result<()> {
     sqlx::query(
         "DELETE FROM unreachable_blocks;
          INSERT INTO unreachable_blocks SELECT id FROM blocks",
@@ -112,7 +112,7 @@ pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction<'_>) -> Result
 }
 
 /// Mark the given block as reachable.
-pub(crate) async fn mark_reachable(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<()> {
+pub(crate) async fn mark_reachable(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
     sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
         .bind(id)
         .execute(&mut **tx)

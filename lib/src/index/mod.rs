@@ -211,7 +211,7 @@ impl Index {
     // `remote_nodes`.
     async fn find_inner_nodes_with_new_blocks(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         remote_nodes: &InnerNodeMap,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
@@ -266,7 +266,7 @@ impl Index {
     // Updates summaries of the specified nodes and all their ancestors, commits the transaction
     // and notifies the affected branches that became complete (wasn't before the update but became
     // after it).
-    async fn update_summaries(&self, mut tx: db::Transaction<'_>, hash: Hash) -> Result<()> {
+    async fn update_summaries(&self, mut tx: db::Transaction, hash: Hash) -> Result<()> {
         let statuses = node::update_summaries(&mut tx, hash).await?;
         tx.commit().await?;
 

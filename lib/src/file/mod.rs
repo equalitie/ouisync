@@ -124,7 +124,7 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut db::Transaction<'_>) -> Result<()> {
+    pub(crate) async fn save(&mut self, tx: &mut db::Transaction) -> Result<()> {
         self.blob.flush(tx).await?;
         Ok(())
     }

@@ -81,7 +81,7 @@ impl Blob {
 
     /// Removes a blob.
     pub async fn remove(
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         branch: &Branch,
         head_locator: Locator,
     ) -> Result<()> {
@@ -190,7 +190,7 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, tx: &mut db::Transaction<'_>, mut buffer: &[u8]) -> Result<()> {
+    pub async fn write(&mut self, tx: &mut db::Transaction, mut buffer: &[u8]) -> Result<()> {
         let mut snapshot = None;
 
         loop {
@@ -309,7 +309,7 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self, tx: &mut db::Transaction<'_>) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut db::Transaction) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
@@ -377,7 +377,7 @@ impl Blob {
     // Write the current blob length into the blob header in the head block.
     async fn write_len(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         snapshot: &mut SnapshotData,
     ) -> Result<()> {
         if !self.len_dirty {
@@ -420,7 +420,7 @@ impl Blob {
     // Write the current block into the store.
     async fn write_current_block(
         &mut self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         snapshot: &mut SnapshotData,
     ) -> Result<()> {
         if !self.current_block.dirty {
@@ -446,7 +446,7 @@ impl Blob {
         Ok(())
     }
 
-    async fn trim(&self, tx: &mut db::Transaction<'_>, snapshot: &mut SnapshotData) -> Result<()> {
+    async fn trim(&self, tx: &mut db::Transaction, snapshot: &mut SnapshotData) -> Result<()> {
         match remove_blocks(
             tx,
             snapshot,
@@ -469,7 +469,7 @@ impl Blob {
 /// Creates a shallow copy (only the index nodes are copied, not blocks) of the specified blob into
 /// the specified destination branch. This function is idempotent.
 pub(crate) async fn fork(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     blob_id: BlobId,
     src_branch: &Branch,
     dst_branch: &Branch,
@@ -574,7 +574,7 @@ async fn load_block(
 }
 
 async fn write_block(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     snapshot: &mut SnapshotData,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,
@@ -620,7 +620,7 @@ fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content
 }
 
 async fn remove_blocks<T>(
-    tx: &mut db::Transaction<'_>,
+    tx: &mut db::Transaction,
     snapshot: &mut SnapshotData,
     keys: &AccessKeys,
     locators: T,

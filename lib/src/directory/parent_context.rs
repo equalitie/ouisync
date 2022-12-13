@@ -35,7 +35,7 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors.
     pub async fn bump(
         &self,
-        tx: &mut db::Transaction<'_>,
+        tx: &mut db::Transaction,
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
