@@ -337,8 +337,8 @@ async fn recreate_local_branch() {
         .unwrap();
 
     // A + B: establish link
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+    let reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // B: Sync with A
     common::expect_file_version_content(&repo_b, "foo.txt", Some(&id_b), b"hello from A\n").await;
@@ -364,30 +364,29 @@ async fn recreate_local_branch() {
     common::expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n").await;
 
     // A: Reopen in write mode
+    drop(reg_a);
+    drop(reg_b);
     drop(repo_a);
+
     let repo_a = Repository::open(&store_a, device_id_a, None).await.unwrap();
 
     // A: Modify the repo
     repo_a.create_file("bar.txt").await.unwrap();
+    repo_a.force_work().await.unwrap();
 
     // A: Make sure the local version changed monotonically.
-    common::eventually(&repo_a, || async {
-        let vv_a_1 = repo_a
-            .local_branch()
-            .unwrap()
-            .version_vector()
-            .await
-            .unwrap();
+    let vv_a_1 = repo_a
+        .local_branch()
+        .unwrap()
+        .version_vector()
+        .await
+        .unwrap();
 
-        match vv_a_1.partial_cmp(&vv_b) {
-            Some(Ordering::Greater) => true,
-            Some(Ordering::Equal | Ordering::Less) => {
-                panic!("non-monotonic version progression")
-            }
-            None => false,
-        }
-    })
-    .await;
+    assert_eq!(
+        vv_a_1.partial_cmp(&vv_b),
+        Some(Ordering::Greater),
+        "non-monotonic version progression"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -55,7 +55,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
 pub(crate) async fn write(
-    conn: &mut db::Connection,
+    tx: &mut db::Transaction<'_>,
     id: &BlockId,
     buffer: &[u8],
     nonce: &BlockNonce,
@@ -74,7 +74,7 @@ pub(crate) async fn write(
     .bind(id)
     .bind(nonce.as_slice())
     .bind(buffer)
-    .execute(&mut *conn)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
@@ -112,10 +112,10 @@ pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction<'_>) -> Result
 }
 
 /// Mark the given block as reachable.
-pub(crate) async fn mark_reachable(conn: &mut db::Connection, id: &BlockId) -> Result<()> {
+pub(crate) async fn mark_reachable(tx: &mut db::Transaction<'_>, id: &BlockId) -> Result<()> {
     sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
         .bind(id)
-        .execute(conn)
+        .execute(&mut **tx)
         .await?;
 
     Ok(())
@@ -129,26 +129,30 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
 
         let content = random_block_content();
         let id = BlockId::from_content(&content);
         let nonce = BlockNonce::default();
 
-        write(&mut conn, &id, &content, &nonce).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
+        write(&mut tx, &id, &content, &nonce).await.unwrap();
 
         let mut buffer = vec![0; BLOCK_SIZE];
-        read(&mut conn, &id, &mut buffer).await.unwrap();
+        read(&mut tx, &id, &mut buffer).await.unwrap();
 
         assert_eq!(buffer, content);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_read_missing_block() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
 
         let mut buffer = vec![0; BLOCK_SIZE];
         let id = BlockId::from_content(&buffer);
+
+        let mut conn = pool.acquire().await.unwrap();
 
         match read(&mut conn, &id, &mut buffer).await {
             Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
@@ -159,20 +163,20 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_write_existing_block() {
-        let (_base_dir, mut conn) = setup().await;
+        let (_base_dir, pool) = setup().await;
 
         let content0 = random_block_content();
         let id = BlockId::from_content(&content0);
         let nonce = BlockNonce::default();
 
-        write(&mut conn, &id, &content0, &nonce).await.unwrap();
-        write(&mut conn, &id, &content0, &nonce).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+
+        write(&mut tx, &id, &content0, &nonce).await.unwrap();
+        write(&mut tx, &id, &content0, &nonce).await.unwrap();
     }
 
-    async fn setup() -> (TempDir, db::PoolConnection) {
-        let (base_dir, pool) = db::create_temp().await.unwrap();
-        let conn = pool.acquire().await.unwrap();
-        (base_dir, conn)
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 
     fn random_block_content() -> Vec<u8> {

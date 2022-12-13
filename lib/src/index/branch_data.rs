@@ -306,20 +306,20 @@ impl SnapshotData {
     }
 
     /// Remove this snapshot
-    pub async fn remove(&self, conn: &mut db::Connection) -> Result<()> {
-        self.root_node.remove_recursively(conn).await
+    pub async fn remove(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        self.root_node.remove_recursively(tx).await
     }
 
     /// Remove all snapshots of this branch older than this one.
-    pub async fn remove_all_older(&self, conn: &mut db::Connection) -> Result<()> {
-        self.root_node.remove_recursively_all_older(conn).await
+    pub async fn remove_all_older(&self, tx: &mut db::Transaction<'_>) -> Result<()> {
+        self.root_node.remove_recursively_all_older(tx).await
     }
 
     /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
     /// preserves older snapshots that can be used as fallback for the latest snapshot and only
     // removed those that can't.
     pub async fn prune(&self, db: &db::Pool) -> Result<()> {
-        // First remove all incomplete snapshots
+        // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = db.begin().await?;
         self.root_node
             .remove_recursively_all_older_incomplete(&mut tx)

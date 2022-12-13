@@ -96,12 +96,12 @@ async fn create_new_inner_node() {
     let hash = rand::random();
     let bucket = rand::random();
 
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node = InnerNode::new(hash, Summary::FULL);
-    node.save(&mut conn, &parent, bucket).await.unwrap();
+    node.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let nodes = InnerNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
     assert_eq!(nodes.get(bucket), Some(&node));
 
@@ -120,15 +120,15 @@ async fn create_existing_inner_node() {
     let hash = rand::random();
     let bucket = rand::random();
 
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node0 = InnerNode::new(hash, Summary::FULL);
-    node0.save(&mut conn, &parent, bucket).await.unwrap();
+    node0.save(&mut tx, &parent, bucket).await.unwrap();
 
     let node1 = InnerNode::new(hash, Summary::FULL);
-    node1.save(&mut conn, &parent, bucket).await.unwrap();
+    node1.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let nodes = InnerNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
 
     assert_eq!(nodes.get(bucket), Some(&node0));
     assert!((0..bucket).all(|b| nodes.get(b).is_none()));
@@ -141,7 +141,6 @@ async fn create_existing_inner_node() {
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_create_conflicting_inner_node() {
     let (_base_dir, pool) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
 
     let parent = rand::random();
     let bucket = rand::random();
@@ -154,11 +153,13 @@ async fn attempt_to_create_conflicting_inner_node() {
         }
     };
 
+    let mut tx = pool.begin().await.unwrap();
+
     let node0 = InnerNode::new(hash0, Summary::FULL);
-    node0.save(&mut conn, &parent, bucket).await.unwrap();
+    node0.save(&mut tx, &parent, bucket).await.unwrap();
 
     let node1 = InnerNode::new(hash1, Summary::FULL);
-    assert_matches!(node1.save(&mut conn, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+    assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -169,12 +170,12 @@ async fn save_new_present_leaf_node() {
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
-    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
@@ -186,16 +187,17 @@ async fn save_new_present_leaf_node() {
 #[tokio::test(flavor = "multi_thread")]
 async fn save_new_missing_leaf_node() {
     let (_base_dir, pool) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
 
     let parent = rand::random();
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
-    let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let node = LeafNode::missing(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
@@ -207,19 +209,20 @@ async fn save_new_missing_leaf_node() {
 #[tokio::test(flavor = "multi_thread")]
 async fn save_missing_leaf_node_over_existing_missing_one() {
     let (_base_dir, pool) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
 
     let parent = rand::random();
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
-    let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
 
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let node = LeafNode::missing(encoded_locator, block_id);
+    node.save(&mut tx, &parent).await.unwrap();
+
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();
@@ -231,19 +234,20 @@ async fn save_missing_leaf_node_over_existing_missing_one() {
 #[tokio::test(flavor = "multi_thread")]
 async fn save_missing_leaf_node_over_existing_present_one() {
     let (_base_dir, pool) = setup().await;
-    let mut conn = pool.acquire().await.unwrap();
 
     let parent = rand::random();
     let encoded_locator = rand::random();
     let block_id = rand::random();
 
+    let mut tx = pool.begin().await.unwrap();
+
     let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
     let node = LeafNode::missing(encoded_locator, block_id);
-    node.save(&mut conn, &parent).await.unwrap();
+    node.save(&mut tx, &parent).await.unwrap();
 
-    let nodes = LeafNode::load_children(&mut conn, &parent).await.unwrap();
+    let nodes = LeafNode::load_children(&mut tx, &parent).await.unwrap();
     assert_eq!(nodes.len(), 1);
 
     let node = nodes.get(&encoded_locator).unwrap();

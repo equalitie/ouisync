@@ -704,41 +704,35 @@ async fn fork_then_remove_src_branch() {
     let locator_1 = Locator::head(rng.gen());
 
     let mut tx = pool.begin().await.unwrap();
+
     let mut blob_0 = Blob::create(src_branch.clone(), locator_0);
     blob_0.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
     let mut blob_1 = Blob::create(src_branch.clone(), locator_1);
     blob_1.flush(&mut tx).await.unwrap();
-    tx.commit().await.unwrap();
 
-    let mut tx = pool.begin().await.unwrap();
     fork(&mut tx, *locator_0.blob_id(), &src_branch, &dst_branch)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
 
     drop(blob_0);
     drop(blob_1);
 
-    let mut conn = pool.acquire().await.unwrap();
-
     // Remove the src branch
     src_branch
         .data()
-        .load_snapshot(&mut conn)
+        .load_snapshot(&mut tx)
         .await
         .unwrap()
-        .remove(&mut conn)
+        .remove(&mut tx)
         .await
         .unwrap();
 
     // The forked blob still exists
-    Blob::open(&mut conn, dst_branch, locator_0).await.unwrap();
+    Blob::open(&mut tx, dst_branch, locator_0).await.unwrap();
 
     // The unforked is gone
-    match Blob::open(&mut conn, src_branch, locator_1).await {
+    match Blob::open(&mut tx, src_branch, locator_1).await {
         Err(Error::EntryNotFound) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("unexpected success"),
