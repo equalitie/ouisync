@@ -1,9 +1,13 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
-use std::mem::size_of;
+use std::{fmt, mem::size_of};
 
 type BarrierId = u64;
 type Round = u32;
-type Step = u8;
+#[derive(Eq, PartialEq, Copy, Clone)]
+enum Step {
+    Zero,
+    One,
+}
 type Msg = (BarrierId, Round, Step);
 
 /// Ensures there are no more in-flight messages beween us and the peer.
@@ -71,6 +75,9 @@ impl<'a> Barrier<'a> {
         #[cfg(test)]
         self.mark_step().await;
 
+        #[cfg(test)]
+        println!("{:x} >> RST", self.barrier_id);
+
         // I think we send this empty message in order to break the encryption on the other side and
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
@@ -88,20 +95,19 @@ impl<'a> Barrier<'a> {
             let (their_barrier_id, their_round, their_step) =
                 self.exchange0(self.barrier_id, round).await?;
 
-            if their_step != 0 {
+            if their_step != Step::Zero {
                 next_round = max(round, their_round) + 1;
                 continue;
             }
 
-            // Ensure we end at the same time.
-            if round != their_round {
-                if round < their_round {
-                    round = their_round;
-                    self.send(self.barrier_id, round, 0).await?;
-                } else {
-                    next_round = round + 1;
-                    continue;
-                }
+            // Just for info, this is ensured inside `exchange0`.
+            assert!(round <= their_round);
+
+            if round < their_round {
+                // They are ahead of us, but on the same step. So play along, bump our round to
+                // theirs and pretend we did the step zero with the same round.
+                round = their_round;
+                self.send(self.barrier_id, round, Step::Zero).await?;
             }
 
             let (our_barrier_id, their_round, their_step) =
@@ -113,7 +119,7 @@ impl<'a> Barrier<'a> {
                     }
                 };
 
-            if their_step != 1 {
+            if their_step != Step::One {
                 next_round = max(round, their_round) + 1;
                 continue;
             }
@@ -141,33 +147,36 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
     ) -> Result<Msg, BarrierError> {
-        let our_step = 0;
-        self.send(barrier_id, our_round, our_step).await?;
+        let our_step = Step::Zero;
 
         loop {
-            let (barrier_id, their_round, their_step) = match self
-                .recv(
-                    #[cfg(test)]
-                    our_round,
-                    #[cfg(test)]
-                    our_step,
-                )
-                .await?
-            {
-                Some(msg) => msg,
-                None => continue,
-            };
+            self.send(barrier_id, our_round, our_step).await?;
 
-            if their_step != 0 {
-                // We have a miss-step in `exchange`, we just sent them that our step is 0 so
-                // they'll see that and start a new round. Note that the next round will fail
-                // because then they'll receive our message from step 1. But at least we'll have a
-                // sync on `exchange` even though we'll not have a sync on "step". Sync on "step"
-                // will then happen in the logic of the `run` function.
-                continue;
+            loop {
+                let (barrier_id, their_round, their_step) = match self
+                    .recv(
+                        #[cfg(test)]
+                        our_round,
+                        #[cfg(test)]
+                        our_step,
+                    )
+                    .await?
+                {
+                    Some(msg) => msg,
+                    None => continue,
+                };
+
+                if their_round < our_round {
+                    // The peer is behind, so we resend our previous message. If they receive it
+                    // more than once, they should ignore the duplicates. Note that we do need to
+                    // resend it as opposed to just ignore and start receiving again because they
+                    // could have dropped the previous message we sent them (e.g. because they did
+                    // not have the repo that the two are about to sync).
+                    break;
+                }
+
+                return Ok((barrier_id, their_round, their_step));
             }
-
-            return Ok((barrier_id, their_round, their_step));
         }
     }
 
@@ -176,20 +185,28 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
     ) -> Result<Option<Msg>, BarrierError> {
-        let our_step = 1;
+        let our_step = Step::One;
         self.send(barrier_id, our_round, our_step).await?;
 
-        match self
-            .recv(
-                #[cfg(test)]
-                our_round,
-                #[cfg(test)]
-                our_step,
-            )
-            .await?
-        {
-            Some(msg) => Ok(Some(msg)),
-            None => Ok(None),
+        loop {
+            match self
+                .recv(
+                    #[cfg(test)]
+                    our_round,
+                    #[cfg(test)]
+                    our_step,
+                )
+                .await?
+            {
+                Some((barrier, round, step)) => {
+                    if step == Step::Zero && round == our_round {
+                        // They resent the same message from previous step, ignore it.
+                        continue;
+                    }
+                    return Ok(Some((barrier, round, step)));
+                }
+                None => return Ok(None),
+            }
         }
     }
 
@@ -206,21 +223,20 @@ impl<'a> Barrier<'a> {
         match parse_message(&msg) {
             Some((barrier_id, their_round, their_step)) => {
                 match their_step {
-                    0 => {
+                    Step::Zero => {
                         #[cfg(test)]
                         println!(
-                            "{:x} R{} S{} << their_barrier_id:{:x} their_round:{} their_step:{}",
+                            "{:x} R{} S{:?} << their_barrier_id:{:x} their_round:{} their_step:{:?}",
                             self.barrier_id, round, our_step, barrier_id, their_round, their_step
                         )
                     }
-                    1 => {
+                    Step::One => {
                         #[cfg(test)]
                         println!(
-                            "{:x} R{} S{} << our_barrier_id:{:x} their_round:{} their_step:{}",
+                            "{:x} R{} S{:?} << our_barrier_id:{:x} their_round:{} their_step:{:?}",
                             self.barrier_id, round, our_step, barrier_id, their_round, their_step
                         )
                     }
-                    _ => return Ok(None),
                 }
                 Ok(Some((barrier_id, their_round, their_step)))
             }
@@ -241,21 +257,20 @@ impl<'a> Barrier<'a> {
 
         #[cfg(test)]
         match our_step {
-            0 => {
+            Step::Zero => {
                 assert_eq!(self.barrier_id, barrier_id);
                 println!(
                     "{:x} R{} S0 >> self.barrier_id:{:x}",
                     self.barrier_id, our_round, barrier_id
                 );
             }
-            1 => {
+            Step::One => {
                 assert_ne!(self.barrier_id, barrier_id);
                 println!(
                     "{:x} R{} S1 >> their_barrier_id:{:x}",
                     self.barrier_id, our_round, barrier_id
                 );
             }
-            _ => unreachable!(),
         }
         self.sink
             .send(construct_message(barrier_id, our_round, our_step).to_vec())
@@ -295,7 +310,10 @@ fn construct_message(barrier_id: BarrierId, round: Round, step: Step) -> MsgData
     s[..MSG_ROUND_SIZE].clone_from_slice(&round.to_le_bytes());
     let s = &mut s[MSG_ROUND_SIZE..];
 
-    s[..MSG_STEP_SIZE].clone_from_slice(&step.to_le_bytes());
+    match step {
+        Step::Zero => s[..MSG_STEP_SIZE].clone_from_slice(&0u8.to_le_bytes()),
+        Step::One => s[..MSG_STEP_SIZE].clone_from_slice(&1u8.to_le_bytes()),
+    }
     let s = &mut s[MSG_STEP_SIZE..];
 
     s[..MSG_SUFFIX_SIZE].clone_from_slice(MSG_SUFFIX);
@@ -322,11 +340,19 @@ fn parse_message(data: &[u8]) -> Option<Msg> {
         return None;
     }
 
+    let step_num = u8::from_le_bytes(step_data.try_into().unwrap());
+
+    let step = match step_num {
+        0 => Step::Zero,
+        1 => Step::One,
+        _ => return None,
+    };
+
     // Unwraps OK because we know the sizes at compile time.
     Some((
         BarrierId::from_le_bytes(id_data.try_into().unwrap()),
         Round::from_le_bytes(round_data.try_into().unwrap()),
-        Step::from_le_bytes(step_data.try_into().unwrap()),
+        step,
     ))
 }
 
@@ -341,6 +367,15 @@ pub enum BarrierError {
 impl From<ChannelClosed> for BarrierError {
     fn from(_: ChannelClosed) -> Self {
         Self::ChannelClosed
+    }
+}
+
+impl std::fmt::Debug for Step {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zero => write!(f, "0"),
+            Self::One => write!(f, "1"),
+        }
     }
 }
 
@@ -430,12 +465,20 @@ mod tests {
     // --- Sink ---------------------------------------------------------------
     #[derive(Clone)]
     struct Sink {
+        drop_count: Arc<Mutex<u32>>,
         tx: mpsc::Sender<Vec<u8>>,
     }
 
     #[async_trait]
     impl ContentSinkTrait for Sink {
         async fn send(&self, message: Vec<u8>) -> Result<(), ChannelClosed> {
+            {
+                let mut drop_count = self.drop_count.lock().await;
+                if *drop_count > 0 {
+                    *drop_count -= 1;
+                    return Ok(());
+                }
+            }
             self.tx.send(message).await.map_err(|_| ChannelClosed)
         }
     }
@@ -456,13 +499,16 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    fn new_test_channel() -> (Sink, Stream) {
+    fn new_test_channel(drop_count: u32) -> (Sink, Stream) {
         // Exchanging messages would normally require only a mpsc channel of size one, but at the
         // beginning of the Barrier algorithm we also send one "reset" message which increases the
         // channel size requirement by one.
         let (tx, rx) = mpsc::channel(2);
         (
-            Sink { tx },
+            Sink {
+                drop_count: Arc::new(Mutex::new(drop_count)),
+                tx,
+            },
             Stream {
                 rx: Arc::new(Mutex::new(rx)),
             },
@@ -477,11 +523,14 @@ mod tests {
     }
 
     // When this returns true, it's no longer needed to test with higher `n`.
-    async fn test_case(n: u32) -> bool {
-        println!(">>>>>>>>>>>>>>>>>>> START n:{} <<<<<<<<<<<<<<<<<<<<<<", n);
+    async fn test_restart_case(n: u32) -> bool {
+        println!(
+            ">>>>>>>>>>>>>>>>>>> TEST RESTART AFTER n:{} <<<<<<<<<<<<<<<<<<<<<<",
+            n
+        );
 
-        let (ac_to_b, b_from_ac) = new_test_channel();
-        let (b_to_ac, ac_from_b) = new_test_channel();
+        let (ac_to_b, b_from_ac) = new_test_channel(0 /* don't drop anything */);
+        let (b_to_ac, ac_from_b) = new_test_channel(0 /* don't drop anything */);
 
         let task_1 = task::spawn(async move {
             let mut stepper_c = Stepper::new(0xc, ac_to_b.clone(), ac_from_b.clone());
@@ -530,13 +579,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test() {
+    async fn test_restarts() {
         let mut n = 0;
         loop {
-            if test_case(n).await {
+            if test_restart_case(n).await {
                 break;
             }
             n += 1;
+        }
+    }
+
+    async fn test_drop_from_start_case(a: u32, b: u32) {
+        println!(
+            ">>>>>>>>>>>>>>>>>>> TEST DROP a:{} b:{} <<<<<<<<<<<<<<<<<<<<<<",
+            a, b
+        );
+
+        let (a_to_b, mut b_from_a) = new_test_channel(a);
+        let (b_to_a, mut a_from_b) = new_test_channel(b);
+
+        let task_a = task::spawn(async move {
+            Barrier {
+                barrier_id: 0xa,
+                stream: &mut a_from_b,
+                sink: &a_to_b,
+                marker: None,
+            }
+            .run()
+            .await
+            .unwrap()
+        });
+
+        let task_b = task::spawn(async move {
+            Barrier {
+                barrier_id: 0xb,
+                stream: &mut b_from_a,
+                sink: &b_to_a,
+                marker: None,
+            }
+            .run()
+            .await
+            .unwrap()
+        });
+
+        match timeout(Duration::from_secs(5), task_a).await {
+            Err(_) => panic!(
+                "Test case drop_from_start (task_a, a:{}, b:{}) timed out",
+                a, b
+            ),
+            Ok(Err(err)) => panic!(
+                "Test case drop_from_start (task_a, a:{}, b:{}) failed with {:?}",
+                a, b, err
+            ),
+            Ok(Ok(_)) => (),
+        }
+
+        match timeout(Duration::from_secs(5), task_b).await {
+            Err(_) => panic!(
+                "Test case drop_from_start (task_b, a:{}, b:{}) timed out",
+                a, b
+            ),
+            Ok(Err(err)) => panic!(
+                "Test case drop_from_start (task_b, a:{}, b:{}) failed with {:?}",
+                a, b, err
+            ),
+            Ok(Ok(_)) => (),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_drop_from_start() {
+        // Drop first `a` packets from the barrier A and first `b` packets from the barrier B.
+        // After sending first two packets, both nodes start reading, so max 2 dropped packets
+        // make sense to consider.
+        // Note that the case (2,2) should not be possible because that would mean that they both
+        // sent a message while not receiving one.
+        for (a, b) in [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1)] {
+            test_drop_from_start_case(a, b).await;
         }
     }
 }
