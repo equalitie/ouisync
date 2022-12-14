@@ -106,6 +106,21 @@ impl Store {
 
         Ok(())
     }
+
+    pub(crate) async fn mark_all_blocks_unreachable(&self) -> Result<()> {
+        let mut tx = self.db().begin().await?;
+
+        sqlx::query(
+            "DELETE FROM unreachable_blocks;
+             INSERT INTO unreachable_blocks SELECT DISTINCT block_id FROM snapshot_leaf_nodes",
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]

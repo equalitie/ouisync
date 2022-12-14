@@ -455,11 +455,7 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut tx = shared.store.db().begin().await?;
-        block::mark_all_unreachable(&mut tx).await?;
-        tx.commit().await?;
-
-        Ok(())
+        shared.store.mark_all_blocks_unreachable().await
     }
 
     async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {

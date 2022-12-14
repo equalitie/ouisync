@@ -114,18 +114,6 @@ pub(crate) async fn remove(tx: &mut db::Transaction, id: &BlockId) -> Result<()>
     Ok(())
 }
 
-/// Mark all blocks as unreachable.
-pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction) -> Result<()> {
-    sqlx::query(
-        "DELETE FROM unreachable_blocks;
-         INSERT INTO unreachable_blocks SELECT id FROM blocks",
-    )
-    .execute(&mut **tx)
-    .await?;
-
-    Ok(())
-}
-
 /// Mark the given block as reachable.
 pub(crate) async fn mark_reachable(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
     sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
