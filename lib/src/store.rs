@@ -5,11 +5,10 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
-    index::{self, Index, LeafNode},
+    index::{self, Index},
     progress::Progress,
     repository::LocalId,
 };
-use futures_util::TryStreamExt;
 use sqlx::Row;
 use tracing::Span;
 
@@ -106,59 +105,6 @@ impl Store {
         }
 
         Ok(())
-    }
-
-    /// Remove all unreachable blocks. Do this at the end of every garbage collection pass.
-    pub(crate) async fn remove_unreachable_blocks(&self) -> Result<usize> {
-        // We need to delete the blocks and also mark them as missing (so they can be requested in
-        // case they become needed again) in their corresponding leaf nodes and then update the
-        // summaries of the corresponding ancestor nodes. This is a complex and potentially
-        // expensive operation which is why we do it a few blocks at a time.
-        const BATCH_SIZE: u32 = 32;
-
-        let mut total_count = 0;
-
-        loop {
-            let mut tx = self.db().begin().await?;
-
-            let block_ids: Vec<BlockId> = sqlx::query("SELECT id FROM unreachable_blocks LIMIT ?")
-                .bind(BATCH_SIZE)
-                .map(|row| row.get(0))
-                .fetch_all(&mut *tx)
-                .await?;
-
-            if block_ids.is_empty() {
-                break;
-            }
-
-            total_count += block_ids.len();
-
-            for block_id in block_ids {
-                sqlx::query("DELETE FROM blocks WHERE id = ?")
-                    .bind(&block_id)
-                    .execute(&mut *tx)
-                    .await?;
-
-                sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
-                    .bind(&block_id)
-                    .execute(&mut *tx)
-                    .await?;
-
-                LeafNode::set_missing(&mut tx, &block_id).await?;
-
-                let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(&mut tx, &block_id)
-                    .try_collect()
-                    .await?;
-
-                for hash in parent_hashes {
-                    index::update_summaries(&mut tx, hash).await?;
-                }
-            }
-
-            tx.commit().await?;
-        }
-
-        Ok(total_count)
     }
 }
 

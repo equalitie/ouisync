@@ -328,9 +328,11 @@ mod scan {
         blob::BlockIds,
         blob_id::BlobId,
         block,
+        index::{self, LeafNode},
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
+    use futures_util::TryStreamExt;
 
     #[derive(Copy, Clone, Debug)]
     pub(super) enum Mode {
@@ -459,10 +461,42 @@ mod scan {
     }
 
     async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let count = shared.store.remove_unreachable_blocks().await?;
+        // We need to delete the blocks and also mark them as missing (so they can be requested in
+        // case they become needed again) in their corresponding leaf nodes and then update the
+        // summaries of the corresponding ancestor nodes. This is a complex and potentially
+        // expensive operation which is why we do it a few blocks at a time.
+        const BATCH_SIZE: u32 = 32;
 
-        if count > 0 {
-            tracing::debug!("unreachable blocks removed: {}", count);
+        let mut total_count = 0;
+
+        loop {
+            let mut tx = shared.store.db().begin().await?;
+
+            let block_ids = block::load_unreachable(&mut tx, BATCH_SIZE).await?;
+            if block_ids.is_empty() {
+                break;
+            }
+
+            total_count += block_ids.len();
+
+            for block_id in block_ids {
+                block::remove(&mut tx, &block_id).await?;
+                LeafNode::set_missing(&mut tx, &block_id).await?;
+
+                let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(&mut tx, &block_id)
+                    .try_collect()
+                    .await?;
+
+                for hash in parent_hashes {
+                    index::update_summaries(&mut tx, hash).await?;
+                }
+            }
+
+            tx.commit().await?;
+        }
+
+        if total_count > 0 {
+            tracing::debug!("unreachable blocks removed: {}", total_count);
         }
 
         Ok(())
