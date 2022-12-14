@@ -4,7 +4,6 @@ mod tests;
 
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
-    access_control::AccessKeys,
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -77,25 +76,6 @@ impl Blob {
             len: 0,
             len_dirty: false,
         }
-    }
-
-    /// Removes a blob.
-    pub async fn remove(
-        tx: &mut db::Transaction,
-        branch: &Branch,
-        head_locator: Locator,
-    ) -> Result<()> {
-        let mut snapshot = branch.data().load_snapshot(tx).await?;
-
-        match remove_blocks(tx, &mut snapshot, branch.keys(), head_locator.sequence()).await {
-            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
-            // we should never get `Ok` because the locator sequence we are passing to
-            // `remove_blocks` is unbounded).
-            Ok(()) | Err(Error::EntryNotFound) => (),
-            Err(error) => return Err(error),
-        }
-
-        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
@@ -323,7 +303,6 @@ impl Blob {
 
         self.write_len(tx, &mut snapshot).await?;
         self.write_current_block(tx, &mut snapshot).await?;
-        self.trim(tx, &mut snapshot).await?;
 
         Ok(true)
     }
@@ -444,25 +423,6 @@ impl Blob {
         self.current_block.dirty = false;
 
         Ok(())
-    }
-
-    async fn trim(&self, tx: &mut db::Transaction, snapshot: &mut SnapshotData) -> Result<()> {
-        match remove_blocks(
-            tx,
-            snapshot,
-            self.branch.keys(),
-            self.head_locator
-                .sequence()
-                .skip(self.block_count() as usize),
-        )
-        .await
-        {
-            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
-            // we should never get `Ok` because the locator sequence we are passing to
-            // `remove_blocks` is unbounded).
-            Ok(()) | Err(Error::EntryNotFound) => Ok(()),
-            Err(error) => Err(error),
-        }
     }
 }
 
@@ -617,25 +577,4 @@ fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content
 fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
     let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
-}
-
-async fn remove_blocks<T>(
-    tx: &mut db::Transaction,
-    snapshot: &mut SnapshotData,
-    keys: &AccessKeys,
-    locators: T,
-) -> Result<()>
-where
-    T: IntoIterator<Item = Locator>,
-{
-    let read_key = keys.read();
-    let write_keys = keys.write().ok_or(Error::PermissionDenied)?;
-
-    for locator in locators {
-        snapshot
-            .remove_block(tx, &locator.encode(read_key), write_keys)
-            .await?;
-    }
-
-    Ok(())
 }
