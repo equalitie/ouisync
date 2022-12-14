@@ -224,7 +224,11 @@ pub unsafe extern "C" fn session_shutdown_network_and_close() {
         _logger,
     } = *session;
 
-    runtime.block_on(async move { network.shutdown().await });
+    runtime.block_on(async move {
+        time::timeout(Duration::from_millis(500), network.shutdown())
+            .await
+            .unwrap_or(())
+    });
 
     // Force drop order
     drop(runtime);

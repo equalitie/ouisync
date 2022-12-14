@@ -12,8 +12,9 @@ use ouisync_lib::{
 use std::{
     collections::{hash_map::Entry, HashMap},
     io,
+    time::Duration,
 };
-use tokio::{fs::File, io::AsyncWriteExt};
+use tokio::{fs::File, io::AsyncWriteExt, time};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -207,7 +208,9 @@ async fn main() -> Result<()> {
 
     terminated().await?;
 
-    network.shutdown().await;
+    time::timeout(Duration::from_secs(1), network.shutdown())
+        .await
+        .unwrap_or(());
 
     Ok(())
 }
