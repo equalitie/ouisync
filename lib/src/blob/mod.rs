@@ -279,7 +279,9 @@ impl Blob {
             return Err(Error::OperationNotSupported);
         }
 
-        self.seek(conn, SeekFrom::Start(len)).await?;
+        if self.seek_position() > len {
+            self.seek(conn, SeekFrom::Start(len)).await?;
+        }
 
         self.len = len;
         self.len_dirty = true;
