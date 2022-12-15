@@ -1,4 +1,4 @@
-use super::{Error, MissingBlockStrategy, OverwriteStrategy};
+use super::{Error, MissingBlockStrategy};
 use crate::{
     blob,
     blob_id::BlobId,
@@ -42,9 +42,7 @@ impl ParentContext {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.entries.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
-        directory
-            .save(tx, &content, OverwriteStrategy::Keep)
-            .await?;
+        directory.save(tx, &content).await?;
         directory.bump(tx, op).await?;
 
         Ok(())
@@ -64,9 +62,7 @@ impl ParentContext {
         match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
             Ok(()) => {
                 let mut tx = directory.branch().db().begin().await?;
-                directory
-                    .save(&mut tx, &content, OverwriteStrategy::Remove)
-                    .await?;
+                directory.save(&mut tx, &content).await?;
                 blob::fork(&mut tx, blob_id, src_branch, dst_branch).await?;
                 directory
                     .commit(tx, content, &VersionVectorOp::Merge(src_vv))

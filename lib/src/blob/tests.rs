@@ -8,7 +8,6 @@ use crate::{
     index::BranchData,
     test_utils,
 };
-use assert_matches::assert_matches;
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
 use std::sync::Arc;
@@ -257,157 +256,29 @@ async fn seek_before_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn remove_blob() {
-    let (mut rng, _base_dir, pool, branch) = setup(0).await;
-    let mut tx = pool.begin().await.unwrap();
-
-    let locator0 = random_head_locator(&mut rng);
-    let locator1 = locator0.next();
-
-    let content: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(2 * BLOCK_SIZE)
-        .collect();
-
-    let mut blob = Blob::create(branch.clone(), locator0);
-    blob.write(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-
-    let encoded_locator0 = locator0.encode(branch.keys().read());
-    let encoded_locator1 = locator1.encode(branch.keys().read());
-
-    let block_ids = {
-        let (id0, _) = branch.data().get(&mut tx, &encoded_locator0).await.unwrap();
-        let (id1, _) = branch.data().get(&mut tx, &encoded_locator1).await.unwrap();
-        [id0, id1]
-    };
-
-    // Remove the blob
-    Blob::remove(&mut tx, &branch, locator0).await.unwrap();
-
-    // Check the block entries were deleted from the index.
-    assert_matches!(
-        branch.data().get(&mut tx, &encoded_locator0).await,
-        Err(Error::EntryNotFound)
-    );
-    assert_matches!(
-        branch.data().get(&mut tx, &encoded_locator1).await,
-        Err(Error::EntryNotFound)
-    );
-
-    // Check the blocks were deleted as well.
-    for block_id in &block_ids {
-        assert!(!block::exists(&mut tx, block_id).await.unwrap());
-    }
-
-    drop(tx);
-    pool.close().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remove_blob_with_unflushed_writes() {
-    let (mut rng, _base_dir, pool, branch) = setup(0).await;
-    let mut tx = pool.begin().await.unwrap();
-
-    // Create an empty blob and flush it.
-    let locator = random_head_locator(&mut rng);
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.flush(&mut tx).await.unwrap();
-
-    // Write two blocks to it (write a little bit past the second block to force it to be written
-    // to the store) but don't flush.
-    let content: Vec<_> = (&mut rng)
-        .sample_iter(Standard)
-        .take(2 * BLOCK_SIZE - HEADER_SIZE + 1)
-        .collect();
-    blob.write(&mut tx, &content).await.unwrap();
-
-    let encoded_locators: Vec<_> = locator
-        .sequence()
-        .take(2)
-        .map(|locator| locator.encode(branch.keys().read()))
-        .collect();
-    let mut block_ids = Vec::new();
-    for encoded_locator in &encoded_locators {
-        let (block_id, _) = branch.data().get(&mut tx, encoded_locator).await.unwrap();
-        block_ids.push(block_id);
-    }
-
-    // Drop the blob without flushing it first.
-    drop(blob);
-
-    // Remove the blob
-    Blob::remove(&mut tx, &branch, locator).await.unwrap();
-
-    // Check that all blocks, including the unflushed ones, were deleted:
-
-    // from the index...
-    for encoded_locator in &encoded_locators {
-        assert_matches!(
-            branch.data().get(&mut tx, encoded_locator).await,
-            Err(Error::EntryNotFound)
-        );
-    }
-
-    // ...and from the block store as well.
-    for block_id in &block_ids {
-        assert!(!block::exists(&mut tx, block_id).await.unwrap());
-    }
-
-    drop(tx);
-    pool.close().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_empty() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut tx = pool.begin().await.unwrap();
 
-    let locator0 = random_head_locator(&mut rng);
-    let locator1 = locator0.next();
+    let locator = random_head_locator(&mut rng);
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
         .take(2 * BLOCK_SIZE)
         .collect();
 
-    let mut blob = Blob::create(branch.clone(), locator0);
+    let mut blob = Blob::create(branch.clone(), locator);
     blob.write(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
-
-    let locator0 = locator0.encode(branch.keys().read());
-    let locator1 = locator1.encode(branch.keys().read());
-
-    let (old_block_id0, old_block_id1) = {
-        let (id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
-        let (id1, _) = branch.data().get(&mut tx, &locator1).await.unwrap();
-
-        (id0, id1)
-    };
+    assert_eq!(blob.len(), content.len() as u64);
 
     blob.truncate(&mut tx, 0).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
+    assert_eq!(blob.len(), 0);
 
-    // Check the blob is empty
     let mut buffer = [0; 1];
     blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
     assert_eq!(blob.read(&mut tx, &mut buffer).await.unwrap(), 0);
-    assert_eq!(blob.len(), 0);
-
-    // Check the second block entry was deleted from the index
-    assert_matches!(
-        branch.data().get(&mut tx, &locator1).await,
-        Err(Error::EntryNotFound)
-    );
-    assert!(!block::exists(&mut tx, &old_block_id1).await.unwrap());
-
-    // The first block is not deleted because it's needed to store the metadata.
-    // It's only deleted when the blob itself is deleted.
-    // Check that it was modified to store the new length though.
-    let (new_block_id0, _) = branch.data().get(&mut tx, &locator0).await.unwrap();
-    assert_ne!(new_block_id0, old_block_id0);
-    assert!(!block::exists(&mut tx, &old_block_id0).await.unwrap());
-    assert!(block::exists(&mut tx, &new_block_id0).await.unwrap());
 
     drop(tx);
     pool.close().await.unwrap();
@@ -418,39 +289,28 @@ async fn truncate_to_shorter() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
     let mut tx = pool.begin().await.unwrap();
 
-    let locator0 = random_head_locator(&mut rng);
-    let locator1 = locator0.next();
-    let locator2 = locator1.next();
+    let locator = random_head_locator(&mut rng);
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
         .take(3 * BLOCK_SIZE)
         .collect();
 
-    let mut blob = Blob::create(branch.clone(), locator0);
+    let mut blob = Blob::create(branch.clone(), locator);
     blob.write(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
+    assert_eq!(blob.len(), content.len() as u64);
 
     let new_len = BLOCK_SIZE / 2;
 
     blob.truncate(&mut tx, new_len as u64).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
-
-    let mut buffer = vec![0; new_len];
-    blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
-    assert_eq!(blob.read(&mut tx, &mut buffer).await.unwrap(), new_len);
-    assert_eq!(buffer, content[..new_len]);
     assert_eq!(blob.len(), new_len as u64);
 
-    for locator in &[locator1, locator2] {
-        assert_matches!(
-            branch
-                .data()
-                .get(&mut tx, &locator.encode(branch.keys().read()))
-                .await,
-            Err(Error::EntryNotFound)
-        );
-    }
+    let mut buffer = vec![0; content.len()];
+    blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
+    assert_eq!(blob.read(&mut tx, &mut buffer).await.unwrap(), new_len);
+    assert_eq!(buffer[..new_len], content[..new_len]);
 
     drop(tx);
     pool.close().await.unwrap();

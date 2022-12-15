@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
-    blob::Blob,
     db,
     file::FileCache,
     index::BranchData,
@@ -69,7 +68,6 @@ async fn add_entry_to_existing_directory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_file() {
     let (_base_dir, branch) = setup().await;
-    let mut conn = branch.db().acquire().await.unwrap();
 
     let name = "monkey.txt";
 
@@ -79,7 +77,6 @@ async fn remove_file() {
     file.flush().await.unwrap();
 
     let file_vv = file.version_vector().await.unwrap();
-    let file_locator = *file.locator();
     drop(file);
 
     // Reopen and remove the file
@@ -95,15 +92,7 @@ async fn remove_file() {
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
     assert_eq!(parent_dir.entries().count(), 1);
 
-    // Check the file blob itself was removed as well.
-    match Blob::open(&mut conn, branch.clone(), file_locator).await {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("file blob should not exists but it does"),
-    }
-
     // Try re-creating the file again
-    drop(parent_dir); // Drop the previous handle to avoid deadlock.
     let mut parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
 
     let mut file = parent_dir.create_file(name.into()).await.unwrap();
@@ -337,15 +326,12 @@ async fn move_non_empty_directory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_subdirectory() {
     let (_base_dir, branch) = setup().await;
-    let mut conn = branch.db().acquire().await.unwrap();
 
     let name = "dir";
 
     // Create a directory with a single subdirectory.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
-
-    let dir_locator = *dir.locator();
     let dir_vv = dir.version_vector().await.unwrap();
 
     // Reopen and remove the subdirectory
@@ -358,13 +344,6 @@ async fn remove_subdirectory() {
     // Reopen again and check the subdirectory entry was removed.
     let parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
-
-    // Check the directory blob itself was removed as well.
-    match Blob::open(&mut conn, branch, dir_locator).await {
-        Err(Error::EntryNotFound) => (),
-        Err(error) => panic!("unexpected error {:?}", error),
-        Ok(_) => panic!("directory blob should not exists but it does"),
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

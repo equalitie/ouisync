@@ -90,6 +90,19 @@ impl LeafNode {
             .err_into()
     }
 
+    /// Loads all locators (most of the time (always?) there will be at most one) pointing to the
+    /// block id.
+    pub fn load_locators<'a>(
+        conn: &'a mut db::Connection,
+        block_id: &'a BlockId,
+    ) -> impl Stream<Item = Result<Hash>> + 'a {
+        sqlx::query("SELECT locator FROM snapshot_leaf_nodes WHERE block_id = ?")
+            .bind(block_id)
+            .fetch(conn)
+            .map_ok(|row| row.get(0))
+            .err_into()
+    }
+
     /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
     /// whether at least one node was modified.
     pub async fn set_present(tx: &mut db::Transaction, block_id: &BlockId) -> Result<bool> {

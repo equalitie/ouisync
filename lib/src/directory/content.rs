@@ -2,7 +2,6 @@
 
 use super::entry_data::EntryData;
 use crate::{
-    blob_id::BlobId,
     branch::Branch,
     error::{Error, Result},
     index::VersionVectorOp,
@@ -23,30 +22,25 @@ pub(crate) const VERSION: u64 = 2;
 #[derive(Clone, Debug)]
 pub(super) struct Content {
     entries: v2::Entries,
-    overwritten_blobs: Vec<BlobId>,
 }
 
 impl Content {
     pub fn empty() -> Self {
         Self {
             entries: BTreeMap::new(),
-            overwritten_blobs: Vec::new(),
         }
     }
 
     pub fn deserialize(mut input: &[u8]) -> Result<Self> {
         let version = vint64::decode(&mut input).map_err(|_| Error::MalformedDirectory)?;
-        let content = match version {
+        let entries = match version {
             VERSION => deserialize_entries(input),
             1 => Ok(v2::from_v1(deserialize_entries(input)?)),
             0 => Ok(v2::from_v1(v1::from_v0(deserialize_entries(input)?))),
             _ => Err(Error::StorageVersionMismatch),
         };
 
-        Ok(Self {
-            entries: content?,
-            overwritten_blobs: Vec::new(),
-        })
+        Ok(Self { entries: entries? })
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -86,15 +80,9 @@ impl Content {
                 match entry.get() {
                     EntryData::File(old_data)
                         if new_data.version_vector() > &old_data.version_vector
-                            && !branch.is_file_open(&old_data.blob_id) =>
-                    {
-                        self.overwritten_blobs.push(old_data.blob_id);
-                    }
+                            && !branch.is_file_open(&old_data.blob_id) => {}
                     EntryData::Directory(old_data)
-                        if new_data.version_vector() > &old_data.version_vector =>
-                    {
-                        self.overwritten_blobs.push(old_data.blob_id);
-                    }
+                        if new_data.version_vector() > &old_data.version_vector => {}
                     EntryData::Tombstone(old_data)
                         if new_data.version_vector() > &old_data.version_vector => {}
                     EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_) => {
@@ -123,14 +111,6 @@ impl Content {
         );
 
         Ok(())
-    }
-
-    pub fn overwritten_blobs(&self) -> &[BlobId] {
-        &self.overwritten_blobs
-    }
-
-    pub fn clear_overwritten_blobs(&mut self) {
-        self.overwritten_blobs.clear()
     }
 
     /// Initial version vector for a new entry to be inserted.

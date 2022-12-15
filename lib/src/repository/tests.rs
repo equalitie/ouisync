@@ -52,6 +52,7 @@ async fn count_leaf_nodes_sanity_checks() {
 
     drop(file);
     repo.remove_entry(file_name).await.unwrap();
+    repo.force_work().await.unwrap(); // run the garbage collector
 
     // 1 = one for the root with a tombstone entry
     assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);

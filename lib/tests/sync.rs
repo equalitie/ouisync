@@ -28,6 +28,7 @@ async fn relink_repository() {
     let reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // Create a file by A
+    tracing::info!("A: create test.txt -> 'first'");
     let mut file_a = repo_a.create_file("test.txt").await.unwrap();
     file_a.write(b"first").await.unwrap();
     file_a.flush().await.unwrap();
@@ -36,14 +37,17 @@ async fn relink_repository() {
     common::expect_file_content(&repo_b, "test.txt", b"first").await;
 
     // Unlink B's repo
+    tracing::info!("B: unlink");
     drop(reg_b);
 
     // Update the file while B's repo is unlinked
+    tracing::info!("A: write test.txt -> 'second'");
     file_a.truncate(0).await.unwrap();
     file_a.write(b"second").await.unwrap();
     file_a.flush().await.unwrap();
 
     // Re-register B's repo
+    tracing::info!("B: relink");
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // Wait until the file is updated
@@ -175,6 +179,7 @@ async fn transfer_multiple_files_sequentially() {
         let mut file = repo_a.create_file(&name).await.unwrap();
         common::write_in_chunks(&mut file, content, 4096).await;
         file.flush().await.unwrap();
+        tracing::info!("put {:?}", name);
         drop(file);
 
         // Wait until we see all the already transfered files

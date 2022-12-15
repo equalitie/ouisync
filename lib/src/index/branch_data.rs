@@ -1,10 +1,8 @@
-use std::{collections::HashSet, future};
-
 use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    VersionVectorOp,
+    SnapshotId, VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -19,6 +17,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
+use std::{collections::HashSet, future};
 use tokio::{pin, sync::broadcast};
 
 type LocatorHash = Hash;
@@ -128,7 +127,7 @@ impl BranchData {
     ) -> Result<()> {
         self.load_snapshot(tx)
             .await?
-            .remove_block(tx, encoded_locator, write_keys)
+            .remove_block(tx, encoded_locator, None, write_keys)
             .await
     }
 
@@ -201,6 +200,11 @@ impl SnapshotData {
         }))
     }
 
+    /// Returns the id of this snapshot.
+    pub fn id(&self) -> SnapshotId {
+        self.root_node.snapshot_id
+    }
+
     /// Returns the id of the replica that owns this branch.
     pub fn branch_id(&self) -> &PublicKey {
         &self.root_node.proof.writer_id
@@ -245,22 +249,27 @@ impl SnapshotData {
         Ok(true)
     }
 
-    /// Removes the block identified by encoded_locator from the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
+    /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
+    /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
     pub async fn remove_block(
         &mut self,
         tx: &mut db::Transaction,
         encoded_locator: &Hash,
+        expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut path = self.load_path(tx, encoded_locator).await?;
 
-        path.remove_leaf(encoded_locator)
+        let block_id = path
+            .remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
+
+        if let Some(expected_block_id) = expected_block_id {
+            if &block_id != expected_block_id {
+                return Ok(());
+            }
+        }
+
         self.save_path(tx, &path, write_keys).await?;
 
         Ok(())

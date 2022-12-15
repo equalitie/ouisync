@@ -327,10 +327,14 @@ mod scan {
     use crate::{
         blob::BlockIds,
         blob_id::BlobId,
-        block,
+        block::{self, BlockId},
+        crypto::sign::Keypair,
+        db,
+        index::{self, LeafNode, SnapshotData},
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
+    use futures_util::TryStreamExt;
 
     #[derive(Copy, Clone, Debug)]
     pub(super) enum Mode {
@@ -451,18 +455,45 @@ mod scan {
     }
 
     async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let mut tx = shared.store.db().begin().await?;
-        block::mark_all_unreachable(&mut tx).await?;
-        tx.commit().await?;
-
-        Ok(())
+        shared.store.mark_all_blocks_unreachable().await
     }
 
     async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
-        let count = shared.store.remove_unreachable_blocks().await?;
+        // We need to delete the blocks and also mark them as missing (so they can be requested in
+        // case they become needed again) in their corresponding leaf nodes and then update the
+        // summaries of the corresponding ancestor nodes. This is a complex and potentially
+        // expensive operation which is why we do it a few blocks at a time.
+        const BATCH_SIZE: u32 = 32;
 
-        if count > 0 {
-            tracing::debug!("unreachable blocks removed: {}", count);
+        let mut total_count = 0;
+
+        let local_branch = shared.local_branch().ok();
+        let local_branch_and_write_keys = local_branch
+            .as_ref()
+            .and_then(|branch| branch.keys().write().map(|keys| (branch, keys)));
+
+        loop {
+            let mut tx = shared.store.db().begin().await?;
+
+            let block_ids = block::load_unreachable(&mut tx, BATCH_SIZE).await?;
+            if block_ids.is_empty() {
+                break;
+            }
+
+            total_count += block_ids.len();
+
+            if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
+                let mut snapshot = local_branch.data().load_snapshot(&mut tx).await?;
+                remove_local_nodes(&mut tx, &mut snapshot, write_keys, &block_ids).await?;
+            }
+
+            remove_blocks(&mut tx, &block_ids).await?;
+
+            tx.commit().await?;
+        }
+
+        if total_count > 0 {
+            tracing::debug!("unreachable blocks removed: {}", total_count);
         }
 
         Ok(())
@@ -499,6 +530,49 @@ mod scan {
         }
 
         tx.commit().await?;
+
+        Ok(())
+    }
+
+    async fn remove_local_nodes(
+        tx: &mut db::Transaction,
+        snapshot: &mut SnapshotData,
+        write_keys: &Keypair,
+        block_ids: &[BlockId],
+    ) -> Result<()> {
+        for block_id in block_ids {
+            let locators: Vec<_> = LeafNode::load_locators(tx, block_id).try_collect().await?;
+
+            for locator in locators {
+                match snapshot
+                    .remove_block(tx, &locator, Some(block_id), write_keys)
+                    .await
+                {
+                    Ok(()) | Err(Error::EntryNotFound) => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn remove_blocks(tx: &mut db::Transaction, block_ids: &[BlockId]) -> Result<()> {
+        for block_id in block_ids {
+            tracing::trace!(?block_id, "unreachable block removed");
+
+            block::remove(tx, block_id).await?;
+
+            LeafNode::set_missing(tx, block_id).await?;
+
+            let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(tx, block_id)
+                .try_collect()
+                .await?;
+
+            for hash in parent_hashes {
+                index::update_summaries(tx, hash).await?;
+            }
+        }
 
         Ok(())
     }

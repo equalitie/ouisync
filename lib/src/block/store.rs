@@ -99,14 +99,17 @@ pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
     ) as usize)
 }
 
-/// Mark all blocks as unreachable.
-pub(crate) async fn mark_all_unreachable(tx: &mut db::Transaction) -> Result<()> {
-    sqlx::query(
-        "DELETE FROM unreachable_blocks;
-         INSERT INTO unreachable_blocks SELECT id FROM blocks",
-    )
-    .execute(&mut **tx)
-    .await?;
+/// Removes the specified block from the store.
+pub(crate) async fn remove(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
+    sqlx::query("DELETE FROM blocks WHERE id = ?")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+
+    sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
 
     Ok(())
 }
@@ -119,6 +122,18 @@ pub(crate) async fn mark_reachable(tx: &mut db::Transaction, id: &BlockId) -> Re
         .await?;
 
     Ok(())
+}
+
+/// Load at most `count` ids of unreachable blocks.
+pub(crate) async fn load_unreachable(
+    conn: &mut db::Connection,
+    count: u32,
+) -> Result<Vec<BlockId>> {
+    Ok(sqlx::query("SELECT id FROM unreachable_blocks LIMIT ?")
+        .bind(count)
+        .map(|row| row.get(0))
+        .fetch_all(conn)
+        .await?)
 }
 
 #[cfg(test)]

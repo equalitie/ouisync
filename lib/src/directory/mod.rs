@@ -115,8 +115,7 @@ impl Directory {
 
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
-        self.save(&mut tx, &content, OverwriteStrategy::Remove)
-            .await?;
+        self.save(&mut tx, &content).await?;
         self.commit(tx, content, &VersionVectorOp::IncrementLocal)
             .await?;
 
@@ -150,10 +149,8 @@ impl Directory {
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
         content.insert(self.branch(), name, data)?;
-        dir.save(&mut tx, &Content::empty(), OverwriteStrategy::Remove)
-            .await?;
-        self.save(&mut tx, &content, OverwriteStrategy::Remove)
-            .await?;
+        dir.save(&mut tx, &Content::empty()).await?;
+        self.save(&mut tx, &content).await?;
         self.commit(tx, content, op).await?;
 
         Ok(dir)
@@ -505,19 +502,9 @@ impl Directory {
         name: String,
         data: EntryData,
     ) -> Result<Content> {
-        let overwrite = match data {
-            EntryData::Tombstone(EntryTombstoneData {
-                cause: TombstoneCause::Moved,
-                ..
-            }) => OverwriteStrategy::Keep,
-            EntryData::Tombstone(_) | EntryData::File(_) | EntryData::Directory(_) => {
-                OverwriteStrategy::Remove
-            }
-        };
-
         let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, data)?;
-        self.save(tx, &content, overwrite).await?;
+        self.save(tx, &content).await?;
         self.bump(tx, &VersionVectorOp::IncrementLocal).await?;
 
         Ok(content)
@@ -539,25 +526,7 @@ impl Directory {
         }
     }
 
-    async fn save(
-        &mut self,
-        tx: &mut db::Transaction,
-        content: &Content,
-        overwrite: OverwriteStrategy,
-    ) -> Result<()> {
-        // Remove overwritten blob
-        if matches!(overwrite, OverwriteStrategy::Remove) {
-            for blob_id in content.overwritten_blobs() {
-                match Blob::remove(tx, self.branch(), Locator::head(*blob_id)).await {
-                    // If we get `EntryNotFound` or `BlockNotFound` it most likely means the
-                    // blob is already removed which can legitimately happen due to several
-                    // reasons so we don't treat it as an error.
-                    Ok(()) | Err(Error::EntryNotFound | Error::BlockNotFound(_)) => (),
-                    Err(error) => return Err(error),
-                }
-            }
-        }
-
+    async fn save(&mut self, tx: &mut db::Transaction, content: &Content) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
         self.blob.truncate(tx, 0).await?;
@@ -603,7 +572,6 @@ impl Directory {
     fn finalize(&mut self, content: Content) {
         if !content.is_empty() {
             self.entries = content;
-            self.entries.clear_overwritten_blobs();
         }
 
         self.branch().data().notify();
@@ -676,13 +644,4 @@ async fn load_in(
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))
-}
-
-/// What to do with the existing entry when inserting a new entry in its place.
-enum OverwriteStrategy {
-    // Remove it
-    Remove,
-    // Keep it (useful when inserting a tombstone oven an entry which is to be moved somewhere
-    // else)
-    Keep,
 }

@@ -4,7 +4,6 @@ mod tests;
 
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
-    access_control::AccessKeys,
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
@@ -14,7 +13,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    index::{SingleBlockPresence, SnapshotData},
+    index::{SingleBlockPresence, SnapshotData, SnapshotId},
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
@@ -77,25 +76,6 @@ impl Blob {
             len: 0,
             len_dirty: false,
         }
-    }
-
-    /// Removes a blob.
-    pub async fn remove(
-        tx: &mut db::Transaction,
-        branch: &Branch,
-        head_locator: Locator,
-    ) -> Result<()> {
-        let mut snapshot = branch.data().load_snapshot(tx).await?;
-
-        match remove_blocks(tx, &mut snapshot, branch.keys(), head_locator.sequence()).await {
-            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
-            // we should never get `Ok` because the locator sequence we are passing to
-            // `remove_blocks` is unbounded).
-            Ok(()) | Err(Error::EntryNotFound) => (),
-            Err(error) => return Err(error),
-        }
-
-        Ok(())
     }
 
     pub fn branch(&self) -> &Branch {
@@ -234,6 +214,7 @@ impl Blob {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
+            self.write_len(tx, snapshot).await?;
             self.write_current_block(tx, snapshot).await?;
             self.replace_current_block(locator, id, content)?;
         }
@@ -299,7 +280,9 @@ impl Blob {
             return Err(Error::OperationNotSupported);
         }
 
-        self.seek(conn, SeekFrom::Start(len)).await?;
+        if self.seek_position() > len {
+            self.seek(conn, SeekFrom::Start(len)).await?;
+        }
 
         self.len = len;
         self.len_dirty = true;
@@ -323,7 +306,6 @@ impl Blob {
 
         self.write_len(tx, &mut snapshot).await?;
         self.write_current_block(tx, &mut snapshot).await?;
-        self.trim(tx, &mut snapshot).await?;
 
         Ok(true)
     }
@@ -445,25 +427,6 @@ impl Blob {
 
         Ok(())
     }
-
-    async fn trim(&self, tx: &mut db::Transaction, snapshot: &mut SnapshotData) -> Result<()> {
-        match remove_blocks(
-            tx,
-            snapshot,
-            self.branch.keys(),
-            self.head_locator
-                .sequence()
-                .skip(self.block_count() as usize),
-        )
-        .await
-        {
-            // `EntryNotFound` means we reached the end of the blob. This is expected (in fact,
-            // we should never get `Ok` because the locator sequence we are passing to
-            // `remove_blocks` is unbounded).
-            Ok(()) | Err(Error::EntryNotFound) => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
 }
 
 /// Creates a shallow copy (only the index nodes are copied, not blocks) of the specified blob into
@@ -490,7 +453,13 @@ pub(crate) async fn fork(
         .load_or_create_snapshot(tx, write_keys)
         .await?;
 
-    let locators = Locator::head(blob_id).sequence();
+    let end = match read_len(tx, &src_snapshot, read_key, blob_id).await {
+        Ok(len) => block_count(len),
+        Err(Error::BlockNotFound(_)) => u32::MAX,
+        Err(error) => return Err(error),
+    };
+
+    let locators = Locator::head(blob_id).sequence().take(end as usize);
 
     for locator in locators {
         let encoded_locator = locator.encode(read_key);
@@ -519,6 +488,7 @@ pub(crate) async fn fork(
 pub(crate) struct BlockIds {
     branch: Branch,
     locator: Locator,
+    cache: Option<(SnapshotId, u32)>,
 }
 
 impl BlockIds {
@@ -526,16 +496,71 @@ impl BlockIds {
         Self {
             branch,
             locator: Locator::head(blob_id),
+            cache: None,
         }
     }
 
     pub async fn next(&mut self, conn: &mut db::Connection) -> Result<Option<BlockId>> {
-        let encoded = self.locator.encode(self.branch.keys().read());
-        self.locator = self.locator.next();
+        let snapshot = self.branch.data().load_snapshot(conn).await?;
 
-        match self.branch.data().get(conn, &encoded).await {
-            Ok((block_id, _)) => Ok(Some(block_id)),
+        // If the first block of the blob is available, we read the blob length from it and use it
+        // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.
+        // It might seem that iterating until `EntryNotFound` should be always sufficient and there
+        // should be no reason to read the length, however this is not always the case. Consider
+        // the situation where a blob is truncated, or replaced with a shorter one with the same
+        // blob id. Then without reading the current blob length, we would not know that we should
+        // stop iterating before we hit `EntryNotFound` and we would end up processing also the
+        // blocks that are past the end of the blob. This means that e.g., the garbage collector
+        // would consider those blocks still reachable and would never remove them.
+        if let Some(end) = self.fetch_end(conn, &snapshot).await? {
+            if self.locator.number() >= end {
+                return Ok(None);
+            }
+        }
+
+        let encoded = self.locator.encode(self.branch.keys().read());
+
+        match snapshot.get_block(conn, &encoded).await {
+            Ok((block_id, _)) => {
+                self.locator = self.locator.next();
+                Ok(Some(block_id))
+            }
             Err(Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn fetch_end(
+        &mut self,
+        conn: &mut db::Connection,
+        snapshot: &SnapshotData,
+    ) -> Result<Option<u32>> {
+        let end = self
+            .cache
+            .filter(|(last_snapshot_id, _)| *last_snapshot_id == snapshot.id())
+            .map(|(_, end)| end);
+
+        if let Some(end) = end {
+            return Ok(Some(end));
+        }
+
+        match read_len(
+            conn,
+            snapshot,
+            self.branch.keys().read(),
+            *self.locator.blob_id(),
+        )
+        .await
+        {
+            Ok(len) => {
+                let end = block_count(len);
+                self.cache = Some((snapshot.id(), end));
+                Ok(Some(end))
+            }
+            Err(Error::BlockNotFound(_)) => {
+                self.cache = None;
+                Ok(None)
+            }
             Err(error) => Err(error),
         }
     }
@@ -554,23 +579,14 @@ async fn read_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, nonce) = load_block(conn, snapshot, read_key, locator).await?;
+    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
+
+    let mut buffer = Buffer::new();
+    let nonce = block::read(conn, &id, &mut buffer).await?;
+
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
-}
-
-async fn load_block(
-    conn: &mut db::Connection,
-    snapshot: &SnapshotData,
-    read_key: &cipher::SecretKey,
-    locator: &Locator,
-) -> Result<(BlockId, Buffer, BlockNonce)> {
-    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
-    let mut content = Buffer::new();
-    let nonce = block::read(conn, &id, &mut content).await?;
-
-    Ok((id, content, nonce))
 }
 
 async fn write_block(
@@ -609,6 +625,16 @@ async fn write_block(
     Ok(id)
 }
 
+async fn read_len(
+    conn: &mut db::Connection,
+    snapshot: &SnapshotData,
+    read_key: &cipher::SecretKey,
+    blob_id: BlobId,
+) -> Result<u64> {
+    let (_, buffer) = read_block(conn, snapshot, read_key, &Locator::head(blob_id)).await?;
+    Ok(Cursor::new(buffer).read_u64())
+}
+
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
     let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.decrypt_no_aead(&Nonce::default(), content);
@@ -617,25 +643,4 @@ fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content
 fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
     let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
-}
-
-async fn remove_blocks<T>(
-    tx: &mut db::Transaction,
-    snapshot: &mut SnapshotData,
-    keys: &AccessKeys,
-    locators: T,
-) -> Result<()>
-where
-    T: IntoIterator<Item = Locator>,
-{
-    let read_key = keys.read();
-    let write_keys = keys.write().ok_or(Error::PermissionDenied)?;
-
-    for locator in locators {
-        snapshot
-            .remove_block(tx, &locator.encode(read_key), write_keys)
-            .await?;
-    }
-
-    Ok(())
 }
