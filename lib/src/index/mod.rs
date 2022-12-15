@@ -35,7 +35,7 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::Level;
 
-type SnapshotId = u32;
+pub(crate) type SnapshotId = u32;
 
 #[derive(Clone)]
 pub(crate) struct Index {

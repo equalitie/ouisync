@@ -179,6 +179,7 @@ async fn transfer_multiple_files_sequentially() {
         let mut file = repo_a.create_file(&name).await.unwrap();
         common::write_in_chunks(&mut file, content, 4096).await;
         file.flush().await.unwrap();
+        tracing::info!("put {:?}", name);
         drop(file);
 
         // Wait until we see all the already transfered files

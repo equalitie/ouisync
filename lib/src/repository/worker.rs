@@ -548,10 +548,7 @@ mod scan {
                     .remove_block(tx, &locator, Some(block_id), write_keys)
                     .await
                 {
-                    Ok(true) => {
-                        tracing::trace!(?block_id, "unreachable block + local node removed")
-                    }
-                    Ok(false) | Err(Error::EntryNotFound) => (),
+                    Ok(()) | Err(Error::EntryNotFound) => (),
                     Err(error) => return Err(error),
                 }
             }
