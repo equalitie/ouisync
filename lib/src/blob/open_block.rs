@@ -44,9 +44,7 @@ impl OpenBlock {
         read_key: &cipher::SecretKey,
         locator: Locator,
     ) -> Result<Self> {
-        let (id, mut buffer, nonce) = super::load_block(conn, snapshot, read_key, &locator).await?;
-        super::decrypt_block(read_key, &nonce, &mut buffer);
-
+        let (id, buffer) = super::read_block(conn, snapshot, read_key, &locator).await?;
         let content = Cursor::new(buffer);
 
         Ok(Self {

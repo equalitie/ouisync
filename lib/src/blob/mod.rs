@@ -516,23 +516,14 @@ async fn read_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, mut buffer, nonce) = load_block(conn, snapshot, read_key, locator).await?;
+    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
+
+    let mut buffer = Buffer::new();
+    let nonce = block::read(conn, &id, &mut buffer).await?;
+
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
-}
-
-async fn load_block(
-    conn: &mut db::Connection,
-    snapshot: &SnapshotData,
-    read_key: &cipher::SecretKey,
-    locator: &Locator,
-) -> Result<(BlockId, Buffer, BlockNonce)> {
-    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
-    let mut content = Buffer::new();
-    let nonce = block::read(conn, &id, &mut content).await?;
-
-    Ok((id, content, nonce))
 }
 
 async fn write_block(
