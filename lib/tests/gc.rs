@@ -19,6 +19,7 @@ async fn local_delete_local_file() {
     assert_eq!(repo.count_blocks().await.unwrap(), 2);
 
     repo.remove_entry("test.dat").await.unwrap();
+    repo.force_work().await.unwrap();
 
     // just 1 block for the root directory
     assert_eq!(repo.count_blocks().await.unwrap(), 1);
@@ -82,6 +83,8 @@ async fn local_truncate_local_file() {
 
     file.truncate(0).await.unwrap();
     file.flush().await.unwrap();
+
+    repo.force_work().await.unwrap();
 
     // 1 block for the file + 1 block for the root directory
     assert_eq!(repo.count_blocks().await.unwrap(), 2);

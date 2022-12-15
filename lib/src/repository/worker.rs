@@ -544,7 +544,16 @@ mod scan {
             let locators: Vec<_> = LeafNode::load_locators(tx, block_id).try_collect().await?;
 
             for locator in locators {
-                snapshot.remove_block(tx, &locator, write_keys).await?;
+                match snapshot
+                    .remove_block(tx, &locator, Some(block_id), write_keys)
+                    .await
+                {
+                    Ok(true) => {
+                        tracing::trace!(?block_id, "unreachable block + local node removed")
+                    }
+                    Ok(false) | Err(Error::EntryNotFound) => (),
+                    Err(error) => return Err(error),
+                }
             }
         }
 
@@ -553,6 +562,8 @@ mod scan {
 
     async fn remove_blocks(tx: &mut db::Transaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
+            tracing::trace!(?block_id, "unreachable block removed");
+
             block::remove(tx, block_id).await?;
 
             LeafNode::set_missing(tx, block_id).await?;

@@ -128,8 +128,10 @@ impl BranchData {
     ) -> Result<()> {
         self.load_snapshot(tx)
             .await?
-            .remove_block(tx, encoded_locator, write_keys)
-            .await
+            .remove_block(tx, encoded_locator, None, write_keys)
+            .await?;
+
+        Ok(())
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
@@ -245,25 +247,31 @@ impl SnapshotData {
         Ok(true)
     }
 
-    /// Removes the block identified by encoded_locator from the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
+    /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
+    /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
+    /// Returns `true` if the block was removed, `false` if not.
     pub async fn remove_block(
         &mut self,
         tx: &mut db::Transaction,
         encoded_locator: &Hash,
+        expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut path = self.load_path(tx, encoded_locator).await?;
 
-        path.remove_leaf(encoded_locator)
+        let block_id = path
+            .remove_leaf(encoded_locator)
             .ok_or(Error::EntryNotFound)?;
+
+        if let Some(expected_block_id) = expected_block_id {
+            if &block_id != expected_block_id {
+                return Ok(false);
+            }
+        }
+
         self.save_path(tx, &path, write_keys).await?;
 
-        Ok(())
+        Ok(true)
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
