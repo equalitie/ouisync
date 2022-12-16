@@ -13,6 +13,7 @@ rust-version = "1.65.0"
 tokio = { version = "1.21.0", default-features = false }
 tracing = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.15" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "5287b4a2bc507cde87903bc30ca2f1c548a31e18" }
 
 [profile.bench]
 # Enable debug info so we can profile the benches
