@@ -56,9 +56,10 @@ impl PortForwarder {
             protocol,
         };
 
-        match self.mappings.lock().unwrap().entry(data) {
+        let is_new_mapping = match self.mappings.lock().unwrap().entry(data) {
             hash_map::Entry::Occupied(mut entry) => {
                 *entry.get_mut() += 1;
+                false
             }
             hash_map::Entry::Vacant(entry) => {
                 tracing::info!(
@@ -68,9 +69,9 @@ impl PortForwarder {
                     protocol,
                 );
                 entry.insert(1);
-                self.on_change_tx.send(()).unwrap_or(());
+                true
             }
-        }
+        };
 
         // Start the forwarder when the first mapping is created and stop it when the last mapping
         // is destroyed.
@@ -94,6 +95,12 @@ impl PortForwarder {
 
             task
         };
+
+        if is_new_mapping {
+            // We need to do this _after_ the subscription above, otherwise `on_change_rx` won't
+            // receive it.
+            self.on_change_tx.send(()).unwrap_or(());
+        }
 
         Mapping {
             data,
