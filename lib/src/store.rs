@@ -1,5 +1,7 @@
 //! Operation that affect both the index and the block store.
 
+use std::collections::HashSet;
+
 use crate::{
     block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
     db,
@@ -9,6 +11,7 @@ use crate::{
     progress::Progress,
     repository::LocalId,
 };
+use futures_util::TryStreamExt;
 use sqlx::Row;
 use tracing::Span;
 
@@ -107,19 +110,15 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn mark_all_blocks_unreachable(&self) -> Result<()> {
-        let mut tx = self.db().begin().await?;
+    pub(crate) async fn load_block_ids(&self) -> Result<HashSet<BlockId>> {
+        let mut conn = self.db().acquire().await?;
 
-        sqlx::query(
-            "DELETE FROM unreachable_blocks;
-             INSERT INTO unreachable_blocks SELECT DISTINCT block_id FROM snapshot_leaf_nodes",
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(())
+        sqlx::query("SELECT DISTINCT block_id FROM snapshot_leaf_nodes")
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<BlockId, _>(0))
+            .err_into()
+            .try_collect()
+            .await
     }
 }
 
