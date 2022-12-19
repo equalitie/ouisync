@@ -12,7 +12,7 @@ use super::{
 use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{hash_map, HashMap, HashSet, VecDeque},
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -114,6 +114,8 @@ impl ContentStream {
     fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
         let queues_changed_rx = state.queues_changed_tx.subscribe();
 
+        state.add_channel(channel);
+
         Self {
             channel,
             state,
@@ -155,6 +157,12 @@ impl ContentStream {
 
     pub fn channel(&self) -> &MessageChannel {
         &self.channel
+    }
+}
+
+impl Drop for ContentStream {
+    fn drop(&mut self) {
+        self.state.remove_channel(&self.channel);
     }
 }
 
@@ -235,14 +243,38 @@ impl LiveConnectionInfoSet {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<MessageChannel, VecDeque<Vec<u8>>>>,
+    queues: Mutex<HashMap<MessageChannel, (usize, VecDeque<Vec<u8>>)>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
+    fn add_channel(&self, channel_id: MessageChannel) {
+        match self.queues.lock().unwrap().entry(channel_id) {
+            hash_map::Entry::Occupied(mut entry) => entry.get_mut().0 += 1,
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert((1, Default::default()));
+            }
+        }
+    }
+
+    fn remove_channel(&self, channel_id: &MessageChannel) {
+        // Unwrap because we shouldn't remove more than we add.
+        match self.queues.lock().unwrap().entry(*channel_id) {
+            hash_map::Entry::Occupied(mut entry) => {
+                let value = entry.get_mut();
+                assert_ne!(value.0, 0);
+                value.0 -= 1;
+                if value.0 == 0 {
+                    entry.remove();
+                }
+            }
+            hash_map::Entry::Vacant(_) => unreachable!(),
+        }
+    }
+
     // Pops a message from the corresponding queue.
     fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
-        self.queues.lock().unwrap().get_mut(channel)?.pop_back()
+        self.queues.lock().unwrap().get_mut(channel)?.1.pop_back()
     }
 
     // Pushes the message into the corresponding queue. Wakes up any waiting streams so they can
@@ -251,7 +283,7 @@ impl RecvState {
     // because the `Barrier` algorithm should take care of syncing the communication exchanges.
     fn push(&self, message: Message) {
         if let Some(value) = self.queues.lock().unwrap().get_mut(&message.channel) {
-            value.push_front(message.content);
+            value.1.push_front(message.content);
             self.queues_changed_tx.send(()).unwrap_or(());
         }
     }
