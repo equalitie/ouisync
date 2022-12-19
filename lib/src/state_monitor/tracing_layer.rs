@@ -50,7 +50,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
         let mut guard = self.inner.lock().unwrap();
         let inner = match guard.as_mut() {
             Some(inner) => inner,
-            None => panic!("Tracing started prior to setting a monitor"),
+            None => panic!("Tracing started prior to setting a monitor (on_new_span)"),
         };
         // Unwrap should be OK since I assume the span has just been created (given the name of
         // this function).
@@ -62,7 +62,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
         let mut guard = self.inner.lock().unwrap();
         let inner = match guard.as_mut() {
             Some(inner) => inner,
-            None => panic!("Tracing started prior to setting a monitor"),
+            None => panic!("Tracing started prior to setting a monitor (on_event)"),
         };
         let span_id = ctx.current_span().id().map(|id| id.into_u64());
         inner.on_event(event, span_id);
@@ -72,7 +72,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
         let mut guard = self.inner.lock().unwrap();
         let inner = match guard.as_mut() {
             Some(inner) => inner,
-            None => panic!("Tracing started prior to setting a monitor"),
+            None => panic!("Tracing started prior to setting a monitor (on_close)"),
         };
         inner.on_close(id.into_u64());
     }
@@ -81,7 +81,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
         let mut guard = self.inner.lock().unwrap();
         let inner = match guard.as_mut() {
             Some(inner) => inner,
-            None => panic!("Tracing started prior to setting a monitor"),
+            None => panic!("Tracing started prior to setting a monitor (on_record)"),
         };
         inner.on_record(id.into_u64(), record);
     }

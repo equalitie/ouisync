@@ -220,7 +220,7 @@ pub unsafe extern "C" fn session_shutdown_network_and_close() {
         network,
         sender: _sender,
         root_monitor,
-        repos_span: _repos_span,
+        repos_span,
         _logger,
     } = *session;
 
@@ -233,6 +233,7 @@ pub unsafe extern "C" fn session_shutdown_network_and_close() {
     // Force drop order
     drop(runtime);
     drop(root_monitor);
+    drop(repos_span);
 }
 
 /// Cancel a notification subscription.
