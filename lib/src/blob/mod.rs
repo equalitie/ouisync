@@ -512,10 +512,9 @@ impl BlockIds {
         // stop iterating before we hit `EntryNotFound` and we would end up processing also the
         // blocks that are past the end of the blob. This means that e.g., the garbage collector
         // would consider those blocks still reachable and would never remove them.
-        if let Some(end) = self.fetch_end(conn, &snapshot).await? {
-            if self.locator.number() >= end {
-                return Ok(None);
-            }
+        let end = self.fetch_end(conn, &snapshot).await?;
+        if end > 0 && self.locator.number() >= end {
+            return Ok(None);
         }
 
         let encoded = self.locator.encode(self.branch.keys().read());
@@ -534,14 +533,14 @@ impl BlockIds {
         &mut self,
         conn: &mut db::Connection,
         snapshot: &SnapshotData,
-    ) -> Result<Option<u32>> {
+    ) -> Result<u32> {
         let end = self
             .cache
             .filter(|(last_snapshot_id, _)| *last_snapshot_id == snapshot.id())
             .map(|(_, end)| end);
 
         if let Some(end) = end {
-            return Ok(Some(end));
+            return Ok(end);
         }
 
         match read_len(
@@ -555,11 +554,11 @@ impl BlockIds {
             Ok(len) => {
                 let end = block_count(len);
                 self.cache = Some((snapshot.id(), end));
-                Ok(Some(end))
+                Ok(end)
             }
             Err(Error::BlockNotFound(_)) => {
-                self.cache = None;
-                Ok(None)
+                self.cache = Some((snapshot.id(), 0));
+                Ok(0)
             }
             Err(error) => Err(error),
         }
