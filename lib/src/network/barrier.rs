@@ -1,5 +1,6 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
-use std::{fmt, mem::size_of};
+use std::{fmt, mem::size_of, time::Duration};
+use tokio::time;
 
 type BarrierId = u64;
 type Round = u32;
@@ -78,6 +79,7 @@ impl<'a> Barrier<'a> {
         #[cfg(test)]
         println!("{:x} >> RST", self.barrier_id);
 
+        tracing::trace!(barrier = "sending reset");
         // I think we send this empty message in order to break the encryption on the other side and
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
@@ -104,6 +106,7 @@ impl<'a> Barrier<'a> {
             assert!(round <= their_round);
 
             if round < their_round {
+                tracing::trace!(barrier = "catching up on step 0");
                 // They are ahead of us, but on the same step. So play along, bump our round to
                 // theirs and pretend we did the step zero with the same round.
                 round = their_round;
@@ -139,6 +142,7 @@ impl<'a> Barrier<'a> {
             break;
         }
 
+        tracing::trace!(barrier = "done");
         Ok(())
     }
 
@@ -150,9 +154,11 @@ impl<'a> Barrier<'a> {
         let our_step = Step::Zero;
 
         loop {
+            tracing::trace!(barrier = "step 0 sending");
             self.send(barrier_id, our_round, our_step).await?;
 
             loop {
+                tracing::trace!(barrier = "step 0 receiving");
                 let (barrier_id, their_round, their_step) = match self
                     .recv(
                         #[cfg(test)]
@@ -185,19 +191,29 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
     ) -> Result<Option<Msg>, BarrierError> {
+        tracing::trace!(barrier = "step 1 sending");
         let our_step = Step::One;
         self.send(barrier_id, our_round, our_step).await?;
 
         loop {
-            match self
-                .recv(
-                    #[cfg(test)]
-                    our_round,
-                    #[cfg(test)]
-                    our_step,
-                )
-                .await?
-            {
+            tracing::trace!(barrier = "step 1 receiving");
+            let recv = self.recv(
+                #[cfg(test)]
+                our_round,
+                #[cfg(test)]
+                our_step,
+            );
+
+            // Timing out shouldn't be necessary, but it may still be useful if the peer is buggy.
+            let result = match time::timeout(Duration::from_secs(5), recv).await {
+                Ok(result) => result,
+                Err(_) => {
+                    // timeout
+                    return Ok(None);
+                }
+            };
+
+            match result? {
                 Some((barrier, round, step)) => {
                     if step == Step::Zero && round == our_round {
                         // They resent the same message from previous step, ignore it.
