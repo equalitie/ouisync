@@ -241,18 +241,26 @@ impl LiveConnectionInfoSet {
     }
 }
 
+struct ChannelQueue {
+    reference_count: usize,
+    queue: VecDeque<Vec<u8>>,
+}
+
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<MessageChannel, (usize, VecDeque<Vec<u8>>)>>,
+    queues: Mutex<HashMap<MessageChannel, ChannelQueue>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
 impl RecvState {
     fn add_channel(&self, channel_id: MessageChannel) {
         match self.queues.lock().unwrap().entry(channel_id) {
-            hash_map::Entry::Occupied(mut entry) => entry.get_mut().0 += 1,
+            hash_map::Entry::Occupied(mut entry) => entry.get_mut().reference_count += 1,
             hash_map::Entry::Vacant(entry) => {
-                entry.insert((1, Default::default()));
+                entry.insert(ChannelQueue {
+                    reference_count: 1,
+                    queue: Default::default(),
+                });
             }
         }
     }
@@ -262,9 +270,9 @@ impl RecvState {
         match self.queues.lock().unwrap().entry(*channel_id) {
             hash_map::Entry::Occupied(mut entry) => {
                 let value = entry.get_mut();
-                assert_ne!(value.0, 0);
-                value.0 -= 1;
-                if value.0 == 0 {
+                assert_ne!(value.reference_count, 0);
+                value.reference_count -= 1;
+                if value.reference_count == 0 {
                     entry.remove();
                 }
             }
@@ -274,7 +282,12 @@ impl RecvState {
 
     // Pops a message from the corresponding queue.
     fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
-        self.queues.lock().unwrap().get_mut(channel)?.1.pop_back()
+        self.queues
+            .lock()
+            .unwrap()
+            .get_mut(channel)?
+            .queue
+            .pop_back()
     }
 
     // Pushes the message into the corresponding queue. Wakes up any waiting streams so they can
@@ -283,7 +296,7 @@ impl RecvState {
     // because the `Barrier` algorithm should take care of syncing the communication exchanges.
     fn push(&self, message: Message) {
         if let Some(value) = self.queues.lock().unwrap().get_mut(&message.channel) {
-            value.1.push_front(message.content);
+            value.queue.push_front(message.content);
             self.queues_changed_tx.send(()).unwrap_or(());
         }
     }
