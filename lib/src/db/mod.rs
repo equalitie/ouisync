@@ -65,6 +65,11 @@ impl Pool {
         self.reads.acquire().await.map(PoolConnection)
     }
 
+    /// Begin a read-only transaction. See [`ReadTransaction`] for more details.
+    pub async fn begin_read(&self) -> Result<ReadTransaction, sqlx::Error> {
+        Ok(ReadTransaction(self.reads.begin().await?))
+    }
+
     /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
     /// at any time. Any other tasks are blocked on calling `begin_write` until the task that
     /// currently holds it is done with it (commits it or rolls it back). Performing read-only
@@ -131,6 +136,30 @@ impl Deref for PoolConnection {
 }
 
 impl DerefMut for PoolConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut()
+    }
+}
+
+/// Transaction that allows only reading.
+///
+/// This is useful if one wants to make sure the observed database content doesn't change for the
+/// duration of the transaction even in the presence of concurrent writes. In other words - a read
+/// transaction represents an immutable snapshot of the database at the point the transaction was
+/// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
+/// when the `ReadTransaction` instance drops.
+#[derive(Debug)]
+pub struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
+
+impl Deref for ReadTransaction {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+impl DerefMut for ReadTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.deref_mut()
     }
