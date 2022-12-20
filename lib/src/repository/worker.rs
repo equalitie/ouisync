@@ -522,10 +522,10 @@ mod scan {
         branch: Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut conn = shared.store.db().acquire().await?;
-        let mut blob_block_ids = BlockIds::open(&mut conn, branch, blob_id).await?;
+        let mut tx = shared.store.db().begin_read().await?;
+        let mut blob_block_ids = BlockIds::open(&mut tx, branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next(&mut conn).await? {
+        while let Some(block_id) = blob_block_ids.try_next(&mut tx).await? {
             if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
                 unreachable_block_ids.remove(&block_id);
             }
@@ -533,7 +533,7 @@ mod scan {
             if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
                 shared
                     .store
-                    .require_missing_block(&mut conn, block_id)
+                    .require_missing_block(&mut tx, block_id)
                     .await?;
             }
         }
