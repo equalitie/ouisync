@@ -110,15 +110,33 @@ impl Store {
         Ok(())
     }
 
+    /// Load all block ids referenced from complete snapshots
     pub(crate) async fn load_block_ids(&self) -> Result<HashSet<BlockId>> {
         let mut conn = self.db().acquire().await?;
 
-        sqlx::query("SELECT DISTINCT block_id FROM snapshot_leaf_nodes")
-            .fetch(&mut *conn)
-            .map_ok(|row| row.get::<BlockId, _>(0))
-            .err_into()
-            .try_collect()
-            .await
+        sqlx::query(
+            "WITH RECURSIVE
+                 inner_nodes(hash) AS (
+                     SELECT i.hash
+                        FROM snapshot_inner_nodes AS i
+                        INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                        WHERE r.is_complete = 1
+                     UNION ALL
+                     SELECT c.hash
+                        FROM snapshot_inner_nodes AS c
+                        INNER JOIN inner_nodes AS p ON p.hash = c.parent
+                 )
+             SELECT DISTINCT block_id
+                 FROM snapshot_leaf_nodes
+                 WHERE parent IN inner_nodes
+                 ORDER BY block_id
+        ",
+        )
+        .fetch(&mut *conn)
+        .map_ok(|row| row.get::<BlockId, _>(0))
+        .err_into()
+        .try_collect()
+        .await
     }
 }
 
@@ -464,7 +482,6 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[ignore] // FIXME
     #[tokio::test(flavor = "multi_thread")]
     async fn load_block_ids_excludes_blocks_from_incomplete_snapshots() {
         let (_base_dir, pool) = setup().await;
@@ -516,6 +533,51 @@ mod tests {
 
         let actual = store.load_block_ids().await.unwrap();
         assert!(actual.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_block_ids_multiple_branches() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id_0 = PublicKey::random();
+        let branch_id_1 = PublicKey::random();
+
+        // One block is common between both branches and one for each branch is unique.
+        let all_blocks: [(Hash, Block); 3] = rand::random();
+        let blocks_0 = &all_blocks[..2];
+        let blocks_1 = &all_blocks[1..];
+
+        let snapshot_0 = Snapshot::new(blocks_0.iter().cloned());
+        let snapshot_1 = Snapshot::new(blocks_1.iter().cloned());
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id_0,
+            VersionVector::first(branch_id_0),
+            &snapshot_0,
+        )
+        .await;
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id_1,
+            VersionVector::first(branch_id_1),
+            &snapshot_1,
+        )
+        .await;
+
+        let actual = store.load_block_ids().await.unwrap();
+        let expected = all_blocks
+            .iter()
+            .map(|(_, block)| block.id())
+            .copied()
+            .collect();
+
+        assert_eq!(actual, expected);
     }
 
     async fn setup() -> (TempDir, db::Pool) {
