@@ -615,10 +615,10 @@ async fn block_ids_test() {
     blob.write(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let mut block_ids = BlockIds::new(branch, blob_id);
+    let mut block_ids = BlockIds::open(&mut tx, branch, blob_id).await.unwrap();
     let mut actual_count = 0;
 
-    while block_ids.next(&mut tx).await.unwrap().is_some() {
+    while block_ids.try_next(&mut tx).await.unwrap().is_some() {
         actual_count += 1;
     }
 

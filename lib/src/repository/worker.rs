@@ -385,7 +385,7 @@ mod scan {
         let mut entries = Vec::new();
 
         for branch in branches {
-            entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
+            entries.push((branch.clone(), BlobId::ROOT));
 
             match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => versions.push(dir),
@@ -403,8 +403,8 @@ mod scan {
             }
         }
 
-        for entry in entries {
-            process_blocks(shared, mode, unreachable_block_ids, entry).await?;
+        for (branch, blob_id) in entries {
+            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         let local_branch = shared.local_branch().ok();
@@ -432,14 +432,11 @@ mod scan {
         for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
-                    entries.push(BlockIds::new(
-                        entry.inner().branch().clone(),
-                        *entry.inner().blob_id(),
-                    ));
+                    entries.push((entry.inner().branch().clone(), *entry.inner().blob_id()));
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
+                        entries.push((version.branch().clone(), *version.blob_id()));
                     }
 
                     match entry
@@ -459,8 +456,8 @@ mod scan {
             }
         }
 
-        for entry in entries {
-            process_blocks(shared, mode, unreachable_block_ids, entry).await?;
+        for (branch, blob_id) in entries {
+            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         for dir in subdirs {
@@ -522,11 +519,13 @@ mod scan {
         shared: &Shared,
         mode: Mode,
         unreachable_block_ids: &mut HashSet<BlockId>,
-        mut blob_block_ids: BlockIds,
+        branch: Branch,
+        blob_id: BlobId,
     ) -> Result<()> {
         let mut conn = shared.store.db().acquire().await?;
+        let mut blob_block_ids = BlockIds::open(&mut conn, branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.next(&mut conn).await? {
+        while let Some(block_id) = blob_block_ids.try_next(&mut conn).await? {
             if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
                 unreachable_block_ids.remove(&block_id);
             }

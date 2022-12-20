@@ -2,7 +2,7 @@ use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    SnapshotId, VersionVectorOp,
+    VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -198,11 +198,6 @@ impl SnapshotData {
             root_node,
             notify_tx: self.notify_tx.clone(),
         }))
-    }
-
-    /// Returns the id of this snapshot.
-    pub fn id(&self) -> SnapshotId {
-        self.root_node.snapshot_id
     }
 
     /// Returns the id of the replica that owns this branch.
