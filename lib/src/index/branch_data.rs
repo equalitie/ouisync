@@ -427,6 +427,7 @@ impl SnapshotData {
         // NOTE: It is not enough to remove only the old_root because there may be a non zero
         // number of incomplete roots that have been downloaded prior to new_root becoming
         // complete.
+        // TODO: don't remove older here. Do it only in `worker::prune`
         new_root_node.remove_recursively_all_older(tx).await?;
 
         self.root_node = new_root_node;

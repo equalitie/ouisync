@@ -6,8 +6,6 @@ mod receive_filter;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
@@ -16,6 +14,11 @@ pub(crate) use self::{
     },
     proof::UntrustedProof,
     receive_filter::ReceiveFilter,
+};
+#[cfg(test)]
+pub(crate) use self::{
+    node::{test_utils as node_test_utils, EMPTY_INNER_HASH},
+    proof::Proof,
 };
 
 use self::proof::ProofError;

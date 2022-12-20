@@ -132,8 +132,6 @@ pub(crate) enum BlockRequestMode {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
     use crate::{
         block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -146,7 +144,7 @@ mod tests {
         error::Error,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData, SingleBlockPresence,
+            BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
         },
         locator::Locator,
         repository::RepositoryId,
@@ -155,6 +153,7 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use std::collections::HashSet;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;
@@ -287,15 +286,7 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool, repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, repository_id);
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
@@ -324,17 +315,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_orphaned_block() {
         let (_base_dir, pool) = setup().await;
-
-        let repository_id = RepositoryId::random();
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool, repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
@@ -366,15 +347,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool.clone(), repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, repository_id);
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -432,10 +405,132 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        pool.close().await.unwrap();
+        store.db().close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_block_ids_local() {
+        let (_base_dir, pool) = setup().await;
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch = store.index.get_branch(PublicKey::random());
+
+        let locator = Locator::head(rand::random());
+        let locator = locator.encode(&read_key);
+        let block_id = rand::random();
+
+        let mut tx = store.db().begin_write().await.unwrap();
+        branch
+            .insert(
+                &mut tx,
+                &locator,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let actual = store.load_block_ids().await.unwrap();
+        let expected = [block_id].into_iter().collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_block_ids_remote() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id,
+            VersionVector::first(branch_id),
+            &snapshot,
+        )
+        .await;
+
+        let actual = store.load_block_ids().await.unwrap();
+        let expected = snapshot.blocks().keys().copied().collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[ignore] // FIXME
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_block_ids_excludes_blocks_from_incomplete_snapshots() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+
+        // Create snapshot with two leaf nodes but receive only one of them.
+        let snapshot = loop {
+            let snapshot = Snapshot::generate(&mut rand::thread_rng(), 2);
+            if snapshot.leaf_sets().count() > 1 {
+                break snapshot;
+            }
+        };
+
+        let mut receive_filter = ReceiveFilter::new(store.db().clone());
+        let version_vector = VersionVector::first(branch_id);
+        let proof = Proof::new(
+            branch_id,
+            version_vector,
+            *snapshot.root_hash(),
+            &write_keys,
+        );
+
+        store
+            .index
+            .receive_root_node(proof.into(), Summary::INCOMPLETE)
+            .await
+            .unwrap();
+
+        for layer in snapshot.inner_layers() {
+            for (_, nodes) in layer.inner_maps() {
+                store
+                    .index
+                    .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        for (_, nodes) in snapshot.leaf_sets().take(1) {
+            store
+                .index
+                .receive_leaf_nodes(nodes.clone().into())
+                .await
+                .unwrap();
+        }
+
+        let actual = store.load_block_ids().await.unwrap();
+        assert!(actual.is_empty());
     }
 
     async fn setup() -> (TempDir, db::Pool) {
         db::create_temp().await.unwrap()
+    }
+
+    fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
+        let (event_tx, _) = broadcast::channel(1);
+        let index = Index::new(pool, repo_id, event_tx);
+        Store {
+            index,
+            block_tracker: BlockTracker::new(),
+            block_request_mode: BlockRequestMode::Lazy,
+            local_id: LocalId::new(),
+            span: Span::none(),
+        }
     }
 }
