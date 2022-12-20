@@ -306,7 +306,7 @@ mod prune {
 
             tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
 
-            let mut tx = shared.store.db().begin().await?;
+            let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
@@ -494,7 +494,7 @@ mod scan {
                 break;
             }
 
-            let mut tx = shared.store.db().begin().await?;
+            let mut tx = shared.store.db().begin_write().await?;
 
             total_count += batch.len();
 
@@ -542,7 +542,7 @@ mod scan {
     }
 
     async fn remove_local_nodes(
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         snapshot: &mut SnapshotData,
         write_keys: &Keypair,
         block_ids: &[BlockId],
@@ -564,7 +564,7 @@ mod scan {
         Ok(())
     }
 
-    async fn remove_blocks(tx: &mut db::Transaction, block_ids: &[BlockId]) -> Result<()> {
+    async fn remove_blocks(tx: &mut db::WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
             tracing::trace!(?block_id, "unreachable block removed");
 

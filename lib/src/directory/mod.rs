@@ -100,7 +100,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -133,7 +133,7 @@ impl Directory {
         name: String,
         op: &VersionVectorOp,
     ) -> Result<Self> {
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -169,7 +169,7 @@ impl Directory {
         branch_id: &PublicKey,
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_write().await?;
 
         let content = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
@@ -218,7 +218,7 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        let mut tx = self.branch().db().begin().await?;
+        let mut tx = self.branch().db().begin_write().await?;
 
         let dst_content = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
@@ -295,7 +295,7 @@ impl Directory {
 
     /// Updates the version vector of this directory by merging it with `vv`.
     pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
-        let tx = self.branch().db().begin().await?;
+        let tx = self.branch().db().begin_write().await?;
         self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
             .await
     }
@@ -447,7 +447,7 @@ impl Directory {
 
     async fn begin_remove_entry(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
@@ -498,7 +498,7 @@ impl Directory {
 
     async fn begin_insert_entry(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         name: String,
         data: EntryData,
     ) -> Result<Content> {
@@ -526,7 +526,7 @@ impl Directory {
         }
     }
 
-    async fn save(&mut self, tx: &mut db::Transaction, content: &Content) -> Result<()> {
+    async fn save(&mut self, tx: &mut db::WriteTransaction, content: &Content) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
         self.blob.truncate(tx, 0).await?;
@@ -540,7 +540,7 @@ impl Directory {
     /// it and all its ancestors.
     async fn commit(
         &mut self,
-        mut tx: db::Transaction,
+        mut tx: db::WriteTransaction,
         content: Content,
         op: &VersionVectorOp,
     ) -> Result<()> {
@@ -553,7 +553,7 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::Transaction, op: &VersionVectorOp) -> Result<()> {
+    async fn bump(&mut self, tx: &mut db::WriteTransaction, op: &VersionVectorOp) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent.bump(tx, self.blob.branch().clone(), op).await

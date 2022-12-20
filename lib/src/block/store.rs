@@ -55,7 +55,7 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
 pub(crate) async fn write(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     id: &BlockId,
     buffer: &[u8],
     nonce: &BlockNonce,
@@ -100,7 +100,7 @@ pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
 }
 
 /// Removes the specified block from the store.
-pub(crate) async fn remove(tx: &mut db::Transaction, id: &BlockId) -> Result<()> {
+pub(crate) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Result<()> {
     sqlx::query("DELETE FROM blocks WHERE id = ?")
         .bind(id)
         .execute(&mut **tx)
@@ -128,7 +128,7 @@ mod tests {
         let id = BlockId::from_content(&content);
         let nonce = BlockNonce::default();
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         write(&mut tx, &id, &content, &nonce).await.unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
         let id = BlockId::from_content(&content0);
         let nonce = BlockNonce::default();
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         write(&mut tx, &id, &content0, &nonce).await.unwrap();
         write(&mut tx, &id, &content0, &nonce).await.unwrap();

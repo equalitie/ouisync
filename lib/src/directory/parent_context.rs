@@ -35,7 +35,7 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors.
     pub async fn bump(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
@@ -61,7 +61,7 @@ impl ParentContext {
 
         match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
             Ok(()) => {
-                let mut tx = directory.branch().db().begin().await?;
+                let mut tx = directory.branch().db().begin_write().await?;
                 directory.save(&mut tx, &content).await?;
                 blob::fork(&mut tx, blob_id, src_branch, dst_branch).await?;
                 directory

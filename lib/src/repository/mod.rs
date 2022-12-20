@@ -54,7 +54,7 @@ impl RepositoryDb {
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_write().await?;
         let key = metadata::password_to_key(&mut tx, &password).await?;
         tx.commit().await?;
         Ok(key)
@@ -80,7 +80,7 @@ impl Repository {
         access: Access,
         span: Span,
     ) -> Result<Self> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_write().await?;
 
         let this_writer_id =
             generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
@@ -130,7 +130,7 @@ impl Repository {
         max_access_mode: AccessMode,
         span: Span,
     ) -> Result<Self> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_write().await?;
 
         let local_key = if let Some(local_secret) = local_secret {
             let key = match local_secret {
@@ -229,7 +229,7 @@ impl Repository {
             return Err(Error::PermissionDenied);
         }
 
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
         metadata::set_access(&mut tx, access).await?;
         tx.commit().await?;
         Ok(())
@@ -254,7 +254,7 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
 
         let local_read_key = if let Some(secret) = local_read_secret {
             Some(metadata::secret_to_key(&mut tx, secret).await?)
@@ -288,7 +288,7 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
 
         let local_write_key = if let Some(secret) = local_write_secret {
             Some(metadata::secret_to_key(&mut tx, secret).await?)
@@ -306,7 +306,7 @@ impl Repository {
     /// After running this command, the user won't be able to obtain read access to the repository
     /// using their local read secret.
     pub async fn remove_read_key(&self) -> Result<()> {
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
         metadata::remove_read_key(&mut tx).await?;
         tx.commit().await?;
         Ok(())
@@ -315,7 +315,7 @@ impl Repository {
     /// After running this command, the user won't be able to obtain write access to the repository
     /// using their local write secret.
     pub async fn remove_write_key(&self) -> Result<()> {
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
         metadata::remove_write_key(&mut tx).await?;
         tx.commit().await?;
         Ok(())
@@ -684,7 +684,7 @@ impl Shared {
 }
 
 async fn generate_writer_id(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {

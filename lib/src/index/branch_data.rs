@@ -100,7 +100,7 @@ impl BranchData {
     #[cfg(test)] // currently used only in tests
     pub async fn insert(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
@@ -121,7 +121,7 @@ impl BranchData {
     #[cfg(test)] // currently used only in tests
     pub async fn remove(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         encoded_locator: &Hash,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -164,7 +164,7 @@ impl BranchData {
     /// it doesn't execute at all.
     pub async fn bump(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -225,7 +225,7 @@ impl SnapshotData {
     /// presence of cancellation.
     pub async fn insert_block(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         encoded_locator: &LocatorHash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
@@ -248,7 +248,7 @@ impl SnapshotData {
     /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
     pub async fn remove_block(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         encoded_locator: &Hash,
         expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
@@ -290,7 +290,7 @@ impl SnapshotData {
     /// it doesn't execute at all.
     pub async fn bump(
         self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -310,12 +310,12 @@ impl SnapshotData {
     }
 
     /// Remove this snapshot
-    pub async fn remove(&self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn remove(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         self.root_node.remove_recursively(tx).await
     }
 
     /// Remove all snapshots of this branch older than this one.
-    pub async fn remove_all_older(&self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn remove_all_older(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         self.root_node.remove_recursively_all_older(tx).await
     }
 
@@ -324,7 +324,7 @@ impl SnapshotData {
     // removed those that can't.
     pub async fn prune(&self, db: &db::Pool) -> Result<()> {
         // First remove all incomplete snapshots as they can never serve as fallback.
-        let mut tx = db.begin().await?;
+        let mut tx = db.begin_write().await?;
         self.root_node
             .remove_recursively_all_older_incomplete(&mut tx)
             .await?;
@@ -358,7 +358,7 @@ impl SnapshotData {
 
                 drop(conn);
 
-                let mut tx = db.begin().await?;
+                let mut tx = db.begin_write().await?;
                 old.remove_recursively(&mut tx).await?;
                 old.remove_recursively_all_older(&mut tx).await?;
                 tx.commit().await?;
@@ -399,7 +399,7 @@ impl SnapshotData {
 
     async fn save_path(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         path: &Path,
         write_keys: &Keypair,
     ) -> Result<()> {
@@ -523,7 +523,7 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         branch
             .insert(
@@ -554,7 +554,7 @@ mod tests {
             let locator = random_head_locator();
             let encoded_locator = locator.encode(&read_key);
 
-            let mut tx = pool.begin().await.unwrap();
+            let mut tx = pool.begin_write().await.unwrap();
 
             branch
                 .insert(
@@ -599,7 +599,7 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
@@ -649,7 +649,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
 
         let mut locators = Vec::new();
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         // Add blocks
         for _ in 0..leaf_count {

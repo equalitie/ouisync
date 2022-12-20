@@ -12,7 +12,7 @@ pub(super) async fn run(pool: &Pool) -> Result<(), Error> {
 }
 
 async fn apply(pool: &Pool, dst_version: u32, sql: &str) -> Result<(), Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_write().await?;
 
     let src_version = get_version(&mut tx).await?;
     if src_version >= dst_version {

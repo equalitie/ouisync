@@ -28,7 +28,7 @@ pub struct Pool {
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
-    shared_tx: Arc<AsyncMutex<Option<Transaction>>>,
+    shared_tx: Arc<AsyncMutex<Option<WriteTransaction>>>,
 }
 
 impl Pool {
@@ -65,40 +65,42 @@ impl Pool {
         self.reads.acquire().await.map(PoolConnection)
     }
 
-    /// Begin a regular ("unique") transaction. At most one task can hold a transaction at any time.
-    /// Any other tasks are blocked on calling `begin` until the task that currently holds it is
-    /// done with it (commits it or rolls it back). Performing read-only operations concurrently
-    /// while a transaction is in use is still allowed. Those operations will not see the writes
-    /// performed via the transaction until that transaction is committed however.
+    /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
+    /// at any time. Any other tasks are blocked on calling `begin_write` until the task that
+    /// currently holds it is done with it (commits it or rolls it back). Performing read-only
+    /// operations concurrently while a write transaction is in use is still allowed. Those
+    /// operations will not see the writes performed via the write transaction until that
+    /// transaction is committed however.
     ///
-    /// If an idle `SharedTransaction` exists in the pool when `begin` is called, it is
-    /// automatically committed before the regular transaction is created.
-    pub async fn begin(&self) -> Result<Transaction, sqlx::Error> {
+    /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
+    /// automatically committed before the regular write transaction is created.
+    pub async fn begin_write(&self) -> Result<WriteTransaction, sqlx::Error> {
         let mut shared_tx = self.shared_tx.lock().await;
 
         if let Some(tx) = shared_tx.take() {
             tx.commit().await?;
         }
 
-        Transaction::begin(&self.write).await
+        Ok(WriteTransaction(self.write.begin().await?))
     }
 
-    /// Begin a shared transaction. Unlike regular transaction, a shared transaction is not
-    /// automatically rolled back when dropped. Instead it's returned to the pool where it can be
-    /// reused by calling `begin_shared` again. An idle shared transaction is auto committed when a
-    /// regular transaction is created with `begin`. Shared transaction can also be manually
-    /// committed or rolled back by calling `commit` or `rollback` on it respectively.
+    /// Begin a shared write transaction. Unlike regular write transaction, a shared write
+    /// transaction is not automatically rolled back when dropped. Instead it's returned to the
+    /// pool where it can be reused by calling `begin_shared_write` again. An idle shared write
+    /// transaction is auto committed when a regular write transaction is created with
+    /// `begin_write`. Shared write transaction can also be manually committed or rolled back by
+    /// calling `commit` or `rollback` on it respectively.
     ///
-    /// Use shared transactions to group multiple writes that don't logically need to be in the
-    /// same transaction to improve performance by reducing the number of commits.
-    pub async fn begin_shared(&self) -> Result<SharedTransaction, sqlx::Error> {
+    /// Use shared write transactions to group multiple writes that don't logically need to be in
+    /// the same transaction to improve performance by reducing the number of commits.
+    pub async fn begin_shared_write(&self) -> Result<SharedWriteTransaction, sqlx::Error> {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
         if shared_tx.is_none() {
-            *shared_tx = Some(Transaction::begin(&self.write).await?);
+            *shared_tx = Some(WriteTransaction(self.write.begin().await?));
         }
 
-        Ok(SharedTransaction(shared_tx))
+        Ok(SharedWriteTransaction(shared_tx))
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
@@ -134,15 +136,11 @@ impl DerefMut for PoolConnection {
     }
 }
 
-/// Database transaction
+/// Transaction that allows writing to the database.
 #[derive(Debug)]
-pub struct Transaction(sqlx::Transaction<'static, Sqlite>);
+pub struct WriteTransaction(sqlx::Transaction<'static, Sqlite>);
 
-impl Transaction {
-    async fn begin(pool: &SqlitePool) -> Result<Self, sqlx::Error> {
-        pool.begin().await.map(Self)
-    }
-
+impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.commit().await
     }
@@ -152,7 +150,7 @@ impl Transaction {
     }
 }
 
-impl Deref for Transaction {
+impl Deref for WriteTransaction {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
@@ -160,34 +158,34 @@ impl Deref for Transaction {
     }
 }
 
-impl DerefMut for Transaction {
+impl DerefMut for WriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.deref_mut()
     }
 }
 
-/// Shared transaction
+/// Shared write transaction
 ///
-/// See [Pool::begin_shared] for more details.
+/// See [Pool::begin_shared_write] for more details.
 
 // NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
 // `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub struct SharedTransaction(AsyncOwnedMutexGuard<Option<Transaction>>);
+pub struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
 
-impl SharedTransaction {
+impl SharedWriteTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
-        // `unwrap` is ok, see the NONE above.
+        // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().commit().await
     }
 
     pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
-        // `unwrap` is ok, see the NONE above.
+        // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().rollback().await
     }
 }
 
-impl Deref for SharedTransaction {
-    type Target = Transaction;
+impl Deref for SharedWriteTransaction {
+    type Target = WriteTransaction;
 
     fn deref(&self) -> &Self::Target {
         // `unwrap` is ok, see the NOTE above.
@@ -195,7 +193,7 @@ impl Deref for SharedTransaction {
     }
 }
 
-impl DerefMut for SharedTransaction {
+impl DerefMut for SharedWriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // `unwrap` is ok, see the NOTE above.
         self.0.as_mut().unwrap()
