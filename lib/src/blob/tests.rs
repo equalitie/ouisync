@@ -372,7 +372,16 @@ async fn modify_blob() {
     assert_ne!(new_block_id0, old_block_id0);
     assert_ne!(new_block_id1, old_block_id1);
 
-    // Check the old blocks were deleted
+    // Prune snapshots and check the old blocks were deleted
+    branch
+        .data()
+        .load_snapshot(&mut tx)
+        .await
+        .unwrap()
+        .remove_all_older(&mut tx)
+        .await
+        .unwrap();
+
     for block_id in &[old_block_id0, old_block_id1] {
         assert!(!block::exists(&mut tx, block_id).await.unwrap())
     }

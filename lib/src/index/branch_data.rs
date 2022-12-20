@@ -422,15 +422,8 @@ impl SnapshotData {
             .clone()
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
-        let new_root_node = RootNode::create(tx, new_proof, path.root_summary).await?;
 
-        // NOTE: It is not enough to remove only the old_root because there may be a non zero
-        // number of incomplete roots that have been downloaded prior to new_root becoming
-        // complete.
-        // TODO: don't remove older here. Do it only in `worker::prune`
-        new_root_node.remove_recursively_all_older(tx).await?;
-
-        self.root_node = new_root_node;
+        self.root_node = RootNode::create(tx, new_proof, path.root_summary).await?;
 
         Ok(())
     }
@@ -580,8 +573,15 @@ mod tests {
                 .unwrap();
 
             let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
-
             assert_eq!(r, b2);
+
+            branch
+                .load_snapshot(&mut tx)
+                .await
+                .unwrap()
+                .remove_all_older(&mut tx)
+                .await
+                .unwrap();
 
             assert_eq!(
                 INNER_LAYER_COUNT + 1,
@@ -633,6 +633,14 @@ mod tests {
             Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
         }
 
+        branch
+            .load_snapshot(&mut tx)
+            .await
+            .unwrap()
+            .remove_all_older(&mut tx)
+            .await
+            .unwrap();
+
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
     }
 
@@ -652,13 +660,18 @@ mod tests {
         let mut locators = Vec::new();
         let mut tx = pool.begin_write().await.unwrap();
 
+        let mut snapshot = branch
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap();
+
         // Add blocks
         for _ in 0..leaf_count {
             let locator = rng.gen();
             let block_id = rng.gen();
 
-            branch
-                .insert(
+            snapshot
+                .insert_block(
                     &mut tx,
                     &locator,
                     &block_id,
@@ -673,11 +686,17 @@ mod tests {
             assert!(!has_empty_inner_node(&mut tx).await);
         }
 
+        snapshot.remove_all_older(&mut tx).await.unwrap();
+
         // Remove blocks
         locators.shuffle(&mut rng);
 
         for locator in locators {
-            branch.remove(&mut tx, &locator, &write_keys).await.unwrap();
+            snapshot
+                .remove_block(&mut tx, &locator, None, &write_keys)
+                .await
+                .unwrap();
+            snapshot.remove_all_older(&mut tx).await.unwrap();
 
             assert!(!has_empty_inner_node(&mut tx).await);
         }

@@ -224,16 +224,20 @@ mod tests {
 
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch0
-            .remove(&mut tx, &locator0, &write_keys)
+        let mut snapshot0 = branch0.load_snapshot(&mut tx).await.unwrap();
+        snapshot0
+            .remove_block(&mut tx, &locator0, None, &write_keys)
             .await
             .unwrap();
+        snapshot0.remove_all_older(&mut tx).await.unwrap();
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch1
-            .remove(&mut tx, &locator1, &write_keys)
+        let mut snapshot1 = branch1.load_snapshot(&mut tx).await.unwrap();
+        snapshot1
+            .remove_block(&mut tx, &locator1, None, &write_keys)
             .await
             .unwrap();
+        snapshot1.remove_all_older(&mut tx).await.unwrap();
         assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
     }
 
@@ -289,6 +293,14 @@ mod tests {
                 SingleBlockPresence::Present,
                 &write_keys,
             )
+            .await
+            .unwrap();
+
+        branch
+            .load_snapshot(&mut tx)
+            .await
+            .unwrap()
+            .remove_all_older(&mut tx)
             .await
             .unwrap();
 
