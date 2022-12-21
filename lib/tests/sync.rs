@@ -336,7 +336,9 @@ async fn recreate_local_branch() {
     drop(file);
 
     // A: Reopen the repo in read mode to disable merger
+    repo_a.close().await.unwrap();
     drop(repo_a);
+
     let repo_a = Repository::open_with_mode(&store_a, device_id_a, None, AccessMode::Read)
         .await
         .unwrap();
@@ -371,6 +373,8 @@ async fn recreate_local_branch() {
     // A: Reopen in write mode
     drop(reg_a);
     drop(reg_b);
+
+    repo_a.close().await.unwrap();
     drop(repo_a);
 
     let repo_a = Repository::open(&store_a, device_id_a, None).await.unwrap();
