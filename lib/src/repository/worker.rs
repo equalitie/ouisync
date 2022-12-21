@@ -335,7 +335,7 @@ mod scan {
     };
     use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
     #[derive(Copy, Clone, Debug)]
     pub(super) enum Mode {
@@ -363,11 +363,27 @@ mod scan {
     }
 
     #[instrument(skip(shared), err(Debug))]
-    pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
-        let mut unreachable_block_ids = shared.store.load_block_ids(None, u32::MAX).await?;
-        let mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
+    pub(super) async fn run(shared: &Shared, mut mode: Mode) -> Result<()> {
+        // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
+        // The first pass is used both for requiring missing blocks and collecting unreachable
+        // blocks. The subsequent passes (if any) for collecting only.
+        const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        if matches!(mode, Mode::Collect | Mode::RequireAndCollect) {
+        let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+
+        loop {
+            let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
+            if unreachable_block_ids.is_empty() {
+                break;
+            }
+
+            mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
+            mode = if let Some(mode) = mode.intersect(Mode::Collect) {
+                mode
+            } else {
+                break;
+            };
+
             remove_unreachable_blocks(shared, unreachable_block_ids).await?;
         }
 
@@ -377,7 +393,7 @@ mod scan {
     async fn traverse_root(
         shared: &Shared,
         mut mode: Mode,
-        unreachable_block_ids: &mut HashSet<BlockId>,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<Mode> {
         let branches = shared.load_branches().await?;
 
@@ -421,7 +437,7 @@ mod scan {
     async fn traverse(
         shared: &Shared,
         mut mode: Mode,
-        unreachable_block_ids: &mut HashSet<BlockId>,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
         dir: JointDirectory,
     ) -> Result<Mode> {
         let mut entries = Vec::new();
@@ -469,7 +485,7 @@ mod scan {
 
     async fn remove_unreachable_blocks(
         shared: &Shared,
-        unreachable_block_ids: HashSet<BlockId>,
+        unreachable_block_ids: BTreeSet<BlockId>,
     ) -> Result<()> {
         // We need to delete the blocks and also mark them as missing (so they can be requested in
         // case they become needed again) in their corresponding leaf nodes and then update the
@@ -518,7 +534,7 @@ mod scan {
     async fn process_blocks(
         shared: &Shared,
         mode: Mode,
-        unreachable_block_ids: &mut HashSet<BlockId>,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
         branch: Branch,
         blob_id: BlobId,
     ) -> Result<()> {

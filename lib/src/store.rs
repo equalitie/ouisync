@@ -1,7 +1,5 @@
 //! Operation that affect both the index and the block store.
 
-use std::collections::HashSet;
-
 use crate::{
     block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
     db,
@@ -13,6 +11,7 @@ use crate::{
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
+use std::collections::BTreeSet;
 use tracing::Span;
 
 #[derive(Clone)]
@@ -110,17 +109,30 @@ impl Store {
         Ok(())
     }
 
-    /// Load all block ids referenced from complete snapshots.
-    /// If `lower_bound` is `Some`, returns only ids that are greater than it. `limit` is the max
-    /// number of ids to return.
-    pub(crate) async fn load_block_ids(
-        &self,
-        lower_bound: Option<&BlockId>,
-        limit: u32,
-    ) -> Result<HashSet<BlockId>> {
-        let mut conn = self.db().acquire().await?;
+    /// Returns all block ids referenced from complete snapshots. The result is paginated (with
+    /// `page_size` entries per page) to avoid loading too many items into memory.
+    pub(crate) fn block_ids(&self, page_size: u32) -> BlockIdsPage {
+        BlockIdsPage {
+            pool: self.db().clone(),
+            lower_bound: None,
+            page_size,
+        }
+    }
+}
 
-        sqlx::query(
+pub(crate) struct BlockIdsPage {
+    pool: db::Pool,
+    lower_bound: Option<BlockId>,
+    page_size: u32,
+}
+
+impl BlockIdsPage {
+    /// Returns the next page of the results. If the returned collection is empty it means the end
+    /// of the results was reached. Calling `next` afterwards resets the page back to zero.
+    pub async fn next(&mut self) -> Result<BTreeSet<BlockId>> {
+        let mut conn = self.pool.acquire().await?;
+
+        let ids: Result<BTreeSet<_>> = sqlx::query(
             "WITH RECURSIVE
                  inner_nodes(hash) AS (
                      SELECT i.hash
@@ -138,13 +150,20 @@ impl Store {
                  ORDER BY block_id
                  LIMIT ?",
         )
-        .bind(lower_bound)
-        .bind(limit)
+        .bind(self.lower_bound.as_ref())
+        .bind(self.page_size)
         .fetch(&mut *conn)
         .map_ok(|row| row.get::<BlockId, _>(0))
         .err_into()
         .try_collect()
-        .await
+        .await;
+
+        let ids = ids?;
+
+        // TODO: use `last` when we bump to rust 1.66
+        self.lower_bound = ids.iter().next_back().copied();
+
+        Ok(ids)
     }
 }
 
@@ -447,7 +466,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_block_ids_local() {
+    async fn block_ids_local() {
         let (_base_dir, pool) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
@@ -472,14 +491,14 @@ mod tests {
             .unwrap();
         tx.commit().await.unwrap();
 
-        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
         let expected = [block_id].into_iter().collect();
 
         assert_eq!(actual, expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_block_ids_remote() {
+    async fn block_ids_remote() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
@@ -496,14 +515,14 @@ mod tests {
         )
         .await;
 
-        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
         let expected = snapshot.blocks().keys().copied().collect();
 
         assert_eq!(actual, expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_block_ids_excludes_blocks_from_incomplete_snapshots() {
+    async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
@@ -551,12 +570,12 @@ mod tests {
                 .unwrap();
         }
 
-        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
         assert!(actual.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_block_ids_multiple_branches() {
+    async fn block_ids_multiple_branches() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
@@ -590,7 +609,7 @@ mod tests {
         )
         .await;
 
-        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
         let expected = all_blocks
             .iter()
             .map(|(_, block)| block.id())
@@ -601,7 +620,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_block_ids_with_lower_bound_and_limit() {
+    async fn block_ids_pagination() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
@@ -621,23 +640,18 @@ mod tests {
         let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
         sorted_blocks.sort();
 
-        let actual = store.load_block_ids(None, 2).await.unwrap();
+        let mut page = store.block_ids(2);
+
+        let actual = page.next().await.unwrap();
         let expected = sorted_blocks[..2].iter().copied().collect();
         assert_eq!(actual, expected);
 
-        let actual = store
-            .load_block_ids(Some(&sorted_blocks[1]), u32::MAX)
-            .await
-            .unwrap();
+        let actual = page.next().await.unwrap();
         let expected = sorted_blocks[2..].iter().copied().collect();
         assert_eq!(actual, expected);
 
-        let actual = store
-            .load_block_ids(Some(&sorted_blocks[0]), 1)
-            .await
-            .unwrap();
-        let expected = sorted_blocks[1..2].iter().copied().collect();
-        assert_eq!(actual, expected);
+        let actual = page.next().await.unwrap();
+        assert!(actual.is_empty());
     }
 
     async fn setup() -> (TempDir, db::Pool) {
