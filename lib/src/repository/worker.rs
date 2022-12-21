@@ -364,7 +364,7 @@ mod scan {
 
     #[instrument(skip(shared), err(Debug))]
     pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
-        let mut unreachable_block_ids = shared.store.load_block_ids().await?;
+        let mut unreachable_block_ids = shared.store.load_block_ids(None, u32::MAX).await?;
         let mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
 
         if matches!(mode, Mode::Collect | Mode::RequireAndCollect) {

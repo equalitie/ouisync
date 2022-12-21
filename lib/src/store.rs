@@ -110,8 +110,14 @@ impl Store {
         Ok(())
     }
 
-    /// Load all block ids referenced from complete snapshots
-    pub(crate) async fn load_block_ids(&self) -> Result<HashSet<BlockId>> {
+    /// Load all block ids referenced from complete snapshots.
+    /// If `lower_bound` is `Some`, returns only ids that are greater than it. `limit` is the max
+    /// number of ids to return.
+    pub(crate) async fn load_block_ids(
+        &self,
+        lower_bound: Option<&BlockId>,
+        limit: u32,
+    ) -> Result<HashSet<BlockId>> {
         let mut conn = self.db().acquire().await?;
 
         sqlx::query(
@@ -128,10 +134,12 @@ impl Store {
                  )
              SELECT DISTINCT block_id
                  FROM snapshot_leaf_nodes
-                 WHERE parent IN inner_nodes
+                 WHERE parent IN inner_nodes AND block_id > COALESCE(?, x'')
                  ORDER BY block_id
-        ",
+                 LIMIT ?",
         )
+        .bind(lower_bound)
+        .bind(limit)
         .fetch(&mut *conn)
         .map_ok(|row| row.get::<BlockId, _>(0))
         .err_into()
@@ -464,7 +472,7 @@ mod tests {
             .unwrap();
         tx.commit().await.unwrap();
 
-        let actual = store.load_block_ids().await.unwrap();
+        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
         let expected = [block_id].into_iter().collect();
 
         assert_eq!(actual, expected);
@@ -488,7 +496,7 @@ mod tests {
         )
         .await;
 
-        let actual = store.load_block_ids().await.unwrap();
+        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
         let expected = snapshot.blocks().keys().copied().collect();
 
         assert_eq!(actual, expected);
@@ -543,7 +551,7 @@ mod tests {
                 .unwrap();
         }
 
-        let actual = store.load_block_ids().await.unwrap();
+        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
         assert!(actual.is_empty());
     }
 
@@ -582,13 +590,53 @@ mod tests {
         )
         .await;
 
-        let actual = store.load_block_ids().await.unwrap();
+        let actual = store.load_block_ids(None, u32::MAX).await.unwrap();
         let expected = all_blocks
             .iter()
             .map(|(_, block)| block.id())
             .copied()
             .collect();
 
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_block_ids_with_lower_bound_and_limit() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id,
+            VersionVector::first(branch_id),
+            &snapshot,
+        )
+        .await;
+
+        let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
+        sorted_blocks.sort();
+
+        let actual = store.load_block_ids(None, 2).await.unwrap();
+        let expected = sorted_blocks[..2].iter().copied().collect();
+        assert_eq!(actual, expected);
+
+        let actual = store
+            .load_block_ids(Some(&sorted_blocks[1]), u32::MAX)
+            .await
+            .unwrap();
+        let expected = sorted_blocks[2..].iter().copied().collect();
+        assert_eq!(actual, expected);
+
+        let actual = store
+            .load_block_ids(Some(&sorted_blocks[0]), 1)
+            .await
+            .unwrap();
+        let expected = sorted_blocks[1..2].iter().copied().collect();
         assert_eq!(actual, expected);
     }
 
