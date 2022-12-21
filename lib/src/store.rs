@@ -9,7 +9,9 @@ use crate::{
     progress::Progress,
     repository::LocalId,
 };
+use futures_util::TryStreamExt;
 use sqlx::Row;
+use std::collections::BTreeSet;
 use tracing::Span;
 
 #[derive(Clone)]
@@ -76,7 +78,7 @@ impl Store {
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<()> {
-        let mut tx = self.db().begin().await?;
+        let mut tx = self.db().begin_write().await?;
 
         let writer_ids = match index::receive_block(&mut tx, &data.id).await {
             Ok(writer_ids) => writer_ids,
@@ -107,19 +109,61 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn mark_all_blocks_unreachable(&self) -> Result<()> {
-        let mut tx = self.db().begin().await?;
+    /// Returns all block ids referenced from complete snapshots. The result is paginated (with
+    /// `page_size` entries per page) to avoid loading too many items into memory.
+    pub(crate) fn block_ids(&self, page_size: u32) -> BlockIdsPage {
+        BlockIdsPage {
+            pool: self.db().clone(),
+            lower_bound: None,
+            page_size,
+        }
+    }
+}
 
-        sqlx::query(
-            "DELETE FROM unreachable_blocks;
-             INSERT INTO unreachable_blocks SELECT DISTINCT block_id FROM snapshot_leaf_nodes",
+pub(crate) struct BlockIdsPage {
+    pool: db::Pool,
+    lower_bound: Option<BlockId>,
+    page_size: u32,
+}
+
+impl BlockIdsPage {
+    /// Returns the next page of the results. If the returned collection is empty it means the end
+    /// of the results was reached. Calling `next` afterwards resets the page back to zero.
+    pub async fn next(&mut self) -> Result<BTreeSet<BlockId>> {
+        let mut conn = self.pool.acquire().await?;
+
+        let ids: Result<BTreeSet<_>> = sqlx::query(
+            "WITH RECURSIVE
+                 inner_nodes(hash) AS (
+                     SELECT i.hash
+                        FROM snapshot_inner_nodes AS i
+                        INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                        WHERE r.is_complete = 1
+                     UNION ALL
+                     SELECT c.hash
+                        FROM snapshot_inner_nodes AS c
+                        INNER JOIN inner_nodes AS p ON p.hash = c.parent
+                 )
+             SELECT DISTINCT block_id
+                 FROM snapshot_leaf_nodes
+                 WHERE parent IN inner_nodes AND block_id > COALESCE(?, x'')
+                 ORDER BY block_id
+                 LIMIT ?",
         )
-        .execute(&mut *tx)
-        .await?;
+        .bind(self.lower_bound.as_ref())
+        .bind(self.page_size)
+        .fetch(&mut *conn)
+        .map_ok(|row| row.get::<BlockId, _>(0))
+        .err_into()
+        .try_collect()
+        .await;
 
-        tx.commit().await?;
+        let ids = ids?;
 
-        Ok(())
+        // TODO: use `last` when we bump to rust 1.66
+        self.lower_bound = ids.iter().next_back().copied();
+
+        Ok(ids)
     }
 }
 
@@ -133,8 +177,6 @@ pub(crate) enum BlockRequestMode {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
     use crate::{
         block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -147,7 +189,7 @@ mod tests {
         error::Error,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData, SingleBlockPresence,
+            BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
         },
         locator::Locator,
         repository::RepositoryId,
@@ -156,6 +198,7 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use std::collections::HashSet;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;
@@ -174,7 +217,7 @@ mod tests {
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         block::write(&mut tx, &block_id, &buffer, &BlockNonce::default())
             .await
@@ -208,16 +251,20 @@ mod tests {
 
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch0
-            .remove(&mut tx, &locator0, &write_keys)
+        let mut snapshot0 = branch0.load_snapshot(&mut tx).await.unwrap();
+        snapshot0
+            .remove_block(&mut tx, &locator0, None, &write_keys)
             .await
             .unwrap();
+        snapshot0.remove_all_older(&mut tx).await.unwrap();
         assert!(block::exists(&mut tx, &block_id).await.unwrap());
 
-        branch1
-            .remove(&mut tx, &locator1, &write_keys)
+        let mut snapshot1 = branch1.load_snapshot(&mut tx).await.unwrap();
+        snapshot1
+            .remove_block(&mut tx, &locator1, None, &write_keys)
             .await
             .unwrap();
+        snapshot1.remove_all_older(&mut tx).await.unwrap();
         assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
     }
 
@@ -240,7 +287,7 @@ mod tests {
         rng.fill(&mut buffer[..]);
         let id0 = BlockId::from_content(&buffer);
 
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         block::write(&mut tx, &id0, &buffer, &rng.gen())
             .await
@@ -276,6 +323,14 @@ mod tests {
             .await
             .unwrap();
 
+        branch
+            .load_snapshot(&mut tx)
+            .await
+            .unwrap()
+            .remove_all_older(&mut tx)
+            .await
+            .unwrap();
+
         assert!(!block::exists(&mut tx, &id0).await.unwrap());
         assert!(block::exists(&mut tx, &id1).await.unwrap());
         assert_eq!(block::count(&mut tx).await.unwrap(), 1);
@@ -288,15 +343,7 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool, repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, repository_id);
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
@@ -325,17 +372,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_orphaned_block() {
         let (_base_dir, pool) = setup().await;
-
-        let repository_id = RepositoryId::random();
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool, repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
@@ -367,15 +404,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let (event_tx, _) = broadcast::channel(1);
-        let index = Index::new(pool.clone(), repository_id, event_tx);
-        let store = Store {
-            index,
-            block_tracker: BlockTracker::new(),
-            block_request_mode: BlockRequestMode::Lazy,
-            local_id: LocalId::new(),
-            span: Span::none(),
-        };
+        let store = create_store(pool, repository_id);
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -433,10 +462,211 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        pool.close().await.unwrap();
+        store.db().close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_ids_local() {
+        let (_base_dir, pool) = setup().await;
+        let read_key = SecretKey::random();
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch = store.index.get_branch(PublicKey::random());
+
+        let locator = Locator::head(rand::random());
+        let locator = locator.encode(&read_key);
+        let block_id = rand::random();
+
+        let mut tx = store.db().begin_write().await.unwrap();
+        branch
+            .insert(
+                &mut tx,
+                &locator,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let expected = [block_id].into_iter().collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_ids_remote() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id,
+            VersionVector::first(branch_id),
+            &snapshot,
+        )
+        .await;
+
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let expected = snapshot.blocks().keys().copied().collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+
+        // Create snapshot with two leaf nodes but receive only one of them.
+        let snapshot = loop {
+            let snapshot = Snapshot::generate(&mut rand::thread_rng(), 2);
+            if snapshot.leaf_sets().count() > 1 {
+                break snapshot;
+            }
+        };
+
+        let mut receive_filter = ReceiveFilter::new(store.db().clone());
+        let version_vector = VersionVector::first(branch_id);
+        let proof = Proof::new(
+            branch_id,
+            version_vector,
+            *snapshot.root_hash(),
+            &write_keys,
+        );
+
+        store
+            .index
+            .receive_root_node(proof.into(), Summary::INCOMPLETE)
+            .await
+            .unwrap();
+
+        for layer in snapshot.inner_layers() {
+            for (_, nodes) in layer.inner_maps() {
+                store
+                    .index
+                    .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        for (_, nodes) in snapshot.leaf_sets().take(1) {
+            store
+                .index
+                .receive_leaf_nodes(nodes.clone().into())
+                .await
+                .unwrap();
+        }
+
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        assert!(actual.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_ids_multiple_branches() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id_0 = PublicKey::random();
+        let branch_id_1 = PublicKey::random();
+
+        // One block is common between both branches and one for each branch is unique.
+        let all_blocks: [(Hash, Block); 3] = rand::random();
+        let blocks_0 = &all_blocks[..2];
+        let blocks_1 = &all_blocks[1..];
+
+        let snapshot_0 = Snapshot::new(blocks_0.iter().cloned());
+        let snapshot_1 = Snapshot::new(blocks_1.iter().cloned());
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id_0,
+            VersionVector::first(branch_id_0),
+            &snapshot_0,
+        )
+        .await;
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id_1,
+            VersionVector::first(branch_id_1),
+            &snapshot_1,
+        )
+        .await;
+
+        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let expected = all_blocks
+            .iter()
+            .map(|(_, block)| block.id())
+            .copied()
+            .collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_ids_pagination() {
+        let (_base_dir, pool) = setup().await;
+        let write_keys = Keypair::random();
+        let store = create_store(pool, RepositoryId::from(write_keys.public));
+
+        let branch_id = PublicKey::random();
+        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
+
+        receive_nodes(
+            &store.index,
+            &write_keys,
+            branch_id,
+            VersionVector::first(branch_id),
+            &snapshot,
+        )
+        .await;
+
+        let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
+        sorted_blocks.sort();
+
+        let mut page = store.block_ids(2);
+
+        let actual = page.next().await.unwrap();
+        let expected = sorted_blocks[..2].iter().copied().collect();
+        assert_eq!(actual, expected);
+
+        let actual = page.next().await.unwrap();
+        let expected = sorted_blocks[2..].iter().copied().collect();
+        assert_eq!(actual, expected);
+
+        let actual = page.next().await.unwrap();
+        assert!(actual.is_empty());
     }
 
     async fn setup() -> (TempDir, db::Pool) {
         db::create_temp().await.unwrap()
+    }
+
+    fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
+        let (event_tx, _) = broadcast::channel(1);
+        let index = Index::new(pool, repo_id, event_tx);
+        Store {
+            index,
+            block_tracker: BlockTracker::new(),
+            block_request_mode: BlockRequestMode::Lazy,
+            local_id: LocalId::new(),
+            span: Span::none(),
+        }
     }
 }

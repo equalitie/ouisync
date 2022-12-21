@@ -47,7 +47,11 @@ impl RootNode {
     ///
     /// Contract: the version vector of the inserted node must be happens-after or equal to that of
     /// any existing node in the same branch. Violating this contract results in panic.
-    pub async fn create(tx: &mut db::Transaction, proof: Proof, summary: Summary) -> Result<Self> {
+    pub async fn create(
+        tx: &mut db::WriteTransaction,
+        proof: Proof,
+        summary: Summary,
+    ) -> Result<Self> {
         // Load the latest vv in the same branch.
         let latest_vv: Option<VersionVector> = sqlx::query(
             "SELECT versions
@@ -171,6 +175,38 @@ impl RootNode {
         .err_into()
     }
 
+    /// Return the latest root nodes of all known writers.
+    pub fn load_all_latest(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 writer_id,
+                 versions,
+                 hash,
+                 signature,
+                 is_complete,
+                 block_presence
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id IN (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     GROUP BY writer_id
+                 )",
+        )
+        .fetch(conn)
+        .map_ok(|row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
+            summary: Summary {
+                is_complete: row.get(5),
+                block_presence: row.get(6),
+            },
+        })
+        .err_into()
+    }
+
     /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
     /// most recent to the least recent.
     #[cfg(test)]
@@ -270,7 +306,7 @@ impl RootNode {
     /// This methd consume `self` to force the caller to reload the node from the db if they still
     /// need to use it. This makes it cancel-safe because the `proof` member can never go out of
     /// sync with what's stored in the db even in case the returned future is cancelled.
-    pub async fn update_proof(self, tx: &mut db::Transaction, new_proof: Proof) -> Result<()> {
+    pub async fn update_proof(self, tx: &mut db::WriteTransaction, new_proof: Proof) -> Result<()> {
         assert_eq!(new_proof.writer_id, self.proof.writer_id);
         assert_eq!(new_proof.hash, self.proof.hash);
 
@@ -306,7 +342,7 @@ impl RootNode {
 
     /// Updates the summaries of all nodes with the specified hash. Returns whether the nodes
     /// became complete.
-    pub async fn update_summaries(tx: &mut db::Transaction, hash: &Hash) -> Result<bool> {
+    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<bool> {
         let summary = InnerNode::compute_summary(tx, hash).await?;
 
         // Multiple nodes with the same hash should have the same `is_complete` which is why it's
@@ -334,7 +370,7 @@ impl RootNode {
     }
 
     /// Removes this node including its snapshot.
-    pub async fn remove_recursively(&self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn remove_recursively(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
             .bind(self.snapshot_id)
@@ -346,7 +382,7 @@ impl RootNode {
 
     /// Removes all root nodes, including their snapshots, that are older than this node and are
     /// on the same branch.
-    pub async fn remove_recursively_all_older(&self, tx: &mut db::Transaction) -> Result<()> {
+    pub async fn remove_recursively_all_older(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
             .bind(self.snapshot_id)
@@ -361,7 +397,7 @@ impl RootNode {
     /// on the same branch and are not complete.
     pub async fn remove_recursively_all_older_incomplete(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
     ) -> Result<()> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(

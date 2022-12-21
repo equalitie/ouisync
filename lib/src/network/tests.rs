@@ -469,7 +469,7 @@ async fn create_changeset(
         create_block(rng, index, &branch, write_keys).await;
     }
 
-    let mut tx = index.pool.begin().await.unwrap();
+    let mut tx = index.pool.begin_write().await.unwrap();
     branch
         .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
         .await
@@ -488,7 +488,7 @@ async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, writ
     let block_id = BlockId::from_content(&content);
     let nonce = rng.gen();
 
-    let mut tx = index.pool.begin().await.unwrap();
+    let mut tx = index.pool.begin_write().await.unwrap();
     branch
         .insert(
             &mut tx,

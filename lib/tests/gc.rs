@@ -78,6 +78,8 @@ async fn local_truncate_local_file() {
     write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
+    repo.force_work().await.unwrap();
+
     // 2 blocks for the file + 1 block for the root directory
     assert_eq!(repo.count_blocks().await.unwrap(), 3);
 

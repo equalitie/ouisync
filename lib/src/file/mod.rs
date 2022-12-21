@@ -80,7 +80,7 @@ impl File {
 
     /// Writes `buffer` into this file.
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.branch().db().begin_shared().await?;
+        let mut tx = self.branch().db().begin_shared_write().await?;
         self.acquire_write_lock()?;
         self.blob.write(&mut tx, buffer).await?;
 
@@ -107,7 +107,7 @@ impl File {
             return Ok(());
         }
 
-        let mut tx = self.branch().db().begin_shared().await?;
+        let mut tx = self.branch().db().begin_shared_write().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
@@ -124,7 +124,7 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut db::Transaction) -> Result<()> {
+    pub(crate) async fn save(&mut self, tx: &mut db::WriteTransaction) -> Result<()> {
         self.blob.flush(tx).await?;
         Ok(())
     }

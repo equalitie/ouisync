@@ -6,8 +6,6 @@ mod receive_filter;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
@@ -16,6 +14,11 @@ pub(crate) use self::{
     },
     proof::UntrustedProof,
     receive_filter::ReceiveFilter,
+};
+#[cfg(test)]
+pub(crate) use self::{
+    node::{test_utils as node_test_utils, EMPTY_INNER_HASH},
+    proof::Proof,
 };
 
 use self::proof::ProofError;
@@ -114,14 +117,10 @@ impl Index {
         // incoming node might become outdated. But because we already concluded it's up-to-date,
         // we end up inserting it anyway which breaks the invariant that a node inserted later must
         // be happens-after any node inserted earlier in the same branch.
-        let mut tx = self.pool.begin().await?;
-
-        // Load latest complete root nodes of all known branches.
-        let nodes: Vec<_> = RootNode::load_all_latest_complete(&mut tx)
-            .try_collect()
-            .await?;
+        let mut tx = self.pool.begin_write().await?;
 
         // If the received node is outdated relative to any branch we have, ignore it.
+        let nodes: Vec<_> = RootNode::load_all_latest(&mut tx).try_collect().await?;
         let uptodate = nodes.iter().all(|old_node| {
             match proof
                 .version_vector
@@ -163,7 +162,7 @@ impl Index {
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>, ReceiveError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
@@ -186,7 +185,7 @@ impl Index {
         &self,
         nodes: CacheHash<LeafNodeSet>,
     ) -> Result<Vec<BlockId>, ReceiveError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
@@ -211,7 +210,7 @@ impl Index {
     // `remote_nodes`.
     async fn find_inner_nodes_with_new_blocks(
         &self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         remote_nodes: &InnerNodeMap,
         receive_filter: &mut ReceiveFilter,
     ) -> Result<Vec<Hash>> {
@@ -266,7 +265,7 @@ impl Index {
     // Updates summaries of the specified nodes and all their ancestors, commits the transaction
     // and notifies the affected branches that became complete (wasn't before the update but became
     // after it).
-    async fn update_summaries(&self, mut tx: db::Transaction, hash: Hash) -> Result<()> {
+    async fn update_summaries(&self, mut tx: db::WriteTransaction, hash: Hash) -> Result<()> {
         let statuses = node::update_summaries(&mut tx, hash).await?;
         tx.commit().await?;
 

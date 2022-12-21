@@ -161,7 +161,7 @@ async fn receive_root_node_with_existing_hash() {
     let block_nonce = rng.gen();
     let locator = rng.gen();
 
-    let mut tx = index.pool.begin().await.unwrap();
+    let mut tx = index.pool.begin_write().await.unwrap();
 
     block::write(&mut tx, &block_id, &content, &block_nonce)
         .await
@@ -251,7 +251,7 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = index.pool.begin().await.unwrap();
+        let mut tx = index.pool.begin_write().await.unwrap();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
@@ -275,7 +275,7 @@ mod receive_and_create_root_node {
 
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
-        let mut tx = index.pool.begin().await.unwrap();
+        let mut tx = index.pool.begin_write().await.unwrap();
         node::receive_block(&mut tx, &block_id_1).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -292,7 +292,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = index.pool.begin().await.unwrap();
+            let mut tx = index.pool.begin_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -745,7 +745,7 @@ async fn receive_snapshot(
 }
 
 async fn receive_block(index: &Index, block_id: &BlockId) {
-    let mut tx = index.pool.begin().await.unwrap();
+    let mut tx = index.pool.begin_write().await.unwrap();
     node::receive_block(&mut tx, block_id).await.unwrap();
     tx.commit().await.unwrap();
 }

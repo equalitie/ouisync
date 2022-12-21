@@ -33,7 +33,7 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 /// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they
 /// became complete.
 pub(crate) async fn update_summaries(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     hash: Hash,
 ) -> Result<Vec<(PublicKey, bool)>> {
     update_summaries_with_stack(tx, vec![hash]).await
@@ -42,7 +42,7 @@ pub(crate) async fn update_summaries(
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
 /// Returns the replica ids whose branches reference the received block (if any).
 pub(crate) async fn receive_block(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     id: &BlockId,
 ) -> Result<Vec<PublicKey>> {
     if !LeafNode::set_present(tx, id).await? {
@@ -202,7 +202,7 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
 }
 
 async fn update_summaries_with_stack(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     mut nodes: Vec<Hash>,
 ) -> Result<Vec<(PublicKey, bool)>> {
     let mut statuses = Vec::new();

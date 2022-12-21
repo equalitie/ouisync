@@ -1,7 +1,9 @@
+mod block_ids;
 mod open_block;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
     blob_id::BlobId,
@@ -13,7 +15,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    index::{SingleBlockPresence, SnapshotData, SnapshotId},
+    index::{SingleBlockPresence, SnapshotData},
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
@@ -170,7 +172,7 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, tx: &mut db::Transaction, mut buffer: &[u8]) -> Result<()> {
+    pub async fn write(&mut self, tx: &mut db::WriteTransaction, mut buffer: &[u8]) -> Result<()> {
         let mut snapshot = None;
 
         loop {
@@ -292,7 +294,7 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self, tx: &mut db::Transaction) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut db::WriteTransaction) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
@@ -359,7 +361,7 @@ impl Blob {
     // Write the current blob length into the blob header in the head block.
     async fn write_len(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         snapshot: &mut SnapshotData,
     ) -> Result<()> {
         if !self.len_dirty {
@@ -402,7 +404,7 @@ impl Blob {
     // Write the current block into the store.
     async fn write_current_block(
         &mut self,
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         snapshot: &mut SnapshotData,
     ) -> Result<()> {
         if !self.current_block.dirty {
@@ -432,7 +434,7 @@ impl Blob {
 /// Creates a shallow copy (only the index nodes are copied, not blocks) of the specified blob into
 /// the specified destination branch. This function is idempotent.
 pub(crate) async fn fork(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     blob_id: BlobId,
     src_branch: &Branch,
     dst_branch: &Branch,
@@ -484,87 +486,6 @@ pub(crate) async fn fork(
     Ok(())
 }
 
-/// Pseudo-stream that yields the block ids of the given blob in their sequential order.
-pub(crate) struct BlockIds {
-    branch: Branch,
-    locator: Locator,
-    cache: Option<(SnapshotId, u32)>,
-}
-
-impl BlockIds {
-    pub fn new(branch: Branch, blob_id: BlobId) -> Self {
-        Self {
-            branch,
-            locator: Locator::head(blob_id),
-            cache: None,
-        }
-    }
-
-    pub async fn next(&mut self, conn: &mut db::Connection) -> Result<Option<BlockId>> {
-        let snapshot = self.branch.data().load_snapshot(conn).await?;
-
-        // If the first block of the blob is available, we read the blob length from it and use it
-        // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.
-        // It might seem that iterating until `EntryNotFound` should be always sufficient and there
-        // should be no reason to read the length, however this is not always the case. Consider
-        // the situation where a blob is truncated, or replaced with a shorter one with the same
-        // blob id. Then without reading the current blob length, we would not know that we should
-        // stop iterating before we hit `EntryNotFound` and we would end up processing also the
-        // blocks that are past the end of the blob. This means that e.g., the garbage collector
-        // would consider those blocks still reachable and would never remove them.
-        let end = self.fetch_end(conn, &snapshot).await?;
-        if end > 0 && self.locator.number() >= end {
-            return Ok(None);
-        }
-
-        let encoded = self.locator.encode(self.branch.keys().read());
-
-        match snapshot.get_block(conn, &encoded).await {
-            Ok((block_id, _)) => {
-                self.locator = self.locator.next();
-                Ok(Some(block_id))
-            }
-            Err(Error::EntryNotFound) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn fetch_end(
-        &mut self,
-        conn: &mut db::Connection,
-        snapshot: &SnapshotData,
-    ) -> Result<u32> {
-        let end = self
-            .cache
-            .filter(|(last_snapshot_id, _)| *last_snapshot_id == snapshot.id())
-            .map(|(_, end)| end);
-
-        if let Some(end) = end {
-            return Ok(end);
-        }
-
-        match read_len(
-            conn,
-            snapshot,
-            self.branch.keys().read(),
-            *self.locator.blob_id(),
-        )
-        .await
-        {
-            Ok(len) => {
-                let end = block_count(len);
-                self.cache = Some((snapshot.id(), end));
-                Ok(end)
-            }
-            Err(Error::BlockNotFound(_)) => {
-                self.cache = Some((snapshot.id(), 0));
-                Ok(0)
-            }
-            Err(error) => Err(error),
-        }
-    }
-}
-
 fn block_count(len: u64) -> u32 {
     // https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
     (1 + (len + HEADER_SIZE as u64 - 1) / BLOCK_SIZE as u64)
@@ -589,7 +510,7 @@ async fn read_block(
 }
 
 async fn write_block(
-    tx: &mut db::Transaction,
+    tx: &mut db::WriteTransaction,
     snapshot: &mut SnapshotData,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,

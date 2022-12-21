@@ -306,7 +306,7 @@ mod prune {
 
             tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
 
-            let mut tx = shared.store.db().begin().await?;
+            let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
@@ -335,6 +335,7 @@ mod scan {
     };
     use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
+    use std::collections::BTreeSet;
 
     #[derive(Copy, Clone, Debug)]
     pub(super) enum Mode {
@@ -362,25 +363,45 @@ mod scan {
     }
 
     #[instrument(skip(shared), err(Debug))]
-    pub(super) async fn run(shared: &Shared, mode: Mode) -> Result<()> {
-        prepare_unreachable_blocks(shared).await?;
-        let mode = traverse_root(shared, mode).await?;
+    pub(super) async fn run(shared: &Shared, mut mode: Mode) -> Result<()> {
+        // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
+        // The first pass is used both for requiring missing blocks and collecting unreachable
+        // blocks. The subsequent passes (if any) for collecting only.
+        const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        if matches!(mode, Mode::Collect | Mode::RequireAndCollect) {
-            remove_unreachable_blocks(shared).await?;
+        let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+
+        loop {
+            let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
+            if unreachable_block_ids.is_empty() {
+                break;
+            }
+
+            mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
+            mode = if let Some(mode) = mode.intersect(Mode::Collect) {
+                mode
+            } else {
+                break;
+            };
+
+            remove_unreachable_blocks(shared, unreachable_block_ids).await?;
         }
 
         Ok(())
     }
 
-    async fn traverse_root(shared: &Shared, mut mode: Mode) -> Result<Mode> {
+    async fn traverse_root(
+        shared: &Shared,
+        mut mode: Mode,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+    ) -> Result<Mode> {
         let branches = shared.load_branches().await?;
 
         let mut versions = Vec::with_capacity(branches.len());
         let mut entries = Vec::new();
 
         for branch in branches {
-            entries.push(BlockIds::new(branch.clone(), BlobId::ROOT));
+            entries.push((branch.clone(), BlobId::ROOT));
 
             match branch.open_root(MissingBlockStrategy::Fail).await {
                 Ok(dir) => versions.push(dir),
@@ -398,16 +419,27 @@ mod scan {
             }
         }
 
-        for entry in entries {
-            process_blocks(shared, mode, entry).await?;
+        for (branch, blob_id) in entries {
+            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         let local_branch = shared.local_branch().ok();
-        traverse(shared, mode, JointDirectory::new(local_branch, versions)).await
+        traverse(
+            shared,
+            mode,
+            unreachable_block_ids,
+            JointDirectory::new(local_branch, versions),
+        )
+        .await
     }
 
     #[async_recursion]
-    async fn traverse(shared: &Shared, mut mode: Mode, dir: JointDirectory) -> Result<Mode> {
+    async fn traverse(
+        shared: &Shared,
+        mut mode: Mode,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+        dir: JointDirectory,
+    ) -> Result<Mode> {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
@@ -416,14 +448,11 @@ mod scan {
         for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
-                    entries.push(BlockIds::new(
-                        entry.inner().branch().clone(),
-                        *entry.inner().blob_id(),
-                    ));
+                    entries.push((entry.inner().branch().clone(), *entry.inner().blob_id()));
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        entries.push(BlockIds::new(version.branch().clone(), *version.blob_id()));
+                        entries.push((version.branch().clone(), *version.blob_id()));
                     }
 
                     match entry
@@ -443,28 +472,29 @@ mod scan {
             }
         }
 
-        for entry in entries {
-            process_blocks(shared, mode, entry).await?;
+        for (branch, blob_id) in entries {
+            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         for dir in subdirs {
-            mode = traverse(shared, mode, dir).await?;
+            mode = traverse(shared, mode, unreachable_block_ids, dir).await?;
         }
 
         Ok(mode)
     }
 
-    async fn prepare_unreachable_blocks(shared: &Shared) -> Result<()> {
-        shared.store.mark_all_blocks_unreachable().await
-    }
-
-    async fn remove_unreachable_blocks(shared: &Shared) -> Result<()> {
+    async fn remove_unreachable_blocks(
+        shared: &Shared,
+        unreachable_block_ids: BTreeSet<BlockId>,
+    ) -> Result<()> {
         // We need to delete the blocks and also mark them as missing (so they can be requested in
         // case they become needed again) in their corresponding leaf nodes and then update the
         // summaries of the corresponding ancestor nodes. This is a complex and potentially
         // expensive operation which is why we do it a few blocks at a time.
-        const BATCH_SIZE: u32 = 32;
+        const BATCH_SIZE: usize = 32;
 
+        let mut unreachable_block_ids = unreachable_block_ids.into_iter();
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
         let mut total_count = 0;
 
         let local_branch = shared.local_branch().ok();
@@ -473,21 +503,23 @@ mod scan {
             .and_then(|branch| branch.keys().write().map(|keys| (branch, keys)));
 
         loop {
-            let mut tx = shared.store.db().begin().await?;
+            batch.clear();
+            batch.extend(unreachable_block_ids.by_ref().take(BATCH_SIZE));
 
-            let block_ids = block::load_unreachable(&mut tx, BATCH_SIZE).await?;
-            if block_ids.is_empty() {
+            if batch.is_empty() {
                 break;
             }
 
-            total_count += block_ids.len();
+            let mut tx = shared.store.db().begin_write().await?;
+
+            total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
                 let mut snapshot = local_branch.data().load_snapshot(&mut tx).await?;
-                remove_local_nodes(&mut tx, &mut snapshot, write_keys, &block_ids).await?;
+                remove_local_nodes(&mut tx, &mut snapshot, write_keys, &batch).await?;
             }
 
-            remove_blocks(&mut tx, &block_ids).await?;
+            remove_blocks(&mut tx, &batch).await?;
 
             tx.commit().await?;
         }
@@ -499,26 +531,19 @@ mod scan {
         Ok(())
     }
 
-    async fn process_blocks(shared: &Shared, mode: Mode, mut block_ids: BlockIds) -> Result<()> {
-        // Commit the transaction and begin a new one after this many processed blocks, to not
-        // write-block the db for too long.
-        const BATCH_SIZE: usize = 32;
+    async fn process_blocks(
+        shared: &Shared,
+        mode: Mode,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+        branch: Branch,
+        blob_id: BlobId,
+    ) -> Result<()> {
+        let mut tx = shared.store.db().begin_read().await?;
+        let mut blob_block_ids = BlockIds::open(&mut tx, branch, blob_id).await?;
 
-        let mut tx = shared.store.db().begin().await?;
-        let mut count = 0;
-
-        while let Some(block_id) = block_ids.next(&mut tx).await? {
-            if count >= BATCH_SIZE {
-                tx.commit().await?;
-                tx = shared.store.db().begin().await?;
-
-                count = 0;
-            } else {
-                count += 1;
-            }
-
+        while let Some(block_id) = blob_block_ids.try_next(&mut tx).await? {
             if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
-                block::mark_reachable(&mut tx, &block_id).await?;
+                unreachable_block_ids.remove(&block_id);
             }
 
             if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
@@ -529,13 +554,11 @@ mod scan {
             }
         }
 
-        tx.commit().await?;
-
         Ok(())
     }
 
     async fn remove_local_nodes(
-        tx: &mut db::Transaction,
+        tx: &mut db::WriteTransaction,
         snapshot: &mut SnapshotData,
         write_keys: &Keypair,
         block_ids: &[BlockId],
@@ -557,7 +580,7 @@ mod scan {
         Ok(())
     }
 
-    async fn remove_blocks(tx: &mut db::Transaction, block_ids: &[BlockId]) -> Result<()> {
+    async fn remove_blocks(tx: &mut db::WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
             tracing::trace!(?block_id, "unreachable block removed");
 
