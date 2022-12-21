@@ -17,8 +17,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
-use std::{collections::HashSet, future};
-use tokio::{pin, sync::broadcast};
+use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
 
@@ -333,11 +332,10 @@ impl SnapshotData {
         let mut conn = db.acquire().await?;
 
         // Then remove those snapshots that can't serve as fallback for the current one.
-        let fallback_checker = FallbackChecker::new(&mut conn, &self.root_node).await?;
         let mut maybe_old = self.root_node.load_prev(&mut conn).await?;
 
         while let Some(old) = maybe_old {
-            if fallback_checker.check(&mut conn, &old).await? {
+            if node::check_fallback(&mut conn, &old, &self.root_node).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
@@ -436,35 +434,6 @@ impl Versioned for SnapshotData {
 
     fn branch_id(&self) -> &PublicKey {
         self.branch_id()
-    }
-}
-
-// Helper to check whether an old snapshot can be used as fallback for the new snapshot.
-struct FallbackChecker {
-    new_missing_locators: HashSet<Hash>,
-}
-
-impl FallbackChecker {
-    async fn new(conn: &mut db::Connection, new: &RootNode) -> Result<Self> {
-        let new_missing_locators = node::leaf_nodes(conn, new, SingleBlockPresence::Missing)
-            .map_ok(|node| node.locator)
-            .try_collect()
-            .await?;
-
-        Ok(Self {
-            new_missing_locators,
-        })
-    }
-
-    async fn check(&self, conn: &mut db::Connection, old: &RootNode) -> Result<bool> {
-        let old_present_locators =
-            node::leaf_nodes(conn, old, SingleBlockPresence::Present).map_ok(|node| node.locator);
-
-        let stream = old_present_locators
-            .try_filter(|item| future::ready(self.new_missing_locators.contains(item)));
-        pin!(stream);
-
-        Ok(stream.try_next().await?.is_some())
     }
 }
 
