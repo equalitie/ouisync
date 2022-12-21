@@ -119,12 +119,8 @@ impl Index {
         // be happens-after any node inserted earlier in the same branch.
         let mut tx = self.pool.begin_write().await?;
 
-        // Load latest complete root nodes of all known branches.
-        let nodes: Vec<_> = RootNode::load_all_latest_complete(&mut tx)
-            .try_collect()
-            .await?;
-
         // If the received node is outdated relative to any branch we have, ignore it.
+        let nodes: Vec<_> = RootNode::load_all_latest(&mut tx).try_collect().await?;
         let uptodate = nodes.iter().all(|old_node| {
             match proof
                 .version_vector

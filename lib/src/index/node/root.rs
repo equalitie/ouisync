@@ -175,6 +175,38 @@ impl RootNode {
         .err_into()
     }
 
+    /// Return the latest root nodes of all known writers.
+    pub fn load_all_latest(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 writer_id,
+                 versions,
+                 hash,
+                 signature,
+                 is_complete,
+                 block_presence
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id IN (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     GROUP BY writer_id
+                 )",
+        )
+        .fetch(conn)
+        .map_ok(|row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
+            summary: Summary {
+                is_complete: row.get(5),
+                block_presence: row.get(6),
+            },
+        })
+        .err_into()
+    }
+
     /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
     /// most recent to the least recent.
     #[cfg(test)]
