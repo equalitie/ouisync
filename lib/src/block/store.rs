@@ -106,11 +106,6 @@ pub(crate) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Resul
         .execute(&mut **tx)
         .await?;
 
-    sqlx::query("DELETE FROM unreachable_blocks WHERE id = ?")
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
-
     Ok(())
 }
 
