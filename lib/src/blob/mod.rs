@@ -437,13 +437,11 @@ impl Blob {
 }
 
 /// Creates a shallow copy (only the index nodes are copied, not blocks) of the specified blob into
-/// the specified destination branch. This function is idempotent.
-pub(crate) async fn fork(
-    tx: &mut db::WriteTransaction,
-    blob_id: BlobId,
-    src_branch: &Branch,
-    dst_branch: &Branch,
-) -> Result<()> {
+/// the specified destination branch.
+///
+/// NOTE: This function is not atomic. However, it is idempotent, so in case it's interrupted, it
+/// can be safely retried.
+pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Branch) -> Result<()> {
     // If the blob is already forked, do nothing but still return Ok to maintain idempotency.
     if src_branch.id() == dst_branch.id() {
         return Ok(());
@@ -454,40 +452,57 @@ pub(crate) async fn fork(
     // accidentally forking into remote branch (remote branches don't have write access).
     let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-    let src_snapshot = src_branch.data().load_snapshot(tx).await?;
-    let mut dst_snapshot = dst_branch
-        .data()
-        .load_or_create_snapshot(tx, write_keys)
-        .await?;
+    // To avoid write-blocking the database for too long, we process the blocks in batches. This is
+    // the number of blocks per batch.
+    const BATCH_SIZE: u32 = 32;
 
-    let upper_bound = match read_len(tx, &src_snapshot, read_key, blob_id).await {
-        Ok(len) => block_count(len),
-        Err(Error::BlockNotFound(_)) => u32::MAX,
-        Err(error) => return Err(error),
-    };
+    let end = load_block_count_hint(src_branch, blob_id).await?;
+    let mut locators = Locator::head(blob_id).sequence().take(end as usize);
+    let mut running = true;
 
-    tracing::trace!(upper_bound);
+    while running {
+        let mut tx = src_branch.db().begin_write().await?;
 
-    let locators = Locator::head(blob_id).sequence().take(upper_bound as usize);
-
-    for locator in locators {
-        let encoded_locator = locator.encode(read_key);
-
-        let (block_id, block_presence) = match src_snapshot.get_block(tx, &encoded_locator).await {
-            Ok(block) => block,
-            Err(Error::EntryNotFound) => {
-                // end of the blob
-                break;
-            }
-            Err(error) => return Err(error),
-        };
-
-        // It can happen that the current and dst branches are different, but the blob has
-        // already been forked by some other task in the meantime. In that case this
-        // `insert` is a no-op. We still proceed normally to maintain idempotency.
-        dst_snapshot
-            .insert_block(tx, &encoded_locator, &block_id, block_presence, write_keys)
+        let src_snapshot = src_branch.data().load_snapshot(&mut tx).await?;
+        let mut dst_snapshot = dst_branch
+            .data()
+            .load_or_create_snapshot(&mut tx, write_keys)
             .await?;
+
+        for _ in 0..BATCH_SIZE {
+            let Some(locator) = locators.next() else {
+                running = false;
+                break;
+            };
+
+            let encoded_locator = locator.encode(read_key);
+
+            let (block_id, block_presence) =
+                match src_snapshot.get_block(&mut tx, &encoded_locator).await {
+                    Ok(block) => block,
+                    Err(Error::EntryNotFound) => {
+                        // end of the blob
+                        running = false;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                };
+
+            // It can happen that the current and dst branches are different, but the blob has
+            // already been forked by some other task in the meantime. In that case this
+            // `insert` is a no-op. We still proceed normally to maintain idempotency.
+            dst_snapshot
+                .insert_block(
+                    &mut tx,
+                    &encoded_locator,
+                    &block_id,
+                    block_presence,
+                    write_keys,
+                )
+                .await?;
+        }
+
+        tx.commit().await?;
     }
 
     Ok(())
@@ -508,7 +523,7 @@ async fn read_block(
 ) -> Result<(BlockId, Buffer)> {
     let (id, _) = snapshot
         .get_block(tx, &locator.encode(read_key))
-        .instrument(tracing::info_span!("read_bloc", ?locator))
+        .instrument(tracing::info_span!("read_block", ?locator))
         .await?;
 
     let mut buffer = Buffer::new();
@@ -562,6 +577,19 @@ async fn read_len(
 ) -> Result<u64> {
     let (_, buffer) = read_block(tx, snapshot, read_key, &Locator::head(blob_id)).await?;
     Ok(Cursor::new(buffer).read_u64())
+}
+
+// Returns the max number of blocks the specified blob has. This either returns the actual number
+// or `u32::MAX` in case the first blob is not available and so the blob length can't be obtained.
+async fn load_block_count_hint(branch: &Branch, blob_id: BlobId) -> Result<u32> {
+    let mut tx = branch.db().begin_read().await?;
+    let snapshot = branch.data().load_snapshot(&mut tx).await?;
+
+    match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
+        Ok(len) => Ok(block_count(len)),
+        Err(Error::BlockNotFound(_)) => Ok(u32::MAX),
+        Err(error) => Err(error),
+    }
 }
 
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {

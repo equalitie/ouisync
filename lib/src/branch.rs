@@ -1,6 +1,6 @@
 use crate::{
     access_control::AccessKeys,
-    blob::BlobPinSet,
+    blob::{BlobPin, BlobPinSet},
     blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
@@ -137,6 +137,10 @@ impl Branch {
 
     pub(crate) fn is_any_file_open(&self) -> bool {
         self.shared.file_cache.contains_any(self.id())
+    }
+
+    pub(crate) fn pin_blob(&self, blob_id: BlobId) -> BlobPin {
+        self.shared.blob_pins.acquire(blob_id)
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
