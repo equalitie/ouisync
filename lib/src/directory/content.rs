@@ -8,12 +8,9 @@ use crate::{
     version_vector::VersionVector,
 };
 use serde::Deserialize;
-use std::{
-    collections::{
-        btree_map::{self, Entry},
-        BTreeMap,
-    },
-    result::Result as StdResult,
+use std::collections::{
+    btree_map::{self, Entry},
+    BTreeMap,
 };
 
 /// Version of the Directory serialization format.
@@ -68,7 +65,7 @@ impl Content {
         branch: &Branch,
         name: String,
         new_data: EntryData,
-    ) -> StdResult<(), EntryExists<'a>> {
+    ) -> Result<(), EntryExists<'a>> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
