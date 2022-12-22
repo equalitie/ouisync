@@ -63,6 +63,7 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
+    /// Inserts an entry into this directory.
     pub fn insert(
         &mut self,
         branch: &Branch,
@@ -72,37 +73,27 @@ impl Content {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
-                Ok(())
             }
             Entry::Occupied(mut entry) => {
-                // Overwrite entries only if the new version is more up to date than the old
-                // version. Additionally, if the old entry is `File`, overwrite it only if it's not
-                // currently open.
-
-                if let EntryData::File(old_data) = entry.get() {
-                    if branch.is_file_open(&old_data.blob_id) {
-                        return Err(EntryExists::Open);
-                    }
-                }
-
-                match new_data
-                    .version_vector()
-                    .partial_cmp(entry.get().version_vector())
-                {
-                    Some(Ordering::Greater) => {
-                        entry.insert(new_data);
-                        Ok(())
-                    }
-                    Some(Ordering::Equal | Ordering::Less) => {
-                        if new_data.blob_id() == entry.get().blob_id() {
-                            Err(EntryExists::SameBlob)
-                        } else {
-                            Err(EntryExists::DifferentBlob)
-                        }
-                    }
-                    None => Err(EntryExists::Concurrent),
-                }
+                check_overwrite(branch, entry.get(), &new_data)?;
+                entry.insert(new_data);
             }
+        }
+
+        Ok(())
+    }
+
+    /// Check whether an entry can be inserted into this directory without actually inserting it.
+    pub fn check_insert(
+        &self,
+        branch: &Branch,
+        name: &str,
+        new_data: &EntryData,
+    ) -> Result<(), EntryExists> {
+        if let Some(old_data) = self.entries.get(name) {
+            check_overwrite(branch, old_data, new_data)
+        } else {
+            Ok(())
         }
     }
 
@@ -130,11 +121,12 @@ impl Content {
 }
 
 pub(crate) enum EntryExists {
-    /// The existing entry is more up-to-date and has the same blob id than the one being inserted
-    SameBlob,
-    /// The existing entry is more up-to-date and has a different blob id from the one being
+    /// The existing entry is more up-to-date and points to the same blob than the one being
     /// inserted
-    DifferentBlob,
+    Same,
+    /// The existing entry is more up-to-date and points to a different blob than the one being
+    /// inserted
+    Different,
     /// The existing entry and the one being inserted are concurrent
     Concurrent,
     /// The existing entry is open
@@ -158,6 +150,30 @@ impl<'a> IntoIterator for &'a Content {
 
 fn deserialize_entries<'a, T: Deserialize<'a>>(input: &'a [u8]) -> Result<T, Error> {
     bincode::deserialize(input).map_err(|_| Error::MalformedDirectory)
+}
+
+fn check_overwrite(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<(), EntryExists> {
+    // Overwrite entries only if the new version is more up to date than the old
+    // version. Additionally, if the old entry is `File`, overwrite it only if it's not
+    // currently open.
+
+    if let EntryData::File(old_data) = old {
+        if branch.is_file_open(&old_data.blob_id) {
+            return Err(EntryExists::Open);
+        }
+    }
+
+    match new.version_vector().partial_cmp(old.version_vector()) {
+        Some(Ordering::Greater) => Ok(()),
+        Some(Ordering::Equal | Ordering::Less) => {
+            if new.blob_id() == old.blob_id() {
+                Err(EntryExists::Same)
+            } else {
+                Err(EntryExists::Different)
+            }
+        }
+        None => Err(EntryExists::Concurrent),
+    }
 }
 
 mod v2 {

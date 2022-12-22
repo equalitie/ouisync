@@ -81,8 +81,8 @@ impl ParentContext {
                     .commit(tx, content, &VersionVectorOp::Merge(src_vv))
                     .await?;
             }
-            Err(EntryExists::SameBlob) => (),
-            Err(EntryExists::DifferentBlob | EntryExists::Concurrent | EntryExists::Open) => {
+            Err(EntryExists::Same) => (),
+            Err(EntryExists::Different | EntryExists::Concurrent | EntryExists::Open) => {
                 return Err(Error::EntryExists)
             }
         };
