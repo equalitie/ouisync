@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::{
     super::{proof::Proof, SnapshotId},
     inner::InnerNode,
@@ -17,6 +19,8 @@ use crate::{
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
 
+const EMPTY_SNAPSHOT_ID: SnapshotId = 0;
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
@@ -35,43 +39,54 @@ impl RootNode {
         );
 
         Self {
-            snapshot_id: 0,
+            snapshot_id: EMPTY_SNAPSHOT_ID,
             proof,
             summary: Summary::FULL,
         }
     }
 
-    /// Creates a root node with the specified proof unless it already exists.
+    /// Creates a root node with the specified proof unless already exists.
     ///
     /// # Panics
     ///
-    /// Contract: the version vector of the inserted node must be happens-after or equal to that of
-    /// any existing node in the same branch. Violating this contract results in panic.
+    /// - If `latest` is `Some` but it's not the current latest root node in the same branch
+    /// - If `latest` is `Some` and the new version vector is not happens-after or equal to that of
+    ///   `latest`
+    /// - If `latest` is `None` or `Some(RootNode::empty())` and there already exists a root node
+    ///   in the same branch
     pub async fn create(
         tx: &mut db::WriteTransaction,
+        latest: Option<&RootNode>,
         proof: Proof,
         summary: Summary,
     ) -> Result<Self> {
-        // Load the latest vv in the same branch.
-        let latest_vv: Option<VersionVector> = sqlx::query(
-            "SELECT versions
-             FROM snapshot_root_nodes
-             WHERE
-                snapshot_id = (
-                    SELECT MAX(snapshot_id)
-                    FROM snapshot_root_nodes
-                    WHERE writer_id = ?
-                )",
-        )
-        .bind(&proof.writer_id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .map(|row| row.get(0));
-
-        // Enfore the contact
-        if let Some(latest_vv) = latest_vv {
-            assert!(proof.version_vector >= latest_vv);
+        if let Some(latest) = latest {
+            match proof
+                .version_vector
+                .partial_cmp(&latest.proof.version_vector)
+            {
+                Some(Ordering::Greater | Ordering::Equal) => (),
+                Some(Ordering::Less) | None => {
+                    panic!("root node invariant violation: invalid version vector")
+                }
+            }
         }
+
+        let expected_latest_snapshot_id = latest
+            .map(|node| node.snapshot_id)
+            .unwrap_or(EMPTY_SNAPSHOT_ID);
+        let actual_latest_snapshot_id =
+            sqlx::query("SELECT MAX(snapshot_id) FROM snapshot_root_nodes WHERE writer_id = ?")
+                .bind(&proof.writer_id)
+                .map(|row| row.get(0))
+                .fetch_optional(&mut **tx)
+                .await?
+                .unwrap_or(EMPTY_SNAPSHOT_ID);
+
+        assert_eq!(
+            expected_latest_snapshot_id, actual_latest_snapshot_id,
+            "root node invariant violation: latest mismatch"
+        );
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -92,10 +107,10 @@ impl RootNode {
         .bind(&proof.signature)
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
+        .map(|row| row.get(0))
         .fetch_optional(&mut **tx)
         .await?
-        .ok_or(Error::EntryExists)?
-        .get(0);
+        .ok_or(Error::EntryExists)?;
 
         Ok(Self {
             snapshot_id,
