@@ -121,6 +121,7 @@ impl Index {
 
         // If the received node is outdated relative to any branch we have, ignore it.
         let nodes: Vec<_> = RootNode::load_all_latest(&mut tx).try_collect().await?;
+
         let uptodate = nodes.iter().all(|old_node| {
             match proof
                 .version_vector
@@ -135,8 +136,11 @@ impl Index {
 
         if uptodate {
             let hash = proof.hash;
+            let latest_node = nodes
+                .iter()
+                .find(|node| node.proof.writer_id == proof.writer_id);
 
-            match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
+            match RootNode::create(&mut tx, latest_node, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
                     tracing::debug!(vv = ?node.proof.version_vector, "snapshot started");
 

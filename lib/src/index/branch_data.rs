@@ -421,7 +421,8 @@ impl SnapshotData {
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
 
-        self.root_node = RootNode::create(tx, new_proof, path.root_summary).await?;
+        self.root_node =
+            RootNode::create(tx, Some(&self.root_node), new_proof, path.root_summary).await?;
 
         Ok(())
     }

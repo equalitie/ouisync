@@ -31,6 +31,7 @@ async fn create_new_root_node() {
 
     let node0 = RootNode::create(
         &mut tx,
+        None,
         Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
         Summary::FULL,
     )
@@ -64,6 +65,7 @@ async fn attempt_to_create_existing_root_node() {
 
     let node = RootNode::create(
         &mut tx,
+        None,
         Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
         Summary::FULL,
     )
@@ -73,6 +75,7 @@ async fn attempt_to_create_existing_root_node() {
     assert_matches!(
         RootNode::create(
             &mut tx,
+            Some(&node),
             Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
             Summary::FULL,
         )
@@ -537,6 +540,7 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     let mut root_node = RootNode::create(
         &mut tx,
+        None,
         Proof::new(
             writer_id,
             VersionVector::new(),
@@ -611,6 +615,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut tx,
+        None,
         Proof::new(
             writer_id,
             VersionVector::new(),
