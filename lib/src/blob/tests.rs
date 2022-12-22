@@ -2,15 +2,14 @@ use super::*;
 use crate::{
     access_control::WriteSecrets,
     block::{self, BLOCK_SIZE},
+    branch::BranchShared,
     crypto::sign::PublicKey,
     error::Error,
-    file::FileCache,
     index::BranchData,
     test_utils,
 };
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
-use std::sync::Arc;
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::sync::broadcast;
@@ -468,7 +467,7 @@ async fn fork_and_write_case(
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let src_locator = if src_locator_is_root {
@@ -535,7 +534,7 @@ async fn fork_is_idempotent() {
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let locator = Locator::head(rng.gen());
@@ -566,7 +565,7 @@ async fn fork_then_remove_src_branch() {
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let locator_0 = Locator::head(rng.gen());
@@ -649,7 +648,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
         pool.clone(),
         branch,
         secrets.into(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     (rng, base_dir, pool, branch)

@@ -1,12 +1,12 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
+    branch::BranchShared,
     db,
-    file::FileCache,
     index::BranchData,
 };
 use assert_matches::assert_matches;
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
@@ -566,5 +566,5 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (event_tx, _) = broadcast::channel(1);
     let branch_data = BranchData::new(PublicKey::random(), event_tx.clone());
-    Branch::new(pool, branch_data, keys, Arc::new(FileCache::new(event_tx)))
+    Branch::new(pool, branch_data, keys, BranchShared::new(event_tx))
 }

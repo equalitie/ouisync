@@ -199,6 +199,7 @@ mod tests {
     use super::*;
     use crate::{
         access_control::{AccessKeys, WriteSecrets},
+        branch::BranchShared,
         crypto::sign::PublicKey,
         db,
         directory::MissingBlockStrategy,
@@ -206,7 +207,6 @@ mod tests {
         index::BranchData,
     };
     use assert_matches::assert_matches;
-    use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -333,16 +333,10 @@ mod tests {
         let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
-        let file_cache = Arc::new(FileCache::new(event_tx.clone()));
+        let shared = BranchShared::new(event_tx.clone());
 
-        let branches = [(); N].map(|_| {
-            create_branch(
-                pool.clone(),
-                event_tx.clone(),
-                keys.clone(),
-                file_cache.clone(),
-            )
-        });
+        let branches = [(); N]
+            .map(|_| create_branch(pool.clone(), event_tx.clone(), keys.clone(), shared.clone()));
 
         (base_dir, branches)
     }
@@ -351,10 +345,10 @@ mod tests {
         pool: db::Pool,
         event_tx: broadcast::Sender<Event>,
         keys: AccessKeys,
-        file_cache: Arc<FileCache>,
+        shared: BranchShared,
     ) -> Branch {
         let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(pool, branch_data, keys, file_cache)
+        Branch::new(pool, branch_data, keys, shared)
     }
 }
 

@@ -223,7 +223,7 @@ impl Inner {
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared, scan::Mode::RequireAndCollect).await;
+            let result = scan::run(&self.shared).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
@@ -347,7 +347,7 @@ mod scan {
     use std::collections::BTreeSet;
 
     #[derive(Copy, Clone, Debug)]
-    pub(super) enum Mode {
+    enum Mode {
         // only require missing blocks
         Require,
         // only collect unreachable blocks
@@ -372,12 +372,13 @@ mod scan {
     }
 
     #[instrument(skip(shared), err(Debug))]
-    pub(super) async fn run(shared: &Shared, mut mode: Mode) -> Result<()> {
+    pub(super) async fn run(shared: &Shared) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
+        let mut mode = Mode::RequireAndCollect;
         let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
@@ -385,6 +386,8 @@ mod scan {
             if unreachable_block_ids.is_empty() {
                 break;
             }
+
+            process_pinned_blocks(shared, &mut unreachable_block_ids).await?;
 
             mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
@@ -434,7 +437,7 @@ mod scan {
         }
 
         for (branch, blob_id) in entries {
-            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
+            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         let local_branch = shared.local_branch().ok();
@@ -487,7 +490,7 @@ mod scan {
         }
 
         for (branch, blob_id) in entries {
-            process_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
+            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
         for dir in subdirs {
@@ -495,6 +498,51 @@ mod scan {
         }
 
         Ok(mode)
+    }
+
+    async fn process_reachable_blocks(
+        shared: &Shared,
+        mode: Mode,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+        branch: Branch,
+        blob_id: BlobId,
+    ) -> Result<()> {
+        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
+
+        while let Some(block_id) = blob_block_ids.try_next().await? {
+            if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
+                unreachable_block_ids.remove(&block_id);
+            }
+
+            if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
+                shared.store.require_missing_block(block_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove blocks of pinned blobs from the `unreachable_block_ids` set.
+    async fn process_pinned_blocks(
+        shared: &Shared,
+        unreachable_block_ids: &mut BTreeSet<BlockId>,
+    ) -> Result<()> {
+        let blob_ids = shared.branch_shared.blob_pins.all();
+        if blob_ids.is_empty() {
+            return Ok(());
+        }
+
+        let Some(local_branch) = shared.local_branch().ok() else { return Ok(()) };
+
+        for blob_id in blob_ids {
+            let mut blob_block_ids = BlockIds::open(local_branch.clone(), blob_id).await?;
+
+            while let Some(block_id) = blob_block_ids.try_next().await? {
+                unreachable_block_ids.remove(&block_id);
+            }
+        }
+
+        Ok(())
     }
 
     async fn remove_unreachable_blocks(
@@ -540,29 +588,6 @@ mod scan {
 
         if total_count > 0 {
             tracing::debug!("unreachable blocks removed: {}", total_count);
-        }
-
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(?mode, branch.id = ?branch.id(), ?blob_id), err(Debug))]
-    async fn process_blocks(
-        shared: &Shared,
-        mode: Mode,
-        unreachable_block_ids: &mut BTreeSet<BlockId>,
-        branch: Branch,
-        blob_id: BlobId,
-    ) -> Result<()> {
-        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
-
-        while let Some(block_id) = blob_block_ids.try_next().await? {
-            if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
-                unreachable_block_ids.remove(&block_id);
-            }
-
-            if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
-                shared.store.require_missing_block(block_id).await?;
-            }
         }
 
         Ok(())

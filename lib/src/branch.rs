@@ -1,5 +1,6 @@
 use crate::{
     access_control::AccessKeys,
+    blob::BlobPinSet,
     blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
@@ -7,6 +8,7 @@ use crate::{
     debug::DebugPrinter,
     directory::{Directory, EntryRef, MissingBlockStrategy},
     error::{Error, Result},
+    event::Event,
     file::{File, FileCache, OpenLock},
     index::BranchData,
     locator::Locator,
@@ -15,13 +17,14 @@ use crate::{
 };
 use camino::{Utf8Component, Utf8Path};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct Branch {
     pool: db::Pool,
     branch_data: BranchData,
     keys: AccessKeys,
-    file_cache: Arc<FileCache>,
+    shared: BranchShared,
 }
 
 impl Branch {
@@ -29,13 +32,13 @@ impl Branch {
         pool: db::Pool,
         branch_data: BranchData,
         keys: AccessKeys,
-        file_cache: Arc<FileCache>,
+        shared: BranchShared,
     ) -> Self {
         Self {
             pool,
             branch_data,
             keys,
-            file_cache,
+            shared,
         }
     }
 
@@ -125,15 +128,15 @@ impl Branch {
     }
 
     pub(crate) fn acquire_open_lock(&self, blob_id: BlobId) -> Arc<OpenLock> {
-        self.file_cache.acquire(*self.id(), blob_id)
+        self.shared.file_cache.acquire(*self.id(), blob_id)
     }
 
     pub(crate) fn is_file_open(&self, blob_id: &BlobId) -> bool {
-        self.file_cache.contains(self.id(), blob_id)
+        self.shared.file_cache.contains(self.id(), blob_id)
     }
 
     pub(crate) fn is_any_file_open(&self) -> bool {
-        self.file_cache.contains_any(self.id())
+        self.shared.file_cache.contains_any(self.id())
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -151,7 +154,23 @@ impl Branch {
             pool: self.pool,
             branch_data: self.branch_data,
             keys,
-            file_cache: self.file_cache,
+            shared: self.shared,
+        }
+    }
+}
+
+/// State shared among all branches.
+#[derive(Clone)]
+pub(crate) struct BranchShared {
+    pub file_cache: Arc<FileCache>,
+    pub blob_pins: Arc<BlobPinSet>,
+}
+
+impl BranchShared {
+    pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
+        Self {
+            file_cache: Arc::new(FileCache::new(event_tx)),
+            blob_pins: Arc::new(BlobPinSet::new()),
         }
     }
 }
@@ -196,12 +215,7 @@ mod tests {
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
         let branch = index.get_branch(writer_id);
-        let branch = Branch::new(
-            pool,
-            branch,
-            secrets.into(),
-            Arc::new(FileCache::new(event_tx)),
-        );
+        let branch = Branch::new(pool, branch, secrets.into(), BranchShared::new(event_tx));
 
         (base_dir, branch)
     }

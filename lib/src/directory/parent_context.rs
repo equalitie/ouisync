@@ -61,6 +61,10 @@ impl ParentContext {
         err(Debug)
     )]
     pub async fn fork(&self, src_branch: &Branch, dst_branch: &Branch) -> Result<Self> {
+        // FIXME: this is not atomic - `open`, `save` and `commit` must happen in the same
+        // transaction, otherwise the directory might get modified concurrently from another task
+        // between `open` and `save` and then this task would overwrite those modifications.
+
         let directory = self.open(src_branch.clone()).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
         let blob_id = *src_entry_data.blob_id().ok_or(Error::EntryNotFound)?;
