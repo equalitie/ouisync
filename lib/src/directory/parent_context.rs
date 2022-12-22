@@ -10,7 +10,6 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::cmp::Ordering;
 use tracing::instrument;
 
 /// Info about an entry in the context of its parent directory.
@@ -82,17 +81,9 @@ impl ParentContext {
                     .commit(tx, content, &VersionVectorOp::Merge(src_vv))
                     .await?;
             }
-            Err(EntryExists { new, old }) => {
-                // It's possible that another task has already forked this entry. If that's the
-                // case then we return success.
-                if Some(&blob_id) != old.blob_id() {
-                    return Err(Error::EntryExists);
-                }
-
-                match new.version_vector().partial_cmp(old.version_vector()) {
-                    Some(Ordering::Less | Ordering::Equal) => (),
-                    Some(Ordering::Greater) | None => return Err(Error::EntryExists),
-                }
+            Err(EntryExists::SameBlob) => (),
+            Err(EntryExists::DifferentBlob | EntryExists::Concurrent | EntryExists::Open) => {
+                return Err(Error::EntryExists)
             }
         };
 

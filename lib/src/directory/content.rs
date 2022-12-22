@@ -8,9 +8,12 @@ use crate::{
     version_vector::VersionVector,
 };
 use serde::Deserialize;
-use std::collections::{
-    btree_map::{self, Entry},
-    BTreeMap,
+use std::{
+    cmp::Ordering,
+    collections::{
+        btree_map::{self, Entry},
+        BTreeMap,
+    },
 };
 
 /// Version of the Directory serialization format.
@@ -60,41 +63,47 @@ impl Content {
         self.entries.get_key_value(name)
     }
 
-    pub fn insert<'a>(
-        &'a mut self,
+    pub fn insert(
+        &mut self,
         branch: &Branch,
         name: String,
         new_data: EntryData,
-    ) -> Result<(), EntryExists<'a>> {
+    ) -> Result<(), EntryExists> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 entry.insert(new_data);
+                Ok(())
             }
             Entry::Occupied(mut entry) => {
                 // Overwrite entries only if the new version is more up to date than the old
                 // version. Additionally, if the old entry is `File`, overwrite it only if it's not
                 // currently open.
-                match entry.get() {
-                    EntryData::File(old_data)
-                        if new_data.version_vector() > &old_data.version_vector
-                            && !branch.is_file_open(&old_data.blob_id) => {}
-                    EntryData::Directory(old_data)
-                        if new_data.version_vector() > &old_data.version_vector => {}
-                    EntryData::Tombstone(old_data)
-                        if new_data.version_vector() > &old_data.version_vector => {}
-                    EntryData::File(_) | EntryData::Directory(_) | EntryData::Tombstone(_) => {
-                        return Err(EntryExists {
-                            new: new_data,
-                            old: entry.into_mut(),
-                        });
+
+                if let EntryData::File(old_data) = entry.get() {
+                    if branch.is_file_open(&old_data.blob_id) {
+                        return Err(EntryExists::Open);
                     }
                 }
 
-                entry.insert(new_data);
+                match new_data
+                    .version_vector()
+                    .partial_cmp(entry.get().version_vector())
+                {
+                    Some(Ordering::Greater) => {
+                        entry.insert(new_data);
+                        Ok(())
+                    }
+                    Some(Ordering::Equal | Ordering::Less) => {
+                        if new_data.blob_id() == entry.get().blob_id() {
+                            Err(EntryExists::SameBlob)
+                        } else {
+                            Err(EntryExists::DifferentBlob)
+                        }
+                    }
+                    None => Err(EntryExists::Concurrent),
+                }
             }
         }
-
-        Ok(())
     }
 
     /// Updates the version vector of entry at `name`.
@@ -120,13 +129,20 @@ impl Content {
     }
 }
 
-pub(crate) struct EntryExists<'a> {
-    pub(crate) new: EntryData,
-    pub(crate) old: &'a EntryData,
+pub(crate) enum EntryExists {
+    /// The existing entry is more up-to-date and has the same blob id than the one being inserted
+    SameBlob,
+    /// The existing entry is more up-to-date and has a different blob id from the one being
+    /// inserted
+    DifferentBlob,
+    /// The existing entry and the one being inserted are concurrent
+    Concurrent,
+    /// The existing entry is open
+    Open,
 }
 
-impl<'a> From<EntryExists<'a>> for Error {
-    fn from(_error: EntryExists<'a>) -> Self {
+impl From<EntryExists> for Error {
+    fn from(_error: EntryExists) -> Self {
         Error::EntryExists
     }
 }
