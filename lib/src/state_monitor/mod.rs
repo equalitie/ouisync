@@ -259,10 +259,8 @@ impl Drop for StateMonitorShared {
             let mut parent_lock = parent.lock_inner();
 
             if let map::Entry::Occupied(e) = parent_lock.children.entry(id) {
-                if e.get().strong_count() == 0 {
-                    e.remove();
-                    parent.changed(parent_lock);
-                }
+                e.remove();
+                parent.changed(parent_lock);
             }
         }
     }
