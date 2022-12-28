@@ -126,7 +126,7 @@ impl StateMonitorShared {
     }
 
     fn make_child(self: &Arc<Self>, child_id: MonitorId) -> Arc<Self> {
-        let mut lock = self.lock();
+        let mut lock = self.lock_inner();
         let mut is_new = false;
 
         // Note: the nodes are responsible for removing themeselves from the map but it can still
@@ -174,7 +174,7 @@ impl StateMonitorShared {
 
         // Note: it can still happen that an entry exists in the map but it's refcount is zero.
         // See the comment in `make_child` for more details.
-        self.lock()
+        self.lock_inner()
             .children
             .get(&child)
             .and_then(|child| child.upgrade())
@@ -186,7 +186,7 @@ impl StateMonitorShared {
         name: String,
         value: T,
     ) -> MonitoredValue<T> {
-        let mut lock = self.lock();
+        let mut lock = self.lock_inner();
         let value = Arc::new(Mutex::new(value));
 
         match lock.values.entry(name.clone()) {
@@ -218,7 +218,7 @@ impl StateMonitorShared {
     }
 
     fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
-        self.lock().on_change.subscribe()
+        self.lock_inner().on_change.subscribe()
     }
 
     fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
@@ -230,11 +230,11 @@ impl StateMonitorShared {
         drop(lock);
 
         if let Some(parent) = &self.parent {
-            parent.changed(parent.lock());
+            parent.changed(parent.lock_inner());
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, StateMonitorInner> {
+    fn lock_inner(&self) -> MutexGuard<'_, StateMonitorInner> {
         self.inner.lock().unwrap()
     }
 
@@ -256,7 +256,7 @@ impl Drop for StateMonitorShared {
     fn drop(&mut self) {
         if let Some(parent) = &self.parent {
             let id = self.id.clone();
-            let mut parent_lock = parent.lock();
+            let mut parent_lock = parent.lock_inner();
 
             if let map::Entry::Occupied(e) = parent_lock.children.entry(id) {
                 if e.get().strong_count() == 0 {
@@ -278,7 +278,7 @@ pub struct MonitoredValue<T> {
 
 impl<T> Clone for MonitoredValue<T> {
     fn clone(&self) -> Self {
-        let mut lock = self.monitor.lock();
+        let mut lock = self.monitor.lock_inner();
 
         // Unwrap OK because since this instance exists, there must be an entry for it in the
         // parent monitor.values map.
@@ -327,13 +327,13 @@ impl<'a, T> Drop for MutexGuardWrap<'a, T> {
             // Unlock this before we try to lock the parent monitor.
             self.guard.take();
         }
-        self.monitor.changed(self.monitor.lock());
+        self.monitor.changed(self.monitor.lock_inner());
     }
 }
 
 impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
-        let mut lock = self.monitor.lock();
+        let mut lock = self.monitor.lock_inner();
 
         // Can we avoid cloning `self.name` (since we're droping anyway)?
         match lock.values.entry(self.name.clone()) {
@@ -362,7 +362,7 @@ impl Serialize for StateMonitor {
     where
         S: Serializer,
     {
-        let lock = self.shared.lock();
+        let lock = self.shared.lock_inner();
 
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
@@ -384,8 +384,7 @@ impl<'a> Serialize for ValuesSerializer<'a> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0.iter() {
-            let v = v.ptr.lock().unwrap();
-            map.serialize_entry(k, &v.to_string())?;
+            map.serialize_entry(k, &v.ptr.lock().unwrap().to_string())?;
         }
         map.end()
     }
@@ -402,7 +401,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
             // Drop.
             map.serialize_entry(
                 &format!("{}:{}", id.disambiguator, id.name),
-                &child.upgrade().unwrap().lock().version,
+                &child.upgrade().unwrap().lock_inner().version,
             )?;
         }
         map.end()
