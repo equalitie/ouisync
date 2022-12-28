@@ -393,16 +393,34 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     where
         S: Serializer,
     {
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (id, child) in self.0.iter() {
-            // Unwrap OK because children are responsible for removing themselves from the map on
-            // Drop.
+        let strong = self.make_strong();
+
+        let mut map = serializer.serialize_map(Some(strong.len()))?;
+        for (id, child) in strong.iter() {
             map.serialize_entry(
                 &format!("{}:{}", id.disambiguator, id.name),
-                &child.upgrade().unwrap().lock_inner().version,
+                &child.lock_inner().version,
             )?;
         }
         map.end()
+    }
+}
+
+impl<'a> ChildrenSerializer<'a> {
+    fn make_strong(&self) -> Vec<(MonitorId, Arc<StateMonitorShared>)> {
+        let mut strong = Vec::new();
+        strong.reserve(self.0.len());
+
+        for (id, child) in self.0.iter() {
+            // Note that this can actually be `None` because when the child is destroyed, first the
+            // `Arc`s refcount is decremented and only then `StateMonitorShared`s `drop` function
+            // is called which removes the entry from it's parent's `children` map.
+            if let Some(arc) = child.upgrade() {
+                strong.push((id.clone(), arc));
+            }
+        }
+
+        strong
     }
 }
 
