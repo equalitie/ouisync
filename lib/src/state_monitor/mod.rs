@@ -10,7 +10,10 @@ use std::{
     convert::Into,
     fmt,
     ops::Drop,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard, Weak,
+    },
 };
 
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
@@ -43,14 +46,14 @@ pub struct StateMonitor {
 
 struct StateMonitorShared {
     id: MonitorId,
+    // Incremented on each change, can be used by monitors to determine whether a child has
+    // changed.
+    version: AtomicU64,
     parent: Option<StateMonitor>,
     inner: Mutex<StateMonitorInner>,
 }
 
 struct StateMonitorInner {
-    // Incremented on each change, can be used by monitors to determine whether a child has
-    // changed.
-    version: u64,
     // We need to keep track of the refcount ourselves instead of relying on the `Arc`'s
     // `strong_count`. The reason is that in `Drop` we remove `self` from the parent, if we did
     // this removal from insde `StateMonitorShared`s `drop` function, we could end up with the
@@ -91,11 +94,13 @@ impl StateMonitor {
 
                 let child = Arc::new(StateMonitorShared {
                     id: child_id,
+                    version: AtomicU64::new(0),
+                    // We can't do `self.clone()` here because cloning calls `lock_inner` and thus
+                    // we'd deadlock.
                     parent: Some(Self {
                         shared: self.shared.clone(),
                     }),
                     inner: Mutex::new(StateMonitorInner {
-                        version: 0,
                         refcount: 1,
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
@@ -114,6 +119,7 @@ impl StateMonitor {
         };
 
         if is_new {
+            // We "cloned" `self` in the `parent` field above.
             lock.refcount += 1;
             self.shared.changed(lock);
         }
@@ -205,9 +211,14 @@ impl Drop for StateMonitor {
             let id = self.shared.id.clone();
             let mut parent_lock = parent.shared.lock_inner();
 
-            if let btree_map::Entry::Occupied(e) = parent_lock.children.entry(id) {
-                e.remove();
-                parent.shared.changed(parent_lock);
+            match parent_lock.children.entry(id) {
+                btree_map::Entry::Occupied(e) => {
+                    e.remove();
+                    parent.shared.changed(parent_lock);
+                }
+                btree_map::Entry::Vacant(_) => {
+                    unreachable!();
+                }
             }
         }
     }
@@ -217,9 +228,9 @@ impl StateMonitorShared {
     fn make_root() -> Arc<Self> {
         Arc::new(StateMonitorShared {
             id: MonitorId::root(),
+            version: AtomicU64::new(0),
             parent: None,
             inner: Mutex::new(StateMonitorInner {
-                version: 0,
                 refcount: 1,
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
@@ -234,21 +245,25 @@ impl StateMonitorShared {
             None => return Some(self.clone()),
         };
 
-        // Note: it can still happen that an entry exists in the map but it's refcount is zero.
-        // See the comment in `make_child` for more details.
-        self.lock_inner()
+        let child = self
+            .lock_inner()
             .children
             .get(&child_id)
-            .and_then(|child| child.upgrade())
-            .and_then(|child| child.locate(path))
+            .map(|child| child.upgrade().unwrap());
+
+        // Don't inline this with the previous command because we need to unlock inner before
+        // recursing to the child.
+        child.and_then(|child| child.locate(path))
     }
 
     fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
         self.lock_inner().on_change.subscribe()
     }
 
-    fn changed(&self, mut lock: MutexGuard<'_, StateMonitorInner>) {
-        lock.version += 1;
+    fn changed(&self, lock: MutexGuard<'_, StateMonitorInner>) {
+        // The only important consideration is that incrementing `version` happens before
+        // `on_change` is notified so that whoever will pick it up will see `version` increased.
+        self.version.fetch_add(1, Ordering::SeqCst);
         lock.on_change.send(()).unwrap_or(());
 
         // When serializing, we lock from parent to child (to access the child's `version`), so
@@ -379,7 +394,7 @@ impl Serialize for StateMonitor {
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
         let mut s = serializer.serialize_struct("StateMonitor", 3)?;
-        s.serialize_field("version", &lock.version)?;
+        s.serialize_field("version", &self.shared.version.load(Ordering::SeqCst))?;
         s.serialize_field("values", &ValuesSerializer(&lock.values))?;
         s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
         s.end()
@@ -411,7 +426,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
         for (id, child) in self.0.iter() {
             map.serialize_entry(
                 &format!("{}:{}", id.disambiguator, id.name),
-                &child.upgrade().unwrap().lock_inner().version,
+                &child.upgrade().unwrap().version.load(Ordering::SeqCst),
             )?;
         }
         map.end()
