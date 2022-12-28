@@ -6,7 +6,7 @@ use serde::{
     Serialize, Serializer,
 };
 use std::{
-    collections::{btree_map as map, BTreeMap},
+    collections::{btree_map, BTreeMap},
     convert::Into,
     fmt,
     ops::Drop,
@@ -37,14 +37,13 @@ impl MonitorId {
 
 // --- StateMonitor
 
-#[derive(Clone)]
 pub struct StateMonitor {
     shared: Arc<StateMonitorShared>,
 }
 
 struct StateMonitorShared {
     id: MonitorId,
-    parent: Option<Arc<StateMonitorShared>>,
+    parent: Option<StateMonitor>,
     inner: Mutex<StateMonitorInner>,
 }
 
@@ -52,6 +51,14 @@ struct StateMonitorInner {
     // Incremented on each change, can be used by monitors to determine whether a child has
     // changed.
     version: u64,
+    // We need to keep track of the refcount ourselves instead of relying on the `Arc`'s
+    // `strong_count`. The reason is that in `Drop` we remove `self` from the parent, if we did
+    // this removal from insde `StateMonitorShared`s `drop` function, we could end up with the
+    // parent pointing to no longer existing entry*.
+    //
+    // (*) Because the `Arc` first decrements it's strong count and only then destroys its value.
+    // That means there is a time when the parent's weak ptr to the child is no longer valid.
+    refcount: usize,
     values: BTreeMap<String, MonitoredValueHandle>,
     children: BTreeMap<MonitorId, Weak<StateMonitorShared>>,
     on_change: uninitialized_watch::Sender<()>,
@@ -65,14 +72,7 @@ impl StateMonitor {
     }
 
     pub fn make_child<S: Into<String>>(&self, name: S) -> Self {
-        let child_id = MonitorId {
-            name: name.into(),
-            disambiguator: 0,
-        };
-
-        Self {
-            shared: self.shared.make_child(child_id),
-        }
+        self.make_non_unique_child(name, 0)
     }
 
     /// Use if we want to allow nodes of the same name.
@@ -82,9 +82,43 @@ impl StateMonitor {
             disambiguator,
         };
 
-        Self {
-            shared: self.shared.make_child(child_id),
+        let mut lock = self.shared.lock_inner();
+        let mut is_new = false;
+
+        let child = match lock.children.entry(child_id.clone()) {
+            btree_map::Entry::Vacant(e) => {
+                is_new = true;
+
+                let child = Arc::new(StateMonitorShared {
+                    id: child_id,
+                    parent: Some(Self {
+                        shared: self.shared.clone(),
+                    }),
+                    inner: Mutex::new(StateMonitorInner {
+                        version: 0,
+                        refcount: 1,
+                        values: BTreeMap::new(),
+                        children: BTreeMap::new(),
+                        on_change: uninitialized_watch::channel().0,
+                    }),
+                });
+
+                e.insert(Arc::downgrade(&child));
+                child
+            }
+            btree_map::Entry::Occupied(e) => {
+                // Unwrap OK because children are responsible for removing themselves from the map
+                // on Drop.
+                e.get().upgrade().unwrap()
+            }
+        };
+
+        if is_new {
+            lock.refcount += 1;
+            self.shared.changed(lock);
         }
+
+        Self { shared: child }
     }
 
     pub fn locate<I: Iterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {
@@ -102,12 +136,80 @@ impl StateMonitor {
         name: String,
         value: T,
     ) -> MonitoredValue<T> {
-        self.shared.make_value(name, value)
+        let mut lock = self.shared.lock_inner();
+        let value = Arc::new(Mutex::new(value));
+
+        match lock.values.entry(name.clone()) {
+            btree_map::Entry::Vacant(e) => {
+                e.insert(MonitoredValueHandle {
+                    refcount: 1,
+                    ptr: value.clone(),
+                });
+            }
+            btree_map::Entry::Occupied(mut e) => {
+                tracing::error!(
+                    "StateMonitor: Monitored value of the same name ({:?}) under monitor {:?} already exists",
+                    name,
+                    self.shared.path()
+                );
+                let v = e.get_mut();
+                v.refcount += 1;
+                v.ptr = Arc::new(Mutex::new("<AMBIGUOUS>"));
+            }
+        };
+
+        lock.refcount += 1;
+
+        self.shared.changed(lock);
+
+        MonitoredValue {
+            name,
+            monitor: Self {
+                shared: self.shared.clone(),
+            },
+            value,
+        }
     }
 
     /// Get notified whenever there is a change in this StateMonitor
     pub fn subscribe(&self) -> uninitialized_watch::Receiver<()> {
         self.shared.subscribe()
+    }
+}
+
+impl Clone for StateMonitor {
+    fn clone(&self) -> Self {
+        let mut inner = self.shared.lock_inner();
+        inner.refcount += 1;
+        Self {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+impl Drop for StateMonitor {
+    fn drop(&mut self) {
+        let mut inner = self.shared.lock_inner();
+
+        inner.refcount -= 1;
+
+        if inner.refcount != 0 {
+            return;
+        }
+
+        drop(inner);
+
+        // This is the last instance of this state monitor. If it's not the root, remove it from
+        // the parent.
+        if let Some(parent) = &self.shared.parent {
+            let id = self.shared.id.clone();
+            let mut parent_lock = parent.shared.lock_inner();
+
+            if let btree_map::Entry::Occupied(e) = parent_lock.children.entry(id) {
+                e.remove();
+                parent.shared.changed(parent_lock);
+            }
+        }
     }
 }
 
@@ -118,6 +220,7 @@ impl StateMonitorShared {
             parent: None,
             inner: Mutex::new(StateMonitorInner {
                 version: 0,
+                refcount: 1,
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
                 on_change: uninitialized_watch::channel().0,
@@ -125,50 +228,9 @@ impl StateMonitorShared {
         })
     }
 
-    fn make_child(self: &Arc<Self>, child_id: MonitorId) -> Arc<Self> {
-        let mut lock = self.lock_inner();
-        let mut is_new = false;
-
-        // Note: the nodes are responsible for removing themeselves from the map but it can still
-        // happen the entry's refcount reaches zero before the entry itself is removed* and so we
-        // have to handle also the case where the entry exists, but it's refcount is 0.
-        //
-        // *) because `Arc` decrements the refcount before running the destructor of the contained
-        //    value.
-        let child_weak = lock
-            .children
-            .entry(child_id.clone())
-            .or_insert_with(Weak::new);
-        let child = if let Some(child) = child_weak.upgrade() {
-            child
-        } else {
-            let child = Arc::new(Self {
-                id: child_id,
-                parent: Some(self.clone()),
-                inner: Mutex::new(StateMonitorInner {
-                    version: 0,
-                    values: BTreeMap::new(),
-                    children: BTreeMap::new(),
-                    on_change: uninitialized_watch::channel().0,
-                }),
-            });
-
-            *child_weak = Arc::downgrade(&child);
-            is_new = true;
-
-            child
-        };
-
-        if is_new {
-            self.changed(lock);
-        }
-
-        child
-    }
-
     fn locate<I: Iterator<Item = MonitorId>>(self: &Arc<Self>, mut path: I) -> Option<Arc<Self>> {
-        let child = match path.next() {
-            Some(child) => child,
+        let child_id = match path.next() {
+            Some(child_id) => child_id,
             None => return Some(self.clone()),
         };
 
@@ -176,45 +238,9 @@ impl StateMonitorShared {
         // See the comment in `make_child` for more details.
         self.lock_inner()
             .children
-            .get(&child)
+            .get(&child_id)
             .and_then(|child| child.upgrade())
             .and_then(|child| child.locate(path))
-    }
-
-    fn make_value<T: fmt::Display + Sync + Send + 'static>(
-        self: &Arc<Self>,
-        name: String,
-        value: T,
-    ) -> MonitoredValue<T> {
-        let mut lock = self.lock_inner();
-        let value = Arc::new(Mutex::new(value));
-
-        match lock.values.entry(name.clone()) {
-            map::Entry::Vacant(e) => {
-                e.insert(MonitoredValueHandle {
-                    refcount: 1,
-                    ptr: value.clone(),
-                });
-            }
-            map::Entry::Occupied(mut e) => {
-                tracing::error!(
-                    "StateMonitor: Monitored value of the same name ({:?}) under monitor {:?} already exists",
-                    name,
-                    self.path()
-                );
-                let v = e.get_mut();
-                v.refcount += 1;
-                v.ptr = Arc::new(Mutex::new("<AMBIGUOUS>"));
-            }
-        };
-
-        self.changed(lock);
-
-        MonitoredValue {
-            name,
-            monitor: self.clone(),
-            value,
-        }
     }
 
     fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
@@ -230,7 +256,7 @@ impl StateMonitorShared {
         drop(lock);
 
         if let Some(parent) = &self.parent {
-            parent.changed(parent.lock_inner());
+            parent.shared.changed(parent.shared.lock_inner());
         }
     }
 
@@ -239,7 +265,7 @@ impl StateMonitorShared {
     }
 
     fn path(&self) -> String {
-        if let Some(parent) = self.parent.as_ref() {
+        if let Some(parent) = self.parent.as_ref().map(|parent| &parent.shared) {
             format!(
                 "{}/({},{})",
                 parent.path(),
@@ -252,31 +278,17 @@ impl StateMonitorShared {
     }
 }
 
-impl Drop for StateMonitorShared {
-    fn drop(&mut self) {
-        if let Some(parent) = &self.parent {
-            let id = self.id.clone();
-            let mut parent_lock = parent.lock_inner();
-
-            if let map::Entry::Occupied(e) = parent_lock.children.entry(id) {
-                e.remove();
-                parent.changed(parent_lock);
-            }
-        }
-    }
-}
-
 // --- MonitoredValue
 
 pub struct MonitoredValue<T> {
     name: String,
-    monitor: Arc<StateMonitorShared>,
+    monitor: StateMonitor,
     value: Arc<Mutex<T>>,
 }
 
 impl<T> Clone for MonitoredValue<T> {
     fn clone(&self) -> Self {
-        let mut lock = self.monitor.lock_inner();
+        let mut lock = self.monitor.shared.lock_inner();
 
         // Unwrap OK because since this instance exists, there must be an entry for it in the
         // parent monitor.values map.
@@ -300,7 +312,7 @@ impl<T> MonitoredValue<T> {
 }
 
 pub struct MutexGuardWrap<'a, T> {
-    monitor: Arc<StateMonitorShared>,
+    monitor: StateMonitor,
     // This is only None in the destructor.
     guard: Option<MutexGuard<'a, T>>,
 }
@@ -325,25 +337,27 @@ impl<'a, T> Drop for MutexGuardWrap<'a, T> {
             // Unlock this before we try to lock the parent monitor.
             self.guard.take();
         }
-        self.monitor.changed(self.monitor.lock_inner());
+        self.monitor
+            .shared
+            .changed(self.monitor.shared.lock_inner());
     }
 }
 
 impl<T> Drop for MonitoredValue<T> {
     fn drop(&mut self) {
-        let mut lock = self.monitor.lock_inner();
+        let mut lock = self.monitor.shared.lock_inner();
 
         // Can we avoid cloning `self.name` (since we're droping anyway)?
         match lock.values.entry(self.name.clone()) {
-            map::Entry::Occupied(mut e) => {
+            btree_map::Entry::Occupied(mut e) => {
                 let v = e.get_mut();
                 v.refcount -= 1;
                 if v.refcount == 0 {
                     e.remove();
-                    self.monitor.changed(lock);
+                    self.monitor.shared.changed(lock);
                 }
             }
-            map::Entry::Vacant(_) => unreachable!(),
+            btree_map::Entry::Vacant(_) => unreachable!(),
         }
     }
 }
@@ -393,34 +407,14 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     where
         S: Serializer,
     {
-        let strong = self.make_strong();
-
-        let mut map = serializer.serialize_map(Some(strong.len()))?;
-        for (id, child) in strong.iter() {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (id, child) in self.0.iter() {
             map.serialize_entry(
                 &format!("{}:{}", id.disambiguator, id.name),
-                &child.lock_inner().version,
+                &child.upgrade().unwrap().lock_inner().version,
             )?;
         }
         map.end()
-    }
-}
-
-impl<'a> ChildrenSerializer<'a> {
-    fn make_strong(&self) -> Vec<(MonitorId, Arc<StateMonitorShared>)> {
-        let mut strong = Vec::new();
-        strong.reserve(self.0.len());
-
-        for (id, child) in self.0.iter() {
-            // Note that this can actually be `None` because when the child is destroyed, first the
-            // `Arc`s refcount is decremented and only then `StateMonitorShared`s `drop` function
-            // is called which removes the entry from it's parent's `children` map.
-            if let Some(arc) = child.upgrade() {
-                strong.push((id.clone(), arc));
-            }
-        }
-
-        strong
     }
 }
 
