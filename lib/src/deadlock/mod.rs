@@ -1,5 +1,7 @@
 //! Utilities for deadlock detection
 
+pub mod asynch;
+
 use crate::debug;
 use slab::Slab;
 use std::{

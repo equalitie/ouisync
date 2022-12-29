@@ -6,10 +6,10 @@ mod macros;
 
 pub mod crypto;
 pub mod db;
+pub mod deadlock;
 pub mod device_id;
 pub mod network;
 pub mod path;
-pub mod sync;
 
 mod access_control;
 mod blob;
@@ -18,7 +18,6 @@ mod block;
 mod branch;
 mod config;
 mod conflict;
-mod deadlock;
 mod debug;
 mod directory;
 mod error;
@@ -36,6 +35,7 @@ mod repository;
 mod scoped_task;
 mod state_monitor;
 mod store;
+mod sync;
 #[cfg(test)]
 mod test_utils;
 #[cfg_attr(test, macro_use)]

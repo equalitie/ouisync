@@ -3,7 +3,7 @@ use super::{
     session,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use ouisync_lib::{sync::Mutex, Branch, Error, File, Repository, Result};
+use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Repository, Result};
 use std::{
     convert::TryInto,
     io::SeekFrom,
@@ -13,7 +13,7 @@ use std::{
 };
 
 pub struct FileHolder {
-    file: Mutex<File>,
+    file: AsyncMutex<File>,
     local_branch: Option<Branch>,
 }
 
@@ -31,7 +31,7 @@ pub unsafe extern "C" fn file_open(
         ctx.spawn(async move {
             let file = repo.repository.open_file(&path).await?;
             Ok(SharedHandle::new(Arc::new(FileHolder {
-                file: Mutex::new(file),
+                file: AsyncMutex::new(file),
                 local_branch,
             })))
         })
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn file_create(
             file.flush().await?;
 
             Ok(SharedHandle::new(Arc::new(FileHolder {
-                file: Mutex::new(file),
+                file: AsyncMutex::new(file),
                 local_branch: Some(local_branch),
             })))
         })
