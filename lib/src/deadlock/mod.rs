@@ -1,6 +1,7 @@
 //! Utilities for deadlock detection
 
 pub mod asynch;
+pub mod blocking;
 
 use crate::debug;
 use slab::Slab;
