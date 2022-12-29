@@ -1,6 +1,9 @@
 pub mod tracing_layer;
 
-use crate::sync::uninitialized_watch;
+use crate::{
+    deadlock::blocking::{Mutex, MutexGuard},
+    sync::uninitialized_watch,
+};
 use serde::{
     ser::{SerializeMap, SerializeStruct},
     Serialize, Serializer,
@@ -12,7 +15,7 @@ use std::{
     ops::Drop,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard, Weak,
+        Arc, Weak,
     },
 };
 
