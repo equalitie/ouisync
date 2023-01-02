@@ -21,35 +21,21 @@ impl BlockTracker {
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::new(),
                     clients: Slab::new(),
+                    complete_counter: 0,
                 }),
                 notify_tx,
             }),
         }
     }
 
-    /// Mark the block with the given id as required.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this tracker is in greedy mode.
-    pub fn require(&self, block_id: BlockId) {
-        tracing::trace!(?block_id, "require");
+    /// Begin marking the block with the given id as required. See also [`Require::commit`].
+    pub fn begin_require(&self, block_id: BlockId) -> Require {
+        let inner = self.shared.inner.lock().unwrap();
 
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        match inner.missing_blocks.entry(block_id) {
-            Entry::Occupied(mut entry) => {
-                if entry.get_mut().state.switch_offered_to_required() {
-                    self.shared.notify();
-                }
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(MissingBlock {
-                    clients: HashMap::new(),
-                    state: MissingBlockState::Required,
-                });
-                self.shared.notify();
-            }
+        Require {
+            shared: self.shared.clone(),
+            complete_counter: inner.complete_counter,
+            block_id,
         }
     }
 
@@ -70,6 +56,8 @@ impl BlockTracker {
                 block_ids.remove(block_id);
             }
         }
+
+        inner.complete_counter = inner.complete_counter.wrapping_add(1);
     }
 
     pub fn client(&self) -> BlockTrackerClient {
@@ -264,6 +252,45 @@ impl Drop for BlockTrackerClient {
     }
 }
 
+pub(crate) struct Require {
+    shared: Arc<Shared>,
+    block_id: BlockId,
+    complete_counter: u64,
+}
+
+impl Require {
+    /// Commits marking the block as required. When this returns `true`, the block was successfully
+    /// marked as required. Otherwise the block might have been completed after `begin_require` was
+    /// called (by some other task) and the marking needs to be restarted.
+    pub fn commit(self) -> bool {
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        if inner.complete_counter != self.complete_counter {
+            return false;
+        }
+
+        tracing::trace!(block_id = ?self.block_id, "require");
+
+        match inner.missing_blocks.entry(self.block_id) {
+            Entry::Occupied(mut entry) => {
+                if entry.get_mut().state.switch_offered_to_required() {
+                    self.shared.notify();
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(MissingBlock {
+                    clients: HashMap::new(),
+                    state: MissingBlockState::Required,
+                });
+
+                self.shared.notify();
+            }
+        }
+
+        true
+    }
+}
+
 struct Shared {
     inner: BlockingMutex<Inner>,
     notify_tx: watch::Sender<()>,
@@ -287,6 +314,9 @@ impl Shared {
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
     clients: Slab<HashSet<BlockId>>,
+    // Counts the number of completed blocks. Used to detect concurrent changes when requiring
+    // blocks.
+    complete_counter: u64,
 }
 
 struct MissingBlock {
@@ -368,7 +398,7 @@ mod tests {
         assert_eq!(client.try_accept(), None);
 
         // Required + offered blocks are returned...
-        tracker.require(block0.id);
+        assert!(tracker.begin_require(block0.id).commit());
         assert_eq!(client.try_accept(), Some(block0.id));
 
         // ...but only once.
@@ -383,8 +413,8 @@ mod tests {
         let block0 = make_block();
         let block1 = make_block();
 
-        tracker.require(block0.id);
-        tracker.require(block1.id);
+        assert!(tracker.begin_require(block0.id).commit());
+        assert!(tracker.begin_require(block1.id).commit());
 
         // Required + offered blocks are returned first...
         client.offer(block1.id);
@@ -402,7 +432,7 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
         assert_eq!(client0.try_accept(), Some(block.id));
 
         client0.cancel(&block.id);
@@ -419,7 +449,7 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
         client0.offer(block.id);
         client1.offer(block.id);
 
@@ -438,7 +468,7 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
         client0.offer(block.id);
         client1.offer(block.id);
 
@@ -463,7 +493,7 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
 
         drop(client0);
 
@@ -482,7 +512,7 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
 
         assert_eq!(client0.try_accept(), Some(block.id));
         assert_eq!(client1.try_accept(), None);
@@ -506,9 +536,23 @@ mod tests {
 
         drop(client0);
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
 
         assert_eq!(client1.try_accept(), Some(block.id));
+    }
+
+    #[test]
+    fn concurrent_require_and_complete() {
+        let tracker = BlockTracker::new();
+        let client = tracker.client();
+
+        let block = make_block();
+        client.offer(block.id);
+
+        let require = tracker.begin_require(block.id);
+        tracker.complete(&block.id);
+
+        assert!(!require.commit());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -520,14 +564,14 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        assert!(tracker.begin_require(block.id).commit());
 
         for client in &clients {
             client.offer(block.id);
         }
 
         // Make sure all clients stay alive until we are done so that any accepted requests are not
-        // released prematurelly.
+        // released prematurely.
         let barrier = Arc::new(Barrier::new(clients.len()));
 
         // Run the clients in parallel
@@ -581,7 +625,7 @@ mod tests {
         for (op, block_id) in ops {
             match op {
                 Op::Require => {
-                    tracker.require(block_id);
+                    assert!(tracker.begin_require(block_id).commit());
                 }
                 Op::Offer => {
                     client.offer(block_id);

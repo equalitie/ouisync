@@ -62,10 +62,16 @@ impl Store {
         conn: &mut db::Connection,
         block_id: BlockId,
     ) -> Result<()> {
-        // TODO: check whether the block is already required to avoid the potentially expensive db
-        // lookup.
-        if !block::exists(conn, &block_id).await? {
-            self.block_tracker.require(block_id);
+        loop {
+            let require = self.block_tracker.begin_require(block_id);
+
+            if block::exists(conn, &block_id).await? {
+                break;
+            }
+
+            if require.commit() {
+                break;
+            }
         }
 
         Ok(())
