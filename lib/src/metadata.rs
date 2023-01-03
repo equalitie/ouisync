@@ -429,7 +429,7 @@ async fn set_public(tx: &mut db::WriteTransaction, id: &[u8], blob: &[u8]) -> Re
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
         .bind(blob)
-        .execute(&mut **tx)
+        .execute(&mut ***tx)
         .await?;
 
     Ok(())
@@ -483,7 +483,7 @@ async fn set_secret(
     .bind(id)
     .bind(&nonce[..])
     .bind(&cypher)
-    .execute(&mut **tx)
+    .execute(&mut ***tx)
     .await?;
 
     Ok(())

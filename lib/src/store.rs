@@ -57,15 +57,13 @@ impl Store {
         })
     }
 
-    pub(crate) async fn require_missing_block(
-        &self,
-        conn: &mut db::Connection,
-        block_id: BlockId,
-    ) -> Result<()> {
+    pub(crate) async fn require_missing_block(&self, block_id: BlockId) -> Result<()> {
+        let mut conn = self.db().acquire().await?;
+
         loop {
             let require = self.block_tracker.begin_require(block_id);
 
-            if block::exists(conn, &block_id).await? {
+            if block::exists(&mut conn, &block_id).await? {
                 break;
             }
 

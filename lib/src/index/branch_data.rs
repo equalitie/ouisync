@@ -133,12 +133,12 @@ impl BranchData {
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_snapshot(conn)
+        self.load_snapshot(tx)
             .await?
-            .get_block(conn, encoded_locator)
+            .get_block(tx, encoded_locator)
             .await
     }
 
@@ -272,10 +272,10 @@ impl SnapshotData {
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get_block(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_path(conn, encoded_locator)
+        self.load_path(tx, encoded_locator)
             .await?
             .get_leaf()
             .ok_or(Error::EntryNotFound)
@@ -370,7 +370,7 @@ impl SnapshotData {
 
     async fn load_path(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
         let mut path = Path::new(
@@ -381,7 +381,7 @@ impl SnapshotData {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(conn, &parent).await?;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -390,7 +390,7 @@ impl SnapshotData {
             };
         }
 
-        path.leaves = LeafNode::load_children(conn, &parent).await?;
+        path.leaves = LeafNode::load_children(tx, &parent).await?;
 
         Ok(path)
     }

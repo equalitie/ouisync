@@ -122,7 +122,7 @@ impl InnerNode {
         .bind(&self.hash)
         .bind(self.summary.is_complete)
         .bind(&self.summary.block_presence)
-        .execute(&mut **tx)
+        .execute(&mut ***tx)
         .await?;
 
         Ok(())
@@ -140,7 +140,7 @@ impl InnerNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .bind(hash)
-        .execute(&mut **tx)
+        .execute(&mut ***tx)
         .await?;
 
         Ok(())

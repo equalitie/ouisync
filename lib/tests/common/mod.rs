@@ -249,6 +249,8 @@ pub(crate) async fn check_file_version_content(
         // TODO: this is not ideal as the only way to resolve this problem is to reopen the
         // file (unlike the `BlockNotFound` error where we just need to read it again when the
         // block gets downloaded). This should probably be considered a bug.
+        // FIXME: this should no longer happen because branches that have any open file are not
+        // pruned.
         //
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
         Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {

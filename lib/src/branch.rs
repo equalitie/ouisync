@@ -116,10 +116,10 @@ impl Branch {
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        let mut conn = self.pool.acquire().await?;
+        let mut tx = self.pool.begin_read().await?;
         let (block_id, _) = self
             .data()
-            .get(&mut conn, &Locator::ROOT.encode(self.keys().read()))
+            .get(&mut tx, &Locator::ROOT.encode(self.keys().read()))
             .await?;
         Ok(block_id)
     }

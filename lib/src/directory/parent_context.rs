@@ -97,9 +97,9 @@ impl ParentContext {
     }
 
     /// Opens the parent directory of this entry.
-    pub async fn open_in(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
+    pub async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
         Directory::open_in(
-            conn,
+            tx,
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),

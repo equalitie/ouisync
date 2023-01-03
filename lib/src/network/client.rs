@@ -219,13 +219,9 @@ impl Client {
                 }
             }
             BlockRequestMode::Greedy => {
-                let mut conn = self.store.db().acquire().await?;
-
                 for block_id in updated {
                     if self.block_tracker.offer(block_id) {
-                        self.store
-                            .require_missing_block(&mut conn, block_id)
-                            .await?;
+                        self.store.require_missing_block(block_id).await?;
                     }
                 }
             }

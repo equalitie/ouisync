@@ -89,7 +89,7 @@ impl Pool {
             tx.commit().await?;
         }
 
-        Ok(WriteTransaction(self.write.begin().await?))
+        Ok(WriteTransaction(ReadTransaction(self.write.begin().await?)))
     }
 
     /// Begin a shared write transaction. Unlike regular write transaction, a shared write
@@ -105,7 +105,7 @@ impl Pool {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
         if shared_tx.is_none() {
-            *shared_tx = Some(WriteTransaction(self.write.begin().await?));
+            *shared_tx = Some(WriteTransaction(ReadTransaction(self.write.begin().await?)));
         }
 
         Ok(SharedWriteTransaction(shared_tx))
@@ -124,7 +124,8 @@ impl Pool {
 }
 
 /// Database connection
-// TODO: create a newtype for this which hides `begin` (use the ref-cast crate)
+// TODO: create a newtype for this which hides `begin` (use the ref-cast crate) and implement
+// `Executor` for it.
 pub(crate) type Connection = SqliteConnection;
 
 /// Database connection from pool
@@ -151,6 +152,7 @@ impl DerefMut for PoolConnection {
 /// transaction represents an immutable snapshot of the database at the point the transaction was
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
+// TODO: impl `Executor`
 #[derive(Debug)]
 pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
 
@@ -168,27 +170,28 @@ impl DerefMut for ReadTransaction {
     }
 }
 
-/// Transaction that allows writing to the database.
+/// Transaction that allows both reading and writing.
+// TODO: impl `Executor`
 #[derive(Debug)]
-pub(crate) struct WriteTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct WriteTransaction(ReadTransaction);
 
 impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.0.commit().await
+        self.0 .0.commit().await
     }
 }
 
 impl Deref for WriteTransaction {
-    type Target = Connection;
+    type Target = ReadTransaction;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
 impl DerefMut for WriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        &mut self.0
     }
 }
 
