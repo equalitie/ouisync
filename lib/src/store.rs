@@ -58,18 +58,11 @@ impl Store {
     }
 
     pub(crate) async fn require_missing_block(&self, block_id: BlockId) -> Result<()> {
+        let require = self.block_tracker.begin_require(block_id);
         let mut conn = self.db().acquire().await?;
 
-        loop {
-            let require = self.block_tracker.begin_require(block_id);
-
-            if block::exists(&mut conn, &block_id).await? {
-                break;
-            }
-
-            if require.commit() {
-                break;
-            }
+        if !block::exists(&mut conn, &block_id).await? {
+            require.commit();
         }
 
         Ok(())
