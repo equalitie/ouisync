@@ -23,6 +23,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt, iter, mem,
 };
+use tracing::instrument;
 
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
@@ -92,6 +93,7 @@ impl JointDirectory {
     /// - Finally, if there are both files and directories, only the directories are retured (merged
     ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
     ///   to unambiguously lookup a directory even in the presence of conflicting files.
+    #[instrument(skip(self), err(Debug))]
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
         // First try exact match as it is more common.
         let mut entries =
@@ -123,6 +125,7 @@ impl JointDirectory {
     }
 
     /// Looks up a specific version of a file.
+    #[instrument(skip(self), err(Debug))]
     pub fn lookup_version(&self, name: &'_ str, branch_id: &'_ PublicKey) -> Result<FileRef> {
         self.versions
             .get(branch_id)
@@ -156,6 +159,7 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
+    #[instrument(skip_all, fields(path = %path.as_ref()))]
     pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
         let mut curr = Cow::Borrowed(self);
 
@@ -166,7 +170,11 @@ impl JointDirectory {
                     let next = curr
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
-                        .ok_or(Error::EntryNotFound)?
+                        .ok_or(Error::EntryNotFound)
+                        .map_err(|error| {
+                            tracing::error!(?name, ?error);
+                            error
+                        })?
                         .open()
                         .await?;
                     curr = Cow::Owned(next);

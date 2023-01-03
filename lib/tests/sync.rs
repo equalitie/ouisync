@@ -684,9 +684,20 @@ async fn content_stays_available_during_sync() {
     env.rng.fill(&mut content1[..]);
 
     // First create and sync "b/c.dat"
-    let mut file = repo_a.create_file("b/c.dat").await.unwrap();
-    file.write(&content0).await.unwrap();
-    file.flush().await.unwrap();
+    async {
+        let mut file = repo_a.create_file("b/c.dat").await.unwrap();
+        file.write(&content0)
+            .instrument(tracing::info_span!("write"))
+            .await
+            .unwrap();
+        file.flush()
+            .instrument(tracing::info_span!("flush"))
+            .await
+            .unwrap();
+        tracing::info!("done");
+    }
+    .instrument(tracing::info_span!("create b/c.dat"))
+    .await;
 
     common::expect_file_content(&repo_b, "b/c.dat", &content0).await;
 
@@ -698,11 +709,27 @@ async fn content_stays_available_during_sync() {
     // previous content of "b" can still be accessed even during this period.
 
     let task_a = async {
-        let mut file = repo_a.create_file("a.dat").await.unwrap();
-        file.write(&content1).await.unwrap();
-        file.flush().await.unwrap();
+        async {
+            let mut file = repo_a.create_file("a.dat").await.unwrap();
+            file.write(&content1)
+                .instrument(tracing::info_span!("write"))
+                .await
+                .unwrap();
+            file.flush()
+                .instrument(tracing::info_span!("flush"))
+                .await
+                .unwrap();
+            tracing::info_span!("done");
+        }
+        .instrument(tracing::info_span!("create a.dat"))
+        .await;
 
-        repo_a.create_file("b/d.dat").await.unwrap();
+        async {
+            repo_a.create_file("b/d.dat").await.unwrap();
+            tracing::info_span!("done");
+        }
+        .instrument(tracing::info_span!("create b/d.dat"))
+        .await;
     };
 
     let task_b = common::eventually(&repo_b, || async {

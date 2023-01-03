@@ -30,6 +30,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use std::{fmt, mem};
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct Directory {
@@ -99,6 +100,7 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
+    #[instrument(skip(self))]
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
@@ -123,6 +125,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
+    #[instrument(skip(self))]
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         self.create_directory_with_version_vector_op(name, &VersionVectorOp::IncrementLocal)
             .await

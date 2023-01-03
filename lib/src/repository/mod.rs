@@ -344,7 +344,7 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
@@ -357,7 +357,7 @@ impl Repository {
     }
 
     /// Open a specific version of the file at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
