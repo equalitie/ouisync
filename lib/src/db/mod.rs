@@ -176,10 +176,6 @@ impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.commit().await
     }
-
-    pub async fn rollback(self) -> Result<(), sqlx::Error> {
-        self.0.rollback().await
-    }
 }
 
 impl Deref for WriteTransaction {
@@ -208,11 +204,6 @@ impl SharedWriteTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().commit().await
-    }
-
-    pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.take().unwrap().rollback().await
     }
 }
 
