@@ -1,3 +1,6 @@
+#[macro_use]
+mod macros;
+
 mod id;
 mod migrations;
 
@@ -152,7 +155,6 @@ impl DerefMut for PoolConnection {
 /// transaction represents an immutable snapshot of the database at the point the transaction was
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
-// TODO: impl `Executor`
 #[derive(Debug)]
 pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
 
@@ -170,8 +172,9 @@ impl DerefMut for ReadTransaction {
     }
 }
 
+impl_executor_by_deref!(ReadTransaction);
+
 /// Transaction that allows both reading and writing.
-// TODO: impl `Executor`
 #[derive(Debug)]
 pub(crate) struct WriteTransaction(ReadTransaction);
 
@@ -194,6 +197,8 @@ impl DerefMut for WriteTransaction {
         &mut self.0
     }
 }
+
+impl_executor_by_deref!(WriteTransaction);
 
 /// Shared write transaction
 ///

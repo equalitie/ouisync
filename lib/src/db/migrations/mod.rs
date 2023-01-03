@@ -26,7 +26,7 @@ async fn apply(pool: &Pool, dst_version: u32, sql: &str) -> Result<(), Error> {
         "migrations must be applied in order"
     );
 
-    sqlx::query(sql).execute(&mut **tx).await?;
+    sqlx::query(sql).execute(&mut tx).await?;
     set_version(&mut tx, dst_version).await?;
 
     tx.commit().await?;

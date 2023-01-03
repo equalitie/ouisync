@@ -53,7 +53,7 @@ impl LeafNode {
         .bind(&self.locator)
         .bind(&self.block_id)
         .bind(self.block_presence)
-        .execute(&mut ***tx)
+        .execute(tx)
         .await?;
 
         Ok(())
@@ -109,7 +109,7 @@ impl LeafNode {
         // Check whether there is at least one node that references the given block.
         if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
             .bind(block_id)
-            .fetch_optional(&mut ***tx)
+            .fetch_optional(&mut *tx)
             .await?
             .is_none()
         {
@@ -123,7 +123,7 @@ impl LeafNode {
         .bind(SingleBlockPresence::Present)
         .bind(block_id)
         .bind(SingleBlockPresence::Missing)
-        .execute(&mut ***tx)
+        .execute(tx)
         .await?;
 
         Ok(result.rows_affected() > 0)
@@ -134,7 +134,7 @@ impl LeafNode {
         sqlx::query("UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ?")
             .bind(SingleBlockPresence::Missing)
             .bind(block_id)
-            .execute(&mut ***tx)
+            .execute(tx)
             .await?;
 
         Ok(())

@@ -79,7 +79,7 @@ impl RootNode {
             sqlx::query("SELECT MAX(snapshot_id) FROM snapshot_root_nodes WHERE writer_id = ?")
                 .bind(&proof.writer_id)
                 .map(|row| row.get(0))
-                .fetch_optional(&mut ***tx)
+                .fetch_optional(&mut *tx)
                 .await?
                 .unwrap_or(EMPTY_SNAPSHOT_ID);
 
@@ -108,7 +108,7 @@ impl RootNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .map(|row| row.get(0))
-        .fetch_optional(&mut ***tx)
+        .fetch_optional(tx)
         .await?
         .ok_or(Error::EntryExists)?;
 
@@ -331,7 +331,7 @@ impl RootNode {
         .bind(&new_proof.version_vector)
         .bind(&new_proof.signature)
         .bind(self.snapshot_id)
-        .execute(&mut ***tx)
+        .execute(tx)
         .await?;
 
         Ok(())
@@ -365,7 +365,7 @@ impl RootNode {
         let was_complete: bool =
             sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE hash = ?")
                 .bind(hash)
-                .fetch_optional(&mut ***tx)
+                .fetch_optional(&mut *tx)
                 .await?
                 .map(|row| row.get(0))
                 .unwrap_or(false);
@@ -378,7 +378,7 @@ impl RootNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .bind(hash)
-        .execute(&mut ***tx)
+        .execute(tx)
         .await?;
 
         Ok(!was_complete && summary.is_complete)
@@ -389,7 +389,7 @@ impl RootNode {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
             .bind(self.snapshot_id)
-            .execute(&mut ***tx)
+            .execute(tx)
             .await?;
 
         Ok(())
@@ -402,7 +402,7 @@ impl RootNode {
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
             .bind(self.snapshot_id)
             .bind(&self.proof.writer_id)
-            .execute(&mut ***tx)
+            .execute(tx)
             .await?;
 
         Ok(())
@@ -421,7 +421,7 @@ impl RootNode {
         )
         .bind(self.snapshot_id)
         .bind(&self.proof.writer_id)
-        .execute(&mut ***tx)
+        .execute(tx)
         .await?;
 
         Ok(())
