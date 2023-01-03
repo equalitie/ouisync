@@ -327,7 +327,7 @@ impl Repository {
         &self.shared.store
     }
 
-    pub fn db(&self) -> &db::Pool {
+    pub(crate) fn db(&self) -> &db::Pool {
         self.shared.store.db()
     }
 

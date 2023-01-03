@@ -26,7 +26,7 @@ use tokio::{
 
 /// Database connection pool.
 #[derive(Clone)]
-pub struct Pool {
+pub(crate) struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
     // Pool with a single writable connection.
@@ -125,10 +125,10 @@ impl Pool {
 
 /// Database connection
 // TODO: create a newtype for this which hides `begin` (use the ref-cast crate)
-pub type Connection = SqliteConnection;
+pub(crate) type Connection = SqliteConnection;
 
 /// Database connection from pool
-pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
+pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
 
 impl Deref for PoolConnection {
     type Target = Connection;
@@ -152,7 +152,7 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 #[derive(Debug)]
-pub struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
 
 impl Deref for ReadTransaction {
     type Target = Connection;
@@ -170,7 +170,7 @@ impl DerefMut for ReadTransaction {
 
 /// Transaction that allows writing to the database.
 #[derive(Debug)]
-pub struct WriteTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct WriteTransaction(sqlx::Transaction<'static, Sqlite>);
 
 impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
@@ -202,7 +202,7 @@ impl DerefMut for WriteTransaction {
 
 // NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
 // `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
+pub(crate) struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
 
 impl SharedWriteTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
