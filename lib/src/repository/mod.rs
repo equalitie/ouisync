@@ -60,6 +60,14 @@ impl RepositoryDb {
         tx.commit().await?;
         Ok(key)
     }
+
+    #[cfg(test)]
+    pub(crate) fn new(pool: db::Pool, label: impl Into<String>) -> Self {
+        Self {
+            pool,
+            label: label.into(),
+        }
+    }
 }
 
 pub struct Repository {
@@ -71,17 +79,7 @@ pub struct Repository {
 impl Repository {
     /// Creates a new repository.
     pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
-        Self::create_in(db.pool, device_id, access, db.label).await
-    }
-
-    /// Creates a new repository in an already opened database.
-    pub(crate) async fn create_in(
-        pool: db::Pool,
-        device_id: DeviceId,
-        access: Access,
-        label: String,
-    ) -> Result<Self> {
-        let mut tx = pool.begin_write().await?;
+        let mut tx = db.pool.begin_write().await?;
 
         let this_writer_id =
             generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
@@ -90,7 +88,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access.secrets(), label).await
+        Self::new(db.pool, this_writer_id, access.secrets(), db.label).await
     }
 
     /// Opens an existing repository.

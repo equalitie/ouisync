@@ -267,15 +267,14 @@ async fn blind_access_non_empty_repo() {
 
     let local_key = SecretKey::random();
     // Create the repo and put a file in it.
-    let repo = Repository::create_in(
-        pool.clone(),
+    let repo = Repository::create(
+        RepositoryDb::new(pool.clone(), "test"),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
             local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
-        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -340,15 +339,14 @@ async fn blind_access_empty_repo() {
     let local_key = SecretKey::random();
 
     // Create an empty repo.
-    Repository::create_in(
-        pool.clone(),
+    Repository::create(
+        RepositoryDb::new(pool.clone(), "test"),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
             local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
-        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -373,13 +371,12 @@ async fn read_access_same_replica() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
-    let repo = Repository::create_in(
-        pool.clone(),
+    let repo = Repository::create(
+        RepositoryDb::new(pool.clone(), "test"),
         device_id,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -430,13 +427,12 @@ async fn read_access_different_replica() {
     let (_base_dir, pool) = db::create_temp().await.unwrap();
 
     let device_id_a = rand::random();
-    let repo = Repository::create_in(
-        pool.clone(),
+    let repo = Repository::create(
+        RepositoryDb::new(pool.clone(), "test"),
         device_id_a,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        "test".to_owned(),
     )
     .await
     .unwrap();
