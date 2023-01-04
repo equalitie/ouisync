@@ -130,10 +130,13 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
     tracing::info!("writing");
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
-    common::write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
-    drop(file);
+    async {
+        let mut file = repo_a.create_file("test.dat").await.unwrap();
+        common::write_in_chunks(&mut file, &content, 4096).await;
+        file.flush().await.unwrap();
+    }
+    .instrument(repo_a.span())
+    .await;
 
     tracing::info!("reading");
     common::expect_file_content(&repo_b, "test.dat", &content).await;

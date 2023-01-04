@@ -296,6 +296,13 @@ impl SnapshotData {
         let mut new_vv = self.root_node.proof.version_vector.clone();
         op.apply(self.branch_id(), &mut new_vv);
 
+        tracing::trace!(
+            writer_id = ?self.root_node.proof.writer_id,
+            old_vv = ?self.root_node.proof.version_vector,
+            new_vv = ?new_vv,
+            "update local snapshot"
+        );
+
         let new_proof = Proof::new(
             self.root_node.proof.writer_id,
             new_vv,
@@ -420,6 +427,13 @@ impl SnapshotData {
             .clone()
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
+
+        tracing::trace!(
+            writer_id = ?new_proof.writer_id,
+            old_vv = ?self.root_node.proof.version_vector,
+            new_vv = ?new_proof.version_vector,
+            "create local snapshot"
+        );
 
         self.root_node =
             RootNode::create(tx, Some(&self.root_node), new_proof, path.root_summary).await?;

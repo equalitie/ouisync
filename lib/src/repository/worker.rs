@@ -128,7 +128,10 @@ impl Inner {
 
                     let wait = async {
                         loop {
-                            match event_rx.recv().await {
+                            let event = event_rx.recv().await;
+                            tracing::trace!(?event);
+
+                            match event {
                                 Ok(Payload::BranchChanged(_)) => {
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
@@ -158,6 +161,8 @@ impl Inner {
                 State::Waiting => {
                     state = select! {
                         event = event_rx.recv() => {
+                            tracing::trace!(?event);
+
                             match event {
                                 Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
                                 Err(RecvError::Closed) => State::Terminated,

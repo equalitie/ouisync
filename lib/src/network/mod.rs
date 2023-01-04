@@ -76,9 +76,6 @@ pub struct Network {
 
 impl Network {
     pub fn new(config: ConfigStore) -> Self {
-        let span = tracing::info_span!("Network");
-        let span_enter = span.enter();
-
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(config, incoming_tx);
 
@@ -102,12 +99,13 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        drop(span_enter);
+        let this_runtime_id = SecretRuntimeId::generate();
+        tracing::debug!(this_runtime_id = ?this_runtime_id.public());
 
         let inner = Arc::new(Inner {
-            span,
+            span: Span::current(),
             gateway,
-            this_runtime_id: SecretRuntimeId::generate(),
+            this_runtime_id,
             state: BlockingMutex::new(State {
                 message_brokers: Some(HashMap::new()),
                 registry: Slab::new(),

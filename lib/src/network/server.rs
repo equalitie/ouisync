@@ -28,7 +28,6 @@ impl Server {
         }
     }
 
-    #[instrument(name = "server", skip_all, err(Debug))]
     pub async fn run(&mut self) -> Result<()> {
         let Self { index, tx, rx } = self;
         let responder = Responder::new(index, tx, rx);
@@ -61,7 +60,6 @@ impl<'a> Responder<'a> {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
@@ -69,7 +67,7 @@ impl<'a> Responder<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), err(Debug))]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
 
@@ -97,7 +95,7 @@ impl<'a> Responder<'a> {
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), err(Debug))]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let mut conn = self.index.pool.acquire().await?;

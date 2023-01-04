@@ -55,7 +55,6 @@ impl Client {
         }
     }
 
-    #[instrument(name = "client", skip_all, err(Debug))]
     pub async fn run(&mut self) -> Result<()> {
         self.receive_filter.reset().await?;
 
@@ -162,6 +161,7 @@ impl Client {
             hash = ?proof.hash,
             block_presence = ?summary.block_presence,
         ),
+        err(Debug)
     )]
     async fn handle_root_node(
         &mut self,
@@ -181,7 +181,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()))]
+    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
@@ -202,7 +202,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()))]
+    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
@@ -230,7 +230,7 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?data.id))]
+    #[instrument(skip_all, fields(id = ?data.id), err(Debug))]
     async fn handle_block(
         &mut self,
         data: BlockData,
