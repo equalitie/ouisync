@@ -13,7 +13,7 @@ use ouisync::{
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
 use tokio::task;
-use tracing::{Instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
@@ -28,10 +28,14 @@ async fn relink_repository() {
     let reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     // Create a file by A
-    tracing::info!("A: create test.txt -> 'first'");
-    let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-    file_a.write(b"first").await.unwrap();
-    file_a.flush().await.unwrap();
+    let mut file_a = async {
+        let mut file_a = repo_a.create_file("test.txt").await.unwrap();
+        file_a.write(b"first").await.unwrap();
+        file_a.flush().await.unwrap();
+        file_a
+    }
+    .instrument(repo_a.span())
+    .await;
 
     // Wait until the file is seen by B
     common::expect_file_content(&repo_b, "test.txt", b"first").await;
@@ -41,10 +45,13 @@ async fn relink_repository() {
     drop(reg_b);
 
     // Update the file while B's repo is unlinked
-    tracing::info!("A: write test.txt -> 'second'");
-    file_a.truncate(0).await.unwrap();
-    file_a.write(b"second").await.unwrap();
-    file_a.flush().await.unwrap();
+    async {
+        file_a.truncate(0).await.unwrap();
+        file_a.write(b"second").await.unwrap();
+        file_a.flush().await.unwrap();
+    }
+    .instrument(repo_a.span())
+    .await;
 
     // Re-register B's repo
     tracing::info!("B: relink");
@@ -263,20 +270,36 @@ async fn concurrent_modify_open_file() {
     common::expect_file_version_content(&repo_b, "file.txt", Some(&id_b), &[]).await;
 
     // A: Write to file but don't flush yet
-    common::write_in_chunks(&mut file_a, &content_a, 4096).await;
+    common::write_in_chunks(&mut file_a, &content_a, 4096)
+        .instrument(tracing::info_span!("write file.txt"))
+        .instrument(repo_a.span())
+        .await;
 
     // B: Write to the same file and flush
-    let mut file_b = repo_b.open_file("file.txt").await.unwrap();
-    common::write_in_chunks(&mut file_b, &content_b, 4096).await;
-    file_b.flush().await.unwrap();
-
-    drop(file_b);
+    async {
+        let mut file_b = repo_b.open_file("file.txt").await.unwrap();
+        common::write_in_chunks(&mut file_b, &content_b, 4096)
+            .instrument(tracing::info_span!("write file.txt"))
+            .await;
+        file_b
+            .flush()
+            .instrument(tracing::info_span!("flush file.txt"))
+            .await
+            .unwrap();
+    }
+    .instrument(repo_b.span())
+    .await;
 
     // A: Wait until we see B's writes
     common::expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
 
     // A: Flush the file
-    file_a.flush().await.unwrap();
+    file_a
+        .flush()
+        .instrument(tracing::info_span!("flush file.txt"))
+        .instrument(repo_a.span())
+        .await
+        .unwrap();
     drop(file_a);
 
     // A: Verify both versions of the file are still present
@@ -686,14 +709,8 @@ async fn content_stays_available_during_sync() {
     // First create and sync "b/c.dat"
     async {
         let mut file = repo_a.create_file("b/c.dat").await.unwrap();
-        file.write(&content0)
-            .instrument(tracing::info_span!("write"))
-            .await
-            .unwrap();
-        file.flush()
-            .instrument(tracing::info_span!("flush"))
-            .await
-            .unwrap();
+        file.write(&content0).await.unwrap();
+        file.flush().await.unwrap();
         tracing::info!("done");
     }
     .instrument(tracing::info_span!("create b/c.dat"))
@@ -711,14 +728,8 @@ async fn content_stays_available_during_sync() {
     let task_a = async {
         async {
             let mut file = repo_a.create_file("a.dat").await.unwrap();
-            file.write(&content1)
-                .instrument(tracing::info_span!("write"))
-                .await
-                .unwrap();
-            file.flush()
-                .instrument(tracing::info_span!("flush"))
-                .await
-                .unwrap();
+            file.write(&content1).await.unwrap();
+            file.flush().await.unwrap();
             tracing::info_span!("done");
         }
         .instrument(tracing::info_span!("create a.dat"))
@@ -749,6 +760,7 @@ async fn content_stays_available_during_sync() {
     future::join(task_a, task_b).await;
 }
 
+#[instrument]
 async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
     common::eventually(repo, || check_entry_exists(repo, path, entry_type)).await
 }
@@ -766,6 +778,7 @@ async fn check_entry_exists(repo: &Repository, path: &str, entry_type: EntryType
     }
 }
 
+#[instrument]
 async fn expect_entry_not_found(repo: &Repository, path: &str) {
     let path = Utf8Path::new(path);
     let name = path.file_name().unwrap();
@@ -783,6 +796,7 @@ async fn expect_entry_not_found(repo: &Repository, path: &str) {
     .await
 }
 
+#[instrument]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
         match repo.open_directory(path).await {

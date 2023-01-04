@@ -922,11 +922,9 @@ impl Inner {
 
 impl fmt::Debug for Inner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "VirtualFilesystem::Inner {{ local_id: {} }}",
-            self.repository.local_id()
-        )
+        f.debug_struct("VirtualFilesystem::Inner")
+            .field("repo", &self.repository.label())
+            .finish_non_exhaustive()
     }
 }
 

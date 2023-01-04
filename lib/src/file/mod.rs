@@ -16,6 +16,7 @@ use crate::{
 };
 use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tracing::instrument;
 
 pub struct File {
     blob: Blob,
@@ -79,6 +80,7 @@ impl File {
     }
 
     /// Writes `buffer` into this file.
+    #[instrument(skip_all, fields(buffer.len = buffer.len()))]
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut tx = self.branch().db().begin_shared_write().await?;
         self.acquire_write_lock()?;
@@ -94,6 +96,7 @@ impl File {
     }
 
     /// Truncates the file to the given length.
+    #[instrument(skip(self))]
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
         let mut tx = self.branch().db().begin_read().await?;
         self.acquire_write_lock()?;
@@ -102,6 +105,7 @@ impl File {
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
+    #[instrument(skip_all)]
     pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());

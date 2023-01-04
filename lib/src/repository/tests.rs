@@ -275,7 +275,7 @@ async fn blind_access_non_empty_repo() {
             local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
-        Span::none(),
+        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -299,7 +299,7 @@ async fn blind_access_non_empty_repo() {
             device_id,
             local_secret.clone(),
             access_mode,
-            Span::none(),
+            "test".to_owned(),
         )
         .await
         .unwrap_or_else(|_| {
@@ -348,7 +348,7 @@ async fn blind_access_empty_repo() {
             local_write_key: local_key,
             secrets: WriteSecrets::random(),
         },
-        Span::none(),
+        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -359,7 +359,7 @@ async fn blind_access_empty_repo() {
         device_id,
         Some(LocalSecret::random()),
         AccessMode::Read,
-        Span::none(),
+        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -379,7 +379,7 @@ async fn read_access_same_replica() {
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        Span::none(),
+        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -392,7 +392,7 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, Span::none())
+    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, "test".to_owned())
         .await
         .unwrap();
 
@@ -436,7 +436,7 @@ async fn read_access_different_replica() {
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        Span::none(),
+        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -449,7 +449,7 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let device_id_b = rand::random();
-    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, Span::none())
+    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, "test".to_owned())
         .await
         .unwrap();
 

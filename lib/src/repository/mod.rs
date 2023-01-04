@@ -43,14 +43,15 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
-    span: Span,
+    label: String,
 }
 
 impl RepositoryDb {
     pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
+        let label = store.as_ref().display().to_string();
         let pool = db::create(store).await?;
-        Ok(Self { pool, span })
+
+        Ok(Self { pool, label })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -70,7 +71,7 @@ pub struct Repository {
 impl Repository {
     /// Creates a new repository.
     pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
-        Self::create_in(db.pool, device_id, access, db.span).await
+        Self::create_in(db.pool, device_id, access, db.label).await
     }
 
     /// Creates a new repository in an already opened database.
@@ -78,7 +79,7 @@ impl Repository {
         pool: db::Pool,
         device_id: DeviceId,
         access: Access,
-        span: Span,
+        label: String,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -89,7 +90,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access.secrets(), span).await
+        Self::new(pool, this_writer_id, access.secrets(), label).await
     }
 
     /// Opens an existing repository.
@@ -114,10 +115,10 @@ impl Repository {
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
     ) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
+        let label = store.as_ref().display().to_string();
         let pool = db::open(store).await?;
 
-        Self::open_in(pool, device_id, local_secret, max_access_mode, span).await
+        Self::open_in(pool, device_id, local_secret, max_access_mode, label).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -128,7 +129,7 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
-        span: Span,
+        label: String,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -160,14 +161,14 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, span).await
+        Self::new(pool, this_writer_id, access_secrets, label).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
-        span: Span,
+        label: String,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
@@ -178,15 +179,18 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        span.in_scope(|| tracing::trace!(access = ?secrets.access_mode()));
-
         let store = Store {
             index,
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
-            span: span.clone(),
+            label,
         };
+
+        let span = store.span();
+        span.in_scope(
+            || tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id),
+        );
 
         let shared = Arc::new(Shared {
             store,
@@ -625,16 +629,18 @@ impl Repository {
         self.shared.store.count_blocks().await
     }
 
-    pub fn local_id(&self) -> LocalId {
-        self.shared.store.local_id
+    pub fn label(&self) -> &str {
+        &self.shared.store.label
+    }
+
+    pub fn span(&self) -> Span {
+        self.shared.store.span()
     }
 }
 
 impl fmt::Debug for Repository {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Repository")
-            .field("local_id", &format_args!("{}", self.shared.store.local_id))
-            .finish_non_exhaustive()
+        f.debug_tuple("Repository").field(&self.label()).finish()
     }
 }
 

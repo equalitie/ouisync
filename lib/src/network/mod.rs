@@ -273,7 +273,8 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub fn register(&self, store: Store) -> Registration {
-        store.span.in_scope(
+        let span = store.span();
+        span.in_scope(
             || tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id())),
         );
 
@@ -282,7 +283,7 @@ impl Handle {
             self.inner.pex_discovery_tx.clone(),
         );
 
-        let stats = Arc::new(RepositoryStats::new(store.span.clone()));
+        let stats = Arc::new(RepositoryStats::new(span));
 
         let mut network_state = self.inner.state.lock().unwrap();
 

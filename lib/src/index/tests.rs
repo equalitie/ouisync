@@ -18,7 +18,6 @@ use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
 use tokio::{sync::broadcast, task};
-use tracing::Span;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -441,7 +440,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
-        span: Span::none(),
+        label: "test".to_string(),
     };
 
     let mut rng = rand::thread_rng();

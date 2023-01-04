@@ -15,7 +15,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     time,
 };
-use tracing::{Instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -197,6 +197,7 @@ pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_
     expect_file_version_content(repo, path, None, expected_content).await
 }
 
+#[instrument(skip(expected_content))]
 pub(crate) async fn expect_file_version_content(
     repo: &Repository,
     path: &str,
