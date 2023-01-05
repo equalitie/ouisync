@@ -1,7 +1,7 @@
 use super::{crypto::Role, peer_exchange::PexPayload, runtime_id::PublicRuntimeId};
 use crate::{
     block::{BlockId, BlockNonce},
-    crypto::{Hash, Hashable},
+    crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryId,
@@ -11,6 +11,8 @@ use std::{fmt, io::Write};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
+    /// Request root node for the given branch.
+    RootNode(PublicKey),
     /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
     /// `InnerNodes` or `LeafNodes` response.
     ChildNodes(Hash),
@@ -21,13 +23,14 @@ pub(crate) enum Request {
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
-    /// NOTE: this is technically a notification, not a response. There is no corresponding
-    /// `Request` variant -  the server sends these proactively any time there is change in the
-    /// repo.
+    /// NOTE: This is both a response and notification - the server sends this as a response to
+    /// `Request::RootNode` but also on its own when it detects change in the repo.
     RootNode {
         proof: UntrustedProof,
         summary: Summary,
     },
+    /// Send that a RootNode request failed
+    RootNodeError(PublicKey),
     /// Send inner nodes.
     InnerNodes(InnerNodeMap),
     /// Send leaf nodes.
@@ -52,6 +55,9 @@ impl fmt::Debug for Response {
                 .field("proof", proof)
                 .field("summary", summary)
                 .finish(),
+            Self::RootNodeError(branch_id) => {
+                f.debug_tuple("RootNodeError").field(branch_id).finish()
+            }
             Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
             Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
             Self::ChildNodesError(hash) => f.debug_tuple("ChildNodesError").field(hash).finish(),

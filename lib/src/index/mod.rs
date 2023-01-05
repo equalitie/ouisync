@@ -164,40 +164,43 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
+    /// Also returns the ids of the branches that became complete.
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
-    ) -> Result<Vec<Hash>, ReceiveError> {
+    ) -> Result<(Vec<Hash>, Vec<PublicKey>), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
-        let updated = self
+        let updated_nodes = self
             .find_inner_nodes_with_new_blocks(&mut tx, &nodes, receive_filter)
             .await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
         nodes.inherit_summaries(&mut tx).await?;
         nodes.save(&mut tx, &parent_hash).await?;
-        self.update_summaries(tx, parent_hash).await?;
 
-        Ok(updated)
+        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+
+        Ok((updated_nodes, completed_branches))
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
+    /// Also returns the ids of the branches that became complete.
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
-    ) -> Result<Vec<BlockId>, ReceiveError> {
+    ) -> Result<(Vec<BlockId>, Vec<PublicKey>), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
 
-        let updated = self
+        let updated_blocks = self
             .find_leaf_nodes_with_new_blocks(&mut tx, &nodes)
             .await?;
 
@@ -206,9 +209,10 @@ impl Index {
             .into_missing()
             .save(&mut tx, &parent_hash)
             .await?;
-        self.update_summaries(tx, parent_hash).await?;
 
-        Ok(updated)
+        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+
+        Ok((updated_blocks, completed_branches))
     }
 
     // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
@@ -271,19 +275,25 @@ impl Index {
 
     // Updates summaries of the specified nodes and all their ancestors, commits the transaction
     // and notifies the affected branches that became complete (wasn't before the update but became
-    // after it).
-    async fn update_summaries(&self, mut tx: db::WriteTransaction, hash: Hash) -> Result<()> {
+    // after it). Also returns the completed branches.
+    async fn update_summaries(
+        &self,
+        mut tx: db::WriteTransaction,
+        hash: Hash,
+    ) -> Result<Vec<PublicKey>> {
         let statuses = node::update_summaries(&mut tx, hash).await?;
         tx.commit().await?;
 
         let completed: Vec<_> = statuses
             .into_iter()
             .filter(|(_, complete)| *complete)
-            .map(|(writer_id, _)| self.get_branch(writer_id))
+            .map(|(writer_id, _)| writer_id)
             .collect();
 
         if !completed.is_empty() {
-            for branch in completed {
+            for branch_id in &completed {
+                let branch = self.get_branch(*branch_id);
+
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
                     let vv = branch.load_version_vector(&mut conn).await?;
@@ -294,7 +304,7 @@ impl Index {
             }
         }
 
-        Ok(())
+        Ok(completed)
     }
 
     async fn check_parent_node_exists(

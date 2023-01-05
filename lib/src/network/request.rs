@@ -76,14 +76,18 @@ impl PendingRequests {
 
     fn request_added(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => self.stats.write().index_requests_inflight += 1,
+            Request::RootNode(_) | Request::ChildNodes(_) => {
+                self.stats.write().index_requests_inflight += 1
+            }
             Request::Block(_) => self.stats.write().block_requests_inflight += 1,
         }
     }
 
     fn request_removed(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => self.stats.write().index_requests_inflight -= 1,
+            Request::RootNode(_) | Request::ChildNodes(_) => {
+                self.stats.write().index_requests_inflight -= 1
+            }
             Request::Block(_) => self.stats.write().block_requests_inflight -= 1,
         }
     }

@@ -62,8 +62,38 @@ impl<'a> Responder<'a> {
 
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
+            Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
             Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
             Request::Block(id) => self.handle_block(id).await,
+        }
+    }
+
+    #[instrument(skip(self), err(Debug))]
+    async fn handle_root_node(&mut self, branch_id: PublicKey) -> Result<()> {
+        let mut conn = self.index.pool.acquire().await?;
+        let root_node = RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await;
+
+        match root_node {
+            Ok(node) => {
+                tracing::trace!("root node found");
+
+                let response = Response::RootNode {
+                    proof: node.proof.into(),
+                    summary: node.summary,
+                };
+
+                self.tx.send(response).await;
+                Ok(())
+            }
+            Err(Error::EntryNotFound) => {
+                tracing::trace!("root node not found");
+                self.tx.send(Response::RootNodeError(branch_id)).await;
+                Ok(())
+            }
+            Err(error) => {
+                self.tx.send(Response::RootNodeError(branch_id)).await;
+                Err(error)
+            }
         }
     }
 
