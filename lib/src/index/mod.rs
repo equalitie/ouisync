@@ -122,6 +122,7 @@ impl Index {
         // If the received node is outdated relative to any branch we have, ignore it.
         let nodes: Vec<_> = RootNode::load_all_latest(&mut tx).try_collect().await?;
 
+        // DEBUG
         tracing::trace!(?nodes);
 
         let uptodate = nodes.iter().all(|old_node| {

@@ -276,22 +276,21 @@ impl Require {
             return;
         }
 
-        tracing::trace!(block_id = ?self.block_id, "require");
-
-        match inner.missing_blocks.entry(self.block_id) {
-            Entry::Occupied(mut entry) => {
-                if entry.get_mut().state.switch_offered_to_required() {
-                    self.shared.notify();
-                }
-            }
+        let new = match inner.missing_blocks.entry(self.block_id) {
+            Entry::Occupied(mut entry) => entry.get_mut().state.switch_offered_to_required(),
             Entry::Vacant(entry) => {
                 entry.insert(MissingBlock {
                     clients: HashMap::new(),
                     state: MissingBlockState::Required,
                 });
 
-                self.shared.notify();
+                true
             }
+        };
+
+        if new {
+            tracing::trace!(block_id = ?self.block_id, "require");
+            self.shared.notify();
         }
     }
 }

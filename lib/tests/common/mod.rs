@@ -22,7 +22,7 @@ pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 // Test environment
 pub(crate) struct Env {
     pub rng: StdRng,
-    base_dir: TempDir,
+    base_dir: Option<TempDir>,
     next_repo_num: u64,
     next_peer_num: u64,
     _span: tracing::span::EnteredSpan,
@@ -41,7 +41,7 @@ impl Env {
 
         Self {
             rng,
-            base_dir,
+            base_dir: Some(base_dir),
             next_repo_num: 0,
             next_peer_num: 0,
             _span: span,
@@ -52,7 +52,11 @@ impl Env {
         let num = self.next_repo_num;
         self.next_repo_num += 1;
 
-        self.base_dir.path().join(format!("repo-{}.db", num))
+        self.base_dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join(format!("repo-{}.db", num))
     }
 
     pub async fn create_repo(&mut self) -> Repository {
@@ -101,6 +105,17 @@ impl Env {
         let num = self.next_peer_num;
         self.next_peer_num += 1;
         num
+    }
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        // Preserve the base dir in case of panic, so it can be inspected to help debug test
+        // failures.
+        if thread::panicking() {
+            let path = self.base_dir.take().unwrap().into_path();
+            tracing::warn!("preserving base_dir in '{}'", path.display());
+        }
     }
 }
 

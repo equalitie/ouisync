@@ -237,13 +237,9 @@ impl Client {
         nonce: BlockNonce,
     ) -> Result<(), ReceiveError> {
         match self.store.write_received_block(&data, &nonce).await {
-            Ok(()) => {
-                tracing::trace!("received block");
-                Ok(())
-            }
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
-            Err(Error::BlockNotReferenced) => Ok(()),
+            Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),
             Err(error) => Err(error.into()),
         }
     }

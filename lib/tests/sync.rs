@@ -157,11 +157,16 @@ async fn transfer_large_file() {
     env.rng.fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it.
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
-    common::write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
-    drop(file);
+    tracing::info!("writing");
+    async {
+        let mut file = repo_a.create_file("test.dat").await.unwrap();
+        common::write_in_chunks(&mut file, &content, 4096).await;
+        file.flush().await.unwrap();
+    }
+    .instrument(repo_a.span())
+    .await;
 
+    tracing::info!("reading");
     common::expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
