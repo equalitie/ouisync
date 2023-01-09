@@ -45,7 +45,9 @@ impl RootNode {
         }
     }
 
-    /// Creates a root node with the specified proof unless already exists.
+    /// Creates a root node with the specified proof. If a root node with the same writer_id and
+    /// hash already exists, it's overwritten (but only if the new vv is equal or greater than the
+    /// existing one, see the "Panics" section below for more info)
     ///
     /// # Panics
     ///
@@ -98,7 +100,7 @@ impl RootNode {
                  block_presence
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (writer_id, hash) DO NOTHING
+             ON CONFLICT (writer_id, hash) DO UPDATE SET versions = ?, signature = ?
              RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
@@ -107,10 +109,11 @@ impl RootNode {
         .bind(&proof.signature)
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
+        .bind(&proof.version_vector)
+        .bind(&proof.signature)
         .map(|row| row.get(0))
-        .fetch_optional(tx)
-        .await?
-        .ok_or(Error::EntryExists)?;
+        .fetch_one(tx)
+        .await?;
 
         Ok(Self {
             snapshot_id,

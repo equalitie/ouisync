@@ -17,7 +17,11 @@ use tokio::{
 };
 use tracing::{instrument, Instrument, Span};
 
-pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+// Timeout for running a whole test case
+pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+// Timeout for waiting for an event
+pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Test environment
 pub(crate) struct Env {
@@ -178,18 +182,22 @@ where
 {
     let mut rx = repo.subscribe();
 
-    loop {
-        if f().await {
-            break;
-        }
+    time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if f().await {
+                break;
+            }
 
-        wait(&mut rx).await
-    }
+            wait(&mut rx).await
+        }
+    })
+    .await
+    .unwrap()
 }
 
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
-        match time::timeout(DEFAULT_TIMEOUT, rx.recv()).await {
+        match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
             Ok(Ok(Event {
                 payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
                 ..

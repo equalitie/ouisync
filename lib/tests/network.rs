@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Proto, DEFAULT_TIMEOUT};
+use self::common::{Env, Proto, TEST_TIMEOUT};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::{select, time};
 
@@ -55,7 +55,7 @@ async fn peer_exchange() {
         }
     };
 
-    time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
+    time::timeout(TEST_TIMEOUT, connected).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,7 +88,7 @@ async fn network_disable_enable_pending_connection() {
 
     // Wait until the connection starts begin established.
     let mut rx = node.network.on_peer_set_change();
-    time::timeout(DEFAULT_TIMEOUT, async {
+    time::timeout(TEST_TIMEOUT, async {
         loop {
             if node.network.knows_peer(remote_addr) {
                 break;
@@ -121,7 +121,7 @@ async fn network_disable_enable_addr_takeover() {
     node.network.handle().bind(&[]).await;
 
     // Bind some other socket to the same address while the network is disabled.
-    let _socket = time::timeout(DEFAULT_TIMEOUT, async {
+    let _socket = time::timeout(TEST_TIMEOUT, async {
         loop {
             if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
                 break socket;
@@ -206,5 +206,5 @@ async fn local_discovery() {
         }
     };
 
-    time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
+    time::timeout(TEST_TIMEOUT, connected).await.unwrap();
 }
