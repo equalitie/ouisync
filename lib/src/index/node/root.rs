@@ -45,50 +45,40 @@ impl RootNode {
         }
     }
 
-    /// Creates a root node with the specified proof. If a root node with the same writer_id and
-    /// hash already exists, it's overwritten (but only if the new vv is equal or greater than the
-    /// existing one, see the "Panics" section below for more info)
+    /// Creates a root node with the specified proof.
     ///
-    /// # Panics
-    ///
-    /// - If `latest` is `Some` but it's not the current latest root node in the same branch
-    /// - If `latest` is `Some` and the new version vector is not happens-after or equal to that of
-    ///   `latest`
-    /// - If `latest` is `None` or `Some(RootNode::empty())` and there already exists a root node
-    ///   in the same branch
+    /// The version vector must be greater than the version vector of any currently existing root
+    /// node in the same branch, otherwise no node is created and an error is returned.
     pub async fn create(
         tx: &mut db::WriteTransaction,
-        latest: Option<&RootNode>,
         proof: Proof,
         summary: Summary,
     ) -> Result<Self> {
-        if let Some(latest) = latest {
-            match proof
-                .version_vector
-                .partial_cmp(&latest.proof.version_vector)
-            {
-                Some(Ordering::Greater | Ordering::Equal) => (),
-                Some(Ordering::Less) | None => {
-                    panic!("root node invariant violation: invalid version vector")
-                }
+        // Check that the root node to be created is newer than the latest existing root node in
+        // the same branch.
+        let old_vv: VersionVector = sqlx::query(
+            "SELECT versions
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 WHERE writer_id = ?
+             )",
+        )
+        .bind(&proof.writer_id)
+        .map(|row| row.get(0))
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_else(VersionVector::new);
+
+        match proof.version_vector.partial_cmp(&old_vv) {
+            Some(Ordering::Greater) => (),
+            Some(Ordering::Equal | Ordering::Less) => return Err(Error::EntryExists),
+            None => {
+                tracing::warn!("attempt to create concurrent root node in the same branch");
+                return Err(Error::OperationNotSupported);
             }
         }
-
-        let expected_latest_snapshot_id = latest
-            .map(|node| node.snapshot_id)
-            .unwrap_or(EMPTY_SNAPSHOT_ID);
-        let actual_latest_snapshot_id =
-            sqlx::query("SELECT MAX(snapshot_id) FROM snapshot_root_nodes WHERE writer_id = ?")
-                .bind(&proof.writer_id)
-                .map(|row| row.get(0))
-                .fetch_optional(&mut *tx)
-                .await?
-                .unwrap_or(EMPTY_SNAPSHOT_ID);
-
-        assert_eq!(
-            expected_latest_snapshot_id, actual_latest_snapshot_id,
-            "root node invariant violation: latest mismatch"
-        );
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -100,7 +90,6 @@ impl RootNode {
                  block_presence
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (writer_id, hash) DO UPDATE SET versions = ?, signature = ?
              RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
@@ -109,8 +98,6 @@ impl RootNode {
         .bind(&proof.signature)
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
-        .bind(&proof.version_vector)
-        .bind(&proof.signature)
         .map(|row| row.get(0))
         .fetch_one(tx)
         .await?;

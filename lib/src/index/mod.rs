@@ -139,18 +139,15 @@ impl Index {
 
         if uptodate {
             let hash = proof.hash;
-            let latest_node = nodes
-                .iter()
-                .find(|node| node.proof.writer_id == proof.writer_id);
 
-            match RootNode::create(&mut tx, latest_node, proof, Summary::INCOMPLETE).await {
+            match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
                     tracing::debug!(vv = ?node.proof.version_vector, "snapshot started");
 
                     // This also commits the transaction.
                     self.update_summaries(tx, hash).await?;
                 }
-                Err(Error::EntryExists) => (), // ignore duplicate nodes but don't fail.
+                Err(Error::EntryExists) => (), // ignore duplicate/outdated nodes but don't fail.
                 Err(error) => return Err(error.into()),
             }
 

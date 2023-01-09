@@ -8,8 +8,7 @@ use crate::{
     },
     db,
     error::Error,
-    index::{node::summary::MultiBlockPresence, UntrustedProof},
-    repository::RepositoryId,
+    index::node::summary::MultiBlockPresence,
     test_utils,
     version_vector::VersionVector,
 };
@@ -32,8 +31,12 @@ async fn create_new_root_node() {
 
     let node0 = RootNode::create(
         &mut tx,
-        None,
-        Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
+        Proof::new(
+            writer_id,
+            VersionVector::first(writer_id),
+            hash,
+            &write_keys,
+        ),
         Summary::FULL,
     )
     .await
@@ -55,7 +58,7 @@ async fn create_new_root_node() {
 }
 
 #[tokio::test]
-async fn replace_root_node_same_version_vector() {
+async fn attempt_to_create_outdated_root_node() {
     let (_base_dir, pool) = setup().await;
 
     let writer_id = PublicKey::random();
@@ -64,80 +67,38 @@ async fn replace_root_node_same_version_vector() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node0 = RootNode::create(
+    let vv0 = VersionVector::first(writer_id);
+    let vv1 = vv0.clone().incremented(writer_id);
+
+    RootNode::create(
         &mut tx,
-        None,
-        Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
+        Proof::new(writer_id, vv1.clone(), hash, &write_keys),
         Summary::FULL,
     )
     .await
     .unwrap();
 
-    let node1 = RootNode::create(
-        &mut tx,
-        Some(&node0),
-        Proof::new(writer_id, VersionVector::new(), hash, &write_keys),
-        Summary::INCOMPLETE,
-    )
-    .await
-    .unwrap();
+    // Same vv
+    assert_matches!(
+        RootNode::create(
+            &mut tx,
+            Proof::new(writer_id, vv1, hash, &write_keys),
+            Summary::INCOMPLETE,
+        )
+        .await,
+        Err(Error::EntryExists)
+    );
 
-    assert_eq!(node1.snapshot_id, node0.snapshot_id);
-    assert_eq!(node1.proof, node0.proof);
-
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut tx, writer_id)
-        .try_collect()
-        .await
-        .unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0], node0);
-}
-
-#[tokio::test]
-async fn replace_root_node_greater_version_vector() {
-    let (_base_dir, pool) = setup().await;
-
-    let writer_id = PublicKey::random();
-    let write_keys = Keypair::random();
-    let repository_id = RepositoryId::from(write_keys.public);
-    let hash = rand::random();
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    let vv = VersionVector::new();
-    let node0 = RootNode::create(
-        &mut tx,
-        None,
-        Proof::new(writer_id, vv.clone(), hash, &write_keys),
-        Summary::FULL,
-    )
-    .await
-    .unwrap();
-
-    let vv = vv.incremented(writer_id);
-    let node1 = RootNode::create(
-        &mut tx,
-        Some(&node0),
-        Proof::new(writer_id, vv, hash, &write_keys),
-        Summary::INCOMPLETE,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(node1.snapshot_id, node0.snapshot_id);
-
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut tx, writer_id)
-        .try_collect()
-        .await
-        .unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0].snapshot_id, node0.snapshot_id);
-    assert_eq!(nodes[0].summary, node0.summary);
-    assert_eq!(nodes[0].proof, node1.proof);
-
-    UntrustedProof::from(node1.proof)
-        .verify(&repository_id)
-        .unwrap();
+    // Old vv
+    assert_matches!(
+        RootNode::create(
+            &mut tx,
+            Proof::new(writer_id, vv0, hash, &write_keys),
+            Summary::INCOMPLETE,
+        )
+        .await,
+        Err(Error::EntryExists)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -589,10 +550,9 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
 
     let mut root_node = RootNode::create(
         &mut tx,
-        None,
         Proof::new(
             writer_id,
-            VersionVector::new(),
+            VersionVector::first(writer_id),
             *snapshot.root_hash(),
             &write_keys,
         ),
@@ -664,10 +624,9 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     // Save the snapshot initially with all nodes missing.
     let mut root_node = RootNode::create(
         &mut tx,
-        None,
         Proof::new(
             writer_id,
-            VersionVector::new(),
+            VersionVector::first(writer_id),
             *snapshot.root_hash(),
             &write_keys,
         ),

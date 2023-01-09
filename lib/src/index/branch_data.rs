@@ -2,7 +2,7 @@ use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    VersionVectorOp,
+    Summary, VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -282,13 +282,8 @@ impl SnapshotData {
     }
 
     /// Update the root version vector of this branch.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
     pub async fn bump(
-        self,
+        &mut self,
         tx: &mut db::WriteTransaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
@@ -296,12 +291,10 @@ impl SnapshotData {
         let mut new_vv = self.root_node.proof.version_vector.clone();
         op.apply(self.branch_id(), &mut new_vv);
 
-        tracing::trace!(
-            writer_id = ?self.root_node.proof.writer_id,
-            old_vv = ?self.root_node.proof.version_vector,
-            new_vv = ?new_vv,
-            "update local snapshot"
-        );
+        // Sometimes `op` is a no-op. This is not an error.
+        if new_vv == self.root_node.proof.version_vector {
+            return Ok(());
+        }
 
         let new_proof = Proof::new(
             self.root_node.proof.writer_id,
@@ -310,9 +303,8 @@ impl SnapshotData {
             write_keys,
         );
 
-        RootNode::create(tx, Some(&self.root_node), new_proof, self.root_node.summary).await?;
-
-        Ok(())
+        self.create_root_node(tx, new_proof, self.root_node.summary)
+            .await
     }
 
     /// Remove this snapshot
@@ -428,6 +420,16 @@ impl SnapshotData {
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
 
+        self.create_root_node(tx, new_proof, path.root_summary)
+            .await
+    }
+
+    async fn create_root_node(
+        &mut self,
+        tx: &mut db::WriteTransaction,
+        new_proof: Proof,
+        new_summary: Summary,
+    ) -> Result<()> {
         tracing::trace!(
             writer_id = ?new_proof.writer_id,
             old_vv = ?self.root_node.proof.version_vector,
@@ -435,8 +437,7 @@ impl SnapshotData {
             "create local snapshot"
         );
 
-        self.root_node =
-            RootNode::create(tx, Some(&self.root_node), new_proof, path.root_summary).await?;
+        self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
 
         Ok(())
     }
