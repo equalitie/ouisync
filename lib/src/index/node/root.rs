@@ -309,37 +309,6 @@ impl RootNode {
         .await
     }
 
-    /// Updates the proof of this node.
-    ///
-    /// Only the version vector can be updated. To update any other field of the proof, a new root
-    /// node needs to be created.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the writer_id or the hash of the new_proof differ from the ones in the current
-    /// proof.
-    ///
-    /// # Cancel safety
-    ///
-    /// This methd consume `self` to force the caller to reload the node from the db if they still
-    /// need to use it. This makes it cancel-safe because the `proof` member can never go out of
-    /// sync with what's stored in the db even in case the returned future is cancelled.
-    pub async fn update_proof(self, tx: &mut db::WriteTransaction, new_proof: Proof) -> Result<()> {
-        assert_eq!(new_proof.writer_id, self.proof.writer_id);
-        assert_eq!(new_proof.hash, self.proof.hash);
-
-        sqlx::query(
-            "UPDATE snapshot_root_nodes SET versions = ?, signature = ? WHERE snapshot_id = ?",
-        )
-        .bind(&new_proof.version_vector)
-        .bind(&new_proof.signature)
-        .bind(self.snapshot_id)
-        .execute(tx)
-        .await?;
-
-        Ok(())
-    }
-
     /// Reload this root node from the db.
     #[cfg(test)]
     pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<()> {

@@ -310,7 +310,7 @@ impl SnapshotData {
             write_keys,
         );
 
-        self.root_node.update_proof(tx, new_proof).await?;
+        RootNode::create(tx, Some(&self.root_node), new_proof, self.root_node.summary).await?;
 
         Ok(())
     }
