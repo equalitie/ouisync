@@ -38,7 +38,7 @@ quinn = { git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e
 quinn_udp = { package = "quinn-udp", git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e155d380c0d7cccaf8e66" }
 quinn_proto = { package = "quinn-proto", git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e155d380c0d7cccaf8e66" }
 rcgen = "0.9.1"
-rand = "0.8.5"
+rand = { package = "ouisync-rand", path = "../rand" }
 rupnp = { version = "1.1.0", default-features = false, features = [] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 slab = "0.4.6"
@@ -75,3 +75,6 @@ proptest = "1.0"
 tempfile = "3.2"
 test-strategy = "0.2.1"
 tokio = { workspace = true, features = ["test-util"] }
+
+[features]
+simulation = ["rand/simulation"]
