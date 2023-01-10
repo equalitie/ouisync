@@ -8,7 +8,7 @@ use rand::Rng;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_local_file() {
-    let env = Env::new();
+    let mut env = Env::new();
     let repo = env.create_repo().await;
 
     assert_eq!(repo.count_blocks().await.unwrap(), 0);
@@ -31,8 +31,8 @@ async fn local_delete_remote_file() {
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
@@ -55,8 +55,8 @@ async fn remote_delete_remote_file() {
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.handle().register(repo_r.store().clone());
 
     repo_r.create_file("test.dat").await.unwrap();
 
@@ -71,7 +71,7 @@ async fn remote_delete_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_local_file() {
-    let env = Env::new();
+    let mut env = Env::new();
     let repo = env.create_repo().await;
 
     let mut file = repo.create_file("test.dat").await.unwrap();
@@ -98,8 +98,8 @@ async fn local_truncate_remote_file() {
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
     write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
@@ -126,8 +126,8 @@ async fn remote_truncate_remote_file() {
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
-    let _reg_l = node_l.network.handle().register(repo_l.store().clone());
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+    let _reg_l = node_l.handle().register(repo_l.store().clone());
+    let _reg_r = node_r.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
 
