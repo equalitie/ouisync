@@ -18,9 +18,10 @@ rustls = { version = "0.20.3", default-features = false, features = ["quic", "da
 socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
 thiserror = "1.0.31"
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "sync"] }
+turmoil = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }
 
 [features]
-simulation = []
+simulation = ["turmoil"]

@@ -43,9 +43,10 @@ ssdp-client = "1.0"
 thiserror = "1.0.31"
 tokio = { workspace = true }
 tokio-stream = "0.1.9"
-tokio-util = "0.7.3"
+tokio-util = "0.7.4"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
+turmoil = { workspace = true, optional = true }
 twox-hash = { version = "1.6.3", default-features = false }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
@@ -64,11 +65,10 @@ network-interface = "0.1.3"
 [dev-dependencies]
 assert_matches = "1.5"
 criterion = { version = "0.4", features = ["html_reports"] }
-iai = "0.1.1"
 proptest = "1.0"
 tempfile = "3.2"
 test-strategy = "0.2.1"
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-simulation = ["rand/simulation"]
+simulation = ["rand/simulation", "turmoil"]

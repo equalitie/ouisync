@@ -1,11 +1,15 @@
+// https://github.com/rust-lang/rust/issues/46379
+#![allow(unused)]
+
 use ouisync::{
-    crypto::sign::PublicKey, network::Network, Access, AccessSecrets, ConfigStore, Error, Event,
-    File, Payload, PeerAddr, Repository, RepositoryDb,
+    crypto::sign::PublicKey, network::Network, Access, AccessSecrets, ConfigStore, EntryType,
+    Error, Event, File, Payload, PeerAddr, Repository, RepositoryDb, Result,
 };
 use std::{
     future::Future,
     net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
     thread,
     time::Duration,
 };
@@ -22,10 +26,44 @@ pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 // Timeout for waiting for an event
 pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
+pub(crate) struct RepositoryStore {
+    base_dir: Option<TempDir>,
+    next_num: AtomicU32,
+}
+
+impl RepositoryStore {
+    pub fn new() -> Self {
+        Self {
+            base_dir: Some(TempDir::new().unwrap()),
+            next_num: AtomicU32::new(0),
+        }
+    }
+
+    pub fn next(&self) -> PathBuf {
+        let num = self.next_num.fetch_add(1, Ordering::Relaxed);
+
+        self.base_dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join(format!("repo-{}.db", num))
+    }
+}
+
+impl Drop for RepositoryStore {
+    fn drop(&mut self) {
+        // Preserve the base dir in case of panic, so it can be inspected to help debug test
+        // failures.
+        if thread::panicking() {
+            let path = self.base_dir.take().unwrap().into_path();
+            tracing::warn!("preserving base_dir in '{}'", path.display());
+        }
+    }
+}
+
 // Test environment
 pub(crate) struct Env {
-    base_dir: Option<TempDir>,
-    next_repo_num: u64,
+    repo_store: RepositoryStore,
     next_peer_num: u64,
     _span: tracing::span::EnteredSpan,
 }
@@ -35,44 +73,28 @@ impl Env {
         init_log();
 
         let span = tracing::info_span!("test", name = thread::current().name()).entered();
-        let base_dir = TempDir::new().unwrap();
 
         Self {
-            base_dir: Some(base_dir),
-            next_repo_num: 0,
+            repo_store: RepositoryStore::new(),
             next_peer_num: 0,
             _span: span,
         }
     }
 
-    pub fn next_store(&mut self) -> PathBuf {
-        let num = self.next_repo_num;
-        self.next_repo_num += 1;
-
-        self.base_dir
-            .as_ref()
-            .unwrap()
-            .path()
-            .join(format!("repo-{}.db", num))
+    pub fn next_store(&self) -> PathBuf {
+        self.repo_store.next()
     }
 
-    pub async fn create_repo(&mut self) -> Repository {
+    pub async fn create_repo(&self) -> Repository {
         let secrets = AccessSecrets::random_write();
         self.create_repo_with_secrets(secrets).await
     }
 
-    pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
-        Repository::create(
-            RepositoryDb::create(&self.next_store()).await.unwrap(),
-            rand::random(),
-            Access::new(None, None, secrets),
-        )
-        .await
-        .unwrap()
+    pub async fn create_repo_with_secrets(&self, secrets: AccessSecrets) -> Repository {
+        create_repo(&self.next_store(), secrets).await
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
+    pub async fn create_linked_repos(&self) -> (Repository, Repository) {
         let repo_a = self.create_repo().await;
         let repo_b = self
             .create_repo_with_secrets(repo_a.secrets().clone())
@@ -87,7 +109,6 @@ impl Env {
     }
 
     // Create two nodes connected together.
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) async fn create_connected_nodes(&mut self, proto: Proto) -> (Node, Node) {
         let a = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
         let b = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
@@ -102,17 +123,6 @@ impl Env {
         let num = self.next_peer_num;
         self.next_peer_num += 1;
         num
-    }
-}
-
-impl Drop for Env {
-    fn drop(&mut self) {
-        // Preserve the base dir in case of panic, so it can be inspected to help debug test
-        // failures.
-        if thread::panicking() {
-            let path = self.base_dir.take().unwrap().into_path();
-            tracing::warn!("preserving base_dir in '{}'", path.display());
-        }
     }
 }
 
@@ -139,6 +149,16 @@ impl Node {
             _config_store: config_store,
         }
     }
+}
+
+pub(crate) async fn create_repo(store: &Path, secrets: AccessSecrets) -> Repository {
+    Repository::create(
+        RepositoryDb::create(store).await.unwrap(),
+        rand::random(),
+        Access::new(None, None, secrets),
+    )
+    .await
+    .unwrap()
 }
 
 #[derive(Clone, Copy)]
@@ -275,7 +295,28 @@ pub(crate) async fn check_file_version_content(
     }
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+#[instrument]
+pub(crate) async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
+    eventually(repo, || check_entry_exists(repo, path, entry_type)).await
+}
+
+pub(crate) async fn check_entry_exists(
+    repo: &Repository,
+    path: &str,
+    entry_type: EntryType,
+) -> bool {
+    let result = match entry_type {
+        EntryType::File => repo.open_file(path).await.map(|_| ()),
+        EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
+    };
+
+    match result {
+        Ok(()) => true,
+        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+        Err(error) => panic!("unexpected error: {:?}", error),
+    }
+}
+
 pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());

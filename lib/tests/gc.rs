@@ -8,7 +8,7 @@ use rand::Rng;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_local_file() {
-    let mut env = Env::new();
+    let env = Env::new();
     let repo = env.create_repo().await;
 
     assert_eq!(repo.count_blocks().await.unwrap(), 0);
@@ -71,7 +71,7 @@ async fn remote_delete_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_local_file() {
-    let mut env = Env::new();
+    let env = Env::new();
     let repo = env.create_repo().await;
 
     let mut file = repo.create_file("test.dat").await.unwrap();

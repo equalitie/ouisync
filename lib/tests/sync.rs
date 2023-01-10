@@ -505,7 +505,7 @@ async fn transfer_directory_with_file() {
     let mut dir = repo_a.create_directory("food").await.unwrap();
     dir.create_file("pizza.jpg".into()).await.unwrap();
 
-    expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File).await;
+    common::expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -520,7 +520,7 @@ async fn transfer_directory_with_subdirectory() {
     let mut dir0 = repo_a.create_directory("food").await.unwrap();
     dir0.create_directory("mediterranean".into()).await.unwrap();
 
-    expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory).await;
+    common::expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -535,14 +535,14 @@ async fn remote_rename_file() {
     repo_b.create_file("foo.txt").await.unwrap();
 
     // Wait until the file is synced and merged over to the local branch.
-    expect_entry_exists(&repo_a, "foo.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "foo.txt", EntryType::File).await;
 
     repo_b
         .move_entry("/", "foo.txt", "/", "bar.txt")
         .await
         .unwrap();
 
-    expect_entry_exists(&repo_a, "bar.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "bar.txt", EntryType::File).await;
     expect_entry_not_found(&repo_a, "foo.txt").await;
 }
 
@@ -557,11 +557,11 @@ async fn remote_rename_empty_directory() {
 
     repo_b.create_directory("foo").await.unwrap();
 
-    expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
+    common::expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
 
-    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
+    common::expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
@@ -577,11 +577,11 @@ async fn remote_rename_non_empty_directory() {
     let mut dir = repo_b.create_directory("foo").await.unwrap();
     dir.create_file("data.txt".into()).await.unwrap();
 
-    expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File).await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
 
-    expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File).await;
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
@@ -603,7 +603,7 @@ async fn remote_rename_directory_during_conflict() {
     expect_local_directory_exists(&repo_a, "foo").await;
 
     repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
-    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
+    common::expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
@@ -618,7 +618,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
 
     repo_b.create_file("data.txt").await.unwrap();
 
-    expect_entry_exists(&repo_a, "data.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "data.txt", EntryType::File).await;
 
     repo_b.create_directory("archive").await.unwrap();
     repo_b
@@ -626,14 +626,14 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
         .await
         .unwrap();
 
-    expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File).await;
 
     repo_b
         .move_entry("/", "archive", "/", "trash")
         .await
         .unwrap();
 
-    expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File).await;
+    common::expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File).await;
     expect_entry_not_found(&repo_a, "data.txt").await;
     expect_entry_not_found(&repo_a, "archive").await;
 }
@@ -767,24 +767,6 @@ async fn content_stays_available_during_sync() {
     });
 
     future::join(task_a, task_b).await;
-}
-
-#[instrument]
-async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
-    common::eventually(repo, || check_entry_exists(repo, path, entry_type)).await
-}
-
-async fn check_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) -> bool {
-    let result = match entry_type {
-        EntryType::File => repo.open_file(path).await.map(|_| ()),
-        EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
-    };
-
-    match result {
-        Ok(()) => true,
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
-        Err(error) => panic!("unexpected error: {:?}", error),
-    }
 }
 
 #[instrument]
