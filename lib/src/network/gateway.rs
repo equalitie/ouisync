@@ -1,6 +1,5 @@
 use super::{
     config_keys, ip, peer_addr::PeerAddr, peer_source::PeerSource, quic, raw, seen_peers::SeenPeer,
-    socket,
 };
 use crate::{
     config::{ConfigEntry, ConfigStore},
@@ -8,17 +7,16 @@ use crate::{
     sync::atomic_slot::AtomicSlot,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use net::{
+    tcp::{TcpListener, TcpStream},
+    udp::UdpSocket,
+};
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
 use thiserror::Error;
-use tokio::{
-    net::{TcpListener, TcpStream, UdpSocket},
-    select,
-    sync::mpsc,
-    time,
-};
+use tokio::{select, sync::mpsc, time};
 use tracing::Instrument;
 
 /// Established incoming and outgoing connections.
@@ -383,7 +381,7 @@ impl QuicStack {
         let config_entry = config.entry(config_key);
         let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
-        let socket = match socket::bind::<UdpSocket>(preferred_addr).await {
+        let socket = match UdpSocket::bind(preferred_addr).await {
             Ok(socket) => socket,
             Err(err) => {
                 tracing::error!(
@@ -474,7 +472,7 @@ impl TcpStack {
         let config_entry = config.entry(config_key);
         let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
-        let listener = match socket::bind::<TcpListener>(preferred_addr).await {
+        let listener = match TcpListener::bind(preferred_addr).await {
             Ok(listener) => listener,
             Err(err) => {
                 tracing::warn!(

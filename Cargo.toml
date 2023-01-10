@@ -1,5 +1,5 @@
 [workspace]
-members = ["bindgen", "cli", "ffi", "lib", "rand", "util", "vfs"]
+members = ["bindgen", "cli", "ffi", "lib", "net", "rand", "util", "vfs"]
 
 [workspace.package]
 version = "0.5.1"

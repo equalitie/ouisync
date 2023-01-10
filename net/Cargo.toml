@@ -1,0 +1,15 @@
+[package]
+name = "ouisync-net"
+description = "Low-level networking utilities"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+
+[features]
+simulation = []

@@ -611,10 +611,10 @@ impl Future for Send<'_> {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use net::tcp::{TcpListener, TcpStream};
     use std::net::Ipv4Addr;
-    use tokio::net::{TcpListener, TcpStream};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_stream() {
         let (mut client, server) = setup().await;
 
@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(recv_content, send_content);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_two_streams() {
         let (mut client, server) = setup().await;
 
@@ -669,7 +669,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn drop_stream() {
         let (mut client, server) = setup().await;
 
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(recv_content, send_content1)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn drop_dispatcher() {
         let (_client, server) = setup().await;
 
@@ -714,7 +714,7 @@ mod tests {
         assert_matches!(server_stream.recv().await, Err(ChannelClosed));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn multi_stream_close() {
         let (client, server) = create_connected_sockets().await;
         let (server_reader, _server_writer) = server.into_split();
@@ -751,7 +751,9 @@ mod tests {
     }
 
     async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0).into())
+            .await
+            .unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap())
             .await
             .unwrap();

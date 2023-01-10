@@ -24,7 +24,6 @@ mod request;
 mod runtime_id;
 mod seen_peers;
 mod server;
-mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;

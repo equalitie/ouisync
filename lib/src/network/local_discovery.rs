@@ -2,32 +2,27 @@ use super::{
     interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
-    socket::{self, ReuseAddr},
 };
 use crate::{
     collections::{HashMap, HashSet},
     scoped_task::{self, ScopedJoinHandle},
 };
+use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 use tokio::{
-    net::UdpSocket,
     sync::{mpsc, Mutex},
     time::sleep,
 };
 use tracing::Instrument;
 
-// Selected at random but to not clash with some reserved ones:
-// https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
-const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
-const MULTICAST_PORT: u16 = 9271;
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
 
@@ -281,17 +276,6 @@ impl PerInterfaceLocalDiscovery {
     }
 }
 
-async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
-    let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
-        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
-        ReuseAddr::Required,
-    )
-    .await?;
-    socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
-
-    Ok(socket)
-}
-
 async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: InsecureRuntimeId,
@@ -389,7 +373,7 @@ impl SocketProvider {
             Some(socket) => socket.clone(),
             None => {
                 let socket = loop {
-                    match create_multicast_socket(self.interface).await {
+                    match UdpSocket::bind_multicast(self.interface).await {
                         Ok(socket) => break Arc::new(socket),
                         Err(_) => sleep(ERROR_DELAY).await,
                     }

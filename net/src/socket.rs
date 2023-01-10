@@ -6,7 +6,7 @@ use tokio::{
 
 /// Binds socket to the given address. If the port is already taken, binds to a random available
 /// port which can be retrieved by calling `local_addr` on the returned socket.
-pub(super) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
+pub(crate) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
     // Enable reuse address (`SO_REUSEADDR`) on the socket so that when the network or the whole
     // app is restarted, we can immediatelly re-bind to the same address as before.
     let socket: T = match bind_with_reuse_addr(addr, ReuseAddr::Preferred).await {
@@ -25,7 +25,7 @@ pub(super) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
     Ok(socket)
 }
 
-pub(super) enum ReuseAddr {
+pub(crate) enum ReuseAddr {
     // Reuse address is required. If we fail to set it, we also fail to create the socket.
     Required,
     // Reuse address is a nice-to-have. If we fail to set it, we proceed with the socket creation
@@ -33,7 +33,7 @@ pub(super) enum ReuseAddr {
     Preferred,
 }
 
-pub(super) async fn bind_with_reuse_addr<T: Socket>(
+pub(crate) async fn bind_with_reuse_addr<T: Socket>(
     addr: SocketAddr,
     reuse_addr: ReuseAddr,
 ) -> io::Result<T> {
@@ -57,7 +57,7 @@ pub(super) async fn bind_with_reuse_addr<T: Socket>(
 }
 
 // Internal trait to abstract over different types of network sockets.
-pub(super) trait Socket: Sized {
+pub(crate) trait Socket: Sized {
     const RAW_TYPE: socket2::Type;
 
     fn from_raw(raw: socket2::Socket) -> io::Result<Self>;
