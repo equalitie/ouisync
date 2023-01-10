@@ -1,5 +1,7 @@
-use super::quic;
-use net::tcp::{self, TcpStream};
+use net::{
+    quic,
+    tcp::{self, TcpStream},
+};
 use std::{
     io,
     pin::Pin,

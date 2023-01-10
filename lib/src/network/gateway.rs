@@ -1,5 +1,5 @@
 use super::{
-    config_keys, ip, peer_addr::PeerAddr, peer_source::PeerSource, quic, raw, seen_peers::SeenPeer,
+    config_keys, ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer,
 };
 use crate::{
     config::{ConfigEntry, ConfigStore},
@@ -8,6 +8,7 @@ use crate::{
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
+    quic,
     tcp::{TcpListener, TcpStream},
     udp::UdpSocket,
 };
@@ -121,7 +122,7 @@ impl ConnectError {
         matches!(
             self,
             Self::Quic(quic::Error::Connection(
-                quinn::ConnectionError::LocallyClosed
+                quic::ConnectionError::LocallyClosed
             ))
         )
     }

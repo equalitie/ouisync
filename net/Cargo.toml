@@ -8,8 +8,19 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+bytes = "1.1.0"
+futures-util = { workspace = true }
+quinn = { git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e155d380c0d7cccaf8e66" }
+quinn_udp = { package = "quinn-udp", git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e155d380c0d7cccaf8e66" }
+quinn_proto = { package = "quinn-proto", git = "https://github.com/quinn-rs/quinn", rev = "f7203ee382f6ac91456e155d380c0d7cccaf8e66" }
+rcgen = "0.9.1"
+rustls = { version = "0.20.3", default-features = false, features = ["quic", "dangerous_configuration"] }
 socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
-tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+thiserror = "1.0.31"
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros"] }
 
 [features]
 simulation = []

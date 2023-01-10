@@ -17,7 +17,6 @@ pub mod peer_addr;
 mod peer_exchange;
 mod peer_source;
 mod protocol;
-mod quic;
 mod raw;
 mod repository_stats;
 mod request;

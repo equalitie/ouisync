@@ -314,9 +314,7 @@ impl Drop for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub(super) fn configure(
-    socket: std::net::UdpSocket,
-) -> Result<(Connector, Acceptor, SideChannelMaker)> {
+pub fn configure(socket: std::net::UdpSocket) -> Result<(Connector, Acceptor, SideChannelMaker)> {
     let server_config = make_server_config()?;
 
     let custom_socket = CustomUdpSocket::from_std(socket)?;
@@ -344,14 +342,16 @@ pub(super) fn configure(
 }
 
 //------------------------------------------------------------------------------
+pub use quinn::{ConnectError, ConnectionError, WriteError};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("connect error")]
-    Connect(#[from] quinn::ConnectError),
+    Connect(#[from] ConnectError),
     #[error("connection error")]
-    Connection(#[from] quinn::ConnectionError),
+    Connection(#[from] ConnectionError),
     #[error("write error")]
-    Write(#[from] quinn::WriteError),
+    Write(#[from] WriteError),
     #[error("done accepting error")]
     DoneAccepting,
     #[error("IO error")]
@@ -551,7 +551,7 @@ fn send_to_side_channels(
 //------------------------------------------------------------------------------
 
 /// Makes new `SideChannel`s.
-pub(super) struct SideChannelMaker {
+pub struct SideChannelMaker {
     io: Arc<tokio::net::UdpSocket>,
     side_channel_tx: broadcast::Sender<Packet>,
 }
@@ -565,7 +565,7 @@ impl SideChannelMaker {
     }
 }
 
-pub(super) struct SideChannel {
+pub struct SideChannel {
     io: Arc<tokio::net::UdpSocket>,
     packet_receiver: broadcast::Receiver<Packet>,
 }
@@ -604,7 +604,7 @@ impl SideChannel {
 // `SideChannelSender` is less expensive than the `SideChannel` because there is no additional
 // `broadcast::Receiver` that the `CustomUdpSocket` would need to pass messages to.
 #[derive(Clone)]
-pub(super) struct SideChannelSender {
+pub struct SideChannelSender {
     io: Arc<tokio::net::UdpSocket>,
 }
 

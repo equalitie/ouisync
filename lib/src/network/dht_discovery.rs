@@ -1,6 +1,5 @@
 use super::{
     peer_addr::PeerAddr,
-    quic,
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
@@ -11,6 +10,7 @@ use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
+use net::quic;
 use rand::Rng;
 use std::{
     future::pending,
@@ -183,7 +183,7 @@ impl MonitoredDht {
         let dht = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(false)
-            .start(socket)
+            .start(Socket(socket))
             // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
             // since we just succeeded in binding the socket above, that shouldn't happen.
             .unwrap();
@@ -436,17 +436,19 @@ impl Lookup {
     }
 }
 
+struct Socket(quic::SideChannel);
+
 #[async_trait]
-impl btdht::SocketTrait for quic::SideChannel {
+impl btdht::SocketTrait for Socket {
     async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.send_to(buf, target).await
+        self.0.send_to(buf, target).await
     }
 
     async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.recv_from(buf).await
+        self.0.recv_from(buf).await
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.local_addr()
+        self.0.local_addr()
     }
 }
