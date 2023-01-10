@@ -17,7 +17,7 @@ use tracing::{instrument, Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     // Create two peers and connect them together.
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
@@ -63,7 +63,7 @@ async fn relink_repository() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_remote_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -99,7 +99,7 @@ async fn relay_blind() {
 // Simulate two peers that can't connect to each other but both can connect to a third ("relay")
 // peer.
 async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
     let repo_a = env.create_repo().await;
@@ -125,7 +125,7 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
         .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
 
     let mut content = vec![0; file_size];
-    env.rng.fill(&mut content[..]);
+    rand::thread_rng().fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it. The file must pass through R because A and B
     // are not connected to each other.
@@ -146,7 +146,7 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
 async fn transfer_large_file() {
     let file_size = 4 * 1024 * 1024;
 
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -154,7 +154,7 @@ async fn transfer_large_file() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     let mut content = vec![0; file_size];
-    env.rng.fill(&mut content[..]);
+    rand::thread_rng().fill(&mut content[..]);
 
     // Create a file by A and wait until B sees it.
     tracing::info!("writing");
@@ -172,7 +172,7 @@ async fn transfer_large_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let file_sizes = [512 * 1024, 1024];
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
@@ -184,7 +184,7 @@ async fn transfer_multiple_files_sequentially() {
         .iter()
         .map(|size| {
             let mut content = vec![0; *size];
-            env.rng.fill(&mut content[..]);
+            rand::thread_rng().fill(&mut content[..]);
             content
         })
         .collect();
@@ -210,7 +210,7 @@ async fn transfer_multiple_files_sequentially() {
 // garbage collected prematurelly.
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_write() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -220,7 +220,7 @@ async fn sync_during_file_write() {
     let id_b = *repo_b.local_branch().unwrap().id();
 
     let mut content = vec![0; 3 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content[..]);
+    rand::thread_rng().fill(&mut content[..]);
 
     // A: Create empty file
     let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
@@ -256,7 +256,7 @@ async fn sync_during_file_write() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -268,8 +268,8 @@ async fn concurrent_modify_open_file() {
 
     let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
     let mut content_b = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content_a[..]);
-    env.rng.fill(&mut content_b[..]);
+    rand::thread_rng().fill(&mut content_a[..]);
+    rand::thread_rng().fill(&mut content_b[..]);
 
     // A: Create empty file
     let mut file_a = repo_a.create_file("file.txt").await.unwrap();
@@ -330,13 +330,13 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
     let store_a = env.next_store();
-    let device_id_a = env.rng.gen();
-    let write_secrets = WriteSecrets::generate(&mut env.rng);
+    let device_id_a = rand::random();
+    let write_secrets = WriteSecrets::random();
     let repo_a = Repository::create(
         RepositoryDb::create(&store_a).await.unwrap(),
         device_id_a,
@@ -431,7 +431,7 @@ async fn recreate_local_branch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_many_files() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Quic).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -444,9 +444,10 @@ async fn transfer_many_files() {
 
     let contents: Vec<_> = (0..num_files)
         .map(|_| {
-            let size = env.rng.gen_range(min_size..max_size);
+            let mut rng = rand::thread_rng();
+            let size = rng.gen_range(min_size..max_size);
             let mut buffer = vec![0; size];
-            env.rng.fill(&mut buffer[..]);
+            rng.fill(&mut buffer[..]);
             buffer
         })
         .collect();
@@ -494,7 +495,7 @@ async fn transfer_many_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_directory_with_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -509,7 +510,7 @@ async fn transfer_directory_with_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_directory_with_subdirectory() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -524,7 +525,7 @@ async fn transfer_directory_with_subdirectory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -547,7 +548,7 @@ async fn remote_rename_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_empty_directory() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -566,7 +567,7 @@ async fn remote_rename_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_non_empty_directory() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -586,7 +587,7 @@ async fn remote_rename_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_directory_during_conflict() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -608,7 +609,7 @@ async fn remote_rename_directory_during_conflict() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -639,7 +640,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_update_and_delete_during_conflict() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -656,7 +657,7 @@ async fn concurrent_update_and_delete_during_conflict() {
 
     let mut file = repo_b.create_file("data.txt").await.unwrap();
     let mut content = vec![0u8; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE]; // exactly 2 blocks
-    env.rng.fill(&mut content[..]);
+    rand::thread_rng().fill(&mut content[..]);
     file.write(&content).await.unwrap();
     file.flush().await.unwrap();
 
@@ -675,7 +676,7 @@ async fn concurrent_update_and_delete_during_conflict() {
         &mut content[offset..]
     };
 
-    env.rng.fill(chunk);
+    rand::thread_rng().fill(chunk);
 
     file.seek(SeekFrom::End(-(chunk.len() as i64)))
         .await
@@ -694,7 +695,7 @@ async fn concurrent_update_and_delete_during_conflict() {
 // https://github.com/equalitie/ouisync/issues/86
 #[tokio::test(flavor = "multi_thread")]
 async fn content_stays_available_during_sync() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
@@ -709,10 +710,10 @@ async fn content_stays_available_during_sync() {
     let _reg_b = node_b.network.handle().register(repo_b.store().clone());
 
     let mut content0 = vec![0; 32];
-    env.rng.fill(&mut content0[..]);
+    rand::thread_rng().fill(&mut content0[..]);
 
     let mut content1 = vec![0; 128 * 1024];
-    env.rng.fill(&mut content1[..]);
+    rand::thread_rng().fill(&mut content1[..]);
 
     // First create and sync "b/c.dat"
     async {

@@ -2,7 +2,6 @@ use ouisync::{
     crypto::sign::PublicKey, network::Network, Access, AccessSecrets, ConfigStore, Error, Event,
     File, Payload, PeerAddr, Repository, RepositoryDb,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{
     future::Future,
     net::{Ipv4Addr, SocketAddr},
@@ -25,7 +24,6 @@ pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Test environment
 pub(crate) struct Env {
-    pub rng: StdRng,
     base_dir: Option<TempDir>,
     next_repo_num: u64,
     next_peer_num: u64,
@@ -33,18 +31,13 @@ pub(crate) struct Env {
 }
 
 impl Env {
-    pub fn with_seed(seed: u64) -> Self {
-        Self::with_rng(StdRng::seed_from_u64(seed))
-    }
-
-    pub fn with_rng(rng: StdRng) -> Self {
+    pub fn new() -> Self {
         init_log();
 
         let span = tracing::info_span!("test", name = thread::current().name()).entered();
         let base_dir = TempDir::new().unwrap();
 
         Self {
-            rng,
             base_dir: Some(base_dir),
             next_repo_num: 0,
             next_peer_num: 0,
@@ -64,14 +57,14 @@ impl Env {
     }
 
     pub async fn create_repo(&mut self) -> Repository {
-        let secrets = AccessSecrets::generate_write(&mut self.rng);
+        let secrets = AccessSecrets::random_write();
         self.create_repo_with_secrets(secrets).await
     }
 
     pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
         Repository::create(
             RepositoryDb::create(&self.next_store()).await.unwrap(),
-            self.rng.gen(),
+            rand::random(),
             Access::new(None, None, secrets),
         )
         .await

@@ -4,11 +4,11 @@ mod common;
 
 use self::common::{Env, Proto};
 use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
-use rand::{rngs::StdRng, Rng};
+use rand::Rng;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_local_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let repo = env.create_repo().await;
 
     assert_eq!(repo.count_blocks().await.unwrap(), 0);
@@ -27,7 +27,7 @@ async fn local_delete_local_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_delete_remote_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
@@ -35,7 +35,7 @@ async fn local_delete_remote_file() {
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
-    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+    write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -51,7 +51,7 @@ async fn local_delete_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_delete_remote_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
@@ -71,11 +71,11 @@ async fn remote_delete_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_local_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let repo = env.create_repo().await;
 
     let mut file = repo.create_file("test.dat").await.unwrap();
-    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+    write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
     repo.force_work().await.unwrap();
@@ -94,7 +94,7 @@ async fn local_truncate_local_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_truncate_remote_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
@@ -102,7 +102,7 @@ async fn local_truncate_remote_file() {
     let _reg_r = node_r.network.handle().register(repo_r.store().clone());
 
     let mut file = repo_r.create_file("test.dat").await.unwrap();
-    write_to_file(&mut env.rng, &mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+    write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
     file.flush().await.unwrap();
 
     // 2 blocks for the file + 1 block for the remote root directory
@@ -122,7 +122,7 @@ async fn local_truncate_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_truncate_remote_file() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
 
     let (node_l, node_r) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_l, repo_r) = env.create_linked_repos().await;
@@ -132,7 +132,7 @@ async fn remote_truncate_remote_file() {
     let mut file = repo_r.create_file("test.dat").await.unwrap();
 
     let mut content = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content[..]);
+    rand::thread_rng().fill(&mut content[..]);
 
     file.write(&content).await.unwrap();
     file.flush().await.unwrap();
@@ -170,8 +170,8 @@ async fn expect_block_count(repo: &Repository, expected_count: usize) {
     .await
 }
 
-async fn write_to_file(rng: &mut StdRng, file: &mut File, size: usize) {
+async fn write_to_file(file: &mut File, size: usize) {
     let mut buffer = vec![0; size];
-    rng.fill(&mut buffer[..]);
+    rand::thread_rng().fill(&mut buffer[..]);
     file.write(&buffer).await.unwrap();
 }

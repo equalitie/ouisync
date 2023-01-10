@@ -8,7 +8,7 @@ use tokio::{select, time};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn peer_exchange() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
 
     // B and C are initially connected only to A...
@@ -60,7 +60,7 @@ async fn peer_exchange() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_disable_enable_idle() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
@@ -76,7 +76,7 @@ async fn network_disable_enable_idle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_disable_enable_pending_connection() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
@@ -111,7 +111,7 @@ async fn network_disable_enable_pending_connection() {
 async fn network_disable_enable_addr_takeover() {
     use tokio::net::UdpSocket;
 
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
     let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
@@ -143,7 +143,7 @@ async fn network_disable_enable_addr_takeover() {
 // Test for an edge case that used to panic.
 #[tokio::test(flavor = "multi_thread")]
 async fn dht_toggle() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
 
     let node = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
@@ -158,7 +158,7 @@ async fn dht_toggle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn local_discovery() {
-    let mut env = Env::with_seed(0);
+    let mut env = Env::new();
     let proto = Proto::Quic;
 
     // A and B are initially disconnected and don't know each other's socket addesses.
