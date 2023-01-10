@@ -21,7 +21,7 @@ use std::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::{select, sync::watch, task};
+use tokio::{runtime, select, sync::watch};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
@@ -102,7 +102,10 @@ impl Drop for MessageDispatcher {
         self.recv.reader.close();
 
         let send = self.send.clone();
-        task::spawn(async move { send.close().await });
+
+        if let Ok(handle) = runtime::Handle::try_current() {
+            handle.spawn(async move { send.close().await });
+        }
     }
 }
 
