@@ -1,6 +1,6 @@
 use super::{message::Request, repository_stats::RepositoryStats};
+use crate::collections::{hash_map::Entry, HashMap};
 use std::{
-    collections::{hash_map::Entry, HashMap},
     future,
     sync::Arc,
     time::{Duration, Instant},
@@ -26,7 +26,7 @@ impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
         Self {
             stats,
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 

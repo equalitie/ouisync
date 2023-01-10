@@ -1,7 +1,5 @@
 //! Utilities for sending and receiving messages across the network.
 
-use crate::iterator::IntoIntersection;
-
 use super::{
     connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
     keep_alive::{KeepAliveSink, KeepAliveStream},
@@ -9,10 +7,14 @@ use super::{
     message_io::{MessageSink, MessageStream, SendError},
     raw,
 };
+use crate::{
+    collections::{hash_map, HashMap, HashSet},
+    iterator::IntoIntersection,
+};
 use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
-    collections::{hash_map, HashMap, HashSet, VecDeque},
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},

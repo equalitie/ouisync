@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
@@ -17,7 +18,7 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
-use std::{collections::HashMap, mem};
+use std::mem;
 
 // In-memory snapshot for testing purposes.
 pub(crate) struct Snapshot {
@@ -36,8 +37,8 @@ impl Snapshot {
     // Create snapshot given an iterator of blocks where each block is associated to its encoded
     // locator.
     pub fn new(locators_and_blocks: impl IntoIterator<Item = (Hash, Block)>) -> Self {
-        let mut blocks = HashMap::new();
-        let mut leaves = HashMap::new();
+        let mut blocks = HashMap::default();
+        let mut leaves = HashMap::default();
 
         for (locator, block) in locators_and_blocks {
             let id = block.data.id;

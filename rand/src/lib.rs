@@ -7,6 +7,7 @@ pub mod prelude {
 #[cfg(not(feature = "simulation"))]
 mod implementation {
     pub use rand::{distributions, random, seq, thread_rng, CryptoRng, Rng, SeedableRng};
+    pub use std::collections::hash_map::{DefaultHasher, RandomState};
 
     pub mod rngs {
         pub use rand::rngs::{OsRng, StdRng};
@@ -19,6 +20,8 @@ mod implementation {
     pub use rand::{distributions, seq, CryptoRng, Rng, SeedableRng};
 
     use self::distributions::{Distribution, Standard};
+    use siphasher::sip::SipHasher13;
+    use std::hash::{BuildHasher, Hasher};
 
     pub mod rngs {
         pub use self::{os::OsRng, thread::ThreadRng};
@@ -114,5 +117,53 @@ mod implementation {
         Standard: Distribution<T>,
     {
         thread_rng().gen()
+    }
+
+    /// Drop-in replacement for `std::collections::hash_map::RandomState` which uses the seedable
+    /// rng from this crate (mostly copied from std
+    /// (https://doc.rust-lang.org/src/std/collections/hash/map.rs.html#3092), just modified to use
+    /// the rng from this module).
+    pub struct RandomState {
+        k0: u64,
+        k1: u64,
+    }
+
+    impl RandomState {
+        pub fn new() -> Self {
+            let (k0, k1): (u64, u64) = random();
+
+            Self {
+                k0: k0.wrapping_add(1),
+                k1,
+            }
+        }
+    }
+
+    impl Default for RandomState {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl BuildHasher for RandomState {
+        type Hasher = DefaultHasher;
+
+        #[inline]
+        fn build_hasher(&self) -> DefaultHasher {
+            DefaultHasher(SipHasher13::new_with_keys(self.k0, self.k1))
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct DefaultHasher(SipHasher13);
+
+    impl Hasher for DefaultHasher {
+        fn write(&mut self, msg: &[u8]) {
+            self.0.write(msg)
+        }
+
+        fn finish(&self) -> u64 {
+            self.0.finish()
+        }
     }
 }

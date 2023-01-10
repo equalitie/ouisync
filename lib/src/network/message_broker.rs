@@ -12,14 +12,14 @@ use super::{
     runtime_id::PublicRuntimeId,
     server::Server,
 };
-use crate::{index::Index, repository::LocalId, store::Store};
-use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use std::{
+use crate::{
     collections::{hash_map::Entry, HashMap},
-    future,
-    sync::Arc,
-    time::Duration,
+    index::Index,
+    repository::LocalId,
+    store::Store,
 };
+use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
+use std::{future, sync::Arc, time::Duration};
 use tokio::{
     select,
     sync::{mpsc, oneshot, Semaphore},
@@ -61,7 +61,7 @@ impl MessageBroker {
             this_runtime_id,
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
-            links: HashMap::new(),
+            links: HashMap::default(),
             request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
             span,
         };

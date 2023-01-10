@@ -15,6 +15,7 @@ mod blob;
 mod blob_id;
 mod block;
 mod branch;
+mod collections;
 mod config;
 mod conflict;
 mod db;

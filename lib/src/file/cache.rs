@@ -1,9 +1,6 @@
 use super::lock::OpenLock;
-use crate::{blob_id::BlobId, crypto::sign::PublicKey, event::Event};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex as BlockingMutex, Weak},
-};
+use crate::{blob_id::BlobId, collections::HashMap, crypto::sign::PublicKey, event::Event};
+use std::sync::{Arc, Mutex as BlockingMutex, Weak};
 use tokio::sync::broadcast;
 
 pub(crate) struct FileCache {
@@ -17,7 +14,7 @@ type BranchMap = HashMap<PublicKey, FileMap>;
 impl FileCache {
     pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
         Self {
-            slots: BlockingMutex::new(HashMap::new()),
+            slots: BlockingMutex::new(HashMap::default()),
             event_tx,
         }
     }

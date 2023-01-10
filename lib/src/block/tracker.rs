@@ -1,9 +1,7 @@
 use super::BlockId;
+use crate::collections::{hash_map::Entry, HashMap, HashSet};
 use slab::Slab;
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
-    sync::{Arc, Mutex as BlockingMutex},
-};
+use std::sync::{Arc, Mutex as BlockingMutex};
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
@@ -19,8 +17,8 @@ impl BlockTracker {
         Self {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
-                    missing_blocks: HashMap::new(),
-                    pending_blocks: HashSet::new(),
+                    missing_blocks: HashMap::default(),
+                    pending_blocks: HashSet::default(),
                     clients: Slab::new(),
                 }),
                 notify_tx,
@@ -67,7 +65,7 @@ impl BlockTracker {
             .lock()
             .unwrap()
             .clients
-            .insert(HashSet::new());
+            .insert(HashSet::default());
 
         let notify_rx = self.shared.notify_tx.subscribe();
 
@@ -113,7 +111,7 @@ impl BlockTrackerClient {
             .missing_blocks
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
-                clients: HashSet::new(),
+                clients: HashSet::default(),
                 state: MissingBlockState::Offered,
             });
 
@@ -228,7 +226,7 @@ impl Require {
             Entry::Occupied(mut entry) => entry.get_mut().state.switch_offered_to_required(),
             Entry::Vacant(entry) => {
                 entry.insert(MissingBlock {
-                    clients: HashSet::new(),
+                    clients: HashSet::default(),
                     state: MissingBlockState::Required,
                 });
 
@@ -332,10 +330,9 @@ mod tests {
         super::{BlockData, BLOCK_SIZE},
         *,
     };
-    use crate::test_utils;
+    use crate::{collections::HashSet, test_utils};
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::collections::HashSet;
     use test_strategy::proptest;
     use tokio::{sync::Barrier, task};
 

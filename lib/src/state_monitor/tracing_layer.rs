@@ -1,6 +1,6 @@
 use super::{MonitoredValue, StateMonitor};
+use crate::collections::{hash_map, HashMap};
 use std::{
-    collections::{hash_map, HashMap},
     fmt,
     sync::{Arc, Mutex},
 };
@@ -33,10 +33,10 @@ impl TracingLayer {
                 *inner = Some(TraceLayerInner {
                     root_span: Span {
                         monitor: trace_monitor,
-                        values: MonitoredValues::new(),
+                        values: MonitoredValues::default(),
                     },
                     root_message: None,
-                    spans: HashMap::new(),
+                    spans: HashMap::default(),
                 })
             }
             None => *inner = None,
@@ -144,7 +144,7 @@ impl TraceLayerInner {
                 (
                     Span {
                         monitor: span_monitor,
-                        values: MonitoredValues::new(),
+                        values: MonitoredValues::default(),
                     },
                     None,
                 ),
@@ -180,7 +180,7 @@ impl TraceLayerInner {
             // newly created `StateMonitor`.
             message.take();
             let monitor = span.monitor.make_child(format!("MSG: {}", msg));
-            let mut values = MonitoredValues::new();
+            let mut values = MonitoredValues::default();
             for_each_field(event, |field, value| {
                 if field.name() != "message" {
                     let value = format!("{:?}", value);

@@ -1,8 +1,8 @@
+use crate::collections::HashMap;
 use core::ops::{Deref, DerefMut};
 use once_cell::sync::Lazy;
 use std::{
     backtrace::Backtrace,
-    collections::HashMap,
     panic::Location,
     sync::{
         self,
@@ -13,7 +13,7 @@ use std::{
 };
 
 static WATCHED_ENTRIES: Lazy<sync::Mutex<HashMap<u64, WatchedEntry>>> =
-    Lazy::new(|| sync::Mutex::new(HashMap::new()));
+    Lazy::new(|| sync::Mutex::new(HashMap::default()));
 
 static WATCHING_THREAD: Lazy<thread::JoinHandle<()>> = Lazy::new(|| thread::spawn(watching_thread));
 

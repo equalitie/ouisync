@@ -4,12 +4,14 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
     socket::{self, ReuseAddr},
 };
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::{HashMap, HashSet},
+    scoped_task::{self, ScopedJoinHandle},
+};
 use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
@@ -53,7 +55,7 @@ impl LocalDiscovery {
                 let mut inner = LocalDiscoveryInner {
                     listener_port,
                     peer_tx,
-                    per_interface_discovery: HashMap::new(),
+                    per_interface_discovery: HashMap::default(),
                 };
 
                 let mut interface_watcher = interface::watch_ipv4_multicast_interfaces();
@@ -89,7 +91,7 @@ struct LocalDiscoveryInner {
 
 impl LocalDiscoveryInner {
     fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>) {
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         for interface in new_interfaces {
             match self.per_interface_discovery.entry(interface) {

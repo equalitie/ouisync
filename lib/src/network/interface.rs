@@ -1,6 +1,6 @@
+use crate::collections::HashSet;
+use std::{net::Ipv4Addr, time::Duration};
 use tokio::{sync::mpsc, time::sleep};
-
-use std::{collections::HashSet, net::Ipv4Addr, time::Duration};
 
 // Network interfaces may change at runtime (especially on mobile devices, but on desktops as
 // well). This code helps us track such changes.
@@ -17,7 +17,7 @@ pub(crate) fn watch_ipv4_multicast_interfaces() -> mpsc::Receiver<InterfaceChang
     let (tx, rx) = mpsc::channel(1);
 
     tokio::spawn(async move {
-        let mut seen_interfaces = HashSet::new();
+        let mut seen_interfaces = HashSet::default();
 
         loop {
             let found_interfaces = find_ipv4_multicast_interfaces().await;
@@ -59,7 +59,7 @@ pub(crate) fn watch_ipv4_multicast_interfaces() -> mpsc::Receiver<InterfaceChang
 async fn find_ipv4_multicast_interfaces() -> HashSet<Ipv4Addr> {
     match tokio::task::spawn_blocking(find_ipv4_multicast_interfaces_sync).await {
         Ok(interfaces) => interfaces,
-        Err(_) => HashSet::new(),
+        Err(_) => HashSet::default(),
     }
 }
 
@@ -67,7 +67,7 @@ async fn find_ipv4_multicast_interfaces() -> HashSet<Ipv4Addr> {
 fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
     use std::net::SocketAddrV4;
 
-    let mut ret = HashSet::new();
+    let mut ret = HashSet::default();
 
     // This may be blocking
     let addrs = match nix::ifaddrs::getifaddrs() {
@@ -95,7 +95,7 @@ fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
 
 #[cfg(target_family = "windows")]
 fn find_ipv4_multicast_interfaces_sync() -> HashSet<Ipv4Addr> {
-    let mut ret = HashSet::new();
+    let mut ret = HashSet::default();
 
     use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 

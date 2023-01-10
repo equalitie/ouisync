@@ -3,14 +3,16 @@ use super::{
     quic,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::HashMap,
+    scoped_task::{self, ScopedJoinHandle},
+};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
 use rand::Rng;
 use std::{
-    collections::HashMap,
     future::pending,
     io,
     net::SocketAddr,
@@ -294,7 +296,7 @@ impl Lookup {
         wake_up_rx.borrow_and_update();
 
         let seen_peers = Arc::new(SeenPeers::new());
-        let requests = Arc::new(Mutex::new(HashMap::new()));
+        let requests = Arc::new(Mutex::new(HashMap::default()));
 
         let task = if dht_v4.is_some() || dht_v6.is_some() {
             let span = tracing::info_span!(parent: span, "lookup", ?info_hash);

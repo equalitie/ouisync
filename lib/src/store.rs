@@ -181,6 +181,7 @@ mod tests {
     use super::*;
     use crate::{
         block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+        collections::HashSet,
         crypto::{
             cipher::SecretKey,
             sign::{Keypair, PublicKey},
@@ -199,7 +200,6 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::collections::HashSet;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;

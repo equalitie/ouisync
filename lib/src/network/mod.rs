@@ -44,7 +44,11 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle, store::Store,
+    collections::{hash_map::Entry, HashMap, HashSet},
+    config::ConfigStore,
+    repository::RepositoryId,
+    scoped_task::ScopedAbortHandle,
+    store::Store,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -52,7 +56,6 @@ use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     io, mem,
     net::SocketAddr,
@@ -107,7 +110,7 @@ impl Network {
             gateway,
             this_runtime_id,
             state: BlockingMutex::new(State {
-                message_brokers: Some(HashMap::new()),
+                message_brokers: Some(HashMap::default()),
                 registry: Slab::new(),
             }),
             port_forwarder,
@@ -125,7 +128,7 @@ impl Network {
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
-            our_addresses: BlockingMutex::new(HashSet::new()),
+            our_addresses: BlockingMutex::new(HashSet::default()),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -487,7 +490,7 @@ impl Inner {
             let mut state = self.state.lock().unwrap();
             match &mut state.message_brokers {
                 Some(brokers) => {
-                    let mut new = HashMap::new();
+                    let mut new = HashMap::default();
                     std::mem::swap(brokers, &mut new);
                     new
                 }

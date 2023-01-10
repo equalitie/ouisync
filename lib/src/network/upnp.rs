@@ -1,5 +1,8 @@
 use super::ip;
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::{hash_map, HashMap},
+    scoped_task::{self, ScopedJoinHandle},
+};
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -9,7 +12,6 @@ use rupnp::{
     Device, Service,
 };
 use std::{
-    collections::{hash_map, HashMap},
     fmt,
     future::Future,
     io, net,
@@ -125,7 +127,7 @@ impl PortForwarder {
 
         const ERROR_SLEEP_DURATION: Duration = Duration::from_secs(5);
 
-        let job_handles = Arc::new(Mutex::new(JobHandles::new()));
+        let job_handles = Arc::new(Mutex::new(JobHandles::default()));
 
         let span = tracing::info_span!("devices");
 
@@ -258,7 +260,7 @@ impl PortForwarder {
             })
         };
 
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         match job_handles.entry(device_url.clone()) {
             Entry::Occupied(mut entry) => {

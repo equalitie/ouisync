@@ -1,7 +1,7 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
+use crate::collections::{hash_map::Entry, HashMap};
 use serde::{ser::SerializeSeq, Serialize, Serializer};
 use std::{
-    collections::{hash_map::Entry, HashMap},
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -53,7 +53,7 @@ impl ConnectionDeduplicator {
 
         Self {
             next_id: AtomicU64::new(0),
-            connections: Arc::new(SyncMutex::new(HashMap::new())),
+            connections: Arc::new(SyncMutex::new(HashMap::default())),
             on_change_tx: Arc::new(tx),
         }
     }
@@ -277,7 +277,7 @@ impl ConnectionPermit {
         let on_release = DropAwaitable::new().subscribe();
 
         Self {
-            connections: Arc::new(SyncMutex::new(HashMap::new())),
+            connections: Arc::new(SyncMutex::new(HashMap::default())),
             info: ConnectionInfo {
                 addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
                 dir: ConnectionDirection::Incoming,
