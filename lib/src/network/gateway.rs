@@ -10,7 +10,6 @@ use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
     quic,
     tcp::{TcpListener, TcpStream},
-    udp::UdpSocket,
 };
 use std::{
     net::{IpAddr, SocketAddr},
@@ -382,32 +381,8 @@ impl QuicStack {
         let config_entry = config.entry(config_key);
         let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
-        let socket = match UdpSocket::bind(preferred_addr).await {
-            Ok(socket) => socket,
-            Err(err) => {
-                tracing::error!(
-                    "Failed to bind {} QUIC socket to {:?}: {:?}",
-                    family,
-                    preferred_addr,
-                    err
-                );
-                return None;
-            }
-        };
-
-        let socket = match socket.into_std() {
-            Ok(socket) => socket,
-            Err(err) => {
-                tracing::error!(
-                    "Failed to convert {} tokio::UdpSocket into std::UdpSocket for QUIC: {:?}",
-                    family,
-                    err
-                );
-                return None;
-            }
-        };
-
-        let (connector, listener, side_channel_maker) = match quic::configure(socket) {
+        let (connector, listener, side_channel_maker) = match quic::configure(preferred_addr).await
+        {
             Ok((connector, listener, side_channel_maker)) => {
                 tracing::info!(
                     "Configured {} QUIC stack on {:?}",

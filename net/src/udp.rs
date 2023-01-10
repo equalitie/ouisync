@@ -36,7 +36,6 @@ impl UdpSocket {
         self.0.recv_from(buf).await
     }
 
-    // TODO: remove this
     pub fn into_std(self) -> io::Result<std::net::UdpSocket> {
         self.0.into_std()
     }
