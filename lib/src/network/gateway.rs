@@ -3,7 +3,7 @@ use super::{
     socket,
 };
 use crate::{
-    config::ConfigStore,
+    config::{ConfigEntry, ConfigStore},
     scoped_task::{self, ScopedJoinHandle},
     sync::atomic_slot::AtomicSlot,
 };
@@ -380,9 +380,10 @@ impl QuicStack {
             SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
             SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
         };
+        let config_entry = config.entry(config_key);
+        let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
-        let socket = match socket::bind::<UdpSocket>(preferred_addr, config.entry(config_key)).await
-        {
+        let socket = match socket::bind::<UdpSocket>(preferred_addr).await {
             Ok(socket) => socket,
             Err(err) => {
                 tracing::error!(
@@ -414,6 +415,9 @@ impl QuicStack {
                     family,
                     listener.local_addr()
                 );
+
+                config_entry.set(&listener.local_addr().port()).await.ok();
+
                 (connector, listener, side_channel_maker)
             }
             Err(e) => {
@@ -467,24 +471,26 @@ impl TcpStack {
             SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
             SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
         };
+        let config_entry = config.entry(config_key);
+        let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
-        let listener =
-            match socket::bind::<TcpListener>(preferred_addr, config.entry(config_key)).await {
-                Ok(listener) => listener,
-                Err(err) => {
-                    tracing::warn!(
-                        "Failed to bind listener to {} TCP address {:?}: {:?}",
-                        family,
-                        preferred_addr,
-                        err
-                    );
-                    return None;
-                }
-            };
+        let listener = match socket::bind::<TcpListener>(preferred_addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to bind listener to {} TCP address {:?}: {:?}",
+                    family,
+                    preferred_addr,
+                    err
+                );
+                return None;
+            }
+        };
 
         let listener_local_addr = match listener.local_addr() {
             Ok(addr) => {
                 tracing::info!("Configured {} TCP listener on {:?}", family, addr);
+                config_entry.set(&addr.port()).await.ok();
                 addr
             }
             Err(err) => {
@@ -602,4 +608,14 @@ fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
     }
 
     true
+}
+
+async fn use_last_port(mut addr: SocketAddr, config: &ConfigEntry<u16>) -> SocketAddr {
+    if addr.port() == 0 {
+        if let Ok(last_port) = config.get().await {
+            addr.set_port(last_port);
+        }
+    }
+
+    addr
 }

@@ -1,22 +1,12 @@
-use crate::config::ConfigEntry;
 use std::{io, net::SocketAddr};
 use tokio::{
     net::{TcpListener, UdpSocket},
     task,
 };
 
-/// Bind socket to the given address. If the port is 0, will try to use the same port as the last
-/// time this function was called. The port is loaded/stored in the given config entry.
-pub(super) async fn bind<T: Socket>(
-    mut addr: SocketAddr,
-    config: ConfigEntry<u16>,
-) -> io::Result<T> {
-    if addr.port() == 0 {
-        if let Ok(last_port) = config.get().await {
-            addr.set_port(last_port);
-        }
-    }
-
+/// Binds socket to the given address. If the port is already taken, binds to a random available
+/// port which can be retrieved by calling `local_addr` on the returned socket.
+pub(super) async fn bind<T: Socket>(mut addr: SocketAddr) -> io::Result<T> {
     // Enable reuse address (`SO_REUSEADDR`) on the socket so that when the network or the whole
     // app is restarted, we can immediatelly re-bind to the same address as before.
     let socket: T = match bind_with_reuse_addr(addr, ReuseAddr::Preferred).await {
@@ -31,11 +21,6 @@ pub(super) async fn bind<T: Socket>(
             }
         }
     }?;
-
-    if let Ok(addr) = socket.local_addr() {
-        // Ignore failures
-        config.set(&addr.port()).await.ok();
-    }
 
     Ok(socket)
 }
