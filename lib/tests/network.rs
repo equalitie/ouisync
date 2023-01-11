@@ -12,7 +12,7 @@ use tokio::{select, sync::Barrier, time};
 #[test]
 fn peer_exchange() {
     let mut env = Env::new();
-    env.set_proto(Proto::Quic); // PEX doesn't work with TCP
+    let proto = Proto::Quic; // PEX works only with QUIC
 
     let secrets = AccessSecrets::random_write();
     let barrier = Arc::new(Barrier::new(3));
@@ -25,7 +25,8 @@ fn peer_exchange() {
         let barrier = barrier.clone();
 
         async move {
-            let (_network, _repo, reg) = common::setup_actor(secrets).await;
+            let network = common::create_network(proto).await;
+            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
             reg.enable_pex();
 
             barrier.wait().await;
@@ -37,7 +38,8 @@ fn peer_exchange() {
         let barrier = barrier.clone();
 
         async move {
-            let (network, _repo, reg) = common::setup_actor(secrets).await;
+            let network = common::create_network(proto).await;
+            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
             network.connect("alice");
             reg.enable_pex();
 
@@ -48,7 +50,8 @@ fn peer_exchange() {
 
     env.actor("carol", {
         async move {
-            let (network, _repo, reg) = common::setup_actor(secrets).await;
+            let network = common::create_network(proto).await;
+            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
             network.connect("alice");
             reg.enable_pex();
 
@@ -62,7 +65,6 @@ fn peer_exchange() {
 fn network_disable_enable_idle() {
     let mut env = Env::new();
     let proto = Proto::Quic;
-    env.set_proto(proto);
 
     env.actor("only", async move {
         let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));

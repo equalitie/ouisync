@@ -139,9 +139,7 @@ fn relay_case(_proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
         let mut rx = tx.subscribe();
 
         async move {
-            let network = common::create_network().await;
-            let (_repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+            let (_network, _repo, _reg) = common::setup_actor(secrets).await;
             rx.recv().await.unwrap();
         }
     });
@@ -398,6 +396,7 @@ fn concurrent_modify_open_file() {
 #[test]
 fn recreate_local_branch() {
     let mut env = Env::new();
+    let proto = Proto::Tcp;
 
     let (tx, mut rx) = mpsc::channel(1);
 
@@ -407,7 +406,7 @@ fn recreate_local_branch() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
+            let network = common::create_network(proto).await;
 
             // 1. Create the repo but don't link it yet.
             let repo_path = common::make_repo_path();
@@ -495,6 +494,7 @@ fn recreate_local_branch() {
 #[test]
 fn transfer_directory_with_file() {
     let mut env = Env::new();
+    let proto = Proto::Tcp;
     let (tx, mut rx) = mpsc::channel(1); // side-channel
 
     let secrets = AccessSecrets::random_write();
@@ -503,7 +503,7 @@ fn transfer_directory_with_file() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
+            let network = common::create_network(proto).await;
             let repo = common::create_repo(secrets).await;
             let _reg = network.handle().register(repo.store().clone());
 
@@ -515,7 +515,7 @@ fn transfer_directory_with_file() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
+        let network = common::create_network(proto).await;
         let repo = common::create_repo(secrets).await;
         let _reg = network.handle().register(repo.store().clone());
 
@@ -667,6 +667,7 @@ fn remote_rename_non_empty_directory() {
 #[test]
 fn remote_rename_directory_during_conflict() {
     let mut env = Env::new();
+    let proto = Proto::Tcp;
     let (tx, mut rx) = mpsc::channel(1);
     let secrets = AccessSecrets::random_write();
 
@@ -674,7 +675,7 @@ fn remote_rename_directory_during_conflict() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
+            let network = common::create_network(proto).await;
             let repo = common::create_repo(secrets).await;
 
             // Create file before linking the repo to ensure we create conflict.
@@ -691,7 +692,7 @@ fn remote_rename_directory_during_conflict() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
+        let network = common::create_network(proto).await;
         let repo = common::create_repo(secrets).await;
 
         network.connect("writer");
@@ -757,6 +758,7 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
 #[test]
 fn concurrent_update_and_delete_during_conflict() {
     let mut env = Env::new();
+    let proto = Proto::Tcp;
 
     let (alice_tx, mut alice_rx) = mpsc::channel(1);
     let (bob_tx, mut bob_rx) = mpsc::channel(1);
@@ -769,7 +771,7 @@ fn concurrent_update_and_delete_during_conflict() {
         let content = content.clone();
 
         async move {
-            let network = common::create_network().await;
+            let network = common::create_network(proto).await;
             let repo = common::create_repo(secrets).await;
 
             let id_a = *repo.local_branch().unwrap().id();
@@ -802,7 +804,7 @@ fn concurrent_update_and_delete_during_conflict() {
     });
 
     env.actor("bob", async move {
-        let network = common::create_network().await;
+        let network = common::create_network(proto).await;
         network.connect("alice");
 
         let repo = common::create_repo(secrets).await;

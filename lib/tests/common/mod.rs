@@ -78,7 +78,7 @@ pub(crate) mod env {
         where
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
+            let actor = Actor::new(self.base_dir.path().join(name));
             let span = tracing::info_span!("actor", name);
 
             self.dns.lock().unwrap().register(name);
@@ -90,11 +90,6 @@ pub(crate) mod env {
             let f = f.instrument(span);
 
             self.tasks.push(self.runtime.spawn(f));
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn set_proto(&mut self, proto: Proto) {
-            self.proto = proto;
         }
     }
 
@@ -176,7 +171,6 @@ pub(crate) mod env {
     #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) struct Env<'a> {
         base_dir: TempDir,
-        proto: Proto,
         runner: turmoil::Sim<'a>,
     }
 
@@ -188,11 +182,7 @@ pub(crate) mod env {
             let base_dir = TempDir::new();
             let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
 
-            Self {
-                base_dir,
-                proto: Proto::Tcp,
-                runner,
-            }
+            Self { base_dir, runner }
         }
 
         #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
@@ -200,7 +190,7 @@ pub(crate) mod env {
         where
             Fut: Future<Output = ()> + 'static,
         {
-            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
+            let actor = Actor::new(self.base_dir.path().join(name));
             let span = tracing::info_span!("actor", name);
 
             let f = async move {
@@ -212,11 +202,6 @@ pub(crate) mod env {
 
             self.runner.client(name, f);
         }
-
-        // TODO: add this method when QUIC is supported
-        // pub fn set_proto(&mut self, proto: Proto) {
-        //     self.proto = proto;
-        // }
     }
 
     impl Drop for Env<'_> {
@@ -342,8 +327,7 @@ pub(crate) fn create_unbound_network() -> Network {
 }
 
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) async fn create_network() -> Network {
-    let proto = ACTOR.with(|actor| actor.proto);
+pub(crate) async fn create_network(proto: Proto) -> Network {
     let network = create_unbound_network();
 
     let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
@@ -388,7 +372,7 @@ pub(crate) async fn create_linked_repo(
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 /// Convenience function for the common case where the actor has one linked repository.
 pub(crate) async fn setup_actor(secrets: AccessSecrets) -> (Network, Repository, Registration) {
-    let network = create_network().await;
+    let network = create_network(Proto::Tcp).await;
     let (repo, reg) = create_linked_repo(secrets, &network).await;
     (network, repo, reg)
 }
@@ -399,16 +383,14 @@ task_local! {
 
 struct Actor {
     base_dir: PathBuf,
-    proto: Proto,
     device_id: DeviceId,
     repo_counter: Cell<u32>,
 }
 
 impl Actor {
-    fn new(base_dir: PathBuf, proto: Proto) -> Self {
+    fn new(base_dir: PathBuf) -> Self {
         Actor {
             base_dir,
-            proto,
             device_id: rand::random(),
             repo_counter: Cell::new(0),
         }
