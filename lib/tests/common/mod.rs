@@ -1,8 +1,11 @@
 use ouisync::{
-    crypto::sign::PublicKey, device_id::DeviceId, network::Network, Access, AccessSecrets,
-    ConfigStore, EntryType, Error, Event, File, Payload, PeerAddr, Repository, RepositoryDb,
-    Result,
+    crypto::sign::PublicKey,
+    device_id::DeviceId,
+    network::{Network, Registration},
+    Access, AccessSecrets, ConfigStore, EntryType, Error, Event, File, Payload, PeerAddr,
+    Repository, RepositoryDb, Result,
 };
+use rand::Rng;
 use std::{
     cell::Cell,
     future::Future,
@@ -181,9 +184,10 @@ pub(crate) mod new {
 
             self.tasks.push(self.runtime.spawn(f));
         }
+    }
 
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn run(&mut self) {
+    impl Drop for Env {
+        fn drop(&mut self) {
             self.runtime
                 .block_on(future::try_join_all(self.tasks.drain(..)))
                 .unwrap();
@@ -296,9 +300,10 @@ pub(crate) mod new {
 
             self.runner.client(name, f);
         }
+    }
 
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn run(&mut self) {
+    impl Drop for Env<'_> {
+        fn drop(&mut self) {
             self.runner.run().unwrap()
         }
     }
@@ -341,6 +346,17 @@ pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
     )
     .await
     .unwrap()
+}
+
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_linked_repo(
+    secrets: AccessSecrets,
+    network: &Network,
+) -> (Repository, Registration) {
+    let repo = create_repo(secrets).await;
+    let reg = network.handle().register(repo.store().clone());
+
+    (repo, reg)
 }
 
 task_local! {
@@ -602,6 +618,13 @@ pub(crate) async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result
     }
 
     Ok(content)
+}
+
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) fn random_content(size: usize) -> Vec<u8> {
+    let mut content = vec![0; size];
+    rand::thread_rng().fill(&mut content[..]);
+    content
 }
 
 fn to_megabytes(bytes: usize) -> usize {

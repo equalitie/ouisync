@@ -11,131 +11,177 @@ use ouisync::{
     BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
-use tokio::{sync::mpsc, task};
-use tracing::{instrument, Instrument, Span};
+use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
+use tokio::sync::{broadcast, mpsc};
+use tracing::{instrument, Instrument};
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relink_repository() {
-    let mut env = old::Env::new();
+#[test]
+fn relink_repository() {
+    let mut env = new::Env::new();
 
-    // Create two peers and connect them together.
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
+    // Bidirectional side-channel
+    let (writer_tx, mut writer_rx) = mpsc::channel(1);
+    let (reader_tx, mut reader_rx) = mpsc::channel(1);
 
-    let (repo_a, repo_b) = env.create_linked_repos().await;
+    let secrets = AccessSecrets::random_write();
 
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    // Create a file by A
-    let mut file_a = async {
-        let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-        file_a.write(b"first").await.unwrap();
-        file_a.flush().await.unwrap();
-        file_a
-    }
-    .instrument(repo_a.span())
-    .await;
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    // Wait until the file is seen by B
-    common::expect_file_content(&repo_b, "test.txt", b"first").await;
+            // Create the file
+            let mut file = repo.create_file("test.txt").await.unwrap();
+            file.write(b"first").await.unwrap();
+            file.flush().await.unwrap();
 
-    // Unlink B's repo
-    tracing::info!("B: unlink");
-    drop(reg_b);
+            // Wait for the reader to see the file and then unlink its repo
+            reader_rx.recv().await;
 
-    // Update the file while B's repo is unlinked
-    async {
-        file_a.truncate(0).await.unwrap();
-        file_a.write(b"second").await.unwrap();
-        file_a.flush().await.unwrap();
-    }
-    .instrument(repo_a.span())
-    .await;
+            // Modify the file while reader is unlinked
+            file.truncate(0).await.unwrap();
+            file.write(b"second").await.unwrap();
+            file.flush().await.unwrap();
 
-    // Re-register B's repo
-    tracing::info!("B: relink");
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+            // Notify the reader the file is updated
+            writer_tx.send(()).await.unwrap();
 
-    // Wait until the file is updated
-    common::expect_file_content(&repo_b, "test.txt", b"second").await;
+            // Wait until reader is done
+            reader_rx.recv().await;
+        }
+    });
+
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        // Wait until we see the original file
+        common::expect_file_content(&repo, "test.txt", b"first").await;
+
+        // Unlink the repo and notify the writer
+        drop(reg);
+        reader_tx.send(()).await.unwrap();
+
+        // Wait until writer is done updating the file
+        writer_rx.recv().await;
+
+        // Relink the repo
+        let _reg = network.handle().register(repo.store().clone());
+
+        // Wait until the file is updated
+        common::expect_file_content(&repo, "test.txt", b"second").await;
+
+        // Notify the writer that we are done
+        reader_tx.send(()).await.unwrap();
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remove_remote_file() {
-    let mut env = old::Env::new();
+#[test]
+fn remove_remote_file() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    let secrets = AccessSecrets::random_write();
 
-    // Create a file by A and wait until B sees it.
-    let mut file = repo_a.create_file("test.txt").await.unwrap();
-    file.flush().await.unwrap();
+    env.actor("creator", {
+        let secrets = secrets.clone();
 
-    common::expect_file_content(&repo_b, "test.txt", &[]).await;
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    // Delete the file by B
-    repo_b.remove_entry("test.txt").await.unwrap();
+            let mut file = repo.create_file("test.txt").await.unwrap();
+            file.flush().await.unwrap();
+            drop(file);
 
-    // TODO: wait until A sees the file being deleted
+            expect_entry_not_found(&repo, "test.txt").await;
+
+            tx.send(()).await.unwrap();
+        }
+    });
+
+    env.actor("remover", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("creator");
+
+        common::expect_file_content(&repo, "test.txt", &[]).await;
+
+        repo.remove_entry("test.txt").await.unwrap();
+
+        rx.recv().await;
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relay_write() {
+#[test]
+fn relay_write() {
     // There used to be a deadlock that got triggered only when transferring a sufficiently large
     // file.
     let file_size = 4 * 1024 * 1024;
-    relay_case(Proto::Tcp, file_size, AccessMode::Write).await
+    relay_case(Proto::Tcp, file_size, AccessMode::Write)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relay_blind() {
+#[test]
+fn relay_blind() {
     let file_size = 4 * 1024 * 1024;
-    relay_case(Proto::Tcp, file_size, AccessMode::Blind).await
+    relay_case(Proto::Tcp, file_size, AccessMode::Blind)
 }
 
 // Simulate two peers that can't connect to each other but both can connect to a third ("relay")
 // peer.
-async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
-    let mut env = old::Env::new();
+fn relay_case(_proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
+    let mut env = new::Env::new();
+    let (tx, _) = broadcast::channel(1);
 
-    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_a = env.create_repo().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
+    let secrets = AccessSecrets::random_write();
+    let content = Arc::new(common::random_content(file_size));
 
-    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("relay", {
+        let secrets = secrets.with_mode(relay_access_mode);
+        let mut rx = tx.subscribe();
 
-    // The "relay" peer.
-    let node_r = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_r = env
-        .create_repo_with_secrets(repo_a.secrets().with_mode(relay_access_mode))
-        .await;
-    let _reg_r = node_r.handle().register(repo_r.store().clone());
+        async move {
+            let network = common::create_network().await;
+            let (_repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    // Connect A and B to the relay only
-    node_a.add_user_provided_peer(&proto.listener_local_addr_v4(&node_r));
-    node_b.add_user_provided_peer(&proto.listener_local_addr_v4(&node_r));
+            rx.recv().await.unwrap();
+        }
+    });
 
-    let mut content = vec![0; file_size];
-    rand::thread_rng().fill(&mut content[..]);
+    env.actor("writer", {
+        let secrets = secrets.clone();
+        let content = content.clone();
+        let mut rx = tx.subscribe();
 
-    // Create a file by A and wait until B sees it. The file must pass through R because A and B
-    // are not connected to each other.
-    tracing::info!("writing");
-    async {
-        let mut file = repo_a.create_file("test.dat").await.unwrap();
-        common::write_in_chunks(&mut file, &content, 4096).await;
-        file.flush().await.unwrap();
-    }
-    .instrument(repo_a.span())
-    .await;
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    tracing::info!("reading");
-    common::expect_file_content(&repo_b, "test.dat", &content).await;
+            network.connect("relay");
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
+    });
+
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("relay");
+
+        common::expect_file_content(&repo, "test.dat", &content).await;
+
+        tx.send(()).unwrap();
+    });
 }
 
 #[test]
@@ -146,11 +192,7 @@ fn transfer_large_file() {
     let secrets = AccessSecrets::random_write();
 
     let file_size = 4 * 1024 * 1024;
-    let content = {
-        let mut content = vec![0; file_size];
-        rand::thread_rng().fill(&mut content[..]);
-        Arc::new(content)
-    };
+    let content = Arc::new(common::random_content(file_size));
 
     env.actor("writer", {
         let secrets = secrets.clone();
@@ -158,8 +200,7 @@ fn transfer_large_file() {
 
         async move {
             let network = common::create_network().await;
-            let repo = common::create_repo(secrets).await;
-            let _reg = network.handle().register(repo.store().clone());
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content, 4096).await;
@@ -171,8 +212,7 @@ fn transfer_large_file() {
 
     env.actor("reader", async move {
         let network = common::create_network().await;
-        let repo = common::create_repo(secrets).await;
-        let _reg = network.handle().register(repo.store().clone());
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
         network.connect("writer");
 
@@ -180,48 +220,69 @@ fn transfer_large_file() {
 
         tx.send(()).await.unwrap();
     });
-
-    env.run();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_multiple_files_sequentially() {
-    let mut env = old::Env::new();
-    let file_sizes = [512 * 1024, 1024];
+#[test]
+fn transfer_many_files() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    let num_files = 10;
+    let min_size = 0;
+    let max_size = 128 * 1024;
+    let files = {
+        let mut rng = rand::thread_rng();
+        let files: Vec<_> = (0..num_files)
+            .map(|_| {
+                let size = rng.gen_range(min_size..max_size);
+                let mut buffer = vec![0; size];
+                rng.fill(&mut buffer[..]);
+                buffer
+            })
+            .collect();
+        Arc::new(files)
+    };
 
-    let contents: Vec<_> = file_sizes
-        .iter()
-        .map(|size| {
-            let mut content = vec![0; *size];
-            rand::thread_rng().fill(&mut content[..]);
-            content
-        })
-        .collect();
+    let secrets = AccessSecrets::random_write();
 
-    for (index, content) in contents.iter().enumerate() {
-        let name = format!("file-{}.dat", index);
-        let mut file = repo_a.create_file(&name).await.unwrap();
-        common::write_in_chunks(&mut file, content, 4096).await;
-        file.flush().await.unwrap();
-        tracing::info!("put {:?}", name);
-        drop(file);
+    env.actor("writer", {
+        let secrets = secrets.clone();
+        let files = files.clone();
 
-        // Wait until we see all the already transfered files
-        for (index, content) in contents.iter().take(index + 1).enumerate() {
-            let name = format!("file-{}.dat", index);
-            common::expect_file_content(&repo_b, &name, content).await;
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+            for (index, content) in files.iter().enumerate() {
+                let name = format!("file-{}.dat", index);
+                let mut file = repo.create_file(&name).await.unwrap();
+                common::write_in_chunks(&mut file, content, 4096).await;
+                file.flush().await.unwrap();
+            }
+
+            rx.recv().await;
         }
-    }
+    });
+
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        for (index, content) in files.iter().enumerate() {
+            let name = format!("file-{}.dat", index);
+            common::expect_file_content(&repo, &name, content).await;
+        }
+
+        tx.send(()).await.unwrap();
+    });
 }
 
 // Test for an edge case where a sync happens while we are in the middle of writing a file.
 // This test makes sure that when the sync happens, the partially written file content is not
 // garbage collected prematurelly.
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_write() {
     let mut env = old::Env::new();
@@ -233,8 +294,7 @@ async fn sync_during_file_write() {
 
     let id_b = *repo_b.local_branch().unwrap().id();
 
-    let mut content = vec![0; 3 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    rand::thread_rng().fill(&mut content[..]);
+    let content = common::random_content(3 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     // A: Create empty file
     let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
@@ -268,6 +328,7 @@ async fn sync_during_file_write() {
     common::expect_file_content(&repo_b, "foo.txt", &content).await;
 }
 
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
     let mut env = old::Env::new();
@@ -280,10 +341,8 @@ async fn concurrent_modify_open_file() {
     let id_a = *repo_a.local_branch().unwrap().id();
     let id_b = *repo_b.local_branch().unwrap().id();
 
-    let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    let mut content_b = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    rand::thread_rng().fill(&mut content_a[..]);
-    rand::thread_rng().fill(&mut content_b[..]);
+    let content_a = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content_b = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     // A: Create empty file
     let mut file_a = repo_a.create_file("file.txt").await.unwrap();
@@ -342,6 +401,7 @@ async fn concurrent_modify_open_file() {
 
 // Test that the local version changes monotonically even when the local branch temporarily becomes
 // outdated.
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
     let mut env = old::Env::new();
@@ -443,70 +503,6 @@ async fn recreate_local_branch() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_many_files() {
-    let mut env = old::Env::new();
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Quic).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
-
-    let num_files = 10;
-    let min_size = 0;
-    let max_size = 128 * 1024;
-
-    let contents: Vec<_> = (0..num_files)
-        .map(|_| {
-            let mut rng = rand::thread_rng();
-            let size = rng.gen_range(min_size..max_size);
-            let mut buffer = vec![0; size];
-            rng.fill(&mut buffer[..]);
-            buffer
-        })
-        .collect();
-    let contents = Arc::new(contents);
-
-    let task_a = task::spawn({
-        let contents = contents.clone();
-        async move {
-            for (index, content) in contents.iter().enumerate() {
-                let name = format!("file-{}.dat", index);
-                let mut file = repo_a.create_file(&name).await.unwrap();
-
-                common::write_in_chunks(&mut file, content, 4096).await;
-                file.flush().await.unwrap();
-
-                tracing::info!("put {:?}", name);
-            }
-        }
-        .instrument(Span::current())
-    });
-
-    let task_b = task::spawn(
-        async move {
-            common::eventually(&repo_b, || async {
-                for (index, content) in contents.iter().enumerate() {
-                    let name = format!("file-{}.dat", index);
-
-                    if !common::check_file_version_content(&repo_b, &name, None, content).await {
-                        return false;
-                    }
-
-                    tracing::info!("get {:?}", name);
-                }
-
-                true
-            })
-            .await
-        }
-        .instrument(Span::current()),
-    );
-
-    task_a.await.unwrap();
-    task_b.await.unwrap();
-}
-
 #[test]
 fn transfer_directory_with_file() {
     let mut env = new::Env::new();
@@ -540,87 +536,158 @@ fn transfer_directory_with_file() {
 
         tx.send(()).await.unwrap();
     });
-
-    env.run();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_directory_with_subdirectory() {
-    let mut env = old::Env::new();
+#[test]
+fn transfer_directory_with_subdirectory() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+    let secrets = AccessSecrets::random_write();
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    let mut dir0 = repo_a.create_directory("food").await.unwrap();
-    dir0.create_directory("mediterranean".into()).await.unwrap();
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    common::expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory).await;
+            let mut dir = repo.create_directory("food").await.unwrap();
+            dir.create_directory("mediterranean".into()).await.unwrap();
+
+            rx.recv().await;
+        }
+    });
+
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "food/mediterranean", EntryType::Directory).await;
+
+        tx.send(()).await.unwrap();
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_file() {
-    let mut env = old::Env::new();
+#[test]
+fn remote_rename_file() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+    let secrets = AccessSecrets::random_write();
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    repo_b.create_file("foo.txt").await.unwrap();
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    // Wait until the file is synced and merged over to the local branch.
-    common::expect_entry_exists(&repo_a, "foo.txt", EntryType::File).await;
+            // Create the file and wait until reader has seen it
+            repo.create_file("foo.txt").await.unwrap();
+            rx.recv().await;
 
-    repo_b
-        .move_entry("/", "foo.txt", "/", "bar.txt")
-        .await
-        .unwrap();
+            // Rename it and wait until reader is done
+            repo.move_entry("/", "foo.txt", "/", "bar.txt")
+                .await
+                .unwrap();
+            rx.recv().await;
+        }
+    });
 
-    common::expect_entry_exists(&repo_a, "bar.txt", EntryType::File).await;
-    expect_entry_not_found(&repo_a, "foo.txt").await;
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar.txt", EntryType::File).await;
+        expect_entry_not_found(&repo, "foo.txt").await;
+        tx.send(()).await.unwrap();
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_empty_directory() {
-    let mut env = old::Env::new();
+#[test]
+fn remote_rename_empty_directory() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+    let secrets = AccessSecrets::random_write();
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    repo_b.create_directory("foo").await.unwrap();
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    common::expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
+            // Create directory and wait until reader has seen it
+            repo.create_directory("foo").await.unwrap();
+            rx.recv().await;
 
-    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
+            // Rename the directory and wait until reader is done
+            repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+            rx.recv().await;
+        }
+    });
 
-    common::expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
-    expect_entry_not_found(&repo_a, "foo").await;
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo", EntryType::Directory).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar", EntryType::Directory).await;
+        expect_entry_not_found(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_non_empty_directory() {
-    let mut env = old::Env::new();
+#[test]
+fn remote_rename_non_empty_directory() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+    let secrets = AccessSecrets::random_write();
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    let mut dir = repo_b.create_directory("foo").await.unwrap();
-    dir.create_file("data.txt".into()).await.unwrap();
+        async move {
+            let network = common::create_network().await;
+            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
 
-    common::expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File).await;
+            // Create a directory with content and wait until reader has seen it
+            let mut dir = repo.create_directory("foo").await.unwrap();
+            dir.create_file("data.txt".into()).await.unwrap();
+            rx.recv().await;
 
-    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
+            // Rename the directory and wait until reader is done
+            repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+            rx.recv().await;
+        }
+    });
 
-    common::expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File).await;
-    expect_entry_not_found(&repo_a, "foo").await;
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo/data.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar/data.txt", EntryType::File).await;
+        expect_entry_not_found(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+    });
 }
 
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_directory_during_conflict() {
     let mut env = old::Env::new();
@@ -643,6 +710,7 @@ async fn remote_rename_directory_during_conflict() {
     expect_entry_not_found(&repo_a, "foo").await;
 }
 
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
     let mut env = old::Env::new();
@@ -674,6 +742,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
     expect_entry_not_found(&repo_a, "archive").await;
 }
 
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_update_and_delete_during_conflict() {
     let mut env = old::Env::new();
@@ -729,6 +798,7 @@ async fn concurrent_update_and_delete_during_conflict() {
 }
 
 // https://github.com/equalitie/ouisync/issues/86
+#[cfg(not(feature = "simulation"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn content_stays_available_during_sync() {
     let mut env = old::Env::new();
