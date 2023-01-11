@@ -174,10 +174,16 @@ pub unsafe extern "C" fn repository_set_read_access(
         let local_read_secret = utils::ptr_to_pwd(local_read_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
+            let mut tx = holder.repository.db().begin_write().await?;
+
             holder
                 .repository
-                .set_read_access(local_read_secret, access_secrets)
-                .await
+                .set_read_access(local_read_secret, access_secrets, &mut tx)
+                .await?;
+
+            tx.commit().await?;
+
+            Ok(())
         })
     })
 }
@@ -189,13 +195,13 @@ pub unsafe extern "C" fn repository_set_read_access(
 /// Attempting to change the secret without enough permissions will fail with PermissionDenied
 /// error.
 ///
-/// If `local_write_password` is null, the repository will become read and writable without a
+/// If `local_rw_password` is null, the repository will become read and writable without a
 /// password.  To remove the read and write access use the
 /// `repository_remove_read_and_write_access` function.
 #[no_mangle]
 pub unsafe extern "C" fn repository_set_read_and_write_access(
     handle: SharedHandle<RepositoryHolder>,
-    local_write_password: *const c_char,
+    local_rw_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<()>>,
 ) {
@@ -211,14 +217,24 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
             Some(share_token.into_secrets())
         };
 
-        let local_write_secret =
-            utils::ptr_to_pwd(local_write_password)?.map(LocalSecret::Password);
+        let local_rw_secret = utils::ptr_to_pwd(local_rw_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
+            let mut tx = holder.repository.db().begin_write().await?;
+
             holder
                 .repository
-                .set_write_access(local_write_secret, access_secrets)
-                .await
+                .set_read_access(local_rw_secret.clone(), access_secrets.clone(), &mut tx)
+                .await?;
+
+            holder
+                .repository
+                .set_write_access(local_rw_secret, access_secrets, &mut tx)
+                .await?;
+
+            tx.commit().await?;
+
+            Ok(())
         })
     })
 }
