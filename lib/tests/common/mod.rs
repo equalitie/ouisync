@@ -359,6 +359,14 @@ pub(crate) async fn create_linked_repo(
     (repo, reg)
 }
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+/// Convenience function for the common case where the actor has one linked repository.
+pub(crate) async fn setup_actor(secrets: AccessSecrets) -> (Network, Repository, Registration) {
+    let network = create_network().await;
+    let (repo, reg) = create_linked_repo(secrets, &network).await;
+    (network, repo, reg)
+}
+
 task_local! {
     static ACTOR: Actor;
 }

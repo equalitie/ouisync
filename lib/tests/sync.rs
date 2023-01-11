@@ -29,8 +29,7 @@ fn relink_repository() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             // Create the file
             let mut file = repo.create_file("test.txt").await.unwrap();
@@ -54,9 +53,7 @@ fn relink_repository() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         // Wait until we see the original file
@@ -91,8 +88,7 @@ fn remove_remote_file() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             let mut file = repo.create_file("test.txt").await.unwrap();
             file.flush().await.unwrap();
@@ -105,9 +101,7 @@ fn remove_remote_file() {
     });
 
     env.actor("remover", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("creator");
 
         common::expect_file_content(&repo, "test.txt", &[]).await;
@@ -159,8 +153,7 @@ fn relay_case(_proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
         let mut rx = tx.subscribe();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (network, repo, _reg) = common::setup_actor(secrets).await;
 
             network.connect("relay");
 
@@ -173,8 +166,7 @@ fn relay_case(_proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
 
         network.connect("relay");
 
@@ -199,8 +191,7 @@ fn transfer_large_file() {
         let content = content.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content, 4096).await;
@@ -211,9 +202,7 @@ fn transfer_large_file() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         common::expect_file_content(&repo, "test.dat", &content).await;
@@ -250,8 +239,7 @@ fn transfer_many_files() {
         let files = files.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             for (index, content) in files.iter().enumerate() {
                 let name = format!("file-{}.dat", index);
@@ -265,9 +253,7 @@ fn transfer_many_files() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         for (index, content) in files.iter().enumerate() {
@@ -548,8 +534,7 @@ fn transfer_directory_with_subdirectory() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             let mut dir = repo.create_directory("food").await.unwrap();
             dir.create_directory("mediterranean".into()).await.unwrap();
@@ -559,9 +544,7 @@ fn transfer_directory_with_subdirectory() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         common::expect_entry_exists(&repo, "food/mediterranean", EntryType::Directory).await;
@@ -580,8 +563,7 @@ fn remote_rename_file() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             // Create the file and wait until reader has seen it
             repo.create_file("foo.txt").await.unwrap();
@@ -596,9 +578,7 @@ fn remote_rename_file() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         common::expect_entry_exists(&repo, "foo.txt", EntryType::File).await;
@@ -620,8 +600,7 @@ fn remote_rename_empty_directory() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             // Create directory and wait until reader has seen it
             repo.create_directory("foo").await.unwrap();
@@ -634,9 +613,7 @@ fn remote_rename_empty_directory() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         common::expect_entry_exists(&repo, "foo", EntryType::Directory).await;
@@ -658,8 +635,7 @@ fn remote_rename_non_empty_directory() {
         let secrets = secrets.clone();
 
         async move {
-            let network = common::create_network().await;
-            let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
+            let (_network, repo, _reg) = common::setup_actor(secrets).await;
 
             // Create a directory with content and wait until reader has seen it
             let mut dir = repo.create_directory("foo").await.unwrap();
@@ -673,9 +649,7 @@ fn remote_rename_non_empty_directory() {
     });
 
     env.actor("reader", async move {
-        let network = common::create_network().await;
-        let (repo, _reg) = common::create_linked_repo(secrets, &network).await;
-
+        let (network, repo, _reg) = common::setup_actor(secrets).await;
         network.connect("writer");
 
         common::expect_entry_exists(&repo, "foo/data.txt", EntryType::File).await;
