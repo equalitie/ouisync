@@ -334,12 +334,17 @@ pub(crate) mod old {
     }
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) async fn create_network() -> Network {
-    let (config_store, proto) = ACTOR.with(|actor| (actor.base_dir.join("config"), actor.proto));
+pub(crate) fn create_unbound_network() -> Network {
+    let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
     let config_store = ConfigStore::new(config_store);
 
-    let network = Network::new(config_store);
+    Network::new(config_store)
+}
+
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_network() -> Network {
+    let proto = ACTOR.with(|actor| actor.proto);
+    let network = create_unbound_network();
 
     let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
     let bind_addr = proto.wrap(bind_addr);

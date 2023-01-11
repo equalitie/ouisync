@@ -58,20 +58,25 @@ fn peer_exchange() {
     });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_idle() {
-    let mut env = old::Env::new();
+#[test]
+fn network_disable_enable_idle() {
+    let mut env = Env::new();
     let proto = Proto::Quic;
-    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+    env.set_proto(proto);
 
-    let node = env.create_node(bind).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&node);
+    env.actor("only", async move {
+        let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+        let network = common::create_unbound_network();
 
-    node.handle().bind(&[]).await;
-    node.handle().bind(&[bind]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_0 = proto.listener_local_addr_v4(&network);
 
-    let local_addr_1 = proto.listener_local_addr_v4(&node);
-    assert_eq!(local_addr_1, local_addr_0);
+        network.handle().bind(&[]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_1 = proto.listener_local_addr_v4(&network);
+
+        assert_eq!(local_addr_1, local_addr_0);
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
