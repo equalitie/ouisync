@@ -2,56 +2,60 @@
 
 mod common;
 
-use self::common::{old, Proto, TEST_TIMEOUT};
-use std::{net::Ipv4Addr, time::Duration};
-use tokio::{select, time};
+use self::common::{old, Env, NetworkExt, Proto, TEST_TIMEOUT};
+use ouisync::{network::Network, AccessSecrets};
+use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use tokio::{select, sync::Barrier, time};
 
-#[tokio::test(flavor = "multi_thread")]
-async fn peer_exchange() {
-    let mut env = old::Env::new();
-    let proto = Proto::Quic;
+// This test requires QUIC which is not yet supported in simulation
+#[cfg(not(feature = "simulation"))]
+#[test]
+fn peer_exchange() {
+    let mut env = Env::new();
+    env.set_proto(Proto::Quic); // PEX doesn't work with TCP
 
-    // B and C are initially connected only to A...
-    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_c = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    let secrets = AccessSecrets::random_write();
+    let barrier = Arc::new(Barrier::new(3));
 
-    node_b.add_user_provided_peer(&proto.listener_local_addr_v4(&node_a));
-    node_c.add_user_provided_peer(&proto.listener_local_addr_v4(&node_a));
+    // Bob and Carol are initially connected only to Alice but eventually they connect to each
+    // other via peer exchange.
 
-    let repo_a = env.create_repo().await;
-    let reg_a = node_a.handle().register(repo_a.store().clone());
-    reg_a.enable_pex();
+    env.actor("alice", {
+        let secrets = secrets.clone();
+        let barrier = barrier.clone();
 
-    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_b = node_b.handle().register(repo_b.store().clone());
-    reg_b.enable_pex();
+        async move {
+            let (_network, _repo, reg) = common::setup_actor(secrets).await;
+            reg.enable_pex();
 
-    let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_c = node_c.handle().register(repo_c.store().clone());
-    reg_c.enable_pex();
-
-    let addr_b = proto.listener_local_addr_v4(&node_b);
-    let addr_c = proto.listener_local_addr_v4(&node_c);
-
-    let mut rx_b = node_b.on_peer_set_change();
-    let mut rx_c = node_c.on_peer_set_change();
-
-    // ...eventually B and C connect to each other via peer exchange.
-    let connected = async {
-        loop {
-            if node_b.knows_peer(addr_c) && node_c.knows_peer(addr_b) {
-                break;
-            }
-
-            select! {
-                result = rx_b.changed() => result.unwrap(),
-                result = rx_c.changed() => result.unwrap(),
-            }
+            barrier.wait().await;
         }
-    };
+    });
 
-    time::timeout(TEST_TIMEOUT, connected).await.unwrap();
+    env.actor("bob", {
+        let secrets = secrets.clone();
+        let barrier = barrier.clone();
+
+        async move {
+            let (network, _repo, reg) = common::setup_actor(secrets).await;
+            network.connect("alice");
+            reg.enable_pex();
+
+            expect_knows(&network, "carol").await;
+            barrier.wait().await;
+        }
+    });
+
+    env.actor("carol", {
+        async move {
+            let (network, _repo, reg) = common::setup_actor(secrets).await;
+            network.connect("alice");
+            reg.enable_pex();
+
+            expect_knows(&network, "bob").await;
+            barrier.wait().await;
+        }
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -201,4 +205,20 @@ async fn local_discovery() {
     };
 
     time::timeout(TEST_TIMEOUT, connected).await.unwrap();
+}
+
+async fn expect_knows(network: &Network, peer_name: &str) {
+    time::timeout(TEST_TIMEOUT, async move {
+        let mut rx = network.on_peer_set_change();
+
+        loop {
+            if network.knows(peer_name) {
+                break;
+            }
+
+            rx.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap()
 }

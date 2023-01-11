@@ -20,11 +20,223 @@ use tokio::{
 };
 use tracing::{instrument, Instrument, Span};
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) use self::env::*;
+
 // Timeout for running a whole test case
 pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Timeout for waiting for an event
 pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[cfg(not(feature = "simulation"))]
+pub(crate) mod env {
+    use super::*;
+    use futures_util::future;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    use tokio::{
+        runtime::{self, Runtime},
+        task::JoinHandle,
+    };
+
+    /// Test environment that uses real network (localhost)
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    pub(crate) struct Env {
+        base_dir: TempDir,
+        proto: Proto,
+        runtime: Runtime,
+        tasks: Vec<JoinHandle<()>>,
+        default_port: u16,
+        dns: Arc<Mutex<Dns>>,
+    }
+
+    impl Env {
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn new() -> Self {
+            init_log();
+
+            let runtime = runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            Self {
+                base_dir: TempDir::new(),
+                proto: Proto::Tcp,
+                runtime,
+                tasks: Vec::new(),
+                default_port: next_default_port(),
+                dns: Arc::new(Mutex::new(Dns::new())),
+            }
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
+        where
+            Fut: Future<Output = ()> + Send + 'static,
+        {
+            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
+            let span = tracing::info_span!("actor", name);
+
+            self.dns.lock().unwrap().register(name);
+
+            let f = DNS.scope(self.dns.clone(), f);
+            let f = DEFAULT_PORT.scope(self.default_port, f);
+            let f = ACTOR.scope(actor, f);
+            let f = ACTOR_NAME.scope(name.to_owned(), f);
+            let f = f.instrument(span);
+
+            self.tasks.push(self.runtime.spawn(f));
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn set_proto(&mut self, proto: Proto) {
+            self.proto = proto;
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            self.runtime
+                .block_on(future::try_join_all(self.tasks.drain(..)))
+                .unwrap();
+        }
+    }
+
+    pub(super) fn bind_addr() -> IpAddr {
+        let name = ACTOR_NAME.with(|name| name.clone());
+        lookup(&name)
+    }
+
+    pub(super) fn lookup(target: &str) -> IpAddr {
+        DNS.with(|dns| dns.lock().unwrap().lookup(target))
+    }
+
+    pub(super) fn default_port() -> u16 {
+        DEFAULT_PORT.with(|port| *port)
+    }
+
+    fn next_default_port() -> u16 {
+        use std::sync::atomic::{AtomicU16, Ordering};
+
+        static NEXT: AtomicU16 = AtomicU16::new(7000);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    struct Dns {
+        next_last_octet: u8,
+        addrs: HashMap<String, IpAddr>,
+    }
+
+    impl Dns {
+        fn new() -> Self {
+            Self {
+                next_last_octet: 1,
+                addrs: HashMap::default(),
+            }
+        }
+
+        fn register(&mut self, name: &str) -> IpAddr {
+            let last_octet = self.next_last_octet;
+            self.next_last_octet = self
+                .next_last_octet
+                .checked_add(1)
+                .expect("too many dns records");
+
+            let addr = Ipv4Addr::new(127, 0, 0, last_octet).into();
+
+            assert!(
+                self.addrs.insert(name.to_owned(), addr).is_none(),
+                "dns record already exists"
+            );
+
+            addr
+        }
+
+        fn lookup(&self, name: &str) -> IpAddr {
+            self.addrs.get(name).copied().unwrap()
+        }
+    }
+
+    task_local! {
+        static DNS: Arc<Mutex<Dns>>;
+        static DEFAULT_PORT: u16;
+        static ACTOR_NAME: String;
+    }
+}
+
+#[cfg(feature = "simulation")]
+pub(crate) mod env {
+    use super::*;
+
+    /// Test environment that uses simulated network
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    pub(crate) struct Env<'a> {
+        base_dir: TempDir,
+        proto: Proto,
+        runner: turmoil::Sim<'a>,
+    }
+
+    impl<'a> Env<'a> {
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn new() -> Self {
+            init_log();
+
+            let base_dir = TempDir::new();
+            let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
+
+            Self {
+                base_dir,
+                proto: Proto::Tcp,
+                runner,
+            }
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
+        where
+            Fut: Future<Output = ()> + 'static,
+        {
+            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
+            let span = tracing::info_span!("actor", name);
+
+            let f = async move {
+                f.await;
+                Ok(())
+            };
+            let f = ACTOR.scope(actor, f);
+            let f = f.instrument(span);
+
+            self.runner.client(name, f);
+        }
+
+        // TODO: add this method when QUIC is supported
+        // pub fn set_proto(&mut self, proto: Proto) {
+        //     self.proto = proto;
+        // }
+    }
+
+    impl Drop for Env<'_> {
+        fn drop(&mut self) {
+            self.runner.run().unwrap()
+        }
+    }
+
+    pub(super) fn bind_addr() -> IpAddr {
+        Ipv4Addr::UNSPECIFIED.into()
+    }
+
+    pub(super) fn lookup(target: &str) -> IpAddr {
+        turmoil::lookup(target)
+    }
+
+    pub(super) const fn default_port() -> u16 {
+        7000
+    }
+}
 
 // TODO: remove this
 pub(crate) mod old {
@@ -122,205 +334,6 @@ pub(crate) mod old {
     }
 }
 
-#[cfg(not(feature = "simulation"))]
-pub(crate) mod new {
-    use super::*;
-    use futures_util::future;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
-    use tokio::{
-        runtime::{self, Runtime},
-        task::JoinHandle,
-    };
-
-    /// Test environment that uses real network (localhost)
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) struct Env {
-        base_dir: TempDir,
-        proto: Proto,
-        runtime: Runtime,
-        tasks: Vec<JoinHandle<()>>,
-        default_port: u16,
-        dns: Arc<Mutex<Dns>>,
-    }
-
-    impl Env {
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn new() -> Self {
-            init_log();
-
-            let runtime = runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
-            Self {
-                base_dir: TempDir::new(),
-                proto: Proto::Tcp,
-                runtime,
-                tasks: Vec::new(),
-                default_port: next_default_port(),
-                dns: Arc::new(Mutex::new(Dns::new())),
-            }
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
-        where
-            Fut: Future<Output = ()> + Send + 'static,
-        {
-            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
-            let span = tracing::info_span!("actor", name);
-
-            self.dns.lock().unwrap().register(name);
-
-            let f = DNS.scope(self.dns.clone(), f);
-            let f = DEFAULT_PORT.scope(self.default_port, f);
-            let f = ACTOR.scope(actor, f);
-            let f = ACTOR_NAME.scope(name.to_owned(), f);
-            let f = f.instrument(span);
-
-            self.tasks.push(self.runtime.spawn(f));
-        }
-    }
-
-    impl Drop for Env {
-        fn drop(&mut self) {
-            self.runtime
-                .block_on(future::try_join_all(self.tasks.drain(..)))
-                .unwrap();
-        }
-    }
-
-    pub(super) fn bind_addr() -> IpAddr {
-        let name = ACTOR_NAME.with(|name| name.clone());
-        lookup(&name)
-    }
-
-    pub(super) fn lookup(target: &str) -> IpAddr {
-        DNS.with(|dns| dns.lock().unwrap().lookup(target))
-    }
-
-    pub(super) fn default_port() -> u16 {
-        DEFAULT_PORT.with(|port| *port)
-    }
-
-    fn next_default_port() -> u16 {
-        use std::sync::atomic::{AtomicU16, Ordering};
-
-        static NEXT: AtomicU16 = AtomicU16::new(7000);
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    }
-
-    struct Dns {
-        next_last_octet: u8,
-        addrs: HashMap<String, IpAddr>,
-    }
-
-    impl Dns {
-        fn new() -> Self {
-            Self {
-                next_last_octet: 1,
-                addrs: HashMap::default(),
-            }
-        }
-
-        fn register(&mut self, name: &str) -> IpAddr {
-            let last_octet = self.next_last_octet;
-            self.next_last_octet = self
-                .next_last_octet
-                .checked_add(1)
-                .expect("too many dns records");
-
-            let addr = Ipv4Addr::new(127, 0, 0, last_octet).into();
-
-            assert!(
-                self.addrs.insert(name.to_owned(), addr).is_none(),
-                "dns record already exists"
-            );
-
-            addr
-        }
-
-        fn lookup(&self, name: &str) -> IpAddr {
-            self.addrs.get(name).copied().unwrap()
-        }
-    }
-
-    task_local! {
-        static DNS: Arc<Mutex<Dns>>;
-        static DEFAULT_PORT: u16;
-        static ACTOR_NAME: String;
-    }
-}
-
-#[cfg(feature = "simulation")]
-pub(crate) mod new {
-    use super::*;
-
-    /// Test environment that uses simulated network
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) struct Env<'a> {
-        base_dir: TempDir,
-        proto: Proto,
-        runner: turmoil::Sim<'a>,
-    }
-
-    impl<'a> Env<'a> {
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn new() -> Self {
-            init_log();
-
-            let base_dir = TempDir::new();
-            let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
-
-            Self {
-                base_dir,
-                proto: Proto::Tcp,
-                runner,
-            }
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
-        where
-            Fut: Future<Output = ()> + 'static,
-        {
-            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
-            let span = tracing::info_span!("actor", name);
-
-            let f = async move {
-                f.await;
-                Ok(())
-            };
-            let f = ACTOR.scope(actor, f);
-            let f = f.instrument(span);
-
-            self.runner.client(name, f);
-        }
-    }
-
-    impl Drop for Env<'_> {
-        fn drop(&mut self) {
-            self.runner.run().unwrap()
-        }
-    }
-
-    pub(super) fn bind_addr() -> IpAddr {
-        Ipv4Addr::UNSPECIFIED.into()
-    }
-
-    pub(super) fn lookup(target: &str) -> IpAddr {
-        turmoil::lookup(target)
-    }
-
-    pub(super) const fn default_port() -> u16 {
-        7000
-    }
-}
-
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn create_network() -> Network {
     let (config_store, proto) = ACTOR.with(|actor| (actor.base_dir.join("config"), actor.proto));
@@ -328,7 +341,7 @@ pub(crate) async fn create_network() -> Network {
 
     let network = Network::new(config_store);
 
-    let bind_addr = SocketAddr::new(new::bind_addr(), new::default_port());
+    let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
     let bind_addr = proto.wrap(bind_addr);
     network.handle().bind(&[bind_addr]).await;
 
@@ -336,12 +349,20 @@ pub(crate) async fn create_network() -> Network {
 }
 
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
-    let (path, device_id) = ACTOR.with(|actor| (actor.next_repo_path(), actor.device_id));
+pub(crate) fn make_repo_path() -> PathBuf {
+    ACTOR.with(|actor| actor.next_repo_path())
+}
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) fn device_id() -> DeviceId {
+    ACTOR.with(|actor| actor.device_id)
+}
+
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
     Repository::create(
-        RepositoryDb::create(&path).await.unwrap(),
-        device_id,
+        RepositoryDb::create(&make_repo_path()).await.unwrap(),
+        device_id(),
         Access::new(None, None, secrets),
     )
     .await
@@ -398,23 +419,21 @@ impl Actor {
 
 pub(crate) trait NetworkExt {
     fn connect(&self, to: &str);
+    fn knows(&self, to: &str) -> bool;
 }
 
 impl NetworkExt for Network {
     fn connect(&self, to: &str) {
-        let proto = if self.quic_listener_local_addr_v4().is_some() {
-            Proto::Quic
-        } else if self.tcp_listener_local_addr_v4().is_some() {
-            Proto::Tcp
-        } else {
-            panic!("no protocol")
-        };
-
-        let addr = SocketAddr::new(new::lookup(to), new::default_port());
-        let addr = proto.wrap(addr);
-
-        self.add_user_provided_peer(&addr)
+        self.add_user_provided_peer(&peer_addr(self, to))
     }
+
+    fn knows(&self, to: &str) -> bool {
+        self.knows_peer(peer_addr(self, to))
+    }
+}
+
+fn peer_addr(network: &Network, name: &str) -> PeerAddr {
+    Proto::detect(network).wrap(SocketAddr::new(env::lookup(name), env::default_port()))
 }
 
 /// Wrapper for `tempfile::TempDir` which preserves the dir in case of panic.
@@ -462,6 +481,20 @@ impl Proto {
         match self {
             Self::Tcp => PeerAddr::Tcp(network.tcp_listener_local_addr_v4().unwrap()),
             Self::Quic => PeerAddr::Quic(network.quic_listener_local_addr_v4().unwrap()),
+        }
+    }
+
+    #[track_caller]
+    pub fn detect(network: &Network) -> Self {
+        match (
+            network.quic_listener_local_addr_v4(),
+            network.quic_listener_local_addr_v6(),
+            network.tcp_listener_local_addr_v4(),
+            network.tcp_listener_local_addr_v6(),
+        ) {
+            (Some(_), _, _, _) | (_, Some(_), _, _) => Self::Quic,
+            (_, _, Some(_), _) | (_, _, _, Some(_)) => Self::Tcp,
+            (None, None, None, None) => panic!("no protocol"),
         }
     }
 }
