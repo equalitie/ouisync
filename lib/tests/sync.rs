@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{Env, Proto};
+use self::common::{new, old, NetworkExt, Proto};
 use assert_matches::assert_matches;
 use camino::Utf8Path;
 use futures_util::future;
@@ -12,12 +12,12 @@ use ouisync::{
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
-use tokio::task;
+use tokio::{sync::mpsc, task};
 use tracing::{instrument, Instrument, Span};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn relink_repository() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     // Create two peers and connect them together.
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
@@ -63,7 +63,7 @@ async fn relink_repository() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_remote_file() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -99,7 +99,7 @@ async fn relay_blind() {
 // Simulate two peers that can't connect to each other but both can connect to a third ("relay")
 // peer.
 async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
     let repo_a = env.create_repo().await;
@@ -138,37 +138,55 @@ async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMod
     common::expect_file_content(&repo_b, "test.dat", &content).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_large_file() {
+#[test]
+fn transfer_large_file() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1); // side-channel
+
+    let secrets = AccessSecrets::random_write();
+
     let file_size = 4 * 1024 * 1024;
+    let content = {
+        let mut content = vec![0; file_size];
+        rand::thread_rng().fill(&mut content[..]);
+        Arc::new(content)
+    };
 
-    let mut env = Env::new();
+    env.actor("writer", {
+        let secrets = secrets.clone();
+        let content = content.clone();
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+        async move {
+            let network = common::create_network().await;
+            let repo = common::create_repo(secrets).await;
+            let _reg = network.handle().register(repo.store().clone());
 
-    let mut content = vec![0; file_size];
-    rand::thread_rng().fill(&mut content[..]);
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
 
-    // Create a file by A and wait until B sees it.
-    tracing::info!("writing");
-    async {
-        let mut file = repo_a.create_file("test.dat").await.unwrap();
-        common::write_in_chunks(&mut file, &content, 4096).await;
-        file.flush().await.unwrap();
-    }
-    .instrument(repo_a.span())
-    .await;
+            rx.recv().await;
+        }
+    });
 
-    tracing::info!("reading");
-    common::expect_file_content(&repo_b, "test.dat", &content).await;
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let repo = common::create_repo(secrets).await;
+        let _reg = network.handle().register(repo.store().clone());
+
+        network.connect("writer");
+
+        common::expect_file_content(&repo, "test.dat", &content).await;
+
+        tx.send(()).await.unwrap();
+    });
+
+    env.run();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_multiple_files_sequentially() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
     let file_sizes = [512 * 1024, 1024];
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
@@ -206,7 +224,7 @@ async fn transfer_multiple_files_sequentially() {
 // garbage collected prematurelly.
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_during_file_write() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -252,7 +270,7 @@ async fn sync_during_file_write() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_modify_open_file() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -326,7 +344,7 @@ async fn concurrent_modify_open_file() {
 // outdated.
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_local_branch() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 
@@ -427,7 +445,7 @@ async fn recreate_local_branch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_many_files() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Quic).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -489,24 +507,46 @@ async fn transfer_many_files() {
     task_b.await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_directory_with_file() {
-    let mut env = Env::new();
+#[test]
+fn transfer_directory_with_file() {
+    let mut env = new::Env::new();
+    let (tx, mut rx) = mpsc::channel(1); // side-channel
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.handle().register(repo_b.store().clone());
+    let secrets = AccessSecrets::random_write();
 
-    let mut dir = repo_a.create_directory("food").await.unwrap();
-    dir.create_file("pizza.jpg".into()).await.unwrap();
+    env.actor("writer", {
+        let secrets = secrets.clone();
 
-    common::expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File).await;
+        async move {
+            let network = common::create_network().await;
+            let repo = common::create_repo(secrets).await;
+            let _reg = network.handle().register(repo.store().clone());
+
+            let mut dir = repo.create_directory("food").await.unwrap();
+            dir.create_file("pizza.jpg".into()).await.unwrap();
+
+            rx.recv().await;
+        }
+    });
+
+    env.actor("reader", async move {
+        let network = common::create_network().await;
+        let repo = common::create_repo(secrets).await;
+        let _reg = network.handle().register(repo.store().clone());
+
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "food/pizza.jpg", EntryType::File).await;
+
+        tx.send(()).await.unwrap();
+    });
+
+    env.run();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn transfer_directory_with_subdirectory() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -521,7 +561,7 @@ async fn transfer_directory_with_subdirectory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_file() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -544,7 +584,7 @@ async fn remote_rename_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_empty_directory() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -563,7 +603,7 @@ async fn remote_rename_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_non_empty_directory() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -583,7 +623,7 @@ async fn remote_rename_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_rename_directory_during_conflict() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -605,7 +645,7 @@ async fn remote_rename_directory_during_conflict() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_move_file_to_directory_then_rename_that_directory() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -636,7 +676,7 @@ async fn remote_move_file_to_directory_then_rename_that_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_update_and_delete_during_conflict() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
     let (repo_a, repo_b) = env.create_linked_repos().await;
@@ -691,7 +731,7 @@ async fn concurrent_update_and_delete_during_conflict() {
 // https://github.com/equalitie/ouisync/issues/86
 #[tokio::test(flavor = "multi_thread")]
 async fn content_stays_available_during_sync() {
-    let mut env = Env::new();
+    let mut env = old::Env::new();
 
     let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
 

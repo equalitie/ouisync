@@ -1,18 +1,19 @@
 use ouisync::{
-    crypto::sign::PublicKey, network::Network, Access, AccessSecrets, ConfigStore, EntryType,
-    Error, Event, File, Payload, PeerAddr, Repository, RepositoryDb, Result,
+    crypto::sign::PublicKey, device_id::DeviceId, network::Network, Access, AccessSecrets,
+    ConfigStore, EntryType, Error, Event, File, Payload, PeerAddr, Repository, RepositoryDb,
+    Result,
 };
 use std::{
+    cell::Cell,
     future::Future,
-    net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
     thread,
     time::Duration,
 };
-use tempfile::TempDir;
 use tokio::{
     sync::broadcast::{self, error::RecvError},
-    time,
+    task_local, time,
 };
 use tracing::{instrument, Instrument, Span};
 
@@ -22,152 +23,259 @@ pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 // Timeout for waiting for an event
 pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
-// Test environment
-pub(crate) struct Env {
-    base_dir: Option<TempDir>,
-    next_repo_num: u64,
-    next_peer_num: u64,
-    _span: tracing::span::EnteredSpan,
-}
-
-impl Env {
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub fn new() -> Self {
-        init_log();
-
-        let span = tracing::info_span!("test", name = thread::current().name()).entered();
-        let base_dir = TempDir::new().unwrap();
-
-        Self {
-            base_dir: Some(base_dir),
-            next_repo_num: 0,
-            next_peer_num: 0,
-            _span: span,
-        }
-    }
-
-    pub fn next_store(&mut self) -> PathBuf {
-        let num = self.next_repo_num;
-        self.next_repo_num += 1;
-
-        self.base_dir
-            .as_ref()
-            .unwrap()
-            .path()
-            .join(format!("repo-{}.db", num))
-    }
-
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub async fn create_repo(&mut self) -> Repository {
-        let secrets = AccessSecrets::random_write();
-        self.create_repo_with_secrets(secrets).await
-    }
-
-    pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
-        Repository::create(
-            RepositoryDb::create(&self.next_store()).await.unwrap(),
-            rand::random(),
-            Access::new(None, None, secrets),
-        )
-        .await
-        .unwrap()
-    }
-
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
-        let repo_a = self.create_repo().await;
-        let repo_b = self
-            .create_repo_with_secrets(repo_a.secrets().clone())
-            .await;
-
-        (repo_a, repo_b)
-    }
-
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) async fn create_node(&mut self, bind: PeerAddr) -> Network {
-        let id = self.next_peer_num();
-        let span = tracing::info_span!("peer", id);
-
-        let config_store = self
-            .base_dir
-            .as_ref()
-            .unwrap()
-            .path()
-            .join(format!("config-{}", id));
-        let config_store = ConfigStore::new(config_store);
-
-        let network = {
-            let _enter = span.enter();
-            Network::new(config_store)
-        };
-
-        network.handle().bind(&[bind]).instrument(span).await;
-        network
-    }
-
-    // Create two nodes connected together.
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) async fn create_connected_nodes(&mut self, proto: Proto) -> (Network, Network) {
-        let a = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-        let b = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-
-        b.add_user_provided_peer(&proto.listener_local_addr_v4(&a));
-
-        (a, b)
-    }
-
-    fn next_peer_num(&mut self) -> u64 {
-        let num = self.next_peer_num;
-        self.next_peer_num += 1;
-        num
-    }
-}
-
-impl Drop for Env {
-    fn drop(&mut self) {
-        // Preserve the base dir in case of panic, so it can be inspected to help debug test
-        // failures.
-        if thread::panicking() {
-            let path = self.base_dir.take().unwrap().into_path();
-            tracing::warn!("preserving base_dir in '{}'", path.display());
-        }
-    }
-}
-
-#[cfg(feature = "simulation")]
-pub(crate) mod sim {
+// TODO: remove this
+pub(crate) mod old {
     use super::*;
-    use ouisync::device_id::DeviceId;
-    use std::{
-        cell::Cell,
-        future::Future,
-        net::{Ipv4Addr, SocketAddr},
-        path::PathBuf,
-    };
-    use tokio::task_local;
-    use tracing::Instrument;
 
-    const PORT: u16 = 12345;
-    const PROTO: Proto = Proto::Tcp;
-
-    /// Network simulator
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) struct Sim<'a> {
-        base_dir: Option<TempDir>,
-        inner: turmoil::Sim<'a>,
+    // Test environment
+    pub struct Env {
+        base_dir: TempDir,
+        next_repo_num: u64,
+        next_peer_num: u64,
+        _span: tracing::span::EnteredSpan,
     }
 
-    impl<'a> Sim<'a> {
+    impl Env {
         #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn new() -> Self {
             init_log();
 
-            let base_dir = TempDir::new().unwrap();
-            let inner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
+            let span = tracing::info_span!("test", name = thread::current().name()).entered();
 
             Self {
-                base_dir: Some(base_dir),
-                inner,
+                base_dir: TempDir::new(),
+                next_repo_num: 0,
+                next_peer_num: 0,
+                _span: span,
+            }
+        }
+
+        pub fn next_store(&mut self) -> PathBuf {
+            let num = self.next_repo_num;
+            self.next_repo_num += 1;
+
+            self.base_dir.path().join(format!("repo-{}.db", num))
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub async fn create_repo(&mut self) -> Repository {
+            let secrets = AccessSecrets::random_write();
+            self.create_repo_with_secrets(secrets).await
+        }
+
+        pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
+            Repository::create(
+                RepositoryDb::create(&self.next_store()).await.unwrap(),
+                rand::random(),
+                Access::new(None, None, secrets),
+            )
+            .await
+            .unwrap()
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
+            let repo_a = self.create_repo().await;
+            let repo_b = self
+                .create_repo_with_secrets(repo_a.secrets().clone())
+                .await;
+
+            (repo_a, repo_b)
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub async fn create_node(&mut self, bind: PeerAddr) -> Network {
+            let id = self.next_peer_num();
+            let span = tracing::info_span!("peer", id);
+
+            let config_store = self.base_dir.path().join(format!("config-{}", id));
+            let config_store = ConfigStore::new(config_store);
+
+            let network = {
+                let _enter = span.enter();
+                Network::new(config_store)
+            };
+
+            network.handle().bind(&[bind]).instrument(span).await;
+            network
+        }
+
+        // Create two nodes connected together.
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub(crate) async fn create_connected_nodes(&mut self, proto: Proto) -> (Network, Network) {
+            let a = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+            let b = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+
+            b.add_user_provided_peer(&proto.listener_local_addr_v4(&a));
+
+            (a, b)
+        }
+
+        fn next_peer_num(&mut self) -> u64 {
+            let num = self.next_peer_num;
+            self.next_peer_num += 1;
+            num
+        }
+    }
+}
+
+#[cfg(not(feature = "simulation"))]
+pub(crate) mod new {
+    use super::*;
+    use futures_util::future;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    use tokio::{
+        runtime::{self, Runtime},
+        task::JoinHandle,
+    };
+
+    /// Test environment that uses real network (localhost)
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    pub(crate) struct Env {
+        base_dir: TempDir,
+        proto: Proto,
+        runtime: Runtime,
+        tasks: Vec<JoinHandle<()>>,
+        default_port: u16,
+        dns: Arc<Mutex<Dns>>,
+    }
+
+    impl Env {
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn new() -> Self {
+            init_log();
+
+            let runtime = runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            Self {
+                base_dir: TempDir::new(),
+                proto: Proto::Tcp,
+                runtime,
+                tasks: Vec::new(),
+                default_port: next_default_port(),
+                dns: Arc::new(Mutex::new(Dns::new())),
+            }
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn actor<Fut>(&mut self, name: &str, f: Fut)
+        where
+            Fut: Future<Output = ()> + Send + 'static,
+        {
+            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
+            let span = tracing::info_span!("actor", name);
+
+            self.dns.lock().unwrap().register(name);
+
+            let f = DNS.scope(self.dns.clone(), f);
+            let f = DEFAULT_PORT.scope(self.default_port, f);
+            let f = ACTOR.scope(actor, f);
+            let f = ACTOR_NAME.scope(name.to_owned(), f);
+            let f = f.instrument(span);
+
+            self.tasks.push(self.runtime.spawn(f));
+        }
+
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn run(&mut self) {
+            self.runtime
+                .block_on(future::try_join_all(self.tasks.drain(..)))
+                .unwrap();
+        }
+    }
+
+    pub(super) fn bind_addr() -> IpAddr {
+        let name = ACTOR_NAME.with(|name| name.clone());
+        lookup(&name)
+    }
+
+    pub(super) fn lookup(target: &str) -> IpAddr {
+        DNS.with(|dns| dns.lock().unwrap().lookup(target))
+    }
+
+    pub(super) fn default_port() -> u16 {
+        DEFAULT_PORT.with(|port| *port)
+    }
+
+    fn next_default_port() -> u16 {
+        use std::sync::atomic::{AtomicU16, Ordering};
+
+        static NEXT: AtomicU16 = AtomicU16::new(7000);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    struct Dns {
+        next_last_octet: u8,
+        addrs: HashMap<String, IpAddr>,
+    }
+
+    impl Dns {
+        fn new() -> Self {
+            Self {
+                next_last_octet: 1,
+                addrs: HashMap::default(),
+            }
+        }
+
+        fn register(&mut self, name: &str) -> IpAddr {
+            let last_octet = self.next_last_octet;
+            self.next_last_octet = self
+                .next_last_octet
+                .checked_add(1)
+                .expect("too many dns records");
+
+            let addr = Ipv4Addr::new(127, 0, 0, last_octet).into();
+
+            assert!(
+                self.addrs.insert(name.to_owned(), addr).is_none(),
+                "dns record already exists"
+            );
+
+            addr
+        }
+
+        fn lookup(&self, name: &str) -> IpAddr {
+            self.addrs.get(name).copied().unwrap()
+        }
+    }
+
+    task_local! {
+        static DNS: Arc<Mutex<Dns>>;
+        static DEFAULT_PORT: u16;
+        static ACTOR_NAME: String;
+    }
+}
+
+#[cfg(feature = "simulation")]
+pub(crate) mod new {
+    use super::*;
+
+    /// Test environment that uses simulated network
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    pub(crate) struct Env<'a> {
+        base_dir: TempDir,
+        proto: Proto,
+        runner: turmoil::Sim<'a>,
+    }
+
+    impl<'a> Env<'a> {
+        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+        pub fn new() -> Self {
+            init_log();
+
+            let base_dir = TempDir::new();
+            let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
+
+            Self {
+                base_dir,
+                proto: Proto::Tcp,
+                runner,
             }
         }
 
@@ -176,84 +284,135 @@ pub(crate) mod sim {
         where
             Fut: Future<Output = ()> + 'static,
         {
-            let actor = Actor::new(self.base_dir.as_ref().unwrap().path().join(name));
+            let actor = Actor::new(self.base_dir.path().join(name), self.proto);
             let span = tracing::info_span!("actor", name);
 
             let f = async move {
                 f.await;
                 Ok(())
             };
-            let f = ACTOR.scope(actor, f).instrument(span);
+            let f = ACTOR.scope(actor, f);
+            let f = f.instrument(span);
 
-            self.inner.client(name, f);
+            self.runner.client(name, f);
         }
 
         #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn run(&mut self) {
-            self.inner.run().unwrap()
+            self.runner.run().unwrap()
         }
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) async fn create_network() -> Network {
-        let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
-        let config_store = ConfigStore::new(config_store);
-
-        let network = Network::new(config_store);
-
-        let bind = PROTO.wrap((Ipv4Addr::UNSPECIFIED, PORT));
-        network.handle().bind(&[bind]).await;
-
-        network
+    pub(super) fn bind_addr() -> IpAddr {
+        Ipv4Addr::UNSPECIFIED.into()
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
-        let (path, device_id) = ACTOR.with(|actor| (actor.next_repo_path(), actor.device_id));
-
-        Repository::create(
-            RepositoryDb::create(&path).await.unwrap(),
-            device_id,
-            Access::new(None, None, secrets),
-        )
-        .await
-        .unwrap()
+    pub(super) fn lookup(target: &str) -> IpAddr {
+        turmoil::lookup(target)
     }
 
-    task_local! {
-        static ACTOR: Actor;
+    pub(super) const fn default_port() -> u16 {
+        7000
     }
+}
 
-    struct Actor {
-        base_dir: PathBuf,
-        device_id: DeviceId,
-        repo_counter: Cell<u32>,
-    }
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_network() -> Network {
+    let (config_store, proto) = ACTOR.with(|actor| (actor.base_dir.join("config"), actor.proto));
+    let config_store = ConfigStore::new(config_store);
 
-    impl Actor {
-        fn new(base_dir: PathBuf) -> Self {
-            Actor {
-                base_dir,
-                device_id: rand::random(),
-                repo_counter: Cell::new(0),
-            }
+    let network = Network::new(config_store);
+
+    let bind_addr = SocketAddr::new(new::bind_addr(), new::default_port());
+    let bind_addr = proto.wrap(bind_addr);
+    network.handle().bind(&[bind_addr]).await;
+
+    network
+}
+
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
+    let (path, device_id) = ACTOR.with(|actor| (actor.next_repo_path(), actor.device_id));
+
+    Repository::create(
+        RepositoryDb::create(&path).await.unwrap(),
+        device_id,
+        Access::new(None, None, secrets),
+    )
+    .await
+    .unwrap()
+}
+
+task_local! {
+    static ACTOR: Actor;
+}
+
+struct Actor {
+    base_dir: PathBuf,
+    proto: Proto,
+    device_id: DeviceId,
+    repo_counter: Cell<u32>,
+}
+
+impl Actor {
+    fn new(base_dir: PathBuf, proto: Proto) -> Self {
+        Actor {
+            base_dir,
+            proto,
+            device_id: rand::random(),
+            repo_counter: Cell::new(0),
         }
-
-        fn next_repo_path(&self) -> PathBuf {
-            let num = self.repo_counter.get();
-            self.repo_counter.set(num + 1);
-
-            self.base_dir.join(format!("repo-{}.db", num))
-        }
     }
 
-    pub(crate) trait NetworkExt {
-        fn connect(&self, to: &str);
+    fn next_repo_path(&self) -> PathBuf {
+        let num = self.repo_counter.get();
+        self.repo_counter.set(num + 1);
+
+        self.base_dir.join(format!("repo-{}.db", num))
+    }
+}
+
+pub(crate) trait NetworkExt {
+    fn connect(&self, to: &str);
+}
+
+impl NetworkExt for Network {
+    fn connect(&self, to: &str) {
+        let proto = if self.quic_listener_local_addr_v4().is_some() {
+            Proto::Quic
+        } else if self.tcp_listener_local_addr_v4().is_some() {
+            Proto::Tcp
+        } else {
+            panic!("no protocol")
+        };
+
+        let addr = SocketAddr::new(new::lookup(to), new::default_port());
+        let addr = proto.wrap(addr);
+
+        self.add_user_provided_peer(&addr)
+    }
+}
+
+/// Wrapper for `tempfile::TempDir` which preserves the dir in case of panic.
+struct TempDir(Option<tempfile::TempDir>);
+
+impl TempDir {
+    fn new() -> Self {
+        Self(Some(tempfile::TempDir::new().unwrap()))
     }
 
-    impl NetworkExt for Network {
-        fn connect(&self, to: &str) {
-            self.add_user_provided_peer(&PROTO.wrap(SocketAddr::new(turmoil::lookup(to), PORT)))
+    fn path(&self) -> &Path {
+        self.0.as_ref().unwrap().path()
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        // Preserve the dir in case of panic, so it can be inspected to help debug test
+        // failures.
+        if thread::panicking() {
+            let path = self.0.take().unwrap().into_path();
+            tracing::warn!("preserving temp dir in '{}'", path.display());
         }
     }
 }
