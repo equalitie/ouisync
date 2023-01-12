@@ -19,8 +19,8 @@ mod implementation {
 
     impl TcpListener {
         /// Binds TCP socket to the given address. If the port is taken, uses a random one,
-        pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
-            Ok(Self(socket::bind(addr).await?))
+        pub async fn bind(addr: impl Into<SocketAddr>) -> io::Result<Self> {
+            Ok(Self(socket::bind(addr.into()).await?))
         }
 
         pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {

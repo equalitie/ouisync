@@ -753,7 +753,7 @@ mod tests {
     }
 
     async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0).into())
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0u16))
             .await
             .unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap())
