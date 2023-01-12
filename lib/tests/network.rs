@@ -5,7 +5,7 @@
 
 mod common;
 
-use self::common::{old, Env, NetworkExt, Proto, TEST_TIMEOUT};
+use self::common::{Env, NetworkExt, Proto, TEST_TIMEOUT};
 use ouisync::{network::Network, AccessSecrets};
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{sync::Barrier, time};
@@ -110,53 +110,58 @@ fn network_disable_enable_pending_connection() {
     });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_addr_takeover() {
+#[test]
+fn network_disable_enable_addr_takeover() {
     use tokio::net::UdpSocket;
 
-    let mut env = old::Env::new();
+    let mut env = Env::new();
     let proto = Proto::Quic;
-    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = env.create_node(bind).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&node);
+    env.actor("wendy", async move {
+        let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+        let network = common::create_unbound_network();
 
-    node.handle().bind(&[]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_0 = proto.listener_local_addr_v4(&network);
 
-    // Bind some other socket to the same address while the network is disabled.
-    let _socket = time::timeout(TEST_TIMEOUT, async {
-        loop {
-            if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
-                break socket;
-            } else {
-                time::sleep(Duration::from_millis(250)).await;
+        network.handle().bind(&[]).await;
+
+        // Bind some other socket to the same address while the network is disabled.
+        let _socket = time::timeout(TEST_TIMEOUT, async {
+            loop {
+                if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
+                    break socket;
+                } else {
+                    time::sleep(Duration::from_millis(250)).await;
+                }
             }
-        }
-    })
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
-    // Enabling the network binds it to a different port.
-    node.handle().bind(&[bind]).await;
+        // Enabling the network binds it to a different port.
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_1 = proto.listener_local_addr_v4(&network);
 
-    let local_addr_1 = proto.listener_local_addr_v4(&node);
-    assert_ne!(local_addr_1, local_addr_0);
+        assert_ne!(local_addr_1, local_addr_0);
+    });
 }
 
 // Test for an edge case that used to panic.
-#[tokio::test(flavor = "multi_thread")]
-async fn dht_toggle() {
-    let mut env = old::Env::new();
+#[test]
+fn dht_toggle() {
+    let mut env = Env::new();
     let proto = Proto::Quic;
 
-    let node = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    env.actor("eric", async move {
+        let network = common::create_network(proto).await;
+        let (_repo, reg) =
+            common::create_linked_repo(AccessSecrets::random_write(), &network).await;
 
-    let repo = env.create_repo().await;
-    let reg = node.handle().register(repo.store().clone());
-
-    reg.enable_dht();
-    reg.disable_dht();
-    reg.enable_dht();
+        reg.enable_dht();
+        reg.disable_dht();
+        reg.enable_dht();
+    });
 }
 
 #[test]

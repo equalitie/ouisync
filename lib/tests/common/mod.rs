@@ -219,11 +219,14 @@ pub(crate) mod env {
     }
 
     pub(super) const fn default_port() -> u16 {
+        // The simulated network is isolated from other tests that might be running in parallel so
+        // using a constant port is ok as it can't clash with those other tests.
         7000
     }
 }
 
 // TODO: remove this
+#[deprecated]
 pub(crate) mod old {
     use super::*;
 
