@@ -1,3 +1,4 @@
+use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey,
     device_id::DeviceId,
@@ -540,6 +541,24 @@ pub(crate) async fn check_entry_exists(
         Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
         Err(error) => panic!("unexpected error: {:?}", error),
     }
+}
+
+#[instrument]
+pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
+    let path = Utf8Path::new(path);
+    let name = path.file_name().unwrap();
+    let parent = path.parent().unwrap();
+
+    eventually(repo, || async {
+        let parent = repo.open_directory(parent).await.unwrap();
+
+        match parent.lookup_unique(name) {
+            Ok(_) => false,
+            Err(Error::EntryNotFound) => true,
+            Err(error) => panic!("unexpected error: {:?}", error),
+        }
+    })
+    .await
 }
 
 #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379

@@ -4,7 +4,6 @@ mod common;
 
 use self::common::{actor, Env, NetworkExt, Proto};
 use assert_matches::assert_matches;
-use camino::Utf8Path;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, RepositoryDb, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
@@ -81,7 +80,7 @@ fn remove_remote_file() {
         file.flush().await.unwrap();
         drop(file);
 
-        expect_entry_not_found(&repo, "test.txt").await;
+        common::expect_entry_not_found(&repo, "test.txt").await;
 
         tx.send(()).await.unwrap();
     });
@@ -548,7 +547,7 @@ fn remote_rename_file() {
         tx.send(()).await.unwrap();
 
         common::expect_entry_exists(&repo, "bar.txt", EntryType::File).await;
-        expect_entry_not_found(&repo, "foo.txt").await;
+        common::expect_entry_not_found(&repo, "foo.txt").await;
         tx.send(()).await.unwrap();
     });
 }
@@ -578,7 +577,7 @@ fn remote_rename_empty_directory() {
         tx.send(()).await.unwrap();
 
         common::expect_entry_exists(&repo, "bar", EntryType::Directory).await;
-        expect_entry_not_found(&repo, "foo").await;
+        common::expect_entry_not_found(&repo, "foo").await;
         tx.send(()).await.unwrap();
     });
 }
@@ -609,7 +608,7 @@ fn remote_rename_non_empty_directory() {
         tx.send(()).await.unwrap();
 
         common::expect_entry_exists(&repo, "bar/data.txt", EntryType::File).await;
-        expect_entry_not_found(&repo, "foo").await;
+        common::expect_entry_not_found(&repo, "foo").await;
         tx.send(()).await.unwrap();
     });
 }
@@ -652,7 +651,7 @@ fn remote_rename_directory_during_conflict() {
         tx.send(()).await.unwrap();
 
         common::expect_entry_exists(&repo, "bar", EntryType::Directory).await;
-        expect_entry_not_found(&repo, "foo").await;
+        common::expect_entry_not_found(&repo, "foo").await;
         tx.send(()).await.unwrap();
     });
 }
@@ -689,8 +688,8 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
         tx.send(()).await.unwrap();
 
         common::expect_entry_exists(&repo, "trash/data.txt", EntryType::File).await;
-        expect_entry_not_found(&repo, "data.txt").await;
-        expect_entry_not_found(&repo, "archive").await;
+        common::expect_entry_not_found(&repo, "data.txt").await;
+        common::expect_entry_not_found(&repo, "archive").await;
         tx.send(()).await.unwrap();
     });
 }
@@ -860,24 +859,6 @@ fn content_stays_available_during_sync() {
             tx.send(()).await.unwrap();
         }
     });
-}
-
-#[instrument]
-async fn expect_entry_not_found(repo: &Repository, path: &str) {
-    let path = Utf8Path::new(path);
-    let name = path.file_name().unwrap();
-    let parent = path.parent().unwrap();
-
-    common::eventually(repo, || async {
-        let parent = repo.open_directory(parent).await.unwrap();
-
-        match parent.lookup_unique(name) {
-            Ok(_) => false,
-            Err(Error::EntryNotFound) => true,
-            Err(error) => panic!("unexpected error: {:?}", error),
-        }
-    })
-    .await
 }
 
 #[instrument]

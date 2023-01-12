@@ -3,7 +3,7 @@
 mod common;
 
 use self::common::{actor, Env, NetworkExt};
-use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use ouisync::{File, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
 
 #[test]
@@ -33,31 +33,42 @@ fn local_delete_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    env.actor("remote", async move {
-        let (_network, repo, _reg) = actor::setup().await;
+    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
-        let mut file = repo.create_file("test.dat").await.unwrap();
-        write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
-        file.flush().await.unwrap();
+    env.actor("remote", {
+        let content = content.clone();
 
-        rx.recv().await.unwrap();
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            file.write(&content).await.unwrap();
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
     });
 
-    env.actor("local", async move {
-        let (network, repo, _reg) = actor::setup().await;
-        network.connect("remote");
+    env.actor("local", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("remote");
 
-        // 2 blocks for the file + 1 block for the remote root directory
-        expect_block_count(&repo, 3).await;
+            common::expect_file_content(&repo, "test.dat", &content).await;
+            repo.force_work().await.unwrap();
 
-        repo.remove_entry("test.dat").await.unwrap();
-        repo.force_work().await.unwrap();
+            // 2 blocks for the file + 1 block for the remote root directory
+            assert_eq!(repo.count_blocks().await.unwrap(), 3);
 
-        // Both the file and the remote root are deleted, only the local root remains to track the
-        // tombstone.
-        assert_eq!(repo.count_blocks().await.unwrap(), 1);
+            repo.remove_entry("test.dat").await.unwrap();
+            repo.force_work().await.unwrap();
 
-        tx.send(()).await.unwrap();
+            // Both the file and the remote root are deleted, only the local root remains to track the
+            // tombstone.
+            assert_eq!(repo.count_blocks().await.unwrap(), 1);
+
+            tx.send(()).await.unwrap();
+        }
     });
 }
 
@@ -80,12 +91,18 @@ fn remote_delete_remote_file() {
         let (network, repo, _reg) = actor::setup().await;
         network.connect("remote");
 
+        common::expect_file_content(&repo, "test.dat", &[]).await;
+        repo.force_work().await.unwrap();
+
         // 1 block for the file + 1 block for the remote root directory
-        expect_block_count(&repo, 2).await;
+        assert_eq!(repo.count_blocks().await.unwrap(), 2);
         tx.send(()).await.unwrap();
 
+        common::expect_entry_not_found(&repo, "test.dat").await;
+        repo.force_work().await.unwrap();
+
         // The remote file is removed but the remote root remains to track the tombstone
-        expect_block_count(&repo, 1).await;
+        assert_eq!(repo.count_blocks().await.unwrap(), 1);
         tx.send(()).await.unwrap();
     });
 }
@@ -121,35 +138,46 @@ fn local_truncate_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    env.actor("remote", async move {
-        let (_network, repo, _reg) = actor::setup().await;
+    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
-        let mut file = repo.create_file("test.dat").await.unwrap();
-        write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
-        file.flush().await.unwrap();
+    env.actor("remote", {
+        let content = content.clone();
 
-        rx.recv().await.unwrap();
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            file.write(&content).await.unwrap();
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
     });
 
-    env.actor("local", async move {
-        let (network, repo, _reg) = actor::setup().await;
-        network.connect("remote");
+    env.actor("local", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("remote");
 
-        // 2 blocks for the file + 1 block for the remote root directory
-        expect_block_count(&repo, 3).await;
+            common::expect_file_content(&repo, "test.dat", &content).await;
+            repo.force_work().await.unwrap();
 
-        let mut file = repo.open_file("test.dat").await.unwrap();
-        file.fork(repo.local_branch().unwrap()).await.unwrap();
-        file.truncate(0).await.unwrap();
-        file.flush().await.unwrap();
+            // 2 blocks for the file + 1 block for the remote root directory
+            assert_eq!(repo.count_blocks().await.unwrap(), 3);
 
-        repo.force_work().await.unwrap();
+            let mut file = repo.open_file("test.dat").await.unwrap();
+            file.fork(repo.local_branch().unwrap()).await.unwrap();
+            file.truncate(0).await.unwrap();
+            file.flush().await.unwrap();
 
-        //   1 block for the file (the original 2 blocks were removed)
-        // + 1 block for the local root (created when the file was forked)
-        assert_eq!(repo.count_blocks().await.unwrap(), 2);
+            repo.force_work().await.unwrap();
 
-        tx.send(()).await.unwrap();
+            //   1 block for the file (the original 2 blocks were removed)
+            // + 1 block for the local root (created when the file was forked)
+            assert_eq!(repo.count_blocks().await.unwrap(), 2);
+
+            tx.send(()).await.unwrap();
+        }
     });
 }
 
@@ -198,21 +226,6 @@ fn remote_truncate_remote_file() {
             tx.send(()).await.unwrap();
         }
     });
-}
-
-async fn expect_block_count(repo: &Repository, expected_count: usize) {
-    common::eventually(repo, || async {
-        let actual_count = repo.count_blocks().await.unwrap();
-
-        tracing::debug!(
-            "block count - actual: {}, expected: {}",
-            actual_count,
-            expected_count
-        );
-
-        actual_count == expected_count
-    })
-    .await
 }
 
 async fn write_to_file(file: &mut File, size: usize) {
