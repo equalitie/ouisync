@@ -17,14 +17,11 @@ use crate::{
 use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 use tokio::{
     pin, select,
     sync::{mpsc, watch},
-    time::{self, Instant},
+    time::{self, Duration, Instant},
 };
 use tokio_stream::StreamExt;
 

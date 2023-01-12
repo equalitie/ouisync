@@ -16,9 +16,12 @@ use std::{
     future::Future,
     io, net,
     sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant, SystemTime},
+    time::SystemTime,
 };
-use tokio::{sync::watch, time::sleep};
+use tokio::{
+    sync::watch,
+    time::{sleep, Duration, Instant},
+};
 use tracing::{Instrument, Span};
 
 type JobHandles = HashMap<Uri, TrackedDevice>;

@@ -58,13 +58,13 @@ use std::{
     io, mem,
     net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
-    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
     task::{AbortHandle, JoinSet},
+    time::Duration,
 };
 use tracing::{instrument, Instrument, Span};
 

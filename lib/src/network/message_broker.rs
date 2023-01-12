@@ -19,11 +19,12 @@ use crate::{
     store::Store,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
-use std::{future, sync::Arc, time::Duration};
+use std::{future, sync::Arc};
 use tokio::{
     select,
     sync::{mpsc, oneshot, Semaphore},
     task,
+    time::Duration,
 };
 use tracing::{field, instrument::Instrument, Span};
 

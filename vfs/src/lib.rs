@@ -28,8 +28,9 @@ use std::{
     os::raw::c_int,
     panic::{self, AssertUnwindSafe},
     path::Path,
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
+use tokio::time::Duration;
 use tracing::{instrument, Span};
 
 // Name of the filesystem.

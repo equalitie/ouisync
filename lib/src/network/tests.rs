@@ -21,7 +21,7 @@ use crate::{
 };
 use futures_util::future;
 use rand::prelude::*;
-use std::{fmt, future::Future, sync::Arc, time::Duration};
+use std::{fmt, future::Future, sync::Arc};
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{
@@ -30,7 +30,7 @@ use tokio::{
         broadcast::{self, error::RecvError},
         mpsc, Semaphore,
     },
-    time,
+    time::{self, Duration},
 };
 use tracing::{Instrument, Span};
 

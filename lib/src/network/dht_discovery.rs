@@ -20,12 +20,12 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 use tokio::{
     select,
     sync::{mpsc, watch},
-    time,
+    time::{self, Duration},
 };
 use tracing::{instrument::Instrument, Span};
 

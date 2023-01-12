@@ -5,11 +5,11 @@ use std::{
     pin::Pin,
     sync::{Arc, RwLock},
     task::{Context, Poll},
-    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::broadcast,
+    time::Duration,
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";

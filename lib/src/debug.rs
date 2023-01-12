@@ -1,5 +1,8 @@
-use std::{fmt, future::Future, time::Duration};
-use tokio::{pin, time};
+use std::{fmt, future::Future};
+use tokio::{
+    pin,
+    time::{self, Duration},
+};
 
 #[derive(Clone)]
 pub struct DebugPrinter {

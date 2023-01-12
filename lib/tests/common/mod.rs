@@ -12,11 +12,11 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     thread,
-    time::Duration,
 };
 use tokio::{
     sync::broadcast::{self, error::RecvError},
-    task_local, time,
+    task_local,
+    time::{self, Duration},
 };
 use tracing::{instrument, span::EnteredSpan, Instrument, Span};
 

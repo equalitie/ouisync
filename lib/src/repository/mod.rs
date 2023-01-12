@@ -32,10 +32,11 @@ use crate::{
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use std::{fmt, path::Path, sync::Arc, time::Duration};
+use std::{fmt, path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
+    time::Duration,
 };
 use tracing::{instrument, instrument::Instrument, Span};
 

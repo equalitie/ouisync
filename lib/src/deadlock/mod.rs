@@ -12,8 +12,8 @@ use std::{
     ops::{Deref, DerefMut},
     panic::Location,
     sync::{Arc, Mutex as BlockingMutex},
-    time::Duration,
 };
+use tokio::time::Duration;
 
 const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 

@@ -9,8 +9,8 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant},
 };
+use tokio::time::{Duration, Instant};
 
 static WATCHED_ENTRIES: Lazy<sync::Mutex<HashMap<u64, WatchedEntry>>> =
     Lazy::new(|| sync::Mutex::new(HashMap::default()));

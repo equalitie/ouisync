@@ -15,11 +15,10 @@ use std::{
     io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
-    time::Duration,
 };
 use tokio::{
     sync::{mpsc, Mutex},
-    time::sleep,
+    time::{sleep, Duration},
 };
 use tracing::Instrument;
 

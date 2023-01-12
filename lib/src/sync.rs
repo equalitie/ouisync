@@ -2,8 +2,11 @@
 
 /// MPMC broadcast channel
 pub mod broadcast {
-    use std::time::{Duration, Instant};
-    use tokio::{select, sync::broadcast, time};
+    use tokio::{
+        select,
+        sync::broadcast,
+        time::{self, Duration, Instant},
+    };
 
     /// Adapter for `Receiver` which limits the rate at which messages are received. The messages
     /// are not buffered - if the rate limit is exceeded, all but the last message are discarded.
@@ -34,7 +37,7 @@ pub mod broadcast {
             if Instant::now() < end {
                 loop {
                     select! {
-                        _ = time::sleep_until(end.into()) => break,
+                        _ = time::sleep_until(end) => break,
                         result = self.rx.recv() => {
                             item = Some(result?);
                         }

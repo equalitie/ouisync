@@ -1,6 +1,6 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
-use std::{fmt, mem::size_of, time::Duration};
-use tokio::time;
+use std::{fmt, mem::size_of};
+use tokio::time::{self, Duration};
 
 type BarrierId = u64;
 type Round = u32;
@@ -400,11 +400,11 @@ mod tests {
     use super::*;
     use crate::scoped_task::{self, ScopedJoinHandle};
     use async_trait::async_trait;
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
     use tokio::{
         sync::{mpsc, Mutex},
         task,
-        time::timeout,
+        time::{timeout, Duration},
     };
 
     struct Stepper {

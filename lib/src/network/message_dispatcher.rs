@@ -19,9 +19,8 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
-    time::Duration,
 };
-use tokio::{runtime, select, sync::watch};
+use tokio::{runtime, select, sync::watch, time::Duration};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);

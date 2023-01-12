@@ -11,12 +11,13 @@ use net::{
     quic,
     tcp::{TcpListener, TcpStream},
 };
-use std::{
-    net::{IpAddr, SocketAddr},
-    time::Duration,
-};
+use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
-use tokio::{select, sync::mpsc, time};
+use tokio::{
+    select,
+    sync::mpsc,
+    time::{self, Duration},
+};
 use tracing::Instrument;
 
 /// Established incoming and outgoing connections.

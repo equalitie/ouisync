@@ -1,6 +1,9 @@
 use crate::collections::HashSet;
-use std::{net::Ipv4Addr, time::Duration};
-use tokio::{sync::mpsc, time::sleep};
+use std::net::Ipv4Addr;
+use tokio::{
+    sync::mpsc,
+    time::{sleep, Duration},
+};
 
 // Network interfaces may change at runtime (especially on mobile devices, but on desktops as
 // well). This code helps us track such changes.

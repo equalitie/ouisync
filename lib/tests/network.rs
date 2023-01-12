@@ -7,8 +7,11 @@ mod common;
 
 use self::common::{actor, Env, NetworkExt, Proto, TEST_TIMEOUT};
 use ouisync::network::Network;
-use std::{net::Ipv4Addr, sync::Arc, time::Duration};
-use tokio::{sync::Barrier, time};
+use std::{net::Ipv4Addr, sync::Arc};
+use tokio::{
+    sync::Barrier,
+    time::{self, Duration},
+};
 
 // This test requires QUIC which is not yet supported in simulation
 #[test]
