@@ -38,22 +38,30 @@ mod implementation {
             };
 
             thread_local! {
-                pub(super) static THREAD_RNG: Rc<RefCell<StdRng>> = Rc::new(RefCell::new(StdRng::seed_from_u64(*SEED)));
+                pub(super) static THREAD_RNG: Rc<RefCell<StdRng>> =
+                    Rc::new(RefCell::new(StdRng::seed_from_u64(get_seed())));
             }
 
-            static SEED: Lazy<u64> = Lazy::new(|| {
-                const PARSE_ERROR: &str = "failed to parse OUISYNC_TEST_SEED";
+            fn get_seed() -> u64 {
+                // Generate/parse the seed only once per process, but log it for every thread. This
+                // is so that every test logs the seed separately so that when the test fails we
+                // knows what seed it was using.
+                static SEED: Lazy<u64> = Lazy::new(|| {
+                    const PARSE_ERROR: &str = "failed to parse OUISYNC_TEST_SEED";
 
-                let seed = match env::var("OUISYNC_TEST_SEED") {
-                    Ok(seed) => seed.parse().expect(PARSE_ERROR),
-                    Err(VarError::NotPresent) => rand::rngs::OsRng.gen(),
-                    Err(VarError::NotUnicode(_)) => panic!("{}", PARSE_ERROR),
-                };
+                    match env::var("OUISYNC_TEST_SEED") {
+                        Ok(seed) => seed.parse().expect(PARSE_ERROR),
+                        Err(VarError::NotPresent) => rand::rngs::OsRng.gen(),
+                        Err(VarError::NotUnicode(_)) => panic!("{}", PARSE_ERROR),
+                    }
+                });
+
+                let seed = *SEED;
 
                 tracing::debug!(target: "ouisync::rand", seed);
 
                 seed
-            });
+            }
 
             pub struct ThreadRng(Rc<RefCell<StdRng>>);
 
