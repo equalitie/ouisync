@@ -5,8 +5,8 @@
 
 mod common;
 
-use self::common::{Env, NetworkExt, Proto, TEST_TIMEOUT};
-use ouisync::{network::Network, AccessSecrets};
+use self::common::{actor, Env, NetworkExt, Proto, TEST_TIMEOUT};
+use ouisync::network::Network;
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{sync::Barrier, time};
 
@@ -15,20 +15,17 @@ use tokio::{sync::Barrier, time};
 fn peer_exchange() {
     let mut env = Env::new();
     let proto = Proto::Quic; // PEX works only with QUIC
-
-    let secrets = AccessSecrets::random_write();
     let barrier = Arc::new(Barrier::new(3));
 
     // Bob and Carol are initially connected only to Alice but eventually they connect to each
     // other via peer exchange.
 
     env.actor("alice", {
-        let secrets = secrets.clone();
         let barrier = barrier.clone();
 
         async move {
-            let network = common::create_network(proto).await;
-            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
             reg.enable_pex();
 
             barrier.wait().await;
@@ -36,12 +33,11 @@ fn peer_exchange() {
     });
 
     env.actor("bob", {
-        let secrets = secrets.clone();
         let barrier = barrier.clone();
 
         async move {
-            let network = common::create_network(proto).await;
-            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
             reg.enable_pex();
 
@@ -52,8 +48,8 @@ fn peer_exchange() {
 
     env.actor("carol", {
         async move {
-            let network = common::create_network(proto).await;
-            let (_repo, reg) = common::create_linked_repo(secrets, &network).await;
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
             reg.enable_pex();
 
@@ -70,7 +66,7 @@ fn network_disable_enable_idle() {
 
     env.actor("only", async move {
         let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
-        let network = common::create_unbound_network();
+        let network = actor::create_unbound_network();
 
         network.handle().bind(&[bind_addr]).await;
         let local_addr_0 = proto.listener_local_addr_v4(&network);
@@ -93,7 +89,7 @@ fn network_disable_enable_pending_connection() {
 
     env.actor("local", async move {
         let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
-        let network = common::create_unbound_network();
+        let network = actor::create_unbound_network();
 
         network.handle().bind(&[bind_addr]).await;
         let local_addr_0 = proto.listener_local_addr_v4(&network);
@@ -119,7 +115,7 @@ fn network_disable_enable_addr_takeover() {
 
     env.actor("wendy", async move {
         let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
-        let network = common::create_unbound_network();
+        let network = actor::create_unbound_network();
 
         network.handle().bind(&[bind_addr]).await;
         let local_addr_0 = proto.listener_local_addr_v4(&network);
@@ -154,9 +150,8 @@ fn dht_toggle() {
     let proto = Proto::Quic;
 
     env.actor("eric", async move {
-        let network = common::create_network(proto).await;
-        let (_repo, reg) =
-            common::create_linked_repo(AccessSecrets::random_write(), &network).await;
+        let network = actor::create_network(proto).await;
+        let (_repo, reg) = actor::create_linked_repo(&network).await;
 
         reg.enable_dht();
         reg.disable_dht();
@@ -177,7 +172,7 @@ fn local_discovery() {
         let barrier = barrier.clone();
 
         env.actor(&format!("node-{}", src_port), async move {
-            let network = common::create_unbound_network();
+            let network = actor::create_unbound_network();
             network
                 .handle()
                 .bind(&[proto.wrap((Ipv4Addr::LOCALHOST, src_port))])

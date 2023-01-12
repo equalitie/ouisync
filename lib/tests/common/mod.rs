@@ -47,6 +47,7 @@ pub(crate) mod env {
         runtime: Runtime,
         tasks: Vec<JoinHandle<()>>,
         default_port: u16,
+        default_secrets: AccessSecrets,
         dns: Arc<Mutex<Dns>>,
     }
 
@@ -64,6 +65,7 @@ pub(crate) mod env {
                 runtime,
                 tasks: Vec::new(),
                 default_port: next_default_port(),
+                default_secrets: AccessSecrets::random_write(),
                 dns: Arc::new(Mutex::new(Dns::new())),
             }
         }
@@ -79,6 +81,7 @@ pub(crate) mod env {
 
             let f = DNS.scope(self.dns.clone(), f);
             let f = DEFAULT_PORT.scope(self.default_port, f);
+            let f = DEFAULT_SECRETS.scope(self.default_secrets.clone(), f);
             let f = ACTOR.scope(actor, f);
             let f = ACTOR_NAME.scope(name.to_owned(), f);
             let f = f.instrument(span);
@@ -165,6 +168,7 @@ pub(crate) mod env {
     pub(crate) struct Env<'a> {
         base_dir: TempDir,
         runner: turmoil::Sim<'a>,
+        default_secrets: AccessSecrets,
     }
 
     impl<'a> Env<'a> {
@@ -174,7 +178,11 @@ pub(crate) mod env {
             let base_dir = TempDir::new();
             let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
 
-            Self { base_dir, runner }
+            Self {
+                base_dir,
+                runner,
+                default_secrets: AccessSecrets::random_write(),
+            }
         }
 
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
@@ -189,6 +197,7 @@ pub(crate) mod env {
                 Ok(())
             };
             let f = ACTOR.scope(actor, f);
+            let f = DEFAULT_SECRETS.scope(self.default_secrets.clone(), f);
             let f = f.instrument(span);
 
             self.runner.client(name, f);
@@ -216,61 +225,73 @@ pub(crate) mod env {
     }
 }
 
-pub(crate) fn create_unbound_network() -> Network {
-    let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
-    let config_store = ConfigStore::new(config_store);
+/// Operations on the current actor. All of these function can only be called in an actor context,
+/// that is, from inside the future passed to `Env::actor`.
+pub(crate) mod actor {
+    use super::*;
 
-    Network::new(config_store)
-}
+    pub(crate) fn create_unbound_network() -> Network {
+        let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
+        let config_store = ConfigStore::new(config_store);
 
-pub(crate) async fn create_network(proto: Proto) -> Network {
-    let network = create_unbound_network();
+        Network::new(config_store)
+    }
 
-    let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
-    let bind_addr = proto.wrap(bind_addr);
-    network.handle().bind(&[bind_addr]).await;
+    pub(crate) async fn create_network(proto: Proto) -> Network {
+        let network = create_unbound_network();
 
-    network
-}
+        let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
+        let bind_addr = proto.wrap(bind_addr);
+        network.handle().bind(&[bind_addr]).await;
 
-pub(crate) fn make_repo_path() -> PathBuf {
-    ACTOR.with(|actor| actor.next_repo_path())
-}
+        network
+    }
 
-pub(crate) fn device_id() -> DeviceId {
-    ACTOR.with(|actor| actor.device_id)
-}
+    pub(crate) fn make_repo_path() -> PathBuf {
+        ACTOR.with(|actor| actor.next_repo_path())
+    }
 
-pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
-    Repository::create(
-        RepositoryDb::create(&make_repo_path()).await.unwrap(),
-        device_id(),
-        Access::new(None, None, secrets),
-    )
-    .await
-    .unwrap()
-}
+    pub(crate) fn device_id() -> DeviceId {
+        ACTOR.with(|actor| actor.device_id)
+    }
 
-pub(crate) async fn create_linked_repo(
-    secrets: AccessSecrets,
-    network: &Network,
-) -> (Repository, Registration) {
-    let repo = create_repo(secrets).await;
-    let reg = network.handle().register(repo.store().clone());
+    pub(crate) fn default_secrets() -> AccessSecrets {
+        DEFAULT_SECRETS.with(|secrets| secrets.clone())
+    }
 
-    (repo, reg)
-}
+    pub(crate) async fn create_repo_with_secrets(secrets: AccessSecrets) -> Repository {
+        Repository::create(
+            RepositoryDb::create(&make_repo_path()).await.unwrap(),
+            device_id(),
+            Access::new(None, None, secrets),
+        )
+        .await
+        .unwrap()
+    }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-/// Convenience function for the common case where the actor has one linked repository.
-pub(crate) async fn setup_actor(secrets: AccessSecrets) -> (Network, Repository, Registration) {
-    let network = create_network(Proto::Tcp).await;
-    let (repo, reg) = create_linked_repo(secrets, &network).await;
-    (network, repo, reg)
+    pub(crate) async fn create_repo() -> Repository {
+        create_repo_with_secrets(default_secrets()).await
+    }
+
+    pub(crate) async fn create_linked_repo(network: &Network) -> (Repository, Registration) {
+        let repo = create_repo().await;
+        let reg = network.handle().register(repo.store().clone());
+
+        (repo, reg)
+    }
+
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+    /// Convenience function for the common case where the actor has one linked repository.
+    pub(crate) async fn setup() -> (Network, Repository, Registration) {
+        let network = create_network(Proto::Tcp).await;
+        let (repo, reg) = create_linked_repo(&network).await;
+        (network, repo, reg)
+    }
 }
 
 task_local! {
     static ACTOR: Actor;
+    static DEFAULT_SECRETS: AccessSecrets;
 }
 
 struct Actor {

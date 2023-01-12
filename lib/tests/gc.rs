@@ -2,8 +2,8 @@
 
 mod common;
 
-use self::common::{Env, NetworkExt};
-use ouisync::{AccessSecrets, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use self::common::{actor, Env, NetworkExt};
+use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
 
 #[test]
@@ -11,7 +11,7 @@ fn local_delete_local_file() {
     let mut env = Env::new();
 
     env.actor("local", async {
-        let repo = common::create_repo(AccessSecrets::random_write()).await;
+        let repo = actor::create_repo().await;
 
         assert_eq!(repo.count_blocks().await.unwrap(), 0);
 
@@ -32,24 +32,19 @@ fn local_delete_local_file() {
 fn local_delete_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
-    let secrets = AccessSecrets::random_write();
 
-    env.actor("remote", {
-        let secrets = secrets.clone();
+    env.actor("remote", async move {
+        let (_network, repo, _reg) = actor::setup().await;
 
-        async move {
-            let (_network, repo, _reg) = common::setup_actor(secrets).await;
+        let mut file = repo.create_file("test.dat").await.unwrap();
+        write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+        file.flush().await.unwrap();
 
-            let mut file = repo.create_file("test.dat").await.unwrap();
-            write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
-            file.flush().await.unwrap();
-
-            rx.recv().await.unwrap();
-        }
+        rx.recv().await.unwrap();
     });
 
     env.actor("local", async move {
-        let (network, repo, _reg) = common::setup_actor(secrets).await;
+        let (network, repo, _reg) = actor::setup().await;
         network.connect("remote");
 
         // 2 blocks for the file + 1 block for the remote root directory
@@ -70,24 +65,19 @@ fn local_delete_remote_file() {
 fn remote_delete_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
-    let secrets = AccessSecrets::random_write();
 
-    env.actor("remote", {
-        let secrets = secrets.clone();
+    env.actor("remote", async move {
+        let (_network, repo, _reg) = actor::setup().await;
 
-        async move {
-            let (_network, repo, _reg) = common::setup_actor(secrets).await;
+        repo.create_file("test.dat").await.unwrap();
+        rx.recv().await.unwrap();
 
-            repo.create_file("test.dat").await.unwrap();
-            rx.recv().await.unwrap();
-
-            repo.remove_entry("test.dat").await.unwrap();
-            rx.recv().await.unwrap();
-        }
+        repo.remove_entry("test.dat").await.unwrap();
+        rx.recv().await.unwrap();
     });
 
     env.actor("local", async move {
-        let (network, repo, _reg) = common::setup_actor(secrets).await;
+        let (network, repo, _reg) = actor::setup().await;
         network.connect("remote");
 
         // 1 block for the file + 1 block for the remote root directory
@@ -105,7 +95,7 @@ fn local_truncate_local_file() {
     let mut env = Env::new();
 
     env.actor("local", async move {
-        let repo = common::create_repo(AccessSecrets::random_write()).await;
+        let repo = actor::create_repo().await;
 
         let mut file = repo.create_file("test.dat").await.unwrap();
         write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
@@ -130,24 +120,19 @@ fn local_truncate_local_file() {
 fn local_truncate_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
-    let secrets = AccessSecrets::random_write();
 
-    env.actor("remote", {
-        let secrets = secrets.clone();
+    env.actor("remote", async move {
+        let (_network, repo, _reg) = actor::setup().await;
 
-        async move {
-            let (_network, repo, _reg) = common::setup_actor(secrets).await;
+        let mut file = repo.create_file("test.dat").await.unwrap();
+        write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
+        file.flush().await.unwrap();
 
-            let mut file = repo.create_file("test.dat").await.unwrap();
-            write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
-            file.flush().await.unwrap();
-
-            rx.recv().await.unwrap();
-        }
+        rx.recv().await.unwrap();
     });
 
     env.actor("local", async move {
-        let (network, repo, _reg) = common::setup_actor(secrets).await;
+        let (network, repo, _reg) = actor::setup().await;
         network.connect("remote");
 
         // 2 blocks for the file + 1 block for the remote root directory
@@ -172,15 +157,13 @@ fn local_truncate_remote_file() {
 fn remote_truncate_remote_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
-    let secrets = AccessSecrets::random_write();
     let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     env.actor("remote", {
-        let secrets = secrets.clone();
         let content = content.clone();
 
         async move {
-            let (_network, repo, _reg) = common::setup_actor(secrets).await;
+            let (_network, repo, _reg) = actor::setup().await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
             file.write(&content).await.unwrap();
@@ -195,23 +178,25 @@ fn remote_truncate_remote_file() {
         }
     });
 
-    env.actor("local", async move {
-        let (network, repo, _reg) = common::setup_actor(secrets).await;
-        network.connect("remote");
+    env.actor("local", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("remote");
 
-        common::expect_file_content(&repo, "test.dat", &content).await;
-        repo.force_work().await.unwrap();
+            common::expect_file_content(&repo, "test.dat", &content).await;
+            repo.force_work().await.unwrap();
 
-        // 2 blocks for the file + 1 block for the remote root
-        assert_eq!(repo.count_blocks().await.unwrap(), 3);
-        tx.send(()).await.unwrap();
+            // 2 blocks for the file + 1 block for the remote root
+            assert_eq!(repo.count_blocks().await.unwrap(), 3);
+            tx.send(()).await.unwrap();
 
-        common::expect_file_content(&repo, "test.dat", &[]).await;
-        repo.force_work().await.unwrap();
+            common::expect_file_content(&repo, "test.dat", &[]).await;
+            repo.force_work().await.unwrap();
 
-        // 1 block for the file + 1 block for the remote root
-        assert_eq!(repo.count_blocks().await.unwrap(), 2);
-        tx.send(()).await.unwrap();
+            // 1 block for the file + 1 block for the remote root
+            assert_eq!(repo.count_blocks().await.unwrap(), 2);
+            tx.send(()).await.unwrap();
+        }
     });
 }
 
