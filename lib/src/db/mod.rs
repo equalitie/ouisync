@@ -1,15 +1,16 @@
 #[macro_use]
 mod macros;
 
+mod connection;
 mod id;
 mod migrations;
 
 pub use id::DatabaseId;
 
+use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
-        Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
-        SqliteSynchronous,
+        Sqlite, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
     },
     Row, SqlitePool,
 };
@@ -26,6 +27,8 @@ use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
+
+pub(crate) use self::connection::Connection;
 
 /// Database connection pool.
 #[derive(Clone)]
@@ -126,11 +129,6 @@ impl Pool {
     }
 }
 
-/// Database connection
-// TODO: create a newtype for this which hides `begin` (use the ref-cast crate) and implement
-// `Executor` for it.
-pub(crate) type Connection = SqliteConnection;
-
 /// Database connection from pool
 pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
 
@@ -138,13 +136,13 @@ impl Deref for PoolConnection {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        Connection::ref_cast(self.0.deref())
     }
 }
 
 impl DerefMut for PoolConnection {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        Connection::ref_cast_mut(self.0.deref_mut())
     }
 }
 
@@ -162,13 +160,13 @@ impl Deref for ReadTransaction {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        Connection::ref_cast(self.0.deref())
     }
 }
 
 impl DerefMut for ReadTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        Connection::ref_cast_mut(self.0.deref_mut())
     }
 }
 
