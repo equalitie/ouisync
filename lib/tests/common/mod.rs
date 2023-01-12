@@ -20,7 +20,6 @@ use tokio::{
 };
 use tracing::{instrument, Instrument, Span};
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) use self::env::*;
 
 // Timeout for running a whole test case
@@ -43,10 +42,8 @@ pub(crate) mod env {
     };
 
     /// Test environment that uses real network (localhost)
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) struct Env {
         base_dir: TempDir,
-        proto: Proto,
         runtime: Runtime,
         tasks: Vec<JoinHandle<()>>,
         default_port: u16,
@@ -54,7 +51,6 @@ pub(crate) mod env {
     }
 
     impl Env {
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn new() -> Self {
             init_log();
 
@@ -65,7 +61,6 @@ pub(crate) mod env {
 
             Self {
                 base_dir: TempDir::new(),
-                proto: Proto::Tcp,
                 runtime,
                 tasks: Vec::new(),
                 default_port: next_default_port(),
@@ -73,7 +68,6 @@ pub(crate) mod env {
             }
         }
 
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
             Fut: Future<Output = ()> + Send + 'static,
@@ -168,14 +162,12 @@ pub(crate) mod env {
     use super::*;
 
     /// Test environment that uses simulated network
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) struct Env<'a> {
         base_dir: TempDir,
         runner: turmoil::Sim<'a>,
     }
 
     impl<'a> Env<'a> {
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn new() -> Self {
             init_log();
 
@@ -185,7 +177,6 @@ pub(crate) mod env {
             Self { base_dir, runner }
         }
 
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
             Fut: Future<Output = ()> + 'static,
@@ -225,103 +216,6 @@ pub(crate) mod env {
     }
 }
 
-// TODO: remove this
-#[deprecated]
-pub(crate) mod old {
-    use super::*;
-
-    // Test environment
-    pub struct Env {
-        base_dir: TempDir,
-        next_repo_num: u64,
-        next_peer_num: u64,
-        _span: tracing::span::EnteredSpan,
-    }
-
-    impl Env {
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub fn new() -> Self {
-            init_log();
-
-            let span = tracing::info_span!("test", name = thread::current().name()).entered();
-
-            Self {
-                base_dir: TempDir::new(),
-                next_repo_num: 0,
-                next_peer_num: 0,
-                _span: span,
-            }
-        }
-
-        pub fn next_store(&mut self) -> PathBuf {
-            let num = self.next_repo_num;
-            self.next_repo_num += 1;
-
-            self.base_dir.path().join(format!("repo-{}.db", num))
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub async fn create_repo(&mut self) -> Repository {
-            let secrets = AccessSecrets::random_write();
-            self.create_repo_with_secrets(secrets).await
-        }
-
-        pub async fn create_repo_with_secrets(&mut self, secrets: AccessSecrets) -> Repository {
-            Repository::create(
-                RepositoryDb::create(&self.next_store()).await.unwrap(),
-                rand::random(),
-                Access::new(None, None, secrets),
-            )
-            .await
-            .unwrap()
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub async fn create_linked_repos(&mut self) -> (Repository, Repository) {
-            let repo_a = self.create_repo().await;
-            let repo_b = self
-                .create_repo_with_secrets(repo_a.secrets().clone())
-                .await;
-
-            (repo_a, repo_b)
-        }
-
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub async fn create_node(&mut self, bind: PeerAddr) -> Network {
-            let id = self.next_peer_num();
-            let span = tracing::info_span!("peer", id);
-
-            let config_store = self.base_dir.path().join(format!("config-{}", id));
-            let config_store = ConfigStore::new(config_store);
-
-            let network = {
-                let _enter = span.enter();
-                Network::new(config_store)
-            };
-
-            network.handle().bind(&[bind]).instrument(span).await;
-            network
-        }
-
-        // Create two nodes connected together.
-        #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-        pub(crate) async fn create_connected_nodes(&mut self, proto: Proto) -> (Network, Network) {
-            let a = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-            let b = self.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-
-            b.add_user_provided_peer(&proto.listener_local_addr_v4(&a));
-
-            (a, b)
-        }
-
-        fn next_peer_num(&mut self) -> u64 {
-            let num = self.next_peer_num;
-            self.next_peer_num += 1;
-            num
-        }
-    }
-}
-
 pub(crate) fn create_unbound_network() -> Network {
     let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
     let config_store = ConfigStore::new(config_store);
@@ -329,7 +223,6 @@ pub(crate) fn create_unbound_network() -> Network {
     Network::new(config_store)
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn create_network(proto: Proto) -> Network {
     let network = create_unbound_network();
 
@@ -340,17 +233,14 @@ pub(crate) async fn create_network(proto: Proto) -> Network {
     network
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) fn make_repo_path() -> PathBuf {
     ACTOR.with(|actor| actor.next_repo_path())
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) fn device_id() -> DeviceId {
     ACTOR.with(|actor| actor.device_id)
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
     Repository::create(
         RepositoryDb::create(&make_repo_path()).await.unwrap(),
@@ -361,7 +251,6 @@ pub(crate) async fn create_repo(secrets: AccessSecrets) -> Repository {
     .unwrap()
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn create_linked_repo(
     secrets: AccessSecrets,
     network: &Network,
@@ -466,6 +355,7 @@ impl Proto {
         }
     }
 
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     #[track_caller]
     pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
         match self {
@@ -511,7 +401,6 @@ where
     .unwrap()
 }
 
-#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
