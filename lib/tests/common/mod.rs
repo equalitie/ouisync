@@ -18,7 +18,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     task_local, time,
 };
-use tracing::{instrument, Instrument, Span};
+use tracing::{instrument, span::EnteredSpan, Instrument, Span};
 
 pub(crate) use self::env::*;
 
@@ -43,17 +43,16 @@ pub(crate) mod env {
 
     /// Test environment that uses real network (localhost)
     pub(crate) struct Env {
-        base_dir: TempDir,
+        context: Context,
         runtime: Runtime,
         tasks: Vec<JoinHandle<()>>,
         default_port: u16,
-        default_secrets: AccessSecrets,
         dns: Arc<Mutex<Dns>>,
     }
 
     impl Env {
         pub fn new() -> Self {
-            init_log();
+            let context = Context::new();
 
             let runtime = runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -61,11 +60,10 @@ pub(crate) mod env {
                 .unwrap();
 
             Self {
-                base_dir: TempDir::new(),
+                context,
                 runtime,
                 tasks: Vec::new(),
                 default_port: next_default_port(),
-                default_secrets: AccessSecrets::random_write(),
                 dns: Arc::new(Mutex::new(Dns::new())),
             }
         }
@@ -74,14 +72,14 @@ pub(crate) mod env {
         where
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let actor = Actor::new(self.base_dir.path().join(name));
+            let actor = Actor::new(self.context.base_dir.path().join(name));
             let span = tracing::info_span!("actor", name);
 
             self.dns.lock().unwrap().register(name);
 
             let f = DNS.scope(self.dns.clone(), f);
             let f = DEFAULT_PORT.scope(self.default_port, f);
-            let f = DEFAULT_SECRETS.scope(self.default_secrets.clone(), f);
+            let f = DEFAULT_SECRETS.scope(self.context.default_secrets.clone(), f);
             let f = ACTOR.scope(actor, f);
             let f = ACTOR_NAME.scope(name.to_owned(), f);
             let f = f.instrument(span);
@@ -166,30 +164,23 @@ pub(crate) mod env {
 
     /// Test environment that uses simulated network
     pub(crate) struct Env<'a> {
-        base_dir: TempDir,
+        context: Context,
         runner: turmoil::Sim<'a>,
-        default_secrets: AccessSecrets,
     }
 
     impl<'a> Env<'a> {
         pub fn new() -> Self {
-            init_log();
-
-            let base_dir = TempDir::new();
+            let context = Context::new();
             let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
 
-            Self {
-                base_dir,
-                runner,
-                default_secrets: AccessSecrets::random_write(),
-            }
+            Self { context, runner }
         }
 
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
             Fut: Future<Output = ()> + 'static,
         {
-            let actor = Actor::new(self.base_dir.path().join(name));
+            let actor = Actor::new(self.context.base_dir.path().join(name));
             let span = tracing::info_span!("actor", name);
 
             let f = async move {
@@ -197,7 +188,7 @@ pub(crate) mod env {
                 Ok(())
             };
             let f = ACTOR.scope(actor, f);
-            let f = DEFAULT_SECRETS.scope(self.default_secrets.clone(), f);
+            let f = DEFAULT_SECRETS.scope(self.context.default_secrets.clone(), f);
             let f = f.instrument(span);
 
             self.runner.client(name, f);
@@ -292,6 +283,25 @@ pub(crate) mod actor {
 task_local! {
     static ACTOR: Actor;
     static DEFAULT_SECRETS: AccessSecrets;
+}
+
+struct Context {
+    base_dir: TempDir,
+    default_secrets: AccessSecrets,
+    _span: EnteredSpan,
+}
+
+impl Context {
+    fn new() -> Self {
+        init_log();
+
+        Self {
+            base_dir: TempDir::new(),
+            default_secrets: AccessSecrets::random_write(),
+            _span: tracing::info_span!("test", name = thread::current().name().unwrap_or("???"))
+                .entered(),
+        }
+    }
 }
 
 struct Actor {

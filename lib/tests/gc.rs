@@ -203,16 +203,14 @@ fn remote_truncate_remote_file() {
 async fn expect_block_count(repo: &Repository, expected_count: usize) {
     common::eventually(repo, || async {
         let actual_count = repo.count_blocks().await.unwrap();
-        if actual_count == expected_count {
-            true
-        } else {
-            tracing::debug!(
-                "block count - actual: {}, expected: {}",
-                actual_count,
-                expected_count
-            );
-            false
-        }
+
+        tracing::debug!(
+            "block count - actual: {}, expected: {}",
+            actual_count,
+            expected_count
+        );
+
+        actual_count == expected_count
     })
     .await
 }
