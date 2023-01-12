@@ -47,12 +47,6 @@ impl BlockIds {
     pub async fn try_next(&mut self) -> Result<Option<BlockId>> {
         if let Some(end) = self.end {
             if self.locator.number() >= end {
-                tracing::trace!(
-                    vv = ?self.snapshot.version_vector(),
-                    locator = ?self.locator,
-                    "last block (upper bound)"
-                );
-
                 return Ok(None);
             }
         }
@@ -65,15 +59,7 @@ impl BlockIds {
                 self.locator = self.locator.next();
                 Ok(Some(block_id))
             }
-            Err(Error::EntryNotFound) => {
-                tracing::trace!(
-                    vv = ?self.snapshot.version_vector(),
-                    locator = ?self.locator,
-                    "last block (not found)"
-                );
-
-                Ok(None)
-            }
+            Err(Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error),
         }
     }

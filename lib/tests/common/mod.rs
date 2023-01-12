@@ -172,7 +172,9 @@ pub(crate) mod env {
     impl<'a> Env<'a> {
         pub fn new() -> Self {
             let context = Context::new();
-            let runner = turmoil::Builder::new().build_with_rng(Box::new(rand::thread_rng()));
+            let runner = turmoil::Builder::new()
+                .simulation_duration(Duration::from_secs(90))
+                .build_with_rng(Box::new(rand::thread_rng()));
 
             Self { context, runner }
         }
