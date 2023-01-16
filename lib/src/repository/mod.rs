@@ -16,7 +16,7 @@ use crate::{
         sign::{self, PublicKey},
         Password,
     },
-    db,
+    db::{self, DatabaseId},
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, EntryType, MissingBlockStrategy},
@@ -212,6 +212,10 @@ impl Repository {
             worker_handle,
             _progress_reporter_handle,
         })
+    }
+
+    pub async fn database_id(&self) -> Result<DatabaseId> {
+        metadata::get_or_generate_database_id(self.db()).await
     }
 
     pub async fn requires_local_password_for_reading(&self) -> Result<bool> {

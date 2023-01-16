@@ -336,6 +336,19 @@ pub unsafe extern "C" fn repository_info_hash(
     ))
 }
 
+/// Returns an ID that is randomly generated once per repository. Can be used to store local user
+/// data per repository (e.g. passwords behind biometric storage).
+#[no_mangle]
+pub unsafe extern "C" fn repository_database_id(
+    handle: SharedHandle<RepositoryHolder>,
+    port: Port<Result<Vec<u8>>>,
+) {
+    session::with(port, |ctx| {
+        let holder = handle.get();
+        ctx.spawn(async move { Ok(holder.repository.database_id().await?.as_ref().to_vec()) })
+    })
+}
+
 /// Returns the type of repository entry (file, directory, ...).
 /// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
 #[no_mangle]

@@ -4,7 +4,7 @@ use crate::{
         cipher::{self, Nonce},
         sign, Hash, Password, PasswordSalt,
     },
-    db,
+    db::{self, DatabaseId},
     device_id::DeviceId,
     error::{Error, Result},
     repository::RepositoryId,
@@ -19,6 +19,8 @@ const PASSWORD_SALT: &[u8] = b"password_salt";
 const WRITER_ID: &[u8] = b"writer_id";
 const READ_KEY: &[u8] = b"read_key";
 const WRITE_KEY: &[u8] = b"write_key";
+const DATABASE_ID: &[u8] = b"database_id";
+
 // We used to have only the ACCESS_KEY which would be either the read key or the write key or a
 // dummy (random) array of bytes with the length of the writer key. But that wasn't satisfactory
 // because:
@@ -68,6 +70,25 @@ async fn get_or_generate_password_salt(tx: &mut db::WriteTransaction) -> Result<
     };
 
     Ok(salt)
+}
+
+// -------------------------------------------------------------------
+// Database ID
+// -------------------------------------------------------------------
+pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<DatabaseId> {
+    let mut tx = db.begin_write().await?;
+    let database_id = match get_public(&mut tx, DATABASE_ID).await {
+        Ok(database_id) => database_id,
+        Err(Error::EntryNotFound) => {
+            let database_id: DatabaseId = OsRng.gen();
+            set_public(&mut tx, DATABASE_ID, database_id.as_ref()).await?;
+            tx.commit().await?;
+            database_id
+        }
+        Err(error) => return Err(error),
+    };
+
+    Ok(database_id)
 }
 
 // -------------------------------------------------------------------

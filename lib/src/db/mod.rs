@@ -1,4 +1,7 @@
+mod id;
 mod migrations;
+
+pub use id::DatabaseId;
 
 use sqlx::{
     sqlite::{
