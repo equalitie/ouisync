@@ -246,7 +246,6 @@ impl Repository {
         &self,
         local_read_secret: Option<LocalSecret>,
         secrets: Option<AccessSecrets>,
-        tx: &mut db::WriteTransaction,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -262,13 +261,17 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
+        let mut tx = self.db().begin_write().await?;
+
         let local_read_key = if let Some(secret) = local_read_secret {
-            Some(metadata::secret_to_key(tx, secret).await?)
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
         } else {
             None
         };
 
-        metadata::set_read_key(tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
+        metadata::set_read_key(&mut tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -277,7 +280,6 @@ impl Repository {
         &self,
         local_write_secret: Option<LocalSecret>,
         secrets: Option<AccessSecrets>,
-        tx: &mut db::WriteTransaction,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -293,13 +295,17 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
+        let mut tx = self.db().begin_write().await?;
+
         let local_write_key = if let Some(secret) = local_write_secret {
-            Some(metadata::secret_to_key(tx, secret).await?)
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
         } else {
             None
         };
 
-        metadata::set_write_key(tx, write_key, local_write_key.as_ref()).await?;
+        metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }

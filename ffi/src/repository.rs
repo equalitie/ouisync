@@ -174,16 +174,10 @@ pub unsafe extern "C" fn repository_set_read_access(
         let local_read_secret = utils::ptr_to_pwd(local_read_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
-            let mut tx = holder.repository.db().begin_write().await?;
-
             holder
                 .repository
-                .set_read_access(local_read_secret, access_secrets, &mut tx)
-                .await?;
-
-            tx.commit().await?;
-
-            Ok(())
+                .set_read_access(local_read_secret, access_secrets)
+                .await
         })
     })
 }
@@ -220,19 +214,15 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
         let local_rw_secret = utils::ptr_to_pwd(local_rw_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
-            let mut tx = holder.repository.db().begin_write().await?;
-
             holder
                 .repository
-                .set_read_access(local_rw_secret.clone(), access_secrets.clone(), &mut tx)
+                .set_read_access(local_rw_secret.clone(), access_secrets.clone())
                 .await?;
 
             holder
                 .repository
-                .set_write_access(local_rw_secret, access_secrets, &mut tx)
+                .set_write_access(local_rw_secret, access_secrets)
                 .await?;
-
-            tx.commit().await?;
 
             Ok(())
         })
