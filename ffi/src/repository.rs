@@ -7,7 +7,7 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{os::raw::c_char, ptr, slice, sync::Arc};
+use std::{os::raw::c_char, ptr, slice, str::FromStr, sync::Arc};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 use tracing::Instrument;
 
@@ -593,6 +593,28 @@ pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *co
     };
 
     utils::str_to_ptr(token.suggested_name().as_ref())
+}
+
+/// Take the input string, decide whether it's a valid OuiSync token and normalize it (remove white
+/// space, unnecessary slashes,...).
+/// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
+#[no_mangle]
+pub unsafe extern "C" fn share_token_normalize(token: *const c_char) -> *const c_char {
+    #![allow(clippy::question_mark)] // false positive
+
+    let token = if let Ok(token) = utils::ptr_to_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    let token: ShareToken = if let Ok(token) = ShareToken::from_str(token) {
+        token
+    } else {
+        return ptr::null();
+    };
+
+    utils::str_to_ptr(&format!("{}", token))
 }
 
 /// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
