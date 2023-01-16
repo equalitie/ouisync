@@ -309,7 +309,11 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
+            tracing::trace!(
+                id = ?snapshot.branch_id(),
+                vv = ?snapshot.version_vector(),
+                "removing outdated branch"
+            );
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
@@ -413,6 +417,11 @@ mod scan {
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
                     // content yet. It is safe to ignore it.
+
+                    // DEBUG
+                    let vv = branch.version_vector().await?;
+                    tracing::warn!(id = ?branch.id(), ?vv, "branch with missing root entry");
+
                     continue;
                 }
                 Err(error) => {

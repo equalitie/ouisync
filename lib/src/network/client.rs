@@ -119,11 +119,16 @@ impl Client {
             ProcessedResponse::Success(response) => {
                 self.recv_queue.push_front(response);
             }
-            ProcessedResponse::Failure(Failure::Block(block_id)) => {
-                self.block_tracker.cancel(&block_id);
+            ProcessedResponse::Failure(request) => {
+                tracing::trace!(?request, "request failed");
+
+                match request {
+                    Failure::Block(block_id) => {
+                        self.block_tracker.cancel(&block_id);
+                    }
+                    Failure::RootNode(_) | Failure::ChildNodes(_) => (),
+                }
             }
-            ProcessedResponse::Failure(Failure::RootNode(_))
-            | ProcessedResponse::Failure(Failure::ChildNodes(_)) => (),
         }
 
         Ok(())
@@ -194,7 +199,12 @@ impl Client {
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
 
-        tracing::trace!("received {}/{} inner nodes", updated_nodes.len(), total);
+        tracing::trace!(
+            "received {}/{} inner nodes: {:?}",
+            updated_nodes.len(),
+            total,
+            updated_nodes
+        );
 
         for hash in updated_nodes {
             self.send_queue.push_front(Request::ChildNodes(hash));
@@ -325,6 +335,7 @@ enum Success {
     },
 }
 
+#[derive(Debug)]
 enum Failure {
     RootNode(PublicKey),
     ChildNodes(Hash),

@@ -268,7 +268,7 @@ async fn blind_access_non_empty_repo() {
     let local_key = SecretKey::random();
     // Create the repo and put a file in it.
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone(), "test"),
+        RepositoryDb::new(pool.clone()),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
@@ -293,20 +293,14 @@ async fn blind_access_non_empty_repo() {
         (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open_in(
-            pool.clone(),
-            device_id,
-            local_secret.clone(),
-            access_mode,
-            "test".to_owned(),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "Repo should open in blind mode (local_secret.is_some:{:?})",
-                local_secret.is_some(),
-            )
-        });
+        let repo = Repository::open_in(pool.clone(), device_id, local_secret.clone(), access_mode)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Repo should open in blind mode (local_secret.is_some:{:?})",
+                    local_secret.is_some(),
+                )
+            });
 
         // Reading files is not allowed.
         assert_matches!(
@@ -340,7 +334,7 @@ async fn blind_access_empty_repo() {
 
     // Create an empty repo.
     Repository::create(
-        RepositoryDb::new(pool.clone(), "test"),
+        RepositoryDb::new(pool.clone()),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
@@ -357,7 +351,6 @@ async fn blind_access_empty_repo() {
         device_id,
         Some(LocalSecret::random()),
         AccessMode::Read,
-        "test".to_owned(),
     )
     .await
     .unwrap();
@@ -372,7 +365,7 @@ async fn read_access_same_replica() {
     let device_id = rand::random();
 
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone(), "test"),
+        RepositoryDb::new(pool.clone()),
         device_id,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
@@ -389,7 +382,7 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, "test".to_owned())
+    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read)
         .await
         .unwrap();
 
@@ -428,7 +421,7 @@ async fn read_access_different_replica() {
 
     let device_id_a = rand::random();
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone(), "test"),
+        RepositoryDb::new(pool.clone()),
         device_id_a,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
@@ -445,7 +438,7 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let device_id_b = rand::random();
-    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, "test".to_owned())
+    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read)
         .await
         .unwrap();
 

@@ -374,7 +374,6 @@ async fn create_store<R: Rng + CryptoRng>(
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Greedy,
         local_id: LocalId::new(),
-        label: "test".to_string(),
     };
 
     (base_dir, store, writer_id)

@@ -193,13 +193,13 @@ impl MonitoredDht {
             let dht = dht.clone();
 
             async move {
-                tracing::trace!(first_bootstrap = "in progress");
+                state_monitor!(first_bootstrap = "in progress");
 
                 if dht.bootstrapped(None).await {
-                    tracing::trace!(first_bootstrap = "done");
+                    state_monitor!(first_bootstrap = "done");
                     tracing::info!("bootstrap complete");
                 } else {
-                    tracing::trace!(first_bootstrap = "failed");
+                    state_monitor!(first_bootstrap = "failed");
                     tracing::error!("bootstrap failed");
 
                     // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
@@ -213,7 +213,7 @@ impl MonitoredDht {
                     probe_counter += 1;
 
                     if let Some(state) = dht.get_state().await {
-                        tracing::trace!(
+                        state_monitor!(
                             probe_counter,
                             is_running = state.is_running,
                             bootstrapped = state.bootstrapped,
@@ -222,7 +222,7 @@ impl MonitoredDht {
                             bucket_count = state.bucket_count,
                         );
                     } else {
-                        tracing::trace!(
+                        state_monitor!(
                             probe_counter,
                             is_running = false,
                             bootstrapped = false,
@@ -371,7 +371,7 @@ impl Lookup {
         span: Span,
     ) -> ScopedJoinHandle<()> {
         let task = async move {
-            tracing::trace!(state = "started");
+            state_monitor!(state = "started");
 
             // Wait for the first request to be created
             wake_up.changed().await.unwrap_or(());
@@ -380,7 +380,7 @@ impl Lookup {
                 seen_peers.start_new_round();
 
                 tracing::debug!("starting search");
-                tracing::trace!(state = "making request");
+                state_monitor!(state = "making request");
 
                 // find peers for the repo and also announce that we have it.
                 let dhts = dht_v4.iter().chain(dht_v6.iter());
@@ -393,7 +393,7 @@ impl Lookup {
                     .flatten()
                 }));
 
-                tracing::trace!(state = "awaiting results");
+                state_monitor!(state = "awaiting results");
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
@@ -417,7 +417,7 @@ impl Lookup {
                         time.format("%T"),
                         duration
                     );
-                    tracing::trace!(state = format!("sleeping until {}", time.format("%T")));
+                    state_monitor!(state = format!("sleeping until {}", time.format("%T")));
                 }
 
                 select! {

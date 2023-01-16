@@ -188,10 +188,10 @@ impl PerInterfaceLocalDiscovery {
         let mut recv_error_reported = false;
 
         let mut beacon_requests_received = 0;
-        tracing::trace!(beacon_requests_received);
+        state_monitor!(beacon_requests_received);
 
         let mut beacon_responses_received = 0;
-        tracing::trace!(beacon_responses_received);
+        state_monitor!(beacon_responses_received);
 
         loop {
             let socket = socket_provider.provide().await;
@@ -242,7 +242,7 @@ impl PerInterfaceLocalDiscovery {
 
             if is_request {
                 beacon_requests_received += 1;
-                tracing::trace!(beacon_requests_received);
+                state_monitor!(beacon_requests_received);
 
                 let msg = Message::Reply {
                     port: listener_port,
@@ -256,7 +256,7 @@ impl PerInterfaceLocalDiscovery {
                 }
             } else {
                 beacon_responses_received += 1;
-                tracing::trace!(beacon_responses_received);
+                state_monitor!(beacon_responses_received);
             }
 
             let addr = match port {
@@ -284,7 +284,7 @@ async fn run_beacon(
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
     let mut beacons_sent = 0;
-    tracing::trace!(beacons_sent);
+    state_monitor!(beacons_sent);
 
     let mut error_shown = false;
 
@@ -302,7 +302,7 @@ async fn run_beacon(
             Ok(()) => {
                 error_shown = false;
                 beacons_sent += 1;
-                tracing::trace!(beacons_sent);
+                state_monitor!(beacons_sent);
             }
             Err(error) => {
                 if !error_shown {

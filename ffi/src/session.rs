@@ -4,6 +4,7 @@ use super::{
     logger::Logger,
     utils::{self, Bytes, Port, UniqueHandle, UniqueNullableHandle},
 };
+use camino::Utf8Path;
 use ouisync_lib::{
     device_id::{self, DeviceId},
     network::Network,
@@ -340,6 +341,10 @@ where
 
     pub(super) fn repos_span(&self) -> &Span {
         self.session.repos_span()
+    }
+
+    pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
+        tracing::info_span!(parent: self.repos_span(), "repo", ?store)
     }
 }
 

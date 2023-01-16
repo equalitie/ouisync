@@ -59,7 +59,7 @@ pub unsafe extern "C" fn repository_create(
             share_token.into_secrets()
         };
 
-        let span = ctx.repos_span().clone();
+        let span = ctx.repo_span(&store);
 
         ctx.spawn(
             async move {
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn repository_open(
 
         let local_password = utils::ptr_to_pwd(local_password)?;
 
-        let span = ctx.repos_span().clone();
+        let span = ctx.repo_span(&store);
 
         ctx.spawn(
             async move {

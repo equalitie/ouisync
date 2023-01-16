@@ -297,6 +297,7 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
+    #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
         let tx = self.branch().db().begin_write().await?;
         self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))

@@ -455,13 +455,15 @@ pub(crate) async fn fork(
         .load_or_create_snapshot(tx, write_keys)
         .await?;
 
-    let end = match read_len(tx, &src_snapshot, read_key, blob_id).await {
+    let upper_bound = match read_len(tx, &src_snapshot, read_key, blob_id).await {
         Ok(len) => block_count(len),
         Err(Error::BlockNotFound(_)) => u32::MAX,
         Err(error) => return Err(error),
     };
 
-    let locators = Locator::head(blob_id).sequence().take(end as usize);
+    tracing::trace!(upper_bound);
+
+    let locators = Locator::head(blob_id).sequence().take(upper_bound as usize);
 
     for locator in locators {
         let encoded_locator = locator.encode(read_key);

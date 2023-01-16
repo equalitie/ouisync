@@ -173,7 +173,6 @@ impl BlockTrackerClient {
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
-                tracing::trace!(?block_id, "accept");
                 return Some(*block_id);
             }
         }

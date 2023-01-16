@@ -337,6 +337,7 @@ impl From<sqlx::Error> for ReceiveError {
 }
 
 /// Operation on version vector
+#[derive(Debug)]
 pub(crate) enum VersionVectorOp {
     IncrementLocal,
     Merge(VersionVector),

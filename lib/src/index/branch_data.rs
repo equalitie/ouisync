@@ -275,10 +275,8 @@ impl SnapshotData {
         tx: &mut db::ReadTransaction,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_path(tx, encoded_locator)
-            .await?
-            .get_leaf()
-            .ok_or(Error::EntryNotFound)
+        let path = self.load_path(tx, encoded_locator).await?;
+        path.get_leaf().ok_or(Error::EntryNotFound)
     }
 
     /// Update the root version vector of this branch.
@@ -340,6 +338,7 @@ impl SnapshotData {
                 tracing::trace!(
                     branch.id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
                     "not removing outdated snapshot - possible fallback"
                 );
 
@@ -350,6 +349,7 @@ impl SnapshotData {
                 tracing::trace!(
                     branch.id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
                     "removing outdated snapshot"
                 );
 
@@ -380,7 +380,12 @@ impl SnapshotData {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await
+            .map_err(|error| {
+                tracing::warn!(?error, ?parent, root = ?path.root_hash, "failed to load inner nodes");
+                error
+            })
+            ?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -389,7 +394,12 @@ impl SnapshotData {
             };
         }
 
-        path.leaves = LeafNode::load_children(tx, &parent).await?;
+        path.leaves = LeafNode::load_children(tx, &parent).await
+        .map_err(|error| {
+            tracing::warn!(?error, ?parent, root = ?path.root_hash, "failed to load leaf nodes");
+            error
+        })
+        ?;
 
         Ok(path)
     }
@@ -431,9 +441,8 @@ impl SnapshotData {
         new_summary: Summary,
     ) -> Result<()> {
         tracing::trace!(
-            writer_id = ?new_proof.writer_id,
-            old_vv = ?self.root_node.proof.version_vector,
-            new_vv = ?new_proof.version_vector,
+            vv = ?new_proof.version_vector,
+            hash = ?new_proof.hash,
             "create local snapshot"
         );
 

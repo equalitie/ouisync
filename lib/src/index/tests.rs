@@ -440,7 +440,6 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
-        label: "test".to_string(),
     };
 
     let mut rng = rand::thread_rng();

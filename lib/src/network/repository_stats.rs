@@ -54,15 +54,15 @@ impl<'a> Drop for Writer<'a> {
         let mut old = self.old.lock().unwrap();
 
         if self.new.index_requests_inflight != old.index_requests_inflight {
-            tracing::trace!(parent: self.span, index_requests_inflight = self.new.index_requests_inflight);
+            state_monitor!(parent: self.span, index_requests_inflight = self.new.index_requests_inflight);
         }
 
         if self.new.block_requests_inflight != old.block_requests_inflight {
-            tracing::trace!(parent: self.span, block_requests_inflight = self.new.block_requests_inflight);
+            state_monitor!(parent: self.span, block_requests_inflight = self.new.block_requests_inflight);
         }
 
         if self.new.total_requests_cummulative != old.total_requests_cummulative {
-            tracing::trace!(parent: self.span, total_requests_cummulative = self.new.total_requests_cummulative);
+            state_monitor!(parent: self.span, total_requests_cummulative = self.new.total_requests_cummulative);
         }
 
         *old = self.new;

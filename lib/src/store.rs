@@ -12,7 +12,6 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::collections::BTreeSet;
-use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
@@ -20,16 +19,11 @@ pub struct Store {
     pub(crate) block_tracker: BlockTracker,
     pub(crate) block_request_mode: BlockRequestMode,
     pub(crate) local_id: LocalId,
-    pub(crate) label: String,
 }
 
 impl Store {
     pub(crate) fn db(&self) -> &db::Pool {
         &self.index.pool
-    }
-
-    pub(crate) fn span(&self) -> Span {
-        tracing::info_span!("repository", label = self.label)
     }
 
     pub(crate) async fn count_blocks(&self) -> Result<usize> {
@@ -667,7 +661,6 @@ mod tests {
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
-            label: "test".to_owned(),
         }
     }
 }

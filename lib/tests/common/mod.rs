@@ -19,7 +19,7 @@ use tokio::{
     task_local,
     time::{self, Duration},
 };
-use tracing::{instrument, span::EnteredSpan, Instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 pub(crate) use self::env::*;
 
@@ -291,7 +291,6 @@ task_local! {
 struct Context {
     base_dir: TempDir,
     default_secrets: AccessSecrets,
-    _span: EnteredSpan,
 }
 
 impl Context {
@@ -301,8 +300,6 @@ impl Context {
         Self {
             base_dir: TempDir::new(),
             default_secrets: AccessSecrets::random_write(),
-            _span: tracing::info_span!("test", name = thread::current().name().unwrap_or("???"))
-                .entered(),
         }
     }
 }
@@ -460,7 +457,7 @@ pub(crate) async fn expect_file_content(repo: &Repository, path: &str, expected_
     expect_file_version_content(repo, path, None, expected_content).await
 }
 
-#[instrument(skip(expected_content))]
+#[instrument(skip(repo, expected_content))]
 pub(crate) async fn expect_file_version_content(
     repo: &Repository,
     path: &str,
@@ -522,7 +519,7 @@ pub(crate) async fn check_file_version_content(
     }
 }
 
-#[instrument]
+#[instrument(skip(repo))]
 pub(crate) async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
     eventually(repo, || check_entry_exists(repo, path, entry_type)).await
 }
@@ -545,7 +542,7 @@ pub(crate) async fn check_entry_exists(
     }
 }
 
-#[instrument]
+#[instrument(skip(repo))]
 pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
     let path = Utf8Path::new(path);
     let name = path.file_name().unwrap();
@@ -606,7 +603,7 @@ fn to_megabytes(bytes: usize) -> usize {
 pub(crate) fn init_log() {
     use tracing::metadata::LevelFilter;
 
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
@@ -616,8 +613,15 @@ pub(crate) fn init_log() {
         )
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
-        .with_test_writer()
-        .try_init()
-        // error here most likely means the logger is already initialized. We can ignore that.
-        .ok();
+        .with_test_writer();
+
+    let result = if cfg!(feature = "simulation") {
+        // Disable printing time so that logs from the same seed are identical
+        builder.without_time().try_init()
+    } else {
+        builder.try_init()
+    };
+
+    // error here most likely means the logger is already initialized. We can ignore that.
+    result.ok();
 }

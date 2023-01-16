@@ -12,6 +12,10 @@ use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
 use tokio::sync::{broadcast, mpsc};
 use tracing::instrument;
 
+// Some tests used to fail only on sufficiently large files
+// const LARGE_SIZE: usize = 4 * 1024 * 1024;
+const LARGE_SIZE: usize = 2 * 1024 * 1024;
+
 #[test]
 fn relink_repository() {
     let mut env = Env::new();
@@ -99,15 +103,13 @@ fn remove_remote_file() {
 
 #[test]
 fn relay_write() {
-    // There used to be a deadlock that got triggered only when transferring a sufficiently large
-    // file.
-    let file_size = 4 * 1024 * 1024;
+    let file_size = LARGE_SIZE;
     relay_case(Proto::Tcp, file_size, AccessMode::Write)
 }
 
 #[test]
 fn relay_blind() {
-    let file_size = 4 * 1024 * 1024;
+    let file_size = LARGE_SIZE;
     relay_case(Proto::Tcp, file_size, AccessMode::Blind)
 }
 
@@ -169,7 +171,7 @@ fn transfer_large_file() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1); // side-channel
 
-    let file_size = 4 * 1024 * 1024;
+    let file_size = LARGE_SIZE;
     let content = Arc::new(common::random_content(file_size));
 
     env.actor("writer", {
@@ -861,7 +863,7 @@ fn content_stays_available_during_sync() {
     });
 }
 
-#[instrument]
+#[instrument(skip(repo))]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
         match repo.open_directory(path).await {

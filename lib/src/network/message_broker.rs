@@ -198,13 +198,13 @@ async fn maintain_link(
 
     loop {
         if let Some(sleep) = next_sleep {
-            tracing::trace!(state = format!("sleeping {:?}", sleep));
+            state_monitor!(state = format!("sleeping {:?}", sleep));
             tokio::time::sleep(sleep).await;
         }
 
         next_sleep = backoff.next_backoff();
 
-        tracing::trace!(state = "awaiting barrier");
+        state_monitor!(state = "awaiting barrier");
 
         match Barrier::new(&mut stream, &sink).run().await {
             Ok(()) => (),
@@ -212,7 +212,7 @@ async fn maintain_link(
             Err(BarrierError::ChannelClosed) => break,
         }
 
-        tracing::trace!(state = "establishing channel");
+        state_monitor!(state = "establishing channel");
 
         let (crypto_stream, crypto_sink) =
             match establish_channel(role, &mut stream, &mut sink, &store.index).await {
@@ -221,7 +221,7 @@ async fn maintain_link(
                 Err(EstablishError::Closed) => break,
             };
 
-        tracing::trace!(state = "running");
+        state_monitor!(state = "running");
 
         match run_link(
             crypto_stream,

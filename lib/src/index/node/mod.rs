@@ -17,6 +17,7 @@ pub(crate) use self::{
 
 use crate::{
     block::BlockId,
+    collections::{HashMap, HashSet},
     crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
@@ -34,7 +35,7 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     hash: Hash,
-) -> Result<Vec<(PublicKey, bool)>> {
+) -> Result<HashMap<PublicKey, bool>> {
     update_summaries_with_stack(tx, vec![hash]).await
 }
 
@@ -43,9 +44,9 @@ pub(crate) async fn update_summaries(
 pub(crate) async fn receive_block(
     tx: &mut db::WriteTransaction,
     id: &BlockId,
-) -> Result<Vec<PublicKey>> {
+) -> Result<HashSet<PublicKey>> {
     if !LeafNode::set_present(tx, id).await? {
-        return Ok(Vec::new());
+        return Ok(HashSet::default());
     }
 
     let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
@@ -157,8 +158,8 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
 async fn update_summaries_with_stack(
     tx: &mut db::WriteTransaction,
     mut nodes: Vec<Hash>,
-) -> Result<Vec<(PublicKey, bool)>> {
-    let mut statuses = Vec::new();
+) -> Result<HashMap<PublicKey, bool>> {
+    let mut statuses = HashMap::default();
 
     while let Some(hash) = nodes.pop() {
         match parent_kind(tx, &hash).await? {
@@ -166,7 +167,9 @@ async fn update_summaries_with_stack(
                 let complete = RootNode::update_summaries(tx, &hash).await?;
                 RootNode::load_writer_ids(tx, &hash)
                     .try_for_each(|writer_id| {
-                        statuses.push((writer_id, complete));
+                        let entry = statuses.entry(writer_id).or_insert(false);
+                        *entry = *entry || complete;
+
                         future::ready(Ok(()))
                     })
                     .await?;

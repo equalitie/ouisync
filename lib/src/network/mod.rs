@@ -272,17 +272,14 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub fn register(&self, store: Store) -> Registration {
-        let span = store.span();
-        span.in_scope(
-            || tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id())),
-        );
+        tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id()));
 
         let pex = PexController::new(
             self.inner.connection_deduplicator.on_change(),
             self.inner.pex_discovery_tx.clone(),
         );
 
-        let stats = Arc::new(RepositoryStats::new(span));
+        let stats = Arc::new(RepositoryStats::new(Span::current()));
 
         let mut network_state = self.inner.state.lock().unwrap();
 
@@ -665,7 +662,7 @@ impl Inner {
                         return;
                     }
 
-                    tracing::trace!(state = "awaiting permit");
+                    state_monitor!(state = "awaiting permit");
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
@@ -678,14 +675,14 @@ impl Inner {
 
             permit.mark_as_connecting();
 
-            tracing::trace!(state = "connecting", permit_id = permit.id());
+            state_monitor!(state = "connecting", permit_id = permit.id());
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
 
-            tracing::trace!(state = "handling");
+            state_monitor!(state = "handling");
 
             if !self.clone().handle_connection(socket, permit).await {
                 break;
@@ -712,7 +709,7 @@ impl Inner {
 
         permit.mark_as_handshaking();
 
-        tracing::trace!(state = "handshaking");
+        state_monitor!(state = "handshaking");
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
@@ -776,7 +773,7 @@ impl Inner {
             that_runtime_id,
         };
 
-        tracing::trace!(state = "awaiting message broker release");
+        state_monitor!(state = "awaiting message broker release");
 
         released.recv().await;
         tracing::info!("connection lost");

@@ -32,7 +32,7 @@ use crate::{
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use std::{fmt, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
@@ -44,15 +44,13 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
-    label: String,
 }
 
 impl RepositoryDb {
     pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
-        let label = store.as_ref().display().to_string();
         let pool = db::create(store).await?;
 
-        Ok(Self { pool, label })
+        Ok(Self { pool })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -63,11 +61,8 @@ impl RepositoryDb {
     }
 
     #[cfg(test)]
-    pub(crate) fn new(pool: db::Pool, label: impl Into<String>) -> Self {
-        Self {
-            pool,
-            label: label.into(),
-        }
+    pub(crate) fn new(pool: db::Pool) -> Self {
+        Self { pool }
     }
 }
 
@@ -89,7 +84,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(db.pool, this_writer_id, access.secrets(), db.label).await
+        Self::new(db.pool, this_writer_id, access.secrets()).await
     }
 
     /// Opens an existing repository.
@@ -114,10 +109,8 @@ impl Repository {
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
     ) -> Result<Self> {
-        let label = store.as_ref().display().to_string();
         let pool = db::open(store).await?;
-
-        Self::open_in(pool, device_id, local_secret, max_access_mode, label).await
+        Self::open_in(pool, device_id, local_secret, max_access_mode).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -128,7 +121,6 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
-        label: String,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -160,14 +152,13 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, label).await
+        Self::new(pool, this_writer_id, access_secrets).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
-        label: String,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
@@ -183,13 +174,9 @@ impl Repository {
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
-            label,
         };
 
-        let span = store.span();
-        span.in_scope(
-            || tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id),
-        );
+        tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
 
         let shared = Arc::new(Shared {
             store,
@@ -205,10 +192,11 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(span.clone()));
+        task::spawn(worker.run().instrument(Span::current()));
 
-        let _progress_reporter_handle =
-            scoped_task::spawn(report_sync_progress(shared.store.clone()).instrument(span));
+        let _progress_reporter_handle = scoped_task::spawn(
+            report_sync_progress(shared.store.clone()).instrument(Span::current()),
+        );
 
         Ok(Self {
             shared,
@@ -353,7 +341,7 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
@@ -366,7 +354,7 @@ impl Repository {
     }
 
     /// Open a specific version of the file at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip(self, path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
@@ -382,13 +370,13 @@ impl Repository {
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         self.cd(path).await
     }
 
     /// Creates a new file at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let file = self
             .local_branch()?
@@ -399,7 +387,7 @@ impl Repository {
     }
 
     /// Creates a new directory at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let dir = self
             .local_branch()?
@@ -410,7 +398,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -420,7 +408,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -432,7 +420,7 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     #[instrument(
-        skip(src_dir_path, dst_dir_path),
+        skip(self, src_dir_path, dst_dir_path),
         fields(src_dir_path = %src_dir_path.as_ref(), dst_dir_path = %dst_dir_path.as_ref()),
         err
     )]
@@ -632,20 +620,6 @@ impl Repository {
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
         self.shared.store.count_blocks().await
-    }
-
-    pub fn label(&self) -> &str {
-        &self.shared.store.label
-    }
-
-    pub fn span(&self) -> Span {
-        self.shared.store.span()
-    }
-}
-
-impl fmt::Debug for Repository {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("Repository").field(&self.label()).finish()
     }
 }
 
