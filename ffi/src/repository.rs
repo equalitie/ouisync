@@ -160,7 +160,7 @@ pub unsafe extern "C" fn repository_set_read_access(
     port: Port<Result<()>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
+        let holder = handle.get();
 
         let access_secrets = if share_token.is_null() {
             // Repository shall attempt to use the one it's currently using.
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
     port: Port<Result<()>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
+        let holder = handle.get();
 
         let access_secrets = if share_token.is_null() {
             // Repository shall attempt to use the one it's currently using.
@@ -247,8 +247,7 @@ pub unsafe extern "C" fn repository_remove_read_key(
     port: Port<Result<()>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
-
+        let holder = handle.get();
         ctx.spawn(async move { holder.repository.remove_read_key().await })
     })
 }
@@ -260,8 +259,7 @@ pub unsafe extern "C" fn repository_remove_write_key(
     port: Port<Result<()>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
-
+        let holder = handle.get();
         ctx.spawn(async move { holder.repository.remove_write_key().await })
     })
 }
@@ -285,7 +283,7 @@ pub unsafe extern "C" fn repository_requires_local_password_for_reading(
     port: Port<Result<bool>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
+        let holder = handle.get();
         ctx.spawn(async move {
             holder
                 .repository
@@ -302,7 +300,7 @@ pub unsafe extern "C" fn repository_requires_local_password_for_writing(
     port: Port<Result<bool>>,
 ) {
     session::with(port, |ctx| {
-        let holder = handle.release();
+        let holder = handle.get();
         ctx.spawn(async move {
             holder
                 .repository
