@@ -489,6 +489,8 @@ async fn count_leaf_nodes(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
@@ -496,10 +498,15 @@ mod tests {
         locator::Locator,
         test_utils,
     };
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use proptest::{arbitrary::any, collection::vec};
+    use rand::{
+        rngs::StdRng,
+        seq::{IteratorRandom, SliceRandom},
+        Rng, SeedableRng,
+    };
     use sqlx::Row;
     use tempfile::TempDir;
-    use test_strategy::proptest;
+    use test_strategy::{proptest, Arbitrary};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
@@ -696,6 +703,99 @@ mod tests {
         }
     }
 
+    #[proptest]
+    fn prune(
+        #[strategy(vec(any::<PruneTestOp>(), 1..256))] ops: Vec<PruneTestOp>,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(prune_case(ops, rng_seed))
+    }
+
+    #[derive(Arbitrary, Debug)]
+    enum PruneTestOp {
+        Insert,
+        Remove,
+        Bump,
+        Prune,
+    }
+
+    async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let (_base_dir, pool, branch) = setup().await;
+        let write_keys = Keypair::generate(&mut rng);
+
+        let mut snapshot = {
+            let mut conn = pool.acquire().await.unwrap();
+            branch
+                .load_or_create_snapshot(&mut conn, &write_keys)
+                .await
+                .unwrap()
+        };
+
+        let mut expected = BTreeMap::new();
+
+        for op in ops {
+            // Apply op
+            match op {
+                PruneTestOp::Insert => {
+                    let locator = rng.gen();
+                    let block_id = rng.gen();
+
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .insert_block(
+                            &mut tx,
+                            &locator,
+                            &block_id,
+                            SingleBlockPresence::Present,
+                            &write_keys,
+                        )
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+
+                    expected.insert(locator, block_id);
+                }
+                PruneTestOp::Remove => {
+                    let Some(locator) = expected.keys().choose(&mut rng).copied() else {
+                        continue;
+                    };
+
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .remove_block(&mut tx, &locator, None, &write_keys)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+
+                    expected.remove(&locator);
+                }
+                PruneTestOp::Bump => {
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .bump(&mut tx, &VersionVectorOp::IncrementLocal, &write_keys)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+                }
+                PruneTestOp::Prune => {
+                    snapshot.prune(&pool).await.unwrap();
+                }
+            }
+
+            // Verify all expected blocks still present
+            let mut tx = pool.begin_read().await.unwrap();
+
+            for (locator, expected_block_id) in &expected {
+                let (actual_block_id, _) = snapshot.get_block(&mut tx, locator).await.unwrap();
+                assert_eq!(actual_block_id, *expected_block_id);
+            }
+
+            // Verify the snapshot is still complete
+            check_complete(&mut tx, &snapshot).await;
+        }
+    }
+
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {
         sqlx::query(
             "SELECT
@@ -715,6 +815,28 @@ mod tests {
             .await
             .unwrap()
             .is_some()
+    }
+
+    async fn check_complete(conn: &mut db::Connection, snapshot: &SnapshotData) {
+        if snapshot.root_node.proof.hash == *EMPTY_INNER_HASH {
+            return;
+        }
+
+        let nodes = InnerNode::load_children(conn, &snapshot.root_node.proof.hash)
+            .await
+            .unwrap();
+        assert!(!nodes.is_empty());
+
+        let mut stack: Vec<_> = nodes.into_iter().map(|(_, node)| node).collect();
+
+        while let Some(node) = stack.pop() {
+            let inners = InnerNode::load_children(conn, &node.hash).await.unwrap();
+            let leaves = LeafNode::load_children(conn, &node.hash).await.unwrap();
+
+            assert!(inners.len() + leaves.len() > 0);
+
+            stack.extend(inners.into_iter().map(|(_, node)| node));
+        }
     }
 
     async fn init_db() -> (TempDir, db::Pool) {
