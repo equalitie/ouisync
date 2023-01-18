@@ -13,7 +13,7 @@ pub(crate) struct BlockIds {
     branch: Branch,
     snapshot: SnapshotData,
     locator: Locator,
-    end: Option<u32>,
+    upper_bound: Option<u32>,
 }
 
 impl BlockIds {
@@ -30,23 +30,25 @@ impl BlockIds {
         // stop iterating before we hit `EntryNotFound` and we would end up processing also the
         // blocks that are past the end of the blob. This means that e.g., the garbage collector
         // would consider those blocks still reachable and would never remove them.
-        let end = match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
+        let upper_bound = match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
             Ok(len) => Some(block_count(len)),
             Err(Error::BlockNotFound(_)) => None,
             Err(error) => return Err(error),
         };
 
+        tracing::trace!(?upper_bound);
+
         Ok(Self {
             branch,
             snapshot,
             locator: Locator::head(blob_id),
-            end,
+            upper_bound,
         })
     }
 
     pub async fn try_next(&mut self) -> Result<Option<BlockId>> {
-        if let Some(end) = self.end {
-            if self.locator.number() >= end {
+        if let Some(upper_bound) = self.upper_bound {
+            if self.locator.number() >= upper_bound {
                 return Ok(None);
             }
         }

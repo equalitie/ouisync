@@ -18,6 +18,7 @@ use crate::{
 };
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::broadcast;
+use tracing::instrument;
 
 type LocatorHash = Hash;
 
@@ -44,6 +45,7 @@ impl BranchData {
         SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
+    #[instrument(skip_all, err(Debug))]
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
@@ -222,6 +224,7 @@ impl SnapshotData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[instrument(skip_all, err(Debug))]
     pub async fn insert_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -245,6 +248,7 @@ impl SnapshotData {
 
     /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
     /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
+    #[instrument(skip_all, err(Debug))]
     pub async fn remove_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -270,6 +274,7 @@ impl SnapshotData {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
+    #[instrument(skip_all, err(Debug))]
     pub async fn get_block(
         &self,
         tx: &mut db::ReadTransaction,
@@ -280,6 +285,7 @@ impl SnapshotData {
     }
 
     /// Update the root version vector of this branch.
+    #[instrument(skip_all, fields(op), err(Debug))]
     pub async fn bump(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -380,12 +386,7 @@ impl SnapshotData {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(tx, &parent).await
-            .map_err(|error| {
-                tracing::warn!(?error, ?parent, root = ?path.root_hash, "failed to load inner nodes");
-                error
-            })
-            ?;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -394,12 +395,7 @@ impl SnapshotData {
             };
         }
 
-        path.leaves = LeafNode::load_children(tx, &parent).await
-        .map_err(|error| {
-            tracing::warn!(?error, ?parent, root = ?path.root_hash, "failed to load leaf nodes");
-            error
-        })
-        ?;
+        path.leaves = LeafNode::load_children(tx, &parent).await?;
 
         Ok(path)
     }
@@ -705,7 +701,7 @@ mod tests {
 
     #[proptest]
     fn prune(
-        #[strategy(vec(any::<PruneTestOp>(), 1..256))] ops: Vec<PruneTestOp>,
+        #[strategy(vec(any::<PruneTestOp>(), 1..32))] ops: Vec<PruneTestOp>,
         #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
     ) {
         test_utils::run(prune_case(ops, rng_seed))

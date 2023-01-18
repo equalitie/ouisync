@@ -86,7 +86,7 @@ impl<'a> Responder<'a> {
                 Ok(())
             }
             Err(Error::EntryNotFound) => {
-                tracing::trace!("root node not found");
+                tracing::warn!("root node not found");
                 self.tx.send(Response::RootNodeError(branch_id)).await;
                 Ok(())
             }
@@ -118,7 +118,7 @@ impl<'a> Responder<'a> {
                 self.tx.send(Response::LeafNodes(leaf_nodes)).await;
             }
         } else {
-            tracing::trace!("child nodes not found");
+            tracing::warn!("child nodes not found");
             self.tx.send(Response::ChildNodesError(parent_hash)).await;
         }
 
@@ -139,7 +139,7 @@ impl<'a> Responder<'a> {
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
-                tracing::trace!("block not found");
+                tracing::warn!("block not found");
                 self.tx.send(Response::BlockError(id)).await;
                 Ok(())
             }

@@ -545,6 +545,7 @@ mod scan {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(?mode, branch.id = ?branch.id(), ?blob_id), err(Debug))]
     async fn process_blocks(
         shared: &Shared,
         mode: Mode,

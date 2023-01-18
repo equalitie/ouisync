@@ -19,6 +19,7 @@ use crate::{
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
+use tracing::Instrument;
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -501,7 +502,10 @@ async fn read_block(
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, _) = snapshot.get_block(tx, &locator.encode(read_key)).await?;
+    let (id, _) = snapshot
+        .get_block(tx, &locator.encode(read_key))
+        .instrument(tracing::info_span!("read_bloc", ?locator))
+        .await?;
 
     let mut buffer = Buffer::new();
     let nonce = block::read(tx, &id, &mut buffer).await?;
@@ -523,8 +527,6 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
-    tracing::trace!(?locator, ?id, "write block");
-
     // NOTE: make sure the index and block store operations run in the same order as in
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
@@ -536,6 +538,7 @@ async fn write_block(
             SingleBlockPresence::Present,
             write_keys,
         )
+        .instrument(tracing::info_span!("write_block", ?locator, ?id))
         .await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
