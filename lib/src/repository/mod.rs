@@ -32,10 +32,11 @@ use crate::{
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use std::{fmt, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
+    time::Duration,
 };
 use tracing::{instrument, instrument::Instrument, Span};
 
@@ -43,14 +44,13 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
-    span: Span,
 }
 
 impl RepositoryDb {
     pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::create(store).await?;
-        Ok(Self { pool, span })
+
+        Ok(Self { pool })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -58,6 +58,11 @@ impl RepositoryDb {
         let key = metadata::password_to_key(&mut tx, &password).await?;
         tx.commit().await?;
         Ok(key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(pool: db::Pool) -> Self {
+        Self { pool }
     }
 }
 
@@ -70,17 +75,7 @@ pub struct Repository {
 impl Repository {
     /// Creates a new repository.
     pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
-        Self::create_in(db.pool, device_id, access, db.span).await
-    }
-
-    /// Creates a new repository in an already opened database.
-    pub(crate) async fn create_in(
-        pool: db::Pool,
-        device_id: DeviceId,
-        access: Access,
-        span: Span,
-    ) -> Result<Self> {
-        let mut tx = pool.begin_write().await?;
+        let mut tx = db.pool.begin_write().await?;
 
         let this_writer_id =
             generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
@@ -89,7 +84,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(pool, this_writer_id, access.secrets(), span).await
+        Self::new(db.pool, this_writer_id, access.secrets()).await
     }
 
     /// Opens an existing repository.
@@ -114,10 +109,8 @@ impl Repository {
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
     ) -> Result<Self> {
-        let span = tracing::info_span!("repository", db = %store.as_ref().display());
         let pool = db::open(store).await?;
-
-        Self::open_in(pool, device_id, local_secret, max_access_mode, span).await
+        Self::open_in(pool, device_id, local_secret, max_access_mode).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -128,7 +121,6 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
-        span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -160,14 +152,13 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, span).await
+        Self::new(pool, this_writer_id, access_secrets).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
-        span: Span,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
@@ -178,15 +169,14 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        span.in_scope(|| tracing::trace!(access = ?secrets.access_mode()));
-
         let store = Store {
             index,
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
-            span: span.clone(),
         };
+
+        tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
 
         let shared = Arc::new(Shared {
             store,
@@ -202,10 +192,11 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(span.clone()));
+        task::spawn(worker.run().instrument(Span::current()));
 
-        let _progress_reporter_handle =
-            scoped_task::spawn(report_sync_progress(shared.store.clone()).instrument(span));
+        let _progress_reporter_handle = scoped_task::spawn(
+            report_sync_progress(shared.store.clone()).instrument(Span::current()),
+        );
 
         Ok(Self {
             shared,
@@ -243,7 +234,6 @@ impl Repository {
         &self,
         local_read_secret: Option<LocalSecret>,
         secrets: Option<AccessSecrets>,
-        tx: &mut db::WriteTransaction,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -259,13 +249,17 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
+        let mut tx = self.db().begin_write().await?;
+
         let local_read_key = if let Some(secret) = local_read_secret {
-            Some(metadata::secret_to_key(tx, secret).await?)
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
         } else {
             None
         };
 
-        metadata::set_read_key(tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
+        metadata::set_read_key(&mut tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -274,7 +268,6 @@ impl Repository {
         &self,
         local_write_secret: Option<LocalSecret>,
         secrets: Option<AccessSecrets>,
-        tx: &mut db::WriteTransaction,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -290,13 +283,17 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
+        let mut tx = self.db().begin_write().await?;
+
         let local_write_key = if let Some(secret) = local_write_secret {
-            Some(metadata::secret_to_key(tx, secret).await?)
+            Some(metadata::secret_to_key(&mut tx, secret).await?)
         } else {
             None
         };
 
-        metadata::set_write_key(tx, write_key, local_write_key.as_ref()).await?;
+        metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -327,7 +324,7 @@ impl Repository {
         &self.shared.store
     }
 
-    pub fn db(&self) -> &db::Pool {
+    pub(crate) fn db(&self) -> &db::Pool {
         self.shared.store.db()
     }
 
@@ -344,7 +341,7 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
@@ -357,7 +354,7 @@ impl Repository {
     }
 
     /// Open a specific version of the file at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip(self, path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
@@ -373,13 +370,13 @@ impl Repository {
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         self.cd(path).await
     }
 
     /// Creates a new file at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let file = self
             .local_branch()?
@@ -390,7 +387,7 @@ impl Repository {
     }
 
     /// Creates a new directory at the given path.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let dir = self
             .local_branch()?
@@ -401,7 +398,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err(Debug))]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -411,7 +408,7 @@ impl Repository {
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
-    #[instrument(skip(path), fields(path = %path.as_ref()), err)]
+    #[instrument(skip_all, fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -423,7 +420,7 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     #[instrument(
-        skip(src_dir_path, dst_dir_path),
+        skip(self, src_dir_path, dst_dir_path),
         fields(src_dir_path = %src_dir_path.as_ref(), dst_dir_path = %dst_dir_path.as_ref()),
         err
     )]
@@ -623,18 +620,6 @@ impl Repository {
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
         self.shared.store.count_blocks().await
-    }
-
-    pub fn local_id(&self) -> LocalId {
-        self.shared.store.local_id
-    }
-}
-
-impl fmt::Debug for Repository {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Repository")
-            .field("local_id", &format_args!("{}", self.shared.store.local_id))
-            .finish_non_exhaustive()
     }
 }
 

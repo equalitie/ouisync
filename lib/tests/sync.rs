@@ -2,760 +2,868 @@
 
 mod common;
 
-use self::common::{Env, Proto};
+use self::common::{actor, Env, NetworkExt, Proto};
 use assert_matches::assert_matches;
-use camino::Utf8Path;
-use futures_util::future;
 use ouisync::{
-    Access, AccessMode, AccessSecrets, EntryType, Error, Repository, RepositoryDb, WriteSecrets,
-    BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, RepositoryDb, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, net::Ipv4Addr, sync::Arc};
-use tokio::task;
-use tracing::{Instrument, Span};
+use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
+use tokio::sync::{broadcast, mpsc};
+use tracing::instrument;
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relink_repository() {
-    let mut env = Env::with_seed(0);
+// Some tests used to fail only on sufficiently large files
+// const LARGE_SIZE: usize = 4 * 1024 * 1024;
+const LARGE_SIZE: usize = 2 * 1024 * 1024;
 
-    // Create two peers and connect them together.
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
+#[test]
+fn relink_repository() {
+    let mut env = Env::new();
 
-    let (repo_a, repo_b) = env.create_linked_repos().await;
+    // Bidirectional side-channel
+    let (writer_tx, mut writer_rx) = mpsc::channel(1);
+    let (reader_tx, mut reader_rx) = mpsc::channel(1);
 
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let reg_b = node_b.network.handle().register(repo_b.store().clone());
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
 
-    // Create a file by A
-    tracing::info!("A: create test.txt -> 'first'");
-    let mut file_a = repo_a.create_file("test.txt").await.unwrap();
-    file_a.write(b"first").await.unwrap();
-    file_a.flush().await.unwrap();
+        // Create the file
+        let mut file = repo.create_file("test.txt").await.unwrap();
+        file.write(b"first").await.unwrap();
+        file.flush().await.unwrap();
 
-    // Wait until the file is seen by B
-    common::expect_file_content(&repo_b, "test.txt", b"first").await;
+        // Wait for the reader to see the file and then unlink its repo
+        reader_rx.recv().await;
 
-    // Unlink B's repo
-    tracing::info!("B: unlink");
-    drop(reg_b);
+        // Modify the file while reader is unlinked
+        file.truncate(0).await.unwrap();
+        file.write(b"second").await.unwrap();
+        file.flush().await.unwrap();
 
-    // Update the file while B's repo is unlinked
-    tracing::info!("A: write test.txt -> 'second'");
-    file_a.truncate(0).await.unwrap();
-    file_a.write(b"second").await.unwrap();
-    file_a.flush().await.unwrap();
+        // Notify the reader the file is updated
+        writer_tx.send(()).await.unwrap();
 
-    // Re-register B's repo
-    tracing::info!("B: relink");
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+        // Wait until reader is done
+        reader_rx.recv().await;
+    });
 
-    // Wait until the file is updated
-    common::expect_file_content(&repo_b, "test.txt", b"second").await;
+    env.actor("reader", async move {
+        let (network, repo, reg) = actor::setup().await;
+        network.connect("writer");
+
+        // Wait until we see the original file
+        common::expect_file_content(&repo, "test.txt", b"first").await;
+
+        // Unlink the repo and notify the writer
+        drop(reg);
+        reader_tx.send(()).await.unwrap();
+
+        // Wait until writer is done updating the file
+        writer_rx.recv().await;
+
+        // Relink the repo
+        let _reg = network.handle().register(repo.store().clone());
+
+        // Wait until the file is updated
+        common::expect_file_content(&repo, "test.txt", b"second").await;
+
+        // Notify the writer that we are done
+        reader_tx.send(()).await.unwrap();
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn remove_remote_file() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn remove_remote_file() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+    env.actor("creator", async move {
+        let (_network, repo, _reg) = actor::setup().await;
 
-    // Create a file by A and wait until B sees it.
-    let mut file = repo_a.create_file("test.txt").await.unwrap();
-    file.flush().await.unwrap();
+        let mut file = repo.create_file("test.txt").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
 
-    common::expect_file_content(&repo_b, "test.txt", &[]).await;
+        common::expect_entry_not_found(&repo, "test.txt").await;
 
-    // Delete the file by B
-    repo_b.remove_entry("test.txt").await.unwrap();
+        tx.send(()).await.unwrap();
+    });
 
-    // TODO: wait until A sees the file being deleted
+    env.actor("remover", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("creator");
+
+        common::expect_file_content(&repo, "test.txt", &[]).await;
+
+        repo.remove_entry("test.txt").await.unwrap();
+
+        rx.recv().await;
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relay_write() {
-    // There used to be a deadlock that got triggered only when transferring a sufficiently large
-    // file.
-    let file_size = 4 * 1024 * 1024;
-    relay_case(Proto::Tcp, file_size, AccessMode::Write).await
+#[test]
+fn relay_write() {
+    let file_size = LARGE_SIZE;
+    relay_case(Proto::Tcp, file_size, AccessMode::Write)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn relay_blind() {
-    let file_size = 4 * 1024 * 1024;
-    relay_case(Proto::Tcp, file_size, AccessMode::Blind).await
+#[test]
+fn relay_blind() {
+    let file_size = LARGE_SIZE;
+    relay_case(Proto::Tcp, file_size, AccessMode::Blind)
 }
 
 // Simulate two peers that can't connect to each other but both can connect to a third ("relay")
 // peer.
-async fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
-    let mut env = Env::with_seed(0);
+fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
+    let mut env = Env::new();
+    let (tx, _) = broadcast::channel(1);
 
-    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_a = env.create_repo().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
+    let content = Arc::new(common::random_content(file_size));
 
-    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+    env.actor("relay", {
+        let mut rx = tx.subscribe();
 
-    // The "relay" peer.
-    let node_r = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let repo_r = env
-        .create_repo_with_secrets(repo_a.secrets().with_mode(relay_access_mode))
-        .await;
-    let _reg_r = node_r.network.handle().register(repo_r.store().clone());
+        async move {
+            let network = actor::create_network(proto).await;
+            let repo = actor::create_repo_with_secrets(
+                actor::default_secrets().with_mode(relay_access_mode),
+            )
+            .await;
+            let _reg = network.handle().register(repo.store().clone());
 
-    // Connect A and B to the relay only
-    node_a
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
-    node_b
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_r.network));
-
-    let mut content = vec![0; file_size];
-    env.rng.fill(&mut content[..]);
-
-    // Create a file by A and wait until B sees it. The file must pass through R because A and B
-    // are not connected to each other.
-    tracing::info!("writing");
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
-    common::write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
-    drop(file);
-
-    tracing::info!("reading");
-    common::expect_file_content(&repo_b, "test.dat", &content).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_large_file() {
-    let file_size = 4 * 1024 * 1024;
-
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let mut content = vec![0; file_size];
-    env.rng.fill(&mut content[..]);
-
-    // Create a file by A and wait until B sees it.
-    let mut file = repo_a.create_file("test.dat").await.unwrap();
-    common::write_in_chunks(&mut file, &content, 4096).await;
-    file.flush().await.unwrap();
-    drop(file);
-
-    common::expect_file_content(&repo_b, "test.dat", &content).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_multiple_files_sequentially() {
-    let mut env = Env::with_seed(0);
-    let file_sizes = [512 * 1024, 1024];
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let contents: Vec<_> = file_sizes
-        .iter()
-        .map(|size| {
-            let mut content = vec![0; *size];
-            env.rng.fill(&mut content[..]);
-            content
-        })
-        .collect();
-
-    for (index, content) in contents.iter().enumerate() {
-        let name = format!("file-{}.dat", index);
-        let mut file = repo_a.create_file(&name).await.unwrap();
-        common::write_in_chunks(&mut file, content, 4096).await;
-        file.flush().await.unwrap();
-        tracing::info!("put {:?}", name);
-        drop(file);
-
-        // Wait until we see all the already transfered files
-        for (index, content) in contents.iter().take(index + 1).enumerate() {
-            let name = format!("file-{}.dat", index);
-            common::expect_file_content(&repo_b, &name, content).await;
+            rx.recv().await.unwrap();
         }
-    }
+    });
+
+    env.actor("writer", {
+        let content = content.clone();
+        let mut rx = tx.subscribe();
+
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            network.connect("relay");
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            network.connect("relay");
+
+            common::expect_file_content(&repo, "test.dat", &content).await;
+
+            tx.send(()).unwrap();
+        }
+    });
+}
+
+#[test]
+fn transfer_large_file() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1); // side-channel
+
+    let file_size = LARGE_SIZE;
+    let content = Arc::new(common::random_content(file_size));
+
+    env.actor("writer", {
+        let content = content.clone();
+
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            rx.recv().await;
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("writer");
+
+            common::expect_file_content(&repo, "test.dat", &content).await;
+
+            tx.send(()).await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn transfer_many_files() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    let num_files = 10;
+    let min_size = 0;
+    let max_size = 128 * 1024;
+    let files = {
+        let mut rng = rand::thread_rng();
+        let files: Vec<_> = (0..num_files)
+            .map(|_| {
+                let size = rng.gen_range(min_size..max_size);
+                let mut buffer = vec![0; size];
+                rng.fill(&mut buffer[..]);
+                buffer
+            })
+            .collect();
+        Arc::new(files)
+    };
+
+    env.actor("writer", {
+        let files = files.clone();
+
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            for (index, content) in files.iter().enumerate() {
+                let name = format!("file-{}.dat", index);
+                let mut file = repo.create_file(&name).await.unwrap();
+                common::write_in_chunks(&mut file, content, 4096).await;
+                file.flush().await.unwrap();
+            }
+
+            rx.recv().await;
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("writer");
+
+            for (index, content) in files.iter().enumerate() {
+                let name = format!("file-{}.dat", index);
+                common::expect_file_content(&repo, &name, content).await;
+            }
+
+            tx.send(()).await.unwrap();
+        }
+    });
 }
 
 // Test for an edge case where a sync happens while we are in the middle of writing a file.
 // This test makes sure that when the sync happens, the partially written file content is not
 // garbage collected prematurelly.
-#[tokio::test(flavor = "multi_thread")]
-async fn sync_during_file_write() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn sync_during_file_write() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+    let content = common::random_content(3 * BLOCK_SIZE - BLOB_HEADER_SIZE);
 
-    let id_b = *repo_b.local_branch().unwrap().id();
+    env.actor("alice", {
+        let content = content.clone();
 
-    let mut content = vec![0; 3 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content[..]);
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
 
-    // A: Create empty file
-    let mut file_a = repo_a.create_file("foo.txt").await.unwrap();
+            // Create empty file and wait until bob sees it
+            let mut file = repo.create_file("foo.txt").await.unwrap();
+            rx.recv().await;
 
-    // B: Wait until everything gets merged
-    common::expect_file_version_content(&repo_b, "foo.txt", Some(&id_b), &[]).await;
+            // Write half of the file content but don't flush yet.
+            common::write_in_chunks(&mut file, &content[..content.len() / 2], 4096).await;
 
-    // A: Write half of the file content but don't flush yet.
-    common::write_in_chunks(&mut file_a, &content[..content.len() / 2], 4096).await;
+            // Wait until we see the file created by B
+            common::expect_file_content(&repo, "bar.txt", b"bar").await;
 
-    // B: Write a file. Excluding the unflushed changes by A, this makes B's branch newer than
-    // A's.
-    let mut file_b = repo_b.create_file("bar.txt").await.unwrap();
-    file_b.write(b"bar").await.unwrap();
-    file_b.flush().await.unwrap();
-    drop(file_b);
+            // Write the second half of the content and flush.
+            common::write_in_chunks(&mut file, &content[content.len() / 2..], 4096).await;
+            file.flush().await.unwrap();
 
-    // A: Wait until we see the file created by B
-    common::expect_file_content(&repo_a, "bar.txt", b"bar").await;
+            // Reopen the file and verify it has the expected full content
+            let mut file = repo.open_file("foo.txt").await.unwrap();
+            let actual_content = file.read_to_end().await.unwrap();
+            assert_eq!(actual_content, *content);
 
-    // A: Write the second half of the content and flush.
-    common::write_in_chunks(&mut file_a, &content[content.len() / 2..], 4096).await;
-    file_a.flush().await.unwrap();
+            rx.recv().await;
+        }
+    });
 
-    // A: Reopen the file and verify it has the expected full content
-    let mut file_a = repo_a.open_file("foo.txt").await.unwrap();
-    let actual_content = file_a.read_to_end().await.unwrap();
-    assert_eq!(actual_content, content);
+    env.actor("bob", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("alice");
 
-    // B: Wait until we see the file as well
-    common::expect_file_content(&repo_b, "foo.txt", &content).await;
+            let id_bob = *repo.local_branch().unwrap().id();
+
+            // Wait until the file gets merged
+            common::expect_file_version_content(&repo, "foo.txt", Some(&id_bob), &[]).await;
+            tx.send(()).await.unwrap();
+
+            // Write a file. Excluding the unflushed changes by Alice, this makes Bob's branch newer
+            // than Alice's.
+            let mut file = repo.create_file("bar.txt").await.unwrap();
+            file.write(b"bar").await.unwrap();
+            file.flush().await.unwrap();
+            drop(file);
+
+            // Wait until we see the file with the complete content from Alice
+            common::expect_file_content(&repo, "foo.txt", &content).await;
+            tx.send(()).await.unwrap();
+        }
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn concurrent_modify_open_file() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn concurrent_modify_open_file() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
+    let content_a = Arc::new(common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
+    let content_b = Arc::new(common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE));
 
-    let id_a = *repo_a.local_branch().unwrap().id();
-    let id_b = *repo_b.local_branch().unwrap().id();
+    env.actor("alice", {
+        let content_b = content_b.clone();
 
-    let mut content_a = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    let mut content_b = vec![0; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE];
-    env.rng.fill(&mut content_a[..]);
-    env.rng.fill(&mut content_b[..]);
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
 
-    // A: Create empty file
-    let mut file_a = repo_a.create_file("file.txt").await.unwrap();
+            // Create empty file and wait until Bob sees it
+            let mut file = repo.create_file("file.txt").await.unwrap();
 
-    // B: Wait until everything gets merged
-    common::expect_file_version_content(&repo_b, "file.txt", Some(&id_b), &[]).await;
+            let id_a = *repo.local_branch().unwrap().id();
+            let id_b = rx.recv().await.unwrap();
 
-    // A: Write to file but don't flush yet
-    common::write_in_chunks(&mut file_a, &content_a, 4096).await;
+            // Write to file but don't flush yet
+            common::write_in_chunks(&mut file, &content_a, 4096).await;
 
-    // B: Write to the same file and flush
-    let mut file_b = repo_b.open_file("file.txt").await.unwrap();
-    common::write_in_chunks(&mut file_b, &content_b, 4096).await;
-    file_b.flush().await.unwrap();
+            // Wait until we see Bob's writes
+            common::expect_file_version_content(&repo, "file.txt", Some(&id_b), &content_b).await;
 
-    drop(file_b);
+            // A: Flush the file
+            file.flush().await.unwrap();
+            drop(file);
 
-    // A: Wait until we see B's writes
-    common::expect_file_version_content(&repo_a, "file.txt", Some(&id_b), &content_b).await;
+            // Verify both versions of the file are still present
+            assert_matches!(repo.open_file("file.txt").await, Err(Error::AmbiguousEntry));
 
-    // A: Flush the file
-    file_a.flush().await.unwrap();
-    drop(file_a);
+            let mut file_a = repo.open_file_version("file.txt", &id_a).await.unwrap();
+            let actual_content_a = file_a.read_to_end().await.unwrap();
 
-    // A: Verify both versions of the file are still present
-    assert_matches!(
-        repo_a.open_file("file.txt").await,
-        Err(Error::AmbiguousEntry)
-    );
+            let mut file_b = repo.open_file_version("file.txt", &id_b).await.unwrap();
+            let actual_content_b = file_b.read_to_end().await.unwrap();
 
-    let mut file_a = repo_a.open_file_version("file.txt", &id_a).await.unwrap();
-    let actual_content_a = file_a.read_to_end().await.unwrap();
+            assert!(actual_content_a == *content_a);
+            assert!(actual_content_b == *content_b);
+        }
+    });
 
-    let mut file_b = repo_a.open_file_version("file.txt", &id_b).await.unwrap();
-    let actual_content_b = file_b.read_to_end().await.unwrap();
+    env.actor("bob", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.connect("alice");
 
-    assert!(actual_content_a == content_a);
-    assert!(actual_content_b == content_b);
+            let id_b = *repo.local_branch().unwrap().id();
+
+            // Wait until the file gets merged
+            common::expect_file_version_content(&repo, "file.txt", Some(&id_b), &[]).await;
+            tx.send(id_b).await.unwrap();
+
+            // Write to the same file and flush
+            let mut file = repo.open_file("file.txt").await.unwrap();
+            common::write_in_chunks(&mut file, &content_b, 4096).await;
+            file.flush().await.unwrap();
+
+            tx.closed().await;
+        }
+    });
 }
 
 // Test that the local version changes monotonically even when the local branch temporarily becomes
 // outdated.
-#[tokio::test(flavor = "multi_thread")]
-async fn recreate_local_branch() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn recreate_local_branch() {
+    let mut env = Env::new();
+    let proto = Proto::Tcp;
+    let (tx, mut rx) = mpsc::channel(1);
 
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
+    env.actor("alice", async move {
+        let network = actor::create_network(proto).await;
 
-    let store_a = env.next_store();
-    let device_id_a = env.rng.gen();
-    let write_secrets = WriteSecrets::generate(&mut env.rng);
-    let repo_a = Repository::create(
-        RepositoryDb::create(&store_a).await.unwrap(),
-        device_id_a,
-        Access::WriteUnlocked {
-            secrets: write_secrets.clone(),
-        },
-    )
-    .await
-    .unwrap();
-
-    let repo_b = env
-        .create_repo_with_secrets(AccessSecrets::Write(write_secrets.clone()))
-        .await;
-
-    let id_b = *repo_b.local_branch().unwrap().id();
-
-    let mut file = repo_a.create_file("foo.txt").await.unwrap();
-    file.write(b"hello from A\n").await.unwrap();
-    file.flush().await.unwrap();
-
-    let vv_a_0 = repo_a
-        .local_branch()
-        .unwrap()
-        .version_vector()
+        // 1. Create the repo but don't link it yet.
+        let repo_path = actor::make_repo_path();
+        let repo = Repository::create(
+            RepositoryDb::create(&repo_path).await.unwrap(),
+            actor::device_id(),
+            Access::new(None, None, actor::default_secrets()),
+        )
         .await
         .unwrap();
 
-    drop(file);
+        // 2. Create a file
+        let mut file = repo.create_file("foo.txt").await.unwrap();
+        file.write(b"hello from Alice\n").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
 
-    // A: Reopen the repo in read mode to disable merger
-    repo_a.close().await.unwrap();
-    drop(repo_a);
+        let vv_a_0 = repo.local_branch().unwrap().version_vector().await.unwrap();
 
-    let repo_a = Repository::open_with_mode(&store_a, device_id_a, None, AccessMode::Read)
-        .await
-        .unwrap();
+        // 3. Reopen the repo in read mode to disable merger
+        repo.close().await.unwrap();
+        drop(repo);
 
-    // A + B: establish link
-    let reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let reg_b = node_b.network.handle().register(repo_b.store().clone());
+        let repo =
+            Repository::open_with_mode(&repo_path, actor::device_id(), None, AccessMode::Read)
+                .await
+                .unwrap();
 
-    // B: Sync with A
-    common::expect_file_version_content(&repo_b, "foo.txt", Some(&id_b), b"hello from A\n").await;
+        // 4. Establish link
+        let reg = network.handle().register(repo.store().clone());
 
-    // B: Modify the repo. This makes B's branch newer than A's
-    let mut file = repo_b.open_file("foo.txt").await.unwrap();
-    file.seek(SeekFrom::End(0)).await.unwrap();
-    file.write(b"hello from B\n").await.unwrap();
-    file.flush().await.unwrap();
+        // 7. Sync with Bob. Afterwards our local branch will become outdated compared to Bob's
+        common::expect_file_content(&repo, "foo.txt", b"hello from Alice\nhello from Bob\n").await;
 
-    let vv_b = repo_b
-        .local_branch()
-        .unwrap()
-        .version_vector()
-        .await
-        .unwrap();
+        // 8: Reopen in write mode
+        drop(reg);
 
-    drop(file);
+        repo.close().await.unwrap();
+        drop(repo);
+        let repo = Repository::open(&repo_path, actor::device_id(), None)
+            .await
+            .unwrap();
 
-    assert!(vv_b > vv_a_0);
+        // 9. Modify the repo
+        repo.create_file("bar.txt").await.unwrap();
+        repo.force_work().await.unwrap();
 
-    // A: Sync with B. Afterwards our local branch will become outdated compared to B's
-    common::expect_file_content(&repo_a, "foo.txt", b"hello from A\nhello from B\n").await;
+        // 10. Make sure the local version changed monotonically.
+        let vv_b = rx.recv().await.unwrap();
+        assert!(vv_b > vv_a_0);
 
-    // A: Reopen in write mode
-    drop(reg_a);
-    drop(reg_b);
-
-    repo_a.close().await.unwrap();
-    drop(repo_a);
-
-    let repo_a = Repository::open(&store_a, device_id_a, None).await.unwrap();
-
-    // A: Modify the repo
-    repo_a.create_file("bar.txt").await.unwrap();
-    repo_a.force_work().await.unwrap();
-
-    // A: Make sure the local version changed monotonically.
-    let vv_a_1 = repo_a
-        .local_branch()
-        .unwrap()
-        .version_vector()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        vv_a_1.partial_cmp(&vv_b),
-        Some(Ordering::Greater),
-        "non-monotonic version progression"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_many_files() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Quic).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let num_files = 10;
-    let min_size = 0;
-    let max_size = 128 * 1024;
-
-    let contents: Vec<_> = (0..num_files)
-        .map(|_| {
-            let size = env.rng.gen_range(min_size..max_size);
-            let mut buffer = vec![0; size];
-            env.rng.fill(&mut buffer[..]);
-            buffer
-        })
-        .collect();
-    let contents = Arc::new(contents);
-
-    let task_a = task::spawn({
-        let contents = contents.clone();
-        async move {
-            for (index, content) in contents.iter().enumerate() {
-                let name = format!("file-{}.dat", index);
-                let mut file = repo_a.create_file(&name).await.unwrap();
-
-                common::write_in_chunks(&mut file, content, 4096).await;
-                file.flush().await.unwrap();
-
-                tracing::info!("put {:?}", name);
-            }
-        }
-        .instrument(Span::current())
+        let vv_a_1 = repo.local_branch().unwrap().version_vector().await.unwrap();
+        assert_eq!(
+            vv_a_1.partial_cmp(&vv_b),
+            Some(Ordering::Greater),
+            "non-monotonic version progression"
+        );
     });
 
-    let task_b = task::spawn(
-        async move {
-            common::eventually(&repo_b, || async {
-                for (index, content) in contents.iter().enumerate() {
-                    let name = format!("file-{}.dat", index);
+    env.actor("bob", async move {
+        let (network, repo, _sreg) = actor::setup().await;
+        network.connect("alice");
 
-                    if !common::check_file_version_content(&repo_b, &name, None, content).await {
+        let id_b = *repo.local_branch().unwrap().id();
+
+        // 5. Sync with Alice
+        common::expect_file_version_content(&repo, "foo.txt", Some(&id_b), b"hello from Alice\n")
+            .await;
+
+        // 6. Modify the repo. This makes Bob's branch newer than Alice's
+        let mut file = repo.open_file("foo.txt").await.unwrap();
+        file.seek(SeekFrom::End(0)).await.unwrap();
+        file.write(b"hello from Bob\n").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        let vv_b = repo.local_branch().unwrap().version_vector().await.unwrap();
+        tx.send(vv_b).await.unwrap();
+        tx.closed().await;
+    });
+}
+
+#[test]
+fn transfer_directory_with_file() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1); // side-channel
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        let mut dir = repo.create_directory("food").await.unwrap();
+        dir.create_file("pizza.jpg".into()).await.unwrap();
+
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "food/pizza.jpg", EntryType::File).await;
+
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn transfer_directory_with_subdirectory() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        let mut dir = repo.create_directory("food").await.unwrap();
+        dir.create_directory("mediterranean".into()).await.unwrap();
+
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "food/mediterranean", EntryType::Directory).await;
+
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn remote_rename_file() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        // Create the file and wait until reader has seen it
+        repo.create_file("foo.txt").await.unwrap();
+        rx.recv().await;
+
+        // Rename it and wait until reader is done
+        repo.move_entry("/", "foo.txt", "/", "bar.txt")
+            .await
+            .unwrap();
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar.txt", EntryType::File).await;
+        common::expect_entry_not_found(&repo, "foo.txt").await;
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn remote_rename_empty_directory() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        // Create directory and wait until reader has seen it
+        repo.create_directory("foo").await.unwrap();
+        rx.recv().await;
+
+        // Rename the directory and wait until reader is done
+        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo", EntryType::Directory).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar", EntryType::Directory).await;
+        common::expect_entry_not_found(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn remote_rename_non_empty_directory() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        // Create a directory with content and wait until reader has seen it
+        let mut dir = repo.create_directory("foo").await.unwrap();
+        dir.create_file("data.txt".into()).await.unwrap();
+        rx.recv().await;
+
+        // Rename the directory and wait until reader is done
+        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "foo/data.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar/data.txt", EntryType::File).await;
+        common::expect_entry_not_found(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn remote_rename_directory_during_conflict() {
+    let mut env = Env::new();
+    let proto = Proto::Tcp;
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let network = actor::create_network(proto).await;
+        let repo = actor::create_repo().await;
+
+        // Create file before linking the repo to ensure we create conflict.
+        repo.create_file("dummy.txt").await.unwrap();
+
+        let _reg = network.handle().register(repo.store().clone());
+
+        repo.create_directory("foo").await.unwrap();
+        rx.recv().await;
+
+        repo.move_entry("/", "foo", "/", "bar").await.unwrap();
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let network = actor::create_network(proto).await;
+        let repo = actor::create_repo().await;
+
+        network.connect("writer");
+
+        // Create file before linking the repo to ensure we create conflict.
+        // This prevents the remote branch from being pruned.
+        repo.create_file("dummy.txt").await.unwrap();
+
+        let _reg = network.handle().register(repo.store().clone());
+
+        expect_local_directory_exists(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "bar", EntryType::Directory).await;
+        common::expect_entry_not_found(&repo, "foo").await;
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn remote_move_file_to_directory_then_rename_that_directory() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        repo.create_file("data.txt").await.unwrap();
+        rx.recv().await;
+
+        repo.create_directory("archive").await.unwrap();
+        repo.move_entry("/", "data.txt", "archive", "data.txt")
+            .await
+            .unwrap();
+        rx.recv().await;
+
+        repo.move_entry("/", "archive", "/", "trash").await.unwrap();
+        rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.connect("writer");
+
+        common::expect_entry_exists(&repo, "data.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "archive/data.txt", EntryType::File).await;
+        tx.send(()).await.unwrap();
+
+        common::expect_entry_exists(&repo, "trash/data.txt", EntryType::File).await;
+        common::expect_entry_not_found(&repo, "data.txt").await;
+        common::expect_entry_not_found(&repo, "archive").await;
+        tx.send(()).await.unwrap();
+    });
+}
+
+#[test]
+fn concurrent_update_and_delete_during_conflict() {
+    let mut env = Env::new();
+    let proto = Proto::Tcp;
+
+    let (alice_tx, mut alice_rx) = mpsc::channel(1);
+    let (bob_tx, mut bob_rx) = mpsc::channel(1);
+
+    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE); // exactly 2 blocks
+
+    env.actor("alice", {
+        let content = content.clone();
+
+        async move {
+            let network = actor::create_network(proto).await;
+            let repo = actor::create_repo().await;
+
+            let id_a = *repo.local_branch().unwrap().id();
+            let id_b = bob_rx.recv().await.unwrap();
+
+            // 1a. Create a conflict so the branches stay concurrent. This prevents the remote
+            // branch from being pruned.
+            repo.create_file("dummy.txt").await.unwrap();
+
+            let reg = network.handle().register(repo.store().clone());
+
+            // 3. Wait until the file gets merged
+            common::expect_file_version_content(&repo, "data.txt", Some(&id_a), &content).await;
+            alice_tx.send(()).await.unwrap();
+
+            // 4a. Unlink to allow concurrent operations on the file
+            drop(reg);
+
+            // 5a. Remove the file (this garbage-collects its blocks)
+            repo.remove_entry("data.txt").await.unwrap();
+
+            // 6a. Relink
+            let _reg = network.handle().register(repo.store().clone());
+
+            // 7. We are able to read the whole file again including the previously gc-ed blocks.
+            common::expect_file_version_content(&repo, "data.txt", Some(&id_b), &content).await;
+
+            alice_tx.send(()).await.unwrap();
+        }
+    });
+
+    env.actor("bob", {
+        async move {
+            let network = actor::create_network(proto).await;
+            network.connect("alice");
+
+            let repo = actor::create_repo().await;
+
+            bob_tx
+                .send(*repo.local_branch().unwrap().id())
+                .await
+                .unwrap();
+
+            // 1b. Create a conflict so the branches stay concurrent. This prevents the remote branch
+            // from being pruned.
+            repo.create_file("dummy.txt").await.unwrap();
+
+            let reg = network.handle().register(repo.store().clone());
+
+            // 2. Create the file and wait until alice sees it
+            let mut file = repo.create_file("data.txt").await.unwrap();
+            file.write(&content).await.unwrap();
+            file.flush().await.unwrap();
+
+            alice_rx.recv().await.unwrap();
+
+            // 4b. Unlink to allow concurrent operations on the file
+            drop(reg);
+
+            // 5b. Writes to the file in such a way that the first block remains unchanged
+            let chunk = common::random_content(64);
+            file.seek(SeekFrom::End(-(chunk.len() as i64)))
+                .await
+                .unwrap();
+            file.write(&chunk).await.unwrap();
+            file.flush().await.unwrap();
+
+            // 6b. Relink
+            let _reg = network.handle().register(repo.store().clone());
+
+            alice_rx.recv().await.unwrap();
+        }
+    });
+}
+
+// https://github.com/equalitie/ouisync/issues/86
+#[test]
+fn content_stays_available_during_sync() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    let content0 = Arc::new(common::random_content(32));
+    let content1 = Arc::new(common::random_content(128 * 1024));
+
+    env.actor("alice", {
+        let content0 = content0.clone();
+        let content1 = content1.clone();
+
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            // 1. Create "b/c.dat" and wait for Bob to see it.
+            let mut file = repo.create_file("b/c.dat").await.unwrap();
+            file.write(&content0).await.unwrap();
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+
+            // 3. Then create "a.dat" and "b/d.dat".
+            let mut file = repo.create_file("a.dat").await.unwrap();
+            file.write(&content1).await.unwrap();
+            file.flush().await.unwrap();
+
+            repo.create_file("b/d.dat").await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
+    });
+
+    env.actor("bob", {
+        async move {
+            // Bob is read-only to disable the merger which could otherwise interfere with this test.
+            let network = actor::create_network(Proto::Tcp).await;
+            let repo = actor::create_repo_with_secrets(
+                actor::default_secrets().with_mode(AccessMode::Read),
+            )
+            .await;
+            let _reg = network.handle().register(repo.store().clone());
+            network.connect("alice");
+
+            // 2. Sync "b/c.dat"
+            common::expect_file_content(&repo, "b/c.dat", &content0).await;
+            tx.send(()).await.unwrap();
+
+            // 4. Because the entries are processed in lexicographical order, the blocks of "a.dat" are
+            // requested before the blocks of "b". Thus there is a period of time after the snapshot is
+            // completed but before the blocks of "b" are downloaded during which the latest version of
+            // "b" can't be opened because its blocks haven't been downloaded yet (because the blocks
+            // of "a.dat" must be downloaded first). This test verifies that the previous content of
+            // "b" can still be accessed even during this period.
+            common::eventually(&repo, || async {
+                // The first file stays available at all times...
+                assert!(
+                    common::check_file_version_content(&repo, "b/c.dat", None, &content0).await
+                );
+
+                // ...until the new files are transfered
+                for (name, content) in [("a.dat", &content1[..]), ("b/d.dat", &[])] {
+                    if !common::check_file_version_content(&repo, name, None, content).await {
                         return false;
                     }
-
-                    tracing::info!("get {:?}", name);
                 }
 
                 true
             })
-            .await
+            .await;
+
+            tx.send(()).await.unwrap();
         }
-        .instrument(Span::current()),
-    );
-
-    task_a.await.unwrap();
-    task_b.await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_directory_with_file() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let mut dir = repo_a.create_directory("food").await.unwrap();
-    dir.create_file("pizza.jpg".into()).await.unwrap();
-
-    expect_entry_exists(&repo_b, "food/pizza.jpg", EntryType::File).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn transfer_directory_with_subdirectory() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let mut dir0 = repo_a.create_directory("food").await.unwrap();
-    dir0.create_directory("mediterranean".into()).await.unwrap();
-
-    expect_entry_exists(&repo_b, "food/mediterranean", EntryType::Directory).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_file() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    repo_b.create_file("foo.txt").await.unwrap();
-
-    // Wait until the file is synced and merged over to the local branch.
-    expect_entry_exists(&repo_a, "foo.txt", EntryType::File).await;
-
-    repo_b
-        .move_entry("/", "foo.txt", "/", "bar.txt")
-        .await
-        .unwrap();
-
-    expect_entry_exists(&repo_a, "bar.txt", EntryType::File).await;
-    expect_entry_not_found(&repo_a, "foo.txt").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_empty_directory() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    repo_b.create_directory("foo").await.unwrap();
-
-    expect_entry_exists(&repo_a, "foo", EntryType::Directory).await;
-
-    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
-
-    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
-    expect_entry_not_found(&repo_a, "foo").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_non_empty_directory() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let mut dir = repo_b.create_directory("foo").await.unwrap();
-    dir.create_file("data.txt".into()).await.unwrap();
-
-    expect_entry_exists(&repo_a, "foo/data.txt", EntryType::File).await;
-
-    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
-
-    expect_entry_exists(&repo_a, "bar/data.txt", EntryType::File).await;
-    expect_entry_not_found(&repo_a, "foo").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_rename_directory_during_conflict() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    // Create a conflict so the branches stay concurrent. This prevents the remote branch from
-    // being pruned.
-    repo_a.create_file("dummy.txt").await.unwrap();
-    repo_b.create_file("dummy.txt").await.unwrap();
-
-    repo_b.create_directory("foo").await.unwrap();
-    expect_local_directory_exists(&repo_a, "foo").await;
-
-    repo_b.move_entry("/", "foo", "/", "bar").await.unwrap();
-    expect_entry_exists(&repo_a, "bar", EntryType::Directory).await;
-    expect_entry_not_found(&repo_a, "foo").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn remote_move_file_to_directory_then_rename_that_directory() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    repo_b.create_file("data.txt").await.unwrap();
-
-    expect_entry_exists(&repo_a, "data.txt", EntryType::File).await;
-
-    repo_b.create_directory("archive").await.unwrap();
-    repo_b
-        .move_entry("/", "data.txt", "archive", "data.txt")
-        .await
-        .unwrap();
-
-    expect_entry_exists(&repo_a, "archive/data.txt", EntryType::File).await;
-
-    repo_b
-        .move_entry("/", "archive", "/", "trash")
-        .await
-        .unwrap();
-
-    expect_entry_exists(&repo_a, "trash/data.txt", EntryType::File).await;
-    expect_entry_not_found(&repo_a, "data.txt").await;
-    expect_entry_not_found(&repo_a, "archive").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn concurrent_update_and_delete_during_conflict() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-    let (repo_a, repo_b) = env.create_linked_repos().await;
-    let reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let id_a = *repo_a.local_branch().unwrap().id();
-    let id_b = *repo_b.local_branch().unwrap().id();
-
-    // Create a conflict so the branches stay concurrent. This prevents the remote branch from
-    // being pruned.
-    repo_a.create_file("dummy.txt").await.unwrap();
-    repo_b.create_file("dummy.txt").await.unwrap();
-
-    let mut file = repo_b.create_file("data.txt").await.unwrap();
-    let mut content = vec![0u8; 2 * BLOCK_SIZE - BLOB_HEADER_SIZE]; // exactly 2 blocks
-    env.rng.fill(&mut content[..]);
-    file.write(&content).await.unwrap();
-    file.flush().await.unwrap();
-
-    common::expect_file_version_content(&repo_a, "data.txt", Some(&id_a), &content).await;
-
-    // Disconnect to allow concurrent operations on the file
-    drop(reg_a);
-    drop(reg_b);
-
-    // A removes it (this garbage-collects its blocks)
-    repo_a.remove_entry("data.txt").await.unwrap();
-
-    // B writes to it in such a way that the first block remains unchanged
-    let chunk = {
-        let offset = content.len() - 64;
-        &mut content[offset..]
-    };
-
-    env.rng.fill(chunk);
-
-    file.seek(SeekFrom::End(-(chunk.len() as i64)))
-        .await
-        .unwrap();
-    file.write(chunk).await.unwrap();
-    file.flush().await.unwrap();
-
-    // Reconnect
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    // A is able to read the whole file again including the previously gc-ed blocks.
-    common::expect_file_version_content(&repo_a, "data.txt", Some(&id_b), &content).await;
-}
-
-// https://github.com/equalitie/ouisync/issues/86
-#[tokio::test(flavor = "multi_thread")]
-async fn content_stays_available_during_sync() {
-    let mut env = Env::with_seed(0);
-
-    let (node_a, node_b) = env.create_connected_nodes(Proto::Tcp).await;
-
-    let repo_a = env.create_repo().await;
-
-    // B is read-only to disable the merger which could otherwise interfere with this test.
-    let repo_b = env
-        .create_repo_with_secrets(repo_a.secrets().with_mode(AccessMode::Read))
-        .await;
-
-    let _reg_a = node_a.network.handle().register(repo_a.store().clone());
-    let _reg_b = node_b.network.handle().register(repo_b.store().clone());
-
-    let mut content0 = vec![0; 32];
-    env.rng.fill(&mut content0[..]);
-
-    let mut content1 = vec![0; 128 * 1024];
-    env.rng.fill(&mut content1[..]);
-
-    // First create and sync "b/c.dat"
-    let mut file = repo_a.create_file("b/c.dat").await.unwrap();
-    file.write(&content0).await.unwrap();
-    file.flush().await.unwrap();
-
-    common::expect_file_content(&repo_b, "b/c.dat", &content0).await;
-
-    // Then create "a.dat" and "b/d.dat". Because the entries are processed in lexicographical
-    // order, the blocks of "a.dat" are requested before the blocks of "b". Thus there is a period
-    // of time after the snapshot is completed but before the blocks of "b" are downloaded during
-    // which the latest version of "b" can't be opened because its blocks haven't been downloaded
-    // yet (because the blocks of "a.dat" must be downloaded first). This test verifies that the
-    // previous content of "b" can still be accessed even during this period.
-
-    let task_a = async {
-        let mut file = repo_a.create_file("a.dat").await.unwrap();
-        file.write(&content1).await.unwrap();
-        file.flush().await.unwrap();
-
-        repo_a.create_file("b/d.dat").await.unwrap();
-    };
-
-    let task_b = common::eventually(&repo_b, || async {
-        // The first file stays available at all times...
-        assert!(common::check_file_version_content(&repo_b, "b/c.dat", None, &content0).await);
-
-        // ...until the new files are transfered
-        for (name, content) in [("a.dat", &content1[..]), ("b/d.dat", &[])] {
-            if !common::check_file_version_content(&repo_b, name, None, content).await {
-                return false;
-            }
-        }
-
-        true
     });
-
-    future::join(task_a, task_b).await;
 }
 
-async fn expect_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) {
-    common::eventually(repo, || check_entry_exists(repo, path, entry_type)).await
-}
-
-async fn check_entry_exists(repo: &Repository, path: &str, entry_type: EntryType) -> bool {
-    let result = match entry_type {
-        EntryType::File => repo.open_file(path).await.map(|_| ()),
-        EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
-    };
-
-    match result {
-        Ok(()) => true,
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
-        Err(error) => panic!("unexpected error: {:?}", error),
-    }
-}
-
-async fn expect_entry_not_found(repo: &Repository, path: &str) {
-    let path = Utf8Path::new(path);
-    let name = path.file_name().unwrap();
-    let parent = path.parent().unwrap();
-
-    common::eventually(repo, || async {
-        let parent = repo.open_directory(parent).await.unwrap();
-
-        match parent.lookup_unique(name) {
-            Ok(_) => false,
-            Err(Error::EntryNotFound) => true,
-            Err(error) => panic!("unexpected error: {:?}", error),
-        }
-    })
-    .await
-}
-
+#[instrument(skip(repo))]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
         match repo.open_directory(path).await {

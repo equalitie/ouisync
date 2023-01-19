@@ -39,12 +39,12 @@ impl OpenBlock {
     }
 
     pub async fn open_head(
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         snapshot: &SnapshotData,
         read_key: &cipher::SecretKey,
         locator: Locator,
     ) -> Result<Self> {
-        let (id, buffer) = super::read_block(conn, snapshot, read_key, &locator).await?;
+        let (id, buffer) = super::read_block(tx, snapshot, read_key, &locator).await?;
         let content = Cursor::new(buffer);
 
         Ok(Self {

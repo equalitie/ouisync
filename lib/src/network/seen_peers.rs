@@ -1,8 +1,6 @@
 use super::PeerAddr;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
-};
+use crate::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 /// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
 /// networking code will try to connect to it. However, if connecting to the peer fails we would
@@ -59,13 +57,13 @@ impl SeenPeersInner {
     fn new() -> Self {
         Self {
             current_round_id: 0,
-            peers: HashMap::new(),
-            rounds: HashMap::new(),
+            peers: HashMap::default(),
+            rounds: HashMap::default(),
         }
     }
 
     fn start_new_round(&mut self) {
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         self.current_round_id += 1;
         self.rounds.retain(|round, peers| {
@@ -104,7 +102,7 @@ impl SeenPeersInner {
         let (rc, rounds) = self
             .peers
             .entry(addr)
-            .or_insert_with(|| (0, HashSet::new()));
+            .or_insert_with(|| (0, HashSet::default()));
 
         let is_new = rounds.is_empty();
 
@@ -188,7 +186,7 @@ impl Clone for SeenPeer {
 
 impl Drop for SeenPeer {
     fn drop(&mut self) {
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         let mut seen_peers = self.seen_peers.write().unwrap();
 

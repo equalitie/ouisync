@@ -18,7 +18,6 @@ use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
 use tokio::{sync::broadcast, task};
-use tracing::Span;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -441,7 +440,6 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
-        span: Span::none(),
     };
 
     let mut rng = rand::thread_rng();
@@ -466,7 +464,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut store.db().acquire().await.unwrap(),
+        &mut store.db().begin_read().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -488,7 +486,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut store.db().acquire().await.unwrap(),
+        &mut store.db().begin_read().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -691,13 +689,13 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
 }
 
 async fn check_all_blocks_exist(
-    conn: &mut db::Connection,
+    tx: &mut db::ReadTransaction,
     branch: &BranchData,
     snapshot: &Snapshot,
 ) {
     for node in snapshot.leaf_sets().flat_map(|(_, nodes)| nodes) {
-        let (block_id, _) = branch.get(conn, &node.locator).await.unwrap();
-        assert!(block::exists(conn, &block_id).await.unwrap());
+        let (block_id, _) = branch.get(tx, &node.locator).await.unwrap();
+        assert!(block::exists(tx, &block_id).await.unwrap());
     }
 }
 

@@ -45,48 +45,40 @@ impl RootNode {
         }
     }
 
-    /// Creates a root node with the specified proof unless already exists.
+    /// Creates a root node with the specified proof.
     ///
-    /// # Panics
-    ///
-    /// - If `latest` is `Some` but it's not the current latest root node in the same branch
-    /// - If `latest` is `Some` and the new version vector is not happens-after or equal to that of
-    ///   `latest`
-    /// - If `latest` is `None` or `Some(RootNode::empty())` and there already exists a root node
-    ///   in the same branch
+    /// The version vector must be greater than the version vector of any currently existing root
+    /// node in the same branch, otherwise no node is created and an error is returned.
     pub async fn create(
         tx: &mut db::WriteTransaction,
-        latest: Option<&RootNode>,
         proof: Proof,
         summary: Summary,
     ) -> Result<Self> {
-        if let Some(latest) = latest {
-            match proof
-                .version_vector
-                .partial_cmp(&latest.proof.version_vector)
-            {
-                Some(Ordering::Greater | Ordering::Equal) => (),
-                Some(Ordering::Less) | None => {
-                    panic!("root node invariant violation: invalid version vector")
-                }
+        // Check that the root node to be created is newer than the latest existing root node in
+        // the same branch.
+        let old_vv: VersionVector = sqlx::query(
+            "SELECT versions
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 WHERE writer_id = ?
+             )",
+        )
+        .bind(&proof.writer_id)
+        .map(|row| row.get(0))
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_else(VersionVector::new);
+
+        match proof.version_vector.partial_cmp(&old_vv) {
+            Some(Ordering::Greater) => (),
+            Some(Ordering::Equal | Ordering::Less) => return Err(Error::EntryExists),
+            None => {
+                tracing::warn!("attempt to create concurrent root node in the same branch");
+                return Err(Error::OperationNotSupported);
             }
         }
-
-        let expected_latest_snapshot_id = latest
-            .map(|node| node.snapshot_id)
-            .unwrap_or(EMPTY_SNAPSHOT_ID);
-        let actual_latest_snapshot_id =
-            sqlx::query("SELECT MAX(snapshot_id) FROM snapshot_root_nodes WHERE writer_id = ?")
-                .bind(&proof.writer_id)
-                .map(|row| row.get(0))
-                .fetch_optional(&mut **tx)
-                .await?
-                .unwrap_or(EMPTY_SNAPSHOT_ID);
-
-        assert_eq!(
-            expected_latest_snapshot_id, actual_latest_snapshot_id,
-            "root node invariant violation: latest mismatch"
-        );
 
         let snapshot_id = sqlx::query(
             "INSERT INTO snapshot_root_nodes (
@@ -98,7 +90,6 @@ impl RootNode {
                  block_presence
              )
              VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT (writer_id, hash) DO NOTHING
              RETURNING snapshot_id",
         )
         .bind(&proof.writer_id)
@@ -108,9 +99,8 @@ impl RootNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .map(|row| row.get(0))
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or(Error::EntryExists)?;
+        .fetch_one(tx)
+        .await?;
 
         Ok(Self {
             snapshot_id,
@@ -306,37 +296,6 @@ impl RootNode {
         .await
     }
 
-    /// Updates the proof of this node.
-    ///
-    /// Only the version vector can be updated. To update any other field of the proof, a new root
-    /// node needs to be created.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the writer_id or the hash of the new_proof differ from the ones in the current
-    /// proof.
-    ///
-    /// # Cancel safety
-    ///
-    /// This methd consume `self` to force the caller to reload the node from the db if they still
-    /// need to use it. This makes it cancel-safe because the `proof` member can never go out of
-    /// sync with what's stored in the db even in case the returned future is cancelled.
-    pub async fn update_proof(self, tx: &mut db::WriteTransaction, new_proof: Proof) -> Result<()> {
-        assert_eq!(new_proof.writer_id, self.proof.writer_id);
-        assert_eq!(new_proof.hash, self.proof.hash);
-
-        sqlx::query(
-            "UPDATE snapshot_root_nodes SET versions = ?, signature = ? WHERE snapshot_id = ?",
-        )
-        .bind(&new_proof.version_vector)
-        .bind(&new_proof.signature)
-        .bind(self.snapshot_id)
-        .execute(&mut **tx)
-        .await?;
-
-        Ok(())
-    }
-
     /// Reload this root node from the db.
     #[cfg(test)]
     pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<()> {
@@ -365,7 +324,7 @@ impl RootNode {
         let was_complete: bool =
             sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE hash = ?")
                 .bind(hash)
-                .fetch_optional(&mut **tx)
+                .fetch_optional(&mut *tx)
                 .await?
                 .map(|row| row.get(0))
                 .unwrap_or(false);
@@ -378,7 +337,7 @@ impl RootNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .bind(hash)
-        .execute(&mut **tx)
+        .execute(tx)
         .await?;
 
         Ok(!was_complete && summary.is_complete)
@@ -389,7 +348,7 @@ impl RootNode {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
             .bind(self.snapshot_id)
-            .execute(&mut **tx)
+            .execute(tx)
             .await?;
 
         Ok(())
@@ -402,7 +361,7 @@ impl RootNode {
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
             .bind(self.snapshot_id)
             .bind(&self.proof.writer_id)
-            .execute(&mut **tx)
+            .execute(tx)
             .await?;
 
         Ok(())
@@ -421,7 +380,7 @@ impl RootNode {
         )
         .bind(self.snapshot_id)
         .bind(&self.proof.writer_id)
-        .execute(&mut **tx)
+        .execute(tx)
         .await?;
 
         Ok(())

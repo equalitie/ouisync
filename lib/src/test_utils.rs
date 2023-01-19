@@ -5,7 +5,7 @@ use std::future::Future;
 // (see https://github.com/AltSysrq/proptest/issues/179). As a workaround, create the runtime
 // manually.
 pub(crate) fn run<F: Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_multi_thread()
+    tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .unwrap()

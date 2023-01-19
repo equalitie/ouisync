@@ -128,7 +128,10 @@ impl Inner {
 
                     let wait = async {
                         loop {
-                            match event_rx.recv().await {
+                            let event = event_rx.recv().await;
+                            tracing::trace!(?event);
+
+                            match event {
                                 Ok(Payload::BranchChanged(_)) => {
                                     // On `BranchChanged`, interrupt the current job and
                                     // immediately start a new one.
@@ -158,6 +161,8 @@ impl Inner {
                 State::Waiting => {
                     state = select! {
                         event = event_rx.recv() => {
+                            tracing::trace!(?event);
+
                             match event {
                                 Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
                                 Err(RecvError::Closed) => State::Terminated,
@@ -304,7 +309,11 @@ mod prune {
                 Err(error) => return Err(error),
             }
 
-            tracing::trace!(id = ?snapshot.branch_id(), "removing outdated branch");
+            tracing::trace!(
+                id = ?snapshot.branch_id(),
+                vv = ?snapshot.version_vector(),
+                "removing outdated branch"
+            );
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
@@ -408,6 +417,11 @@ mod scan {
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
                     // content yet. It is safe to ignore it.
+
+                    // DEBUG
+                    let vv = branch.version_vector().await?;
+                    tracing::warn!(id = ?branch.id(), ?vv, "branch with missing root entry");
+
                     continue;
                 }
                 Err(error) => {
@@ -531,6 +545,7 @@ mod scan {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(?mode, branch.id = ?branch.id(), ?blob_id), err(Debug))]
     async fn process_blocks(
         shared: &Shared,
         mode: Mode,
@@ -538,19 +553,15 @@ mod scan {
         branch: Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut tx = shared.store.db().begin_read().await?;
-        let mut blob_block_ids = BlockIds::open(&mut tx, branch, blob_id).await?;
+        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next(&mut tx).await? {
+        while let Some(block_id) = blob_block_ids.try_next().await? {
             if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
                 unreachable_block_ids.remove(&block_id);
             }
 
             if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
-                shared
-                    .store
-                    .require_missing_block(&mut tx, block_id)
-                    .await?;
+                shared.store.require_missing_block(block_id).await?;
             }
         }
 

@@ -1,11 +1,10 @@
 use super::{message::Request, repository_stats::RepositoryStats};
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    future,
-    sync::Arc,
-    time::{Duration, Instant},
+use crate::collections::{hash_map::Entry, HashMap};
+use std::{future, sync::Arc};
+use tokio::{
+    sync::OwnedSemaphorePermit,
+    time::{self, Duration, Instant},
 };
-use tokio::{sync::OwnedSemaphorePermit, time};
 
 // Maximum number of sent request for which we haven't received a response yet.
 // Higher values give better performance but too high risks congesting the network. Also there is a
@@ -26,7 +25,7 @@ impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
         Self {
             stats,
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 
@@ -76,14 +75,18 @@ impl PendingRequests {
 
     fn request_added(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => self.stats.write().index_requests_inflight += 1,
+            Request::RootNode(_) | Request::ChildNodes(_) => {
+                self.stats.write().index_requests_inflight += 1
+            }
             Request::Block(_) => self.stats.write().block_requests_inflight += 1,
         }
     }
 
     fn request_removed(&self, request: &Request) {
         match request {
-            Request::ChildNodes(_) => self.stats.write().index_requests_inflight -= 1,
+            Request::RootNode(_) | Request::ChildNodes(_) => {
+                self.stats.write().index_requests_inflight -= 1
+            }
             Request::Block(_) => self.stats.write().block_requests_inflight -= 1,
         }
     }

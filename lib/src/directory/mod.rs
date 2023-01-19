@@ -30,6 +30,7 @@ use crate::{
 };
 use async_recursion::async_recursion;
 use std::{fmt, mem};
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct Directory {
@@ -99,6 +100,7 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
+    #[instrument(skip(self))]
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
@@ -123,6 +125,7 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
+    #[instrument(skip(self))]
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         self.create_directory_with_version_vector_op(name, &VersionVectorOp::IncrementLocal)
             .await
@@ -294,6 +297,7 @@ impl Directory {
     }
 
     /// Updates the version vector of this directory by merging it with `vv`.
+    #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
         let tx = self.branch().db().begin_write().await?;
         self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
@@ -309,13 +313,13 @@ impl Directory {
     }
 
     async fn open_in(
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
-        let (blob, entries) = load(conn, branch, locator, missing_block_strategy).await?;
+        let (blob, entries) = load(tx, branch, locator, missing_block_strategy).await?;
 
         Ok(Self {
             blob,
@@ -330,8 +334,8 @@ impl Directory {
         parent: Option<ParentContext>,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
-        let mut conn = branch.db().acquire().await?;
-        Self::open_in(&mut conn, branch, locator, parent, missing_block_strategy).await
+        let mut tx = branch.db().begin_read().await?;
+        Self::open_in(&mut tx, branch, locator, parent, missing_block_strategy).await
     }
 
     fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
@@ -510,12 +514,12 @@ impl Directory {
         Ok(content)
     }
 
-    async fn load(&mut self, conn: &mut db::Connection) -> Result<Content> {
+    async fn load(&mut self, tx: &mut db::ReadTransaction) -> Result<Content> {
         if self.blob.is_dirty() {
             Ok(self.entries.clone())
         } else {
             let (blob, content) = load(
-                conn,
+                tx,
                 self.branch().clone(),
                 *self.locator(),
                 MissingBlockStrategy::Fail,
@@ -606,15 +610,15 @@ pub enum MissingBlockStrategy {
 
 // Load directory content. On missing block, fallback to previous snapshot (if any).
 async fn load(
-    conn: &mut db::Connection,
+    tx: &mut db::ReadTransaction,
     branch: Branch,
     locator: Locator,
     missing_block_strategy: MissingBlockStrategy,
 ) -> Result<(Blob, Content)> {
-    let mut snapshot = branch.data().load_snapshot(conn).await?;
+    let mut snapshot = branch.data().load_snapshot(tx).await?;
 
     loop {
-        let error = match load_in(conn, branch.clone(), &snapshot, locator).await {
+        let error = match load_in(tx, branch.clone(), &snapshot, locator).await {
             Ok((blob, content)) => return Ok((blob, content)),
             Err(error @ Error::BlockNotFound(_)) => error,
             Err(error) => return Err(error),
@@ -625,7 +629,7 @@ async fn load(
             MissingBlockStrategy::Fail => return Err(error),
         }
 
-        if let Some(prev_snapshot) = snapshot.load_prev(conn).await? {
+        if let Some(prev_snapshot) = snapshot.load_prev(tx).await? {
             snapshot = prev_snapshot;
         } else {
             return Err(error);
@@ -634,13 +638,13 @@ async fn load(
 }
 
 async fn load_in(
-    conn: &mut db::Connection,
+    tx: &mut db::ReadTransaction,
     branch: Branch,
     snapshot: &SnapshotData,
     locator: Locator,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open_in(conn, branch, snapshot, locator).await?;
-    let buffer = blob.read_to_end_in(conn, snapshot).await?;
+    let mut blob = Blob::open_in(tx, branch, snapshot, locator).await?;
+    let buffer = blob.read_to_end_in(tx, snapshot).await?;
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))

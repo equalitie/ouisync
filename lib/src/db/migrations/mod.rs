@@ -8,6 +8,7 @@ pub(super) async fn run(pool: &Pool) -> Result<(), Error> {
     apply(pool, 4, include_str!("v4.sql")).await?;
     apply(pool, 5, include_str!("v5.sql")).await?;
     apply(pool, 6, include_str!("v6.sql")).await?;
+    apply(pool, 7, include_str!("v7.sql")).await?;
 
     Ok(())
 }
@@ -26,7 +27,7 @@ async fn apply(pool: &Pool, dst_version: u32, sql: &str) -> Result<(), Error> {
         "migrations must be applied in order"
     );
 
-    sqlx::query(sql).execute(&mut *tx).await?;
+    sqlx::query(sql).execute(&mut tx).await?;
     set_version(&mut tx, dst_version).await?;
 
     tx.commit().await?;

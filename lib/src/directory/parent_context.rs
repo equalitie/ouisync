@@ -11,6 +11,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use std::cmp::Ordering;
+use tracing::instrument;
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
@@ -50,6 +51,15 @@ impl ParentContext {
 
     /// Atomically forks the blob of this entry into the local branch and returns the updated
     /// parent context.
+    #[instrument(
+        skip_all,
+        fields(
+            name = self.entry_name,
+            parent_id = ?self.directory_id,
+            src_branch.id = ?src_branch.id(),
+            dst_branch.id = ?dst_branch.id()),
+        err(Debug)
+    )]
     pub async fn fork(&self, src_branch: &Branch, dst_branch: &Branch) -> Result<Self> {
         let directory = self.open(src_branch.clone()).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
@@ -82,6 +92,8 @@ impl ParentContext {
             }
         };
 
+        tracing::trace!("done");
+
         let directory_id = *directory.locator().blob_id();
         let parent = directory.parent.clone();
 
@@ -97,9 +109,9 @@ impl ParentContext {
     }
 
     /// Opens the parent directory of this entry.
-    pub async fn open_in(&self, conn: &mut db::Connection, branch: Branch) -> Result<Directory> {
+    pub async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
         Directory::open_in(
-            conn,
+            tx,
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),

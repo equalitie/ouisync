@@ -1,13 +1,13 @@
-use super::quic;
+use net::{
+    quic,
+    tcp::{self, TcpStream},
+};
 use std::{
     io,
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::{tcp, TcpStream},
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 pub enum Stream {
     Tcp(TcpStream),

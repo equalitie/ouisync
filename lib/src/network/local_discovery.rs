@@ -2,30 +2,26 @@ use super::{
     interface::{self, InterfaceChange},
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
-    socket::{self, ReuseAddr},
 };
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::{HashMap, HashSet},
+    scoped_task::{self, ScopedJoinHandle},
+};
+use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
     io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr},
     sync::Arc,
-    time::Duration,
 };
 use tokio::{
-    net::UdpSocket,
     sync::{mpsc, Mutex},
-    time::sleep,
+    time::{sleep, Duration},
 };
 use tracing::Instrument;
 
-// Selected at random but to not clash with some reserved ones:
-// https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
-const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 137);
-const MULTICAST_PORT: u16 = 9271;
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
 
@@ -53,7 +49,7 @@ impl LocalDiscovery {
                 let mut inner = LocalDiscoveryInner {
                     listener_port,
                     peer_tx,
-                    per_interface_discovery: HashMap::new(),
+                    per_interface_discovery: HashMap::default(),
                 };
 
                 let mut interface_watcher = interface::watch_ipv4_multicast_interfaces();
@@ -89,7 +85,7 @@ struct LocalDiscoveryInner {
 
 impl LocalDiscoveryInner {
     fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>) {
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         for interface in new_interfaces {
             match self.per_interface_discovery.entry(interface) {
@@ -192,10 +188,10 @@ impl PerInterfaceLocalDiscovery {
         let mut recv_error_reported = false;
 
         let mut beacon_requests_received = 0;
-        tracing::trace!(beacon_requests_received);
+        state_monitor!(beacon_requests_received);
 
         let mut beacon_responses_received = 0;
-        tracing::trace!(beacon_responses_received);
+        state_monitor!(beacon_responses_received);
 
         loop {
             let socket = socket_provider.provide().await;
@@ -246,7 +242,7 @@ impl PerInterfaceLocalDiscovery {
 
             if is_request {
                 beacon_requests_received += 1;
-                tracing::trace!(beacon_requests_received);
+                state_monitor!(beacon_requests_received);
 
                 let msg = Message::Reply {
                     port: listener_port,
@@ -260,7 +256,7 @@ impl PerInterfaceLocalDiscovery {
                 }
             } else {
                 beacon_responses_received += 1;
-                tracing::trace!(beacon_responses_received);
+                state_monitor!(beacon_responses_received);
             }
 
             let addr = match port {
@@ -279,17 +275,6 @@ impl PerInterfaceLocalDiscovery {
     }
 }
 
-async fn create_multicast_socket(interface: Ipv4Addr) -> io::Result<tokio::net::UdpSocket> {
-    let socket: tokio::net::UdpSocket = socket::bind_with_reuse_addr(
-        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MULTICAST_PORT).into(),
-        ReuseAddr::Required,
-    )
-    .await?;
-    socket.join_multicast_v4(MULTICAST_ADDR, interface)?;
-
-    Ok(socket)
-}
-
 async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: InsecureRuntimeId,
@@ -299,7 +284,7 @@ async fn run_beacon(
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
     let mut beacons_sent = 0;
-    tracing::trace!(beacons_sent);
+    state_monitor!(beacons_sent);
 
     let mut error_shown = false;
 
@@ -317,7 +302,7 @@ async fn run_beacon(
             Ok(()) => {
                 error_shown = false;
                 beacons_sent += 1;
-                tracing::trace!(beacons_sent);
+                state_monitor!(beacons_sent);
             }
             Err(error) => {
                 if !error_shown {
@@ -387,7 +372,7 @@ impl SocketProvider {
             Some(socket) => socket.clone(),
             None => {
                 let socket = loop {
-                    match create_multicast_socket(self.interface).await {
+                    match UdpSocket::bind_multicast(self.interface).await {
                         Ok(socket) => break Arc::new(socket),
                         Err(_) => sleep(ERROR_DELAY).await,
                     }

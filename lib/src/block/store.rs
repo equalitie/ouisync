@@ -74,7 +74,7 @@ pub(crate) async fn write(
     .bind(id)
     .bind(nonce.as_slice())
     .bind(buffer)
-    .execute(&mut **tx)
+    .execute(tx)
     .await?;
 
     Ok(())
@@ -103,7 +103,7 @@ pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
 pub(crate) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Result<()> {
     sqlx::query("DELETE FROM blocks WHERE id = ?")
         .bind(id)
-        .execute(&mut **tx)
+        .execute(tx)
         .await?;
 
     Ok(())

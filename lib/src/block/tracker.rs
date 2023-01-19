@@ -1,9 +1,7 @@
 use super::BlockId;
+use crate::collections::{hash_map::Entry, HashMap, HashSet};
 use slab::Slab;
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
-    sync::{Arc, Mutex as BlockingMutex},
-};
+use std::sync::{Arc, Mutex as BlockingMutex};
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
@@ -19,7 +17,8 @@ impl BlockTracker {
         Self {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
-                    missing_blocks: HashMap::new(),
+                    missing_blocks: HashMap::default(),
+                    pending_blocks: HashSet::default(),
                     clients: Slab::new(),
                 }),
                 notify_tx,
@@ -27,29 +26,14 @@ impl BlockTracker {
         }
     }
 
-    /// Mark the block with the given id as required.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this tracker is in greedy mode.
-    pub fn require(&self, block_id: BlockId) {
-        tracing::trace!(?block_id, "require");
-
+    /// Begin marking the block with the given id as required. See also [`Require::commit`].
+    pub fn begin_require(&self, block_id: BlockId) -> Require {
         let mut inner = self.shared.inner.lock().unwrap();
+        inner.pending_blocks.insert(block_id);
 
-        match inner.missing_blocks.entry(block_id) {
-            Entry::Occupied(mut entry) => {
-                if entry.get_mut().state.switch_offered_to_required() {
-                    self.shared.notify();
-                }
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(MissingBlock {
-                    clients: HashMap::new(),
-                    state: MissingBlockState::Required,
-                });
-                self.shared.notify();
-            }
+        Require {
+            shared: self.shared.clone(),
+            block_id,
         }
     }
 
@@ -59,13 +43,15 @@ impl BlockTracker {
 
         let mut inner = self.shared.inner.lock().unwrap();
 
+        inner.pending_blocks.remove(block_id);
+
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
             missing_block
         } else {
             return;
         };
 
-        for (client_id, _) in missing_block.clients {
+        for client_id in missing_block.clients {
             if let Some(block_ids) = inner.clients.get_mut(client_id) {
                 block_ids.remove(block_id);
             }
@@ -79,7 +65,7 @@ impl BlockTracker {
             .lock()
             .unwrap()
             .clients
-            .insert(HashSet::new());
+            .insert(HashSet::default());
 
         let notify_rx = self.shared.notify_tx.subscribe();
 
@@ -88,6 +74,16 @@ impl BlockTracker {
             client_id,
             notify_rx,
         }
+    }
+
+    #[cfg(test)]
+    fn contains(&self, block_id: &BlockId) -> bool {
+        self.shared
+            .inner
+            .lock()
+            .unwrap()
+            .missing_blocks
+            .contains_key(block_id)
     }
 }
 
@@ -115,13 +111,11 @@ impl BlockTrackerClient {
             .missing_blocks
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
-                clients: HashMap::new(),
+                clients: HashSet::default(),
                 state: MissingBlockState::Offered,
             });
 
-        missing_block
-            .clients
-            .insert(self.client_id, ClientState::Offered);
+        missing_block.clients.insert(self.client_id);
 
         true
     }
@@ -130,15 +124,14 @@ impl BlockTrackerClient {
     pub fn cancel(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        inner.clients[self.client_id].remove(block_id);
-
-        let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else { return };
+        if !inner.clients[self.client_id].remove(block_id) {
+            return;
+        }
 
         tracing::trace!(?block_id, "cancel");
 
-        missing_block
-            .clients
-            .insert(self.client_id, ClientState::Cancelled);
+        // unwrap is ok because of the invariant in `Inner`
+        let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
         if missing_block
             .state
@@ -171,7 +164,6 @@ impl BlockTrackerClient {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
-        // First try to accept a required block offered by this client.
         // TODO: OPTIMIZE (but profile first) this linear lookup
         for block_id in &inner.clients[self.client_id] {
             // unwrap is ok because of the invariant in `Inner`
@@ -181,55 +173,6 @@ impl BlockTrackerClient {
                 .state
                 .switch_required_to_accepted(self.client_id)
             {
-                tracing::trace!(?block_id, "accept offered");
-                return Some(*block_id);
-            }
-        }
-
-        // If none, try to accept a required block with no offers. This is because there are some
-        // edge cases where a block might be required even before any replica offered it.
-        //
-        // Example of such edge case:
-        //
-        // A block is initially present, but is part of a an outdated file/directory. A new snapshot
-        // is in the process of being downloaded from a remote replica. During this download, the
-        // block is still present and so is not marked as offered (because at least one of its
-        // local ancestor nodes is still seen as up-to-date). Then before the download completes,
-        // the worker garbage-collects the block. Then the download completes and triggers another
-        // worker run. During this run the block might be marked as required again (because e.g.
-        // the file was modified by the remote replica). But the block hasn't been marked as
-        // offered (because it was still present during the last snapshot download) and so is not
-        // requested. We now have to wait for the next snapshot update from the remote replica
-        // before the block is marked as offered and only then we proceed with requesting it. This
-        // can take arbitrarily long (even indefinitely).
-        //
-        // By accepting also non-offered blocks, we ensure that the missing block is requested as
-        // soon as possible.
-        //
-        // One downside of this is we might send block requests to replicas that don't have then,
-        // wasting some traffic. This situation should not happen too often so this is considered
-        // acceptable.
-        'outer: for (block_id, missing_block) in &mut inner.missing_blocks {
-            for (client_id, state) in &missing_block.clients {
-                match state {
-                    ClientState::Offered => {
-                        // This block has offers
-                        continue 'outer;
-                    }
-                    ClientState::Cancelled if *client_id == self.client_id => {
-                        // This block was already requested by this client and cancelled. No point
-                        // trying it again.
-                        continue 'outer;
-                    }
-                    ClientState::Cancelled => (),
-                }
-            }
-
-            if missing_block
-                .state
-                .switch_required_to_accepted(self.client_id)
-            {
-                tracing::trace!(?block_id, "accept unoffered");
                 return Some(*block_id);
             }
         }
@@ -264,6 +207,50 @@ impl Drop for BlockTrackerClient {
     }
 }
 
+pub(crate) struct Require {
+    shared: Arc<Shared>,
+    block_id: BlockId,
+}
+
+impl Require {
+    pub fn commit(self) {
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        if !inner.pending_blocks.contains(&self.block_id) {
+            // Block already completed in the meantime.
+            return;
+        }
+
+        let new = match inner.missing_blocks.entry(self.block_id) {
+            Entry::Occupied(mut entry) => entry.get_mut().state.switch_offered_to_required(),
+            Entry::Vacant(entry) => {
+                entry.insert(MissingBlock {
+                    clients: HashSet::default(),
+                    state: MissingBlockState::Required,
+                });
+
+                true
+            }
+        };
+
+        if new {
+            tracing::trace!(block_id = ?self.block_id, "require");
+            self.shared.notify();
+        }
+    }
+}
+
+impl Drop for Require {
+    fn drop(&mut self) {
+        self.shared
+            .inner
+            .lock()
+            .unwrap()
+            .pending_blocks
+            .remove(&self.block_id);
+    }
+}
+
 struct Shared {
     inner: BlockingMutex<Inner>,
     notify_tx: watch::Sender<()>,
@@ -277,7 +264,7 @@ impl Shared {
 
 // Invariant: for all `block_id` and `client_id` such that
 //
-//     missing_blocks[block_id].clients.get(client_id) == Some(ClientState::Offered)
+//     missing_blocks[block_id].clients.contains(client_id)
 //
 // it must hold that
 //
@@ -286,11 +273,12 @@ impl Shared {
 // and vice-versa.
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
+    pending_blocks: HashSet<BlockId>,
     clients: Slab<HashSet<BlockId>>,
 }
 
 struct MissingBlock {
-    clients: HashMap<ClientId, ClientState>,
+    clients: HashSet<ClientId>,
     state: MissingBlockState,
 }
 
@@ -299,11 +287,6 @@ enum MissingBlockState {
     Offered,
     Required,
     Accepted(ClientId),
-}
-
-enum ClientState {
-    Offered,
-    Cancelled,
 }
 
 impl MissingBlockState {
@@ -346,10 +329,9 @@ mod tests {
         super::{BlockData, BLOCK_SIZE},
         *,
     };
-    use crate::test_utils;
+    use crate::{collections::HashSet, test_utils};
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::collections::HashSet;
     use test_strategy::proptest;
     use tokio::{sync::Barrier, task};
 
@@ -367,47 +349,17 @@ mod tests {
         client.offer(block0.id);
         assert_eq!(client.try_accept(), None);
 
+        // Required but not offered blocks are not returned
+        let block1 = make_block();
+        tracker.begin_require(block1.id).commit();
+        assert_eq!(client.try_accept(), None);
+
         // Required + offered blocks are returned...
-        tracker.require(block0.id);
+        tracker.begin_require(block0.id).commit();
         assert_eq!(client.try_accept(), Some(block0.id));
 
         // ...but only once.
         assert_eq!(client.try_accept(), None);
-    }
-
-    #[test]
-    fn required_unoffered() {
-        let tracker = BlockTracker::new();
-        let client = tracker.client();
-
-        let block0 = make_block();
-        let block1 = make_block();
-
-        tracker.require(block0.id);
-        tracker.require(block1.id);
-
-        // Required + offered blocks are returned first...
-        client.offer(block1.id);
-        assert_eq!(client.try_accept(), Some(block1.id));
-
-        // ...but required + non offered blocks are eventually returned as well
-        assert_eq!(client.try_accept(), Some(block0.id));
-    }
-
-    #[test]
-    fn required_unoffered_cancel() {
-        let tracker = BlockTracker::new();
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        tracker.require(block.id);
-        assert_eq!(client0.try_accept(), Some(block.id));
-
-        client0.cancel(&block.id);
-        assert_eq!(client0.try_accept(), None);
-        assert_eq!(client1.try_accept(), Some(block.id));
     }
 
     #[test]
@@ -419,7 +371,7 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
         client0.offer(block.id);
         client1.offer(block.id);
 
@@ -438,7 +390,7 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
         client0.offer(block.id);
         client1.offer(block.id);
 
@@ -463,7 +415,7 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
 
         drop(client0);
 
@@ -482,7 +434,7 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
 
         assert_eq!(client0.try_accept(), Some(block.id));
         assert_eq!(client1.try_accept(), None);
@@ -506,9 +458,24 @@ mod tests {
 
         drop(client0);
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
 
         assert_eq!(client1.try_accept(), Some(block.id));
+    }
+
+    #[test]
+    fn concurrent_require_and_complete() {
+        let tracker = BlockTracker::new();
+        let client = tracker.client();
+
+        let block = make_block();
+        client.offer(block.id);
+
+        let require = tracker.begin_require(block.id);
+        tracker.complete(&block.id);
+        require.commit();
+
+        assert!(!tracker.contains(&block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -520,14 +487,14 @@ mod tests {
 
         let block = make_block();
 
-        tracker.require(block.id);
+        tracker.begin_require(block.id).commit();
 
         for client in &clients {
             client.offer(block.id);
         }
 
         // Make sure all clients stay alive until we are done so that any accepted requests are not
-        // released prematurelly.
+        // released prematurely.
         let barrier = Arc::new(Barrier::new(clients.len()));
 
         // Run the clients in parallel
@@ -581,7 +548,7 @@ mod tests {
         for (op, block_id) in ops {
             match op {
                 Op::Require => {
-                    tracker.require(block_id);
+                    tracker.begin_require(block_id).commit();
                 }
                 Op::Offer => {
                     client.offer(block_id);

@@ -3,7 +3,6 @@ use crate::{
     blob_id::BlobId,
     block::BlockId,
     branch::Branch,
-    db,
     error::{Error, Result},
     index::SnapshotData,
     locator::Locator,
@@ -14,12 +13,13 @@ pub(crate) struct BlockIds {
     branch: Branch,
     snapshot: SnapshotData,
     locator: Locator,
-    end: Option<u32>,
+    upper_bound: Option<u32>,
 }
 
 impl BlockIds {
-    pub async fn open(conn: &mut db::Connection, branch: Branch, blob_id: BlobId) -> Result<Self> {
-        let snapshot = branch.data().load_snapshot(conn).await?;
+    pub async fn open(branch: Branch, blob_id: BlobId) -> Result<Self> {
+        let mut tx = branch.db().begin_read().await?;
+        let snapshot = branch.data().load_snapshot(&mut tx).await?;
 
         // If the first block of the blob is available, we read the blob length from it and use it
         // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.
@@ -30,30 +30,33 @@ impl BlockIds {
         // stop iterating before we hit `EntryNotFound` and we would end up processing also the
         // blocks that are past the end of the blob. This means that e.g., the garbage collector
         // would consider those blocks still reachable and would never remove them.
-        let end = match read_len(conn, &snapshot, branch.keys().read(), blob_id).await {
+        let upper_bound = match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
             Ok(len) => Some(block_count(len)),
             Err(Error::BlockNotFound(_)) => None,
             Err(error) => return Err(error),
         };
 
+        tracing::trace!(?upper_bound);
+
         Ok(Self {
             branch,
             snapshot,
             locator: Locator::head(blob_id),
-            end,
+            upper_bound,
         })
     }
 
-    pub async fn try_next(&mut self, conn: &mut db::Connection) -> Result<Option<BlockId>> {
-        if let Some(end) = self.end {
-            if self.locator.number() >= end {
+    pub async fn try_next(&mut self) -> Result<Option<BlockId>> {
+        if let Some(upper_bound) = self.upper_bound {
+            if self.locator.number() >= upper_bound {
                 return Ok(None);
             }
         }
 
         let encoded = self.locator.encode(self.branch.keys().read());
+        let mut tx = self.branch.db().begin_read().await?;
 
-        match self.snapshot.get_block(conn, &encoded).await {
+        match self.snapshot.get_block(&mut tx, &encoded).await {
             Ok((block_id, _)) => {
                 self.locator = self.locator.next();
                 Ok(Some(block_id))

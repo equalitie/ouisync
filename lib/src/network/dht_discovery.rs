@@ -1,16 +1,18 @@
 use super::{
     peer_addr::PeerAddr,
-    quic,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::HashMap,
+    scoped_task::{self, ScopedJoinHandle},
+};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
+use net::quic;
 use rand::Rng;
 use std::{
-    collections::HashMap,
     future::pending,
     io,
     net::SocketAddr,
@@ -18,12 +20,12 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 use tokio::{
     select,
     sync::{mpsc, watch},
-    time,
+    time::{self, Duration},
 };
 use tracing::{instrument::Instrument, Span};
 
@@ -181,7 +183,7 @@ impl MonitoredDht {
         let dht = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(false)
-            .start(socket)
+            .start(Socket(socket))
             // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
             // since we just succeeded in binding the socket above, that shouldn't happen.
             .unwrap();
@@ -191,13 +193,13 @@ impl MonitoredDht {
             let dht = dht.clone();
 
             async move {
-                tracing::trace!(first_bootstrap = "in progress");
+                state_monitor!(first_bootstrap = "in progress");
 
                 if dht.bootstrapped(None).await {
-                    tracing::trace!(first_bootstrap = "done");
+                    state_monitor!(first_bootstrap = "done");
                     tracing::info!("bootstrap complete");
                 } else {
-                    tracing::trace!(first_bootstrap = "failed");
+                    state_monitor!(first_bootstrap = "failed");
                     tracing::error!("bootstrap failed");
 
                     // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
@@ -211,7 +213,7 @@ impl MonitoredDht {
                     probe_counter += 1;
 
                     if let Some(state) = dht.get_state().await {
-                        tracing::trace!(
+                        state_monitor!(
                             probe_counter,
                             is_running = state.is_running,
                             bootstrapped = state.bootstrapped,
@@ -220,7 +222,7 @@ impl MonitoredDht {
                             bucket_count = state.bucket_count,
                         );
                     } else {
-                        tracing::trace!(
+                        state_monitor!(
                             probe_counter,
                             is_running = false,
                             bootstrapped = false,
@@ -294,7 +296,7 @@ impl Lookup {
         wake_up_rx.borrow_and_update();
 
         let seen_peers = Arc::new(SeenPeers::new());
-        let requests = Arc::new(Mutex::new(HashMap::new()));
+        let requests = Arc::new(Mutex::new(HashMap::default()));
 
         let task = if dht_v4.is_some() || dht_v6.is_some() {
             let span = tracing::info_span!(parent: span, "lookup", ?info_hash);
@@ -369,7 +371,7 @@ impl Lookup {
         span: Span,
     ) -> ScopedJoinHandle<()> {
         let task = async move {
-            tracing::trace!(state = "started");
+            state_monitor!(state = "started");
 
             // Wait for the first request to be created
             wake_up.changed().await.unwrap_or(());
@@ -378,7 +380,7 @@ impl Lookup {
                 seen_peers.start_new_round();
 
                 tracing::debug!("starting search");
-                tracing::trace!(state = "making request");
+                state_monitor!(state = "making request");
 
                 // find peers for the repo and also announce that we have it.
                 let dhts = dht_v4.iter().chain(dht_v6.iter());
@@ -391,7 +393,7 @@ impl Lookup {
                     .flatten()
                 }));
 
-                tracing::trace!(state = "awaiting results");
+                state_monitor!(state = "awaiting results");
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
@@ -415,7 +417,7 @@ impl Lookup {
                         time.format("%T"),
                         duration
                     );
-                    tracing::trace!(state = format!("sleeping until {}", time.format("%T")));
+                    state_monitor!(state = format!("sleeping until {}", time.format("%T")));
                 }
 
                 select! {
@@ -434,17 +436,19 @@ impl Lookup {
     }
 }
 
+struct Socket(quic::SideChannel);
+
 #[async_trait]
-impl btdht::SocketTrait for quic::SideChannel {
+impl btdht::SocketTrait for Socket {
     async fn send_to(&self, buf: &[u8], target: &SocketAddr) -> io::Result<()> {
-        self.send_to(buf, target).await
+        self.0.send_to(buf, target).await
     }
 
     async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.recv_from(buf).await
+        self.0.recv_from(buf).await
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.local_addr()
+        self.0.local_addr()
     }
 }

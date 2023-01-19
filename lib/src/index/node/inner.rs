@@ -58,8 +58,12 @@ impl InnerNode {
             (bucket, node)
         })
         .try_filter_map(|(bucket, node)| {
-            // TODO: consider reporting out-of-range buckets as errors
-            future::ready(Ok(bucket.try_into().ok().map(|bucket| (bucket, node))))
+            if let Ok(bucket) = bucket.try_into() {
+                future::ready(Ok(Some((bucket, node))))
+            } else {
+                tracing::error!("bucket out of range: {:?}", bucket);
+                future::ready(Ok(None))
+            }
         })
         .try_collect()
         .await
@@ -122,7 +126,7 @@ impl InnerNode {
         .bind(&self.hash)
         .bind(self.summary.is_complete)
         .bind(&self.summary.block_presence)
-        .execute(&mut **tx)
+        .execute(tx)
         .await?;
 
         Ok(())
@@ -140,7 +144,7 @@ impl InnerNode {
         .bind(summary.is_complete)
         .bind(&summary.block_presence)
         .bind(hash)
-        .execute(&mut **tx)
+        .execute(tx)
         .await?;
 
         Ok(())

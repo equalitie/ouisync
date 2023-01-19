@@ -2,7 +2,7 @@ use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
     proof::Proof,
-    VersionVectorOp,
+    Summary, VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -18,6 +18,7 @@ use crate::{
 };
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::broadcast;
+use tracing::instrument;
 
 type LocatorHash = Hash;
 
@@ -44,6 +45,7 @@ impl BranchData {
         SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
+    #[instrument(skip_all, err(Debug))]
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
@@ -133,12 +135,12 @@ impl BranchData {
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_snapshot(conn)
+        self.load_snapshot(tx)
             .await?
-            .get_block(conn, encoded_locator)
+            .get_block(tx, encoded_locator)
             .await
     }
 
@@ -222,6 +224,7 @@ impl SnapshotData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
+    #[instrument(skip_all, err(Debug))]
     pub async fn insert_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -245,6 +248,7 @@ impl SnapshotData {
 
     /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
     /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
+    #[instrument(skip_all, err(Debug))]
     pub async fn remove_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -270,31 +274,31 @@ impl SnapshotData {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
+    #[instrument(skip_all, err(Debug))]
     pub async fn get_block(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_path(conn, encoded_locator)
-            .await?
-            .get_leaf()
-            .ok_or(Error::EntryNotFound)
+        let path = self.load_path(tx, encoded_locator).await?;
+        path.get_leaf().ok_or(Error::EntryNotFound)
     }
 
     /// Update the root version vector of this branch.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
+    #[instrument(skip_all, fields(op), err(Debug))]
     pub async fn bump(
-        self,
+        &mut self,
         tx: &mut db::WriteTransaction,
         op: &VersionVectorOp,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut new_vv = self.root_node.proof.version_vector.clone();
         op.apply(self.branch_id(), &mut new_vv);
+
+        // Sometimes `op` is a no-op. This is not an error.
+        if new_vv == self.root_node.proof.version_vector {
+            return Ok(());
+        }
 
         let new_proof = Proof::new(
             self.root_node.proof.writer_id,
@@ -303,9 +307,8 @@ impl SnapshotData {
             write_keys,
         );
 
-        self.root_node.update_proof(tx, new_proof).await?;
-
-        Ok(())
+        self.create_root_node(tx, new_proof, self.root_node.summary)
+            .await
     }
 
     /// Remove this snapshot
@@ -341,6 +344,7 @@ impl SnapshotData {
                 tracing::trace!(
                     branch.id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
                     "not removing outdated snapshot - possible fallback"
                 );
 
@@ -351,6 +355,7 @@ impl SnapshotData {
                 tracing::trace!(
                     branch.id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
                     "removing outdated snapshot"
                 );
 
@@ -370,7 +375,7 @@ impl SnapshotData {
 
     async fn load_path(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         encoded_locator: &LocatorHash,
     ) -> Result<Path> {
         let mut path = Path::new(
@@ -381,7 +386,7 @@ impl SnapshotData {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = InnerNode::load_children(conn, &parent).await?;
+            path.inner[level] = InnerNode::load_children(tx, &parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -390,7 +395,7 @@ impl SnapshotData {
             };
         }
 
-        path.leaves = LeafNode::load_children(conn, &parent).await?;
+        path.leaves = LeafNode::load_children(tx, &parent).await?;
 
         Ok(path)
     }
@@ -421,8 +426,23 @@ impl SnapshotData {
             .incremented(writer_id);
         let new_proof = Proof::new(writer_id, new_version_vector, path.root_hash, write_keys);
 
-        self.root_node =
-            RootNode::create(tx, Some(&self.root_node), new_proof, path.root_summary).await?;
+        self.create_root_node(tx, new_proof, path.root_summary)
+            .await
+    }
+
+    async fn create_root_node(
+        &mut self,
+        tx: &mut db::WriteTransaction,
+        new_proof: Proof,
+        new_summary: Summary,
+    ) -> Result<()> {
+        tracing::trace!(
+            vv = ?new_proof.version_vector,
+            hash = ?new_proof.hash,
+            "create local snapshot"
+        );
+
+        self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
 
         Ok(())
     }
@@ -465,6 +485,8 @@ async fn count_leaf_nodes(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
@@ -472,10 +494,15 @@ mod tests {
         locator::Locator,
         test_utils,
     };
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use proptest::{arbitrary::any, collection::vec};
+    use rand::{
+        rngs::StdRng,
+        seq::{IteratorRandom, SliceRandom},
+        Rng, SeedableRng,
+    };
     use sqlx::Row;
     use tempfile::TempDir;
-    use test_strategy::proptest;
+    use test_strategy::{proptest, Arbitrary};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
@@ -672,6 +699,99 @@ mod tests {
         }
     }
 
+    #[proptest]
+    fn prune(
+        #[strategy(vec(any::<PruneTestOp>(), 1..32))] ops: Vec<PruneTestOp>,
+        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
+    ) {
+        test_utils::run(prune_case(ops, rng_seed))
+    }
+
+    #[derive(Arbitrary, Debug)]
+    enum PruneTestOp {
+        Insert,
+        Remove,
+        Bump,
+        Prune,
+    }
+
+    async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let (_base_dir, pool, branch) = setup().await;
+        let write_keys = Keypair::generate(&mut rng);
+
+        let mut snapshot = {
+            let mut conn = pool.acquire().await.unwrap();
+            branch
+                .load_or_create_snapshot(&mut conn, &write_keys)
+                .await
+                .unwrap()
+        };
+
+        let mut expected = BTreeMap::new();
+
+        for op in ops {
+            // Apply op
+            match op {
+                PruneTestOp::Insert => {
+                    let locator = rng.gen();
+                    let block_id = rng.gen();
+
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .insert_block(
+                            &mut tx,
+                            &locator,
+                            &block_id,
+                            SingleBlockPresence::Present,
+                            &write_keys,
+                        )
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+
+                    expected.insert(locator, block_id);
+                }
+                PruneTestOp::Remove => {
+                    let Some(locator) = expected.keys().choose(&mut rng).copied() else {
+                        continue;
+                    };
+
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .remove_block(&mut tx, &locator, None, &write_keys)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+
+                    expected.remove(&locator);
+                }
+                PruneTestOp::Bump => {
+                    let mut tx = pool.begin_write().await.unwrap();
+                    snapshot
+                        .bump(&mut tx, &VersionVectorOp::IncrementLocal, &write_keys)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+                }
+                PruneTestOp::Prune => {
+                    snapshot.prune(&pool).await.unwrap();
+                }
+            }
+
+            // Verify all expected blocks still present
+            let mut tx = pool.begin_read().await.unwrap();
+
+            for (locator, expected_block_id) in &expected {
+                let (actual_block_id, _) = snapshot.get_block(&mut tx, locator).await.unwrap();
+                assert_eq!(actual_block_id, *expected_block_id);
+            }
+
+            // Verify the snapshot is still complete
+            check_complete(&mut tx, &snapshot).await;
+        }
+    }
+
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {
         sqlx::query(
             "SELECT
@@ -691,6 +811,28 @@ mod tests {
             .await
             .unwrap()
             .is_some()
+    }
+
+    async fn check_complete(conn: &mut db::Connection, snapshot: &SnapshotData) {
+        if snapshot.root_node.proof.hash == *EMPTY_INNER_HASH {
+            return;
+        }
+
+        let nodes = InnerNode::load_children(conn, &snapshot.root_node.proof.hash)
+            .await
+            .unwrap();
+        assert!(!nodes.is_empty());
+
+        let mut stack: Vec<_> = nodes.into_iter().map(|(_, node)| node).collect();
+
+        while let Some(node) = stack.pop() {
+            let inners = InnerNode::load_children(conn, &node.hash).await.unwrap();
+            let leaves = LeafNode::load_children(conn, &node.hash).await.unwrap();
+
+            assert!(inners.len() + leaves.len() > 0);
+
+            stack.extend(inners.into_iter().map(|(_, node)| node));
+        }
     }
 
     async fn init_db() -> (TempDir, db::Pool) {

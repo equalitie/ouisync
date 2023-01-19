@@ -5,11 +5,11 @@ use std::{
     pin::Pin,
     sync::{Arc, RwLock},
     task::{Context, Poll},
-    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::broadcast,
+    time::Duration,
 };
 
 const CERT_DOMAIN: &str = "ouisync.net";
@@ -314,13 +314,9 @@ impl Drop for OwnedWriteHalf {
 }
 
 //------------------------------------------------------------------------------
-pub(super) fn configure(
-    socket: std::net::UdpSocket,
-) -> Result<(Connector, Acceptor, SideChannelMaker)> {
+pub async fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, SideChannelMaker)> {
     let server_config = make_server_config()?;
-
-    let custom_socket = CustomUdpSocket::from_std(socket)?;
-
+    let custom_socket = CustomUdpSocket::bind(bind_addr).await?;
     let side_channel_maker = custom_socket.side_channel_maker();
 
     let (mut endpoint, incoming) = quinn::Endpoint::new_with_abstract_socket(
@@ -344,14 +340,16 @@ pub(super) fn configure(
 }
 
 //------------------------------------------------------------------------------
+pub use quinn::{ConnectError, ConnectionError, WriteError};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("connect error")]
-    Connect(#[from] quinn::ConnectError),
+    Connect(#[from] ConnectError),
     #[error("connection error")]
-    Connection(#[from] quinn::ConnectionError),
+    Connection(#[from] ConnectionError),
     #[error("write error")]
-    Write(#[from] quinn::WriteError),
+    Write(#[from] WriteError),
     #[error("done accepting error")]
     DoneAccepting,
     #[error("IO error")]
@@ -444,23 +442,27 @@ struct Packet {
 }
 
 #[derive(Debug)]
-pub(super) struct CustomUdpSocket {
+struct CustomUdpSocket {
     io: Arc<tokio::net::UdpSocket>,
     quinn_socket_state: quinn_udp::UdpSocketState,
     side_channel_tx: broadcast::Sender<Packet>,
 }
 
 impl CustomUdpSocket {
-    pub fn from_std(sock: std::net::UdpSocket) -> io::Result<Self> {
-        quinn_udp::UdpSocketState::configure((&sock).into())?;
+    async fn bind(addr: SocketAddr) -> io::Result<Self> {
+        let socket = crate::udp::UdpSocket::bind(addr).await?;
+        let socket = socket.into_std()?;
+
+        quinn_udp::UdpSocketState::configure((&socket).into())?;
+
         Ok(Self {
-            io: Arc::new(tokio::net::UdpSocket::from_std(sock)?),
+            io: Arc::new(tokio::net::UdpSocket::from_std(socket)?),
             quinn_socket_state: quinn_udp::UdpSocketState::new(),
             side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
         })
     }
 
-    pub fn side_channel_maker(&self) -> SideChannelMaker {
+    fn side_channel_maker(&self) -> SideChannelMaker {
         SideChannelMaker {
             io: self.io.clone(),
             side_channel_tx: self.side_channel_tx.clone(),
@@ -551,7 +553,7 @@ fn send_to_side_channels(
 //------------------------------------------------------------------------------
 
 /// Makes new `SideChannel`s.
-pub(super) struct SideChannelMaker {
+pub struct SideChannelMaker {
     io: Arc<tokio::net::UdpSocket>,
     side_channel_tx: broadcast::Sender<Packet>,
 }
@@ -565,7 +567,7 @@ impl SideChannelMaker {
     }
 }
 
-pub(super) struct SideChannel {
+pub struct SideChannel {
     io: Arc<tokio::net::UdpSocket>,
     packet_receiver: broadcast::Receiver<Packet>,
 }
@@ -604,7 +606,7 @@ impl SideChannel {
 // `SideChannelSender` is less expensive than the `SideChannel` because there is no additional
 // `broadcast::Receiver` that the `CustomUdpSocket` would need to pass messages to.
 #[derive(Clone)]
-pub(super) struct SideChannelSender {
+pub struct SideChannelSender {
     io: Arc<tokio::net::UdpSocket>,
 }
 
@@ -625,11 +627,10 @@ mod tests {
         task,
     };
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn small_data_exchange() {
-        let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-
-        let (connector, mut acceptor, _) = configure(socket).unwrap();
+        let (connector, mut acceptor, _) =
+            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
 
         let addr = *acceptor.local_addr();
 
@@ -652,12 +653,11 @@ mod tests {
         h2.await.unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {
-        let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let addr = socket.local_addr().unwrap();
-
-        let (_connector, mut acceptor, side_channel_maker) = configure(socket).unwrap();
+        let (_connector, mut acceptor, side_channel_maker) =
+            configure((Ipv4Addr::LOCALHOST, 0).into()).await.unwrap();
+        let addr = *acceptor.local_addr();
         let mut side_channel = side_channel_maker.make();
 
         // We must ensure quinn polls on the socket for side channel to be able to receive data.

@@ -1,96 +1,205 @@
 //! Networking tests
 
+// These test mostly require QUIC / UDP which the simulator doesn't support yet.
+#![cfg(not(feature = "simulation"))]
+
 mod common;
 
-use self::common::{Env, Proto, DEFAULT_TIMEOUT};
-use std::{net::Ipv4Addr, time::Duration};
-use tokio::{select, time};
+use self::common::{actor, Env, NetworkExt, Proto, TEST_TIMEOUT};
+use ouisync::network::Network;
+use std::{net::Ipv4Addr, sync::Arc};
+use tokio::{
+    sync::Barrier,
+    time::{self, Duration},
+};
 
-#[tokio::test(flavor = "multi_thread")]
-async fn peer_exchange() {
-    let mut env = Env::with_seed(0);
-    let proto = Proto::Quic;
+// This test requires QUIC which is not yet supported in simulation
+#[test]
+fn peer_exchange() {
+    let mut env = Env::new();
+    let proto = Proto::Quic; // PEX works only with QUIC
+    let barrier = Arc::new(Barrier::new(3));
 
-    // B and C are initially connected only to A...
-    let node_a = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_b = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-    let node_c = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
+    // Bob and Carol are initially connected only to Alice but eventually they connect to each
+    // other via peer exchange.
 
-    node_b
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_a.network));
-    node_c
-        .network
-        .add_user_provided_peer(&proto.listener_local_addr_v4(&node_a.network));
+    env.actor("alice", {
+        let barrier = barrier.clone();
 
-    let repo_a = env.create_repo().await;
-    let reg_a = node_a.network.handle().register(repo_a.store().clone());
-    reg_a.enable_pex();
+        async move {
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            reg.enable_pex();
 
-    let repo_b = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_b = node_b.network.handle().register(repo_b.store().clone());
-    reg_b.enable_pex();
-
-    let repo_c = env.create_repo_with_secrets(repo_a.secrets().clone()).await;
-    let reg_c = node_c.network.handle().register(repo_c.store().clone());
-    reg_c.enable_pex();
-
-    let addr_b = proto.listener_local_addr_v4(&node_b.network);
-    let addr_c = proto.listener_local_addr_v4(&node_c.network);
-
-    let mut rx_b = node_b.network.on_peer_set_change();
-    let mut rx_c = node_c.network.on_peer_set_change();
-
-    // ...eventually B and C connect to each other via peer exchange.
-    let connected = async {
-        loop {
-            if node_b.network.knows_peer(addr_c) && node_c.network.knows_peer(addr_b) {
-                break;
-            }
-
-            select! {
-                result = rx_b.changed() => result.unwrap(),
-                result = rx_c.changed() => result.unwrap(),
-            }
+            barrier.wait().await;
         }
-    };
+    });
 
-    time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
+    env.actor("bob", {
+        let barrier = barrier.clone();
+
+        async move {
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            network.connect("alice");
+            reg.enable_pex();
+
+            expect_knows(&network, "carol").await;
+            barrier.wait().await;
+        }
+    });
+
+    env.actor("carol", {
+        async move {
+            let network = actor::create_network(proto).await;
+            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            network.connect("alice");
+            reg.enable_pex();
+
+            expect_knows(&network, "bob").await;
+            barrier.wait().await;
+        }
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_idle() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn network_disable_enable_idle() {
+    let mut env = Env::new();
     let proto = Proto::Quic;
-    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = env.create_node(bind).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
+    env.actor("only", async move {
+        let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+        let network = actor::create_unbound_network();
 
-    node.network.handle().bind(&[]).await;
-    node.network.handle().bind(&[bind]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_0 = proto.listener_local_addr_v4(&network);
 
-    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
-    assert_eq!(local_addr_1, local_addr_0);
+        network.handle().bind(&[]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_1 = proto.listener_local_addr_v4(&network);
+
+        assert_eq!(local_addr_1, local_addr_0);
+    });
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_pending_connection() {
-    let mut env = Env::with_seed(0);
+#[test]
+fn network_disable_enable_pending_connection() {
+    let mut env = Env::new();
     let proto = Proto::Quic;
-    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
 
-    let node = env.create_node(bind).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
+    // Just for name lookup
+    env.actor("remote", async {});
 
-    let remote_addr = proto.wrap((Ipv4Addr::LOCALHOST, 12345));
-    node.network.add_user_provided_peer(&remote_addr);
+    env.actor("local", async move {
+        let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+        let network = actor::create_unbound_network();
 
-    // Wait until the connection starts begin established.
-    let mut rx = node.network.on_peer_set_change();
-    time::timeout(DEFAULT_TIMEOUT, async {
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_0 = proto.listener_local_addr_v4(&network);
+
+        // Connect and wait until the connection starts begin established.
+        network.connect("remote");
+        expect_knows(&network, "remote").await;
+
+        network.handle().bind(&[]).await;
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_1 = proto.listener_local_addr_v4(&network);
+
+        assert_eq!(local_addr_1, local_addr_0);
+    });
+}
+
+#[test]
+fn network_disable_enable_addr_takeover() {
+    use tokio::net::UdpSocket;
+
+    let mut env = Env::new();
+    let proto = Proto::Quic;
+
+    env.actor("wendy", async move {
+        let bind_addr = proto.wrap((Ipv4Addr::LOCALHOST, 0));
+        let network = actor::create_unbound_network();
+
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_0 = proto.listener_local_addr_v4(&network);
+
+        network.handle().bind(&[]).await;
+
+        // Bind some other socket to the same address while the network is disabled.
+        let _socket = time::timeout(TEST_TIMEOUT, async {
+            loop {
+                if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
+                    break socket;
+                } else {
+                    time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        // Enabling the network binds it to a different port.
+        network.handle().bind(&[bind_addr]).await;
+        let local_addr_1 = proto.listener_local_addr_v4(&network);
+
+        assert_ne!(local_addr_1, local_addr_0);
+    });
+}
+
+// Test for an edge case that used to panic.
+#[test]
+fn dht_toggle() {
+    let mut env = Env::new();
+    let proto = Proto::Quic;
+
+    env.actor("eric", async move {
+        let network = actor::create_network(proto).await;
+        let (_repo, reg) = actor::create_linked_repo(&network).await;
+
+        reg.enable_dht();
+        reg.disable_dht();
+        reg.enable_dht();
+    });
+}
+
+#[test]
+fn local_discovery() {
+    let mut env = Env::new();
+    let proto = Proto::Quic;
+    let barrier = Arc::new(Barrier::new(2));
+
+    // The peers are initially disconnected and don't know each other's socket addesses.
+    // They eventually discover each other via local discovery.
+
+    for (src_port, dst_port) in [(7001, 7002), (7002, 7001)] {
+        let barrier = barrier.clone();
+
+        env.actor(&format!("node-{}", src_port), async move {
+            let network = actor::create_unbound_network();
+            network
+                .handle()
+                .bind(&[proto.wrap((Ipv4Addr::LOCALHOST, src_port))])
+                .await;
+
+            network.enable_local_discovery();
+
+            // Note we compare only the ports because we bind to `LOCALHOST` (127.0.0.1) but local
+            // discovery produces the actual LAN addresses which we don't know in advance (or
+            // rather can't be bothered to find out). Comparing the ports should be enough to test
+            // that local discovery works.
+            expect_knows_port(&network, dst_port).await;
+
+            barrier.wait().await;
+        });
+    }
+}
+
+async fn expect_knows(network: &Network, peer_name: &str) {
+    time::timeout(TEST_TIMEOUT, async move {
+        let mut rx = network.on_peer_set_change();
+
         loop {
-            if node.network.knows_peer(remote_addr) {
+            if network.knows(peer_name) {
                 break;
             }
 
@@ -98,113 +207,26 @@ async fn network_disable_enable_pending_connection() {
         }
     })
     .await
-    .unwrap();
-
-    node.network.handle().bind(&[]).await;
-    node.network.handle().bind(&[bind]).await;
-
-    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
-    assert_eq!(local_addr_1, local_addr_0);
+    .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn network_disable_enable_addr_takeover() {
-    use tokio::net::UdpSocket;
+async fn expect_knows_port(network: &Network, peer_port: u16) {
+    time::timeout(TEST_TIMEOUT, async move {
+        let mut rx = network.on_peer_set_change();
 
-    let mut env = Env::with_seed(0);
-    let proto = Proto::Quic;
-    let bind = proto.wrap((Ipv4Addr::LOCALHOST, 0));
-
-    let node = env.create_node(bind).await;
-    let local_addr_0 = proto.listener_local_addr_v4(&node.network);
-
-    node.network.handle().bind(&[]).await;
-
-    // Bind some other socket to the same address while the network is disabled.
-    let _socket = time::timeout(DEFAULT_TIMEOUT, async {
         loop {
-            if let Ok(socket) = UdpSocket::bind(local_addr_0.socket_addr()).await {
-                break socket;
-            } else {
-                time::sleep(Duration::from_millis(250)).await;
-            }
-        }
-    })
-    .await
-    .unwrap();
-
-    // Enabling the network binds it to a different port.
-    node.network.handle().bind(&[bind]).await;
-
-    let local_addr_1 = proto.listener_local_addr_v4(&node.network);
-    assert_ne!(local_addr_1, local_addr_0);
-}
-
-// Test for an edge case that used to panic.
-#[tokio::test(flavor = "multi_thread")]
-async fn dht_toggle() {
-    let mut env = Env::with_seed(0);
-    let proto = Proto::Quic;
-
-    let node = env.create_node(proto.wrap((Ipv4Addr::LOCALHOST, 0))).await;
-
-    let repo = env.create_repo().await;
-    let reg = node.network.handle().register(repo.store().clone());
-
-    reg.enable_dht();
-    reg.disable_dht();
-    reg.enable_dht();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn local_discovery() {
-    let mut env = Env::with_seed(0);
-    let proto = Proto::Quic;
-
-    // A and B are initially disconnected and don't know each other's socket addesses.
-    let node_a = env
-        .create_node(proto.wrap((Ipv4Addr::UNSPECIFIED, 0)))
-        .await;
-    let node_b = env
-        .create_node(proto.wrap((Ipv4Addr::UNSPECIFIED, 0)))
-        .await;
-
-    node_a.network.enable_local_discovery();
-    node_b.network.enable_local_discovery();
-
-    // Note we compare only the ports because we bind to `UNSPECIFIED` (0.0.0.0) and that's what
-    // `listener_local_addr_v4` returns as well, but local discovery produces the actual LAN
-    // addresses. Comparing the ports should be enough to test that local discovery works.
-    let port_a = proto.listener_local_addr_v4(&node_a.network).port();
-    let port_b = proto.listener_local_addr_v4(&node_b.network).port();
-
-    let mut rx_a = node_a.network.on_peer_set_change();
-    let mut rx_b = node_b.network.on_peer_set_change();
-
-    // ...eventually they discover each other via local discovery.
-    let connected = async {
-        loop {
-            let mut peer_ports_a = node_a
-                .network
-                .collect_peer_info()
-                .into_iter()
-                .map(|info| info.addr.port());
-            let mut peer_ports_b = node_b
-                .network
+            let mut peer_ports = network
                 .collect_peer_info()
                 .into_iter()
                 .map(|info| info.addr.port());
 
-            if peer_ports_a.any(|port| port == port_b) && peer_ports_b.any(|port| port == port_a) {
+            if peer_ports.any(|port| port == peer_port) {
                 break;
             }
 
-            select! {
-                result = rx_a.changed() => result.unwrap(),
-                result = rx_b.changed() => result.unwrap(),
-            }
+            rx.changed().await.unwrap();
         }
-    };
-
-    time::timeout(DEFAULT_TIMEOUT, connected).await.unwrap();
+    })
+    .await
+    .unwrap()
 }

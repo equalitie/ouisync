@@ -12,7 +12,6 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::collections::BTreeSet;
-use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
@@ -20,11 +19,10 @@ pub struct Store {
     pub(crate) block_tracker: BlockTracker,
     pub(crate) block_request_mode: BlockRequestMode,
     pub(crate) local_id: LocalId,
-    pub(crate) span: Span,
 }
 
 impl Store {
-    pub fn db(&self) -> &db::Pool {
+    pub(crate) fn db(&self) -> &db::Pool {
         &self.index.pool
     }
 
@@ -57,15 +55,12 @@ impl Store {
         })
     }
 
-    pub(crate) async fn require_missing_block(
-        &self,
-        conn: &mut db::Connection,
-        block_id: BlockId,
-    ) -> Result<()> {
-        // TODO: check whether the block is already required to avoid the potentially expensive db
-        // lookup.
-        if !block::exists(conn, &block_id).await? {
-            self.block_tracker.require(block_id);
+    pub(crate) async fn require_missing_block(&self, block_id: BlockId) -> Result<()> {
+        let require = self.block_tracker.begin_require(block_id);
+        let mut conn = self.db().acquire().await?;
+
+        if !block::exists(&mut conn, &block_id).await? {
+            require.commit();
         }
 
         Ok(())
@@ -180,6 +175,7 @@ mod tests {
     use super::*;
     use crate::{
         block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+        collections::HashSet,
         crypto::{
             cipher::SecretKey,
             sign::{Keypair, PublicKey},
@@ -198,7 +194,6 @@ mod tests {
     };
     use assert_matches::assert_matches;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use std::collections::HashSet;
     use tempfile::TempDir;
     use test_strategy::proptest;
     use tokio::sync::broadcast;
@@ -666,7 +661,6 @@ mod tests {
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
-            span: Span::none(),
         }
     }
 }

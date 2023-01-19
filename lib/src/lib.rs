@@ -5,7 +5,6 @@
 mod macros;
 
 pub mod crypto;
-pub mod db;
 pub mod deadlock;
 pub mod device_id;
 pub mod network;
@@ -16,8 +15,10 @@ mod blob;
 mod blob_id;
 mod block;
 mod branch;
+mod collections;
 mod config;
 mod conflict;
+mod db;
 mod debug;
 mod directory;
 mod error;

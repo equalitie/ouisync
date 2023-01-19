@@ -8,13 +8,13 @@ use std::{
     marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     select,
     sync::{mpsc, oneshot},
-    task, time,
+    task,
+    time::{self, Duration},
 };
 use tokio_stream::Timeout;
 use tokio_util::sync::{PollSendError, PollSender};

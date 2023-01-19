@@ -19,6 +19,7 @@ use crate::{
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
+use tracing::Instrument;
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -37,17 +38,17 @@ pub(crate) struct Blob {
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         branch: Branch,
         head_locator: Locator,
     ) -> Result<Self> {
-        let snapshot = branch.data().load_snapshot(conn).await?;
-        Self::open_in(conn, branch, &snapshot, head_locator).await
+        let snapshot = branch.data().load_snapshot(tx).await?;
+        Self::open_in(tx, branch, &snapshot, head_locator).await
     }
 
     /// Opens an existing blob in the given snapshot
     pub async fn open_in(
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         branch: Branch,
         snapshot: &SnapshotData,
         head_locator: Locator,
@@ -55,7 +56,7 @@ impl Blob {
         assert_eq!(branch.id(), snapshot.branch_id());
 
         let mut current_block =
-            OpenBlock::open_head(conn, snapshot, branch.keys().read(), head_locator).await?;
+            OpenBlock::open_head(tx, snapshot, branch.keys().read(), head_locator).await?;
         let len = current_block.content.read_u64();
 
         Ok(Self {
@@ -96,15 +97,15 @@ impl Blob {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(&mut self, conn: &mut db::Connection, buffer: &mut [u8]) -> Result<usize> {
-        let snapshot = self.branch.data().load_snapshot(conn).await?;
-        self.read_in(conn, &snapshot, buffer).await
+    pub async fn read(&mut self, tx: &mut db::ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
+        let snapshot = self.branch.data().load_snapshot(tx).await?;
+        self.read_in(tx, &snapshot, buffer).await
     }
 
     /// Reads data from this blob in the given snapshot.
     pub async fn read_in(
         &mut self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         snapshot: &SnapshotData,
         mut buffer: &mut [u8],
     ) -> Result<usize> {
@@ -135,7 +136,7 @@ impl Blob {
             // truncated this blob and we are trying to read pass its end. In that case we should
             // update `self.len` and try the loop again.
             let (id, content) =
-                read_block(conn, snapshot, self.branch.keys().read(), &locator).await?;
+                read_block(tx, snapshot, self.branch.keys().read(), &locator).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -145,15 +146,15 @@ impl Blob {
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self, conn: &mut db::Connection) -> Result<Vec<u8>> {
-        let snapshot = self.branch.data().load_snapshot(conn).await?;
-        self.read_to_end_in(conn, &snapshot).await
+    pub async fn read_to_end(&mut self, tx: &mut db::ReadTransaction) -> Result<Vec<u8>> {
+        let snapshot = self.branch.data().load_snapshot(tx).await?;
+        self.read_to_end_in(tx, &snapshot).await
     }
 
     /// Read all data from this blob in the given snapshot.
     pub async fn read_to_end_in(
         &mut self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         snapshot: &SnapshotData,
     ) -> Result<Vec<u8>> {
         assert_eq!(self.branch.id(), snapshot.branch_id());
@@ -165,7 +166,7 @@ impl Blob {
                 .unwrap_or(usize::MAX)
         ];
 
-        let len = self.read_in(conn, snapshot, &mut buffer).await?;
+        let len = self.read_in(tx, snapshot, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -230,7 +231,7 @@ impl Blob {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, conn: &mut db::Connection, pos: SeekFrom) -> Result<u64> {
+    pub async fn seek(&mut self, tx: &mut db::ReadTransaction, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.len),
             SeekFrom::End(n) => {
@@ -255,13 +256,13 @@ impl Blob {
 
         if block_number != self.current_block.locator.number() {
             let locator = self.head_locator.nth(block_number);
-            let snapshot = self.branch.data().load_snapshot(conn).await?;
+            let snapshot = self.branch.data().load_snapshot(tx).await?;
 
             // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
             // update `self.len` and try again.
             let (id, content) =
-                read_block(conn, &snapshot, self.branch.keys().read(), &locator).await?;
+                read_block(tx, &snapshot, self.branch.keys().read(), &locator).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -272,7 +273,7 @@ impl Blob {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, conn: &mut db::Connection, len: u64) -> Result<()> {
+    pub async fn truncate(&mut self, tx: &mut db::ReadTransaction, len: u64) -> Result<()> {
         if len == self.len {
             return Ok(());
         }
@@ -283,7 +284,7 @@ impl Blob {
         }
 
         if self.seek_position() > len {
-            self.seek(conn, SeekFrom::Start(len)).await?;
+            self.seek(tx, SeekFrom::Start(len)).await?;
         }
 
         self.len = len;
@@ -455,13 +456,15 @@ pub(crate) async fn fork(
         .load_or_create_snapshot(tx, write_keys)
         .await?;
 
-    let end = match read_len(tx, &src_snapshot, read_key, blob_id).await {
+    let upper_bound = match read_len(tx, &src_snapshot, read_key, blob_id).await {
         Ok(len) => block_count(len),
         Err(Error::BlockNotFound(_)) => u32::MAX,
         Err(error) => return Err(error),
     };
 
-    let locators = Locator::head(blob_id).sequence().take(end as usize);
+    tracing::trace!(upper_bound);
+
+    let locators = Locator::head(blob_id).sequence().take(upper_bound as usize);
 
     for locator in locators {
         let encoded_locator = locator.encode(read_key);
@@ -494,15 +497,18 @@ fn block_count(len: u64) -> u32 {
 }
 
 async fn read_block(
-    conn: &mut db::Connection,
+    tx: &mut db::ReadTransaction,
     snapshot: &SnapshotData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, _) = snapshot.get_block(conn, &locator.encode(read_key)).await?;
+    let (id, _) = snapshot
+        .get_block(tx, &locator.encode(read_key))
+        .instrument(tracing::info_span!("read_bloc", ?locator))
+        .await?;
 
     let mut buffer = Buffer::new();
-    let nonce = block::read(conn, &id, &mut buffer).await?;
+    let nonce = block::read(tx, &id, &mut buffer).await?;
 
     decrypt_block(read_key, &nonce, &mut buffer);
 
@@ -521,8 +527,6 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
-    tracing::trace!(?locator, ?id, "write block");
-
     // NOTE: make sure the index and block store operations run in the same order as in
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
@@ -534,6 +538,7 @@ async fn write_block(
             SingleBlockPresence::Present,
             write_keys,
         )
+        .instrument(tracing::info_span!("write_block", ?locator, ?id))
         .await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
@@ -546,12 +551,12 @@ async fn write_block(
 }
 
 async fn read_len(
-    conn: &mut db::Connection,
+    tx: &mut db::ReadTransaction,
     snapshot: &SnapshotData,
     read_key: &cipher::SecretKey,
     blob_id: BlobId,
 ) -> Result<u64> {
-    let (_, buffer) = read_block(conn, snapshot, read_key, &Locator::head(blob_id)).await?;
+    let (_, buffer) = read_block(tx, snapshot, read_key, &Locator::head(blob_id)).await?;
     Ok(Cursor::new(buffer).read_u64())
 }
 

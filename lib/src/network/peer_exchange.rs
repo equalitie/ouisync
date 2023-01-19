@@ -10,19 +10,18 @@ use super::{
     runtime_id::PublicRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::sync::uninitialized_watch;
+use crate::{
+    collections::{hash_map::Entry, HashMap, HashSet},
+    sync::uninitialized_watch,
+};
 use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 use tokio::{
     pin, select,
     sync::{mpsc, watch},
-    time::{self, Instant},
+    time::{self, Duration, Instant},
 };
 use tokio_stream::StreamExt;
 
@@ -331,7 +330,7 @@ struct RecentFilter {
 impl RecentFilter {
     fn new(expiry: Duration) -> Self {
         Self {
-            seen: HashMap::new(),
+            seen: HashMap::default(),
             expiry,
         }
     }

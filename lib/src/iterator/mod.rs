@@ -2,10 +2,8 @@ mod accumulate;
 mod combinations;
 mod sorted_union;
 
-use std::{
-    collections::{hash_set, HashSet},
-    hash::Hash,
-};
+use crate::collections::{hash_set, HashSet};
+use std::hash::Hash;
 
 #[cfg(test)]
 pub(crate) use self::combinations::PairCombinations;

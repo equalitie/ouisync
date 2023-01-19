@@ -203,17 +203,17 @@ impl<'a> DirectoryRef<'a> {
         &self,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Directory> {
-        let mut conn = self.branch().db().acquire().await?;
-        self.open_in(&mut conn, missing_block_strategy).await
+        let mut tx = self.branch().db().begin_read().await?;
+        self.open_in(&mut tx, missing_block_strategy).await
     }
 
     pub(crate) async fn open_in(
         &self,
-        conn: &mut db::Connection,
+        tx: &mut db::ReadTransaction,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Directory> {
         Directory::open_in(
-            conn,
+            tx,
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),

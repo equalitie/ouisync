@@ -28,7 +28,6 @@ impl Server {
         }
     }
 
-    #[instrument(name = "server", skip_all, err(Debug))]
     pub async fn run(&mut self) -> Result<()> {
         let Self { index, tx, rx } = self;
         let responder = Responder::new(index, tx, rx);
@@ -61,15 +60,44 @@ impl<'a> Responder<'a> {
         Ok(())
     }
 
-    #[instrument(skip(self))]
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
+            Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
             Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
             Request::Block(id) => self.handle_block(id).await,
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), err(Debug))]
+    async fn handle_root_node(&mut self, branch_id: PublicKey) -> Result<()> {
+        let mut conn = self.index.pool.acquire().await?;
+        let root_node = RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await;
+
+        match root_node {
+            Ok(node) => {
+                tracing::trace!("root node found");
+
+                let response = Response::RootNode {
+                    proof: node.proof.into(),
+                    summary: node.summary,
+                };
+
+                self.tx.send(response).await;
+                Ok(())
+            }
+            Err(Error::EntryNotFound) => {
+                tracing::warn!("root node not found");
+                self.tx.send(Response::RootNodeError(branch_id)).await;
+                Ok(())
+            }
+            Err(error) => {
+                self.tx.send(Response::RootNodeError(branch_id)).await;
+                Err(error)
+            }
+        }
+    }
+
+    #[instrument(skip(self), err(Debug))]
     async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
 
@@ -90,14 +118,14 @@ impl<'a> Responder<'a> {
                 self.tx.send(Response::LeafNodes(leaf_nodes)).await;
             }
         } else {
-            tracing::trace!("child nodes not found");
+            tracing::warn!("child nodes not found");
             self.tx.send(Response::ChildNodesError(parent_hash)).await;
         }
 
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), err(Debug))]
     async fn handle_block(&mut self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let mut conn = self.index.pool.acquire().await?;
@@ -111,7 +139,7 @@ impl<'a> Responder<'a> {
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
-                tracing::trace!("block not found");
+                tracing::warn!("block not found");
                 self.tx.send(Response::BlockError(id)).await;
                 Ok(())
             }

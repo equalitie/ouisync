@@ -611,7 +611,6 @@ async fn fork_then_remove_src_branch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_ids_test() {
     let (mut rng, _base_dir, pool, branch) = setup(0).await;
-    let mut tx = pool.begin_write().await.unwrap();
 
     let blob_id: BlobId = rng.gen();
     let head_locator = Locator::head(blob_id);
@@ -621,19 +620,20 @@ async fn block_ids_test() {
         .sample_iter(Standard)
         .take(BLOCK_SIZE * 3 - HEADER_SIZE)
         .collect();
+    let mut tx = pool.begin_write().await.unwrap();
     blob.write(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
 
-    let mut block_ids = BlockIds::open(&mut tx, branch, blob_id).await.unwrap();
+    let mut block_ids = BlockIds::open(branch, blob_id).await.unwrap();
     let mut actual_count = 0;
 
-    while block_ids.try_next(&mut tx).await.unwrap().is_some() {
+    while block_ids.try_next().await.unwrap().is_some() {
         actual_count += 1;
     }
 
     assert_eq!(actual_count, 3);
 
-    drop(tx);
     pool.close().await.unwrap();
 }
 

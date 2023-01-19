@@ -17,14 +17,12 @@ pub mod peer_addr;
 mod peer_exchange;
 mod peer_source;
 mod protocol;
-mod quic;
 mod raw;
 mod repository_stats;
 mod request;
 mod runtime_id;
 mod seen_peers;
 mod server;
-mod socket;
 #[cfg(test)]
 mod tests;
 mod upnp;
@@ -44,7 +42,11 @@ use self::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::{
-    config::ConfigStore, repository::RepositoryId, scoped_task::ScopedAbortHandle, store::Store,
+    collections::{hash_map::Entry, HashMap, HashSet},
+    config::ConfigStore,
+    repository::RepositoryId,
+    scoped_task::ScopedAbortHandle,
+    store::Store,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -52,18 +54,17 @@ use btdht::{self, InfoHash, INFO_HASH_LEN};
 use futures_util::FutureExt;
 use slab::Slab;
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     io, mem,
     net::SocketAddr,
     sync::{Arc, Mutex as BlockingMutex, Weak},
-    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
     task::{AbortHandle, JoinSet},
+    time::Duration,
 };
 use tracing::{instrument, Instrument, Span};
 
@@ -76,9 +77,6 @@ pub struct Network {
 
 impl Network {
     pub fn new(config: ConfigStore) -> Self {
-        let span = tracing::info_span!("Network");
-        let span_enter = span.enter();
-
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(config, incoming_tx);
 
@@ -102,14 +100,15 @@ impl Network {
 
         let user_provided_peers = SeenPeers::new();
 
-        drop(span_enter);
+        let this_runtime_id = SecretRuntimeId::generate();
+        tracing::debug!(this_runtime_id = ?this_runtime_id.public());
 
         let inner = Arc::new(Inner {
-            span,
+            span: Span::current(),
             gateway,
-            this_runtime_id: SecretRuntimeId::generate(),
+            this_runtime_id,
             state: BlockingMutex::new(State {
-                message_brokers: Some(HashMap::new()),
+                message_brokers: Some(HashMap::default()),
                 registry: Slab::new(),
             }),
             port_forwarder,
@@ -127,7 +126,7 @@ impl Network {
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
             highest_seen_protocol_version: BlockingMutex::new(VERSION),
-            our_addresses: BlockingMutex::new(HashSet::new()),
+            our_addresses: BlockingMutex::new(HashSet::default()),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -273,16 +272,14 @@ impl Handle {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub fn register(&self, store: Store) -> Registration {
-        store.span.in_scope(
-            || tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id())),
-        );
+        tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id()));
 
         let pex = PexController::new(
             self.inner.connection_deduplicator.on_change(),
             self.inner.pex_discovery_tx.clone(),
         );
 
-        let stats = Arc::new(RepositoryStats::new(store.span.clone()));
+        let stats = Arc::new(RepositoryStats::new(Span::current()));
 
         let mut network_state = self.inner.state.lock().unwrap();
 
@@ -488,7 +485,7 @@ impl Inner {
             let mut state = self.state.lock().unwrap();
             match &mut state.message_brokers {
                 Some(brokers) => {
-                    let mut new = HashMap::new();
+                    let mut new = HashMap::default();
                     std::mem::swap(brokers, &mut new);
                     new
                 }
@@ -665,7 +662,7 @@ impl Inner {
                         return;
                     }
 
-                    tracing::trace!(state = "awaiting permit");
+                    state_monitor!(state = "awaiting permit");
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
@@ -678,14 +675,14 @@ impl Inner {
 
             permit.mark_as_connecting();
 
-            tracing::trace!(state = "connecting", permit_id = permit.id());
+            state_monitor!(state = "connecting", permit_id = permit.id());
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
 
-            tracing::trace!(state = "handling");
+            state_monitor!(state = "handling");
 
             if !self.clone().handle_connection(socket, permit).await {
                 break;
@@ -712,7 +709,7 @@ impl Inner {
 
         permit.mark_as_handshaking();
 
-        tracing::trace!(state = "handshaking");
+        state_monitor!(state = "handshaking");
 
         let that_runtime_id =
             match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
@@ -776,7 +773,7 @@ impl Inner {
             that_runtime_id,
         };
 
-        tracing::trace!(state = "awaiting message broker release");
+        state_monitor!(state = "awaiting message broker release");
 
         released.recv().await;
         tracing::info!("connection lost");

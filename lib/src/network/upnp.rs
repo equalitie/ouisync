@@ -1,5 +1,8 @@
 use super::ip;
-use crate::scoped_task::{self, ScopedJoinHandle};
+use crate::{
+    collections::{hash_map, HashMap},
+    scoped_task::{self, ScopedJoinHandle},
+};
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -9,14 +12,16 @@ use rupnp::{
     Device, Service,
 };
 use std::{
-    collections::{hash_map, HashMap},
     fmt,
     future::Future,
     io, net,
     sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant, SystemTime},
+    time::SystemTime,
 };
-use tokio::{sync::watch, time::sleep};
+use tokio::{
+    sync::watch,
+    time::{sleep, Duration, Instant},
+};
 use tracing::{Instrument, Span};
 
 type JobHandles = HashMap<Uri, TrackedDevice>;
@@ -125,7 +130,7 @@ impl PortForwarder {
 
         const ERROR_SLEEP_DURATION: Duration = Duration::from_secs(5);
 
-        let job_handles = Arc::new(Mutex::new(JobHandles::new()));
+        let job_handles = Arc::new(Mutex::new(JobHandles::default()));
 
         let span = tracing::info_span!("devices");
 
@@ -136,7 +141,7 @@ impl PortForwarder {
         // maybe the device was swapped for another one,...
         loop {
             lookup_counter += 1;
-            tracing::trace!(lookup_counter);
+            state_monitor!(lookup_counter);
 
             // Cleanup: remove devices not seen in a while.
             job_handles.lock().unwrap().retain(|_uri, device| {
@@ -258,7 +263,7 @@ impl PortForwarder {
             })
         };
 
-        use std::collections::hash_map::Entry;
+        use crate::collections::hash_map::Entry;
 
         match job_handles.entry(device_url.clone()) {
             Entry::Occupied(mut entry) => {
@@ -335,11 +340,11 @@ impl PerIGDPortForwarder {
     async fn run(mut self) {
         let _ext_ip_task = self.start_ext_ip_discovery();
 
-        tracing::trace!(device_url = ?self.device_url.clone());
+        state_monitor!(device_url = ?self.device_url.clone());
 
         let local_ip = loop {
             let local_ip = local_address_to(&self.device_url).await;
-            tracing::trace!(?local_ip);
+            state_monitor!(?local_ip);
 
             match local_ip {
                 Ok(local_ip) => break local_ip,
@@ -396,7 +401,7 @@ impl PerIGDPortForwarder {
             async move {
                 loop {
                     let external_ip = get_external_ip_address(&service, &device_url).await.ok();
-                    tracing::trace!(?external_ip);
+                    state_monitor!(?external_ip);
                     sleep(Duration::from_secs(4 * 60)).await;
                 }
             }
@@ -419,16 +424,16 @@ impl PerIGDPortForwarder {
 
         // Monitoring
         let mut iteration = 0;
-        tracing::trace!(state = ?State::Start, iteration);
+        state_monitor!(state = ?State::Start, iteration);
 
         loop {
             iteration += 1;
-            tracing::trace!(state = ?State::AddingPortMappingFirstStage, iteration);
+            state_monitor!(state = ?State::AddingPortMappingFirstStage, iteration);
 
             if let Err(err) =
                 add_port_mappings(&service, &device_url, &local_ip, lease_duration, &mapping).await
             {
-                tracing::trace!(state = ?State::StageOneFailure(err));
+                state_monitor!(state = ?State::StageOneFailure(err));
                 sleep(error_sleep_duration).await;
                 continue;
             }
@@ -443,10 +448,10 @@ impl PerIGDPortForwarder {
                 );
             }
 
-            tracing::trace!(state = ?State::SleepingFirstStage((SystemTime::now() + sleep_duration).into()));
+            state_monitor!(state = ?State::SleepingFirstStage((SystemTime::now() + sleep_duration).into()));
             sleep(sleep_duration).await;
 
-            tracing::trace!(state = ?State::AddingPortMappingSecondStage);
+            state_monitor!(state = ?State::AddingPortMappingSecondStage);
             // We've seen IGD devices that refuse to update the lease if the previous lease has not
             // yet ended. So what we're doing here is that we do attempt to do just that, but we
             // also then wait until we know the previous lease ended and bump the lease again.
@@ -468,12 +473,12 @@ impl PerIGDPortForwarder {
             if let Err(err) =
                 add_port_mappings(&service, &device_url, &local_ip, lease_duration, &mapping).await
             {
-                tracing::trace!(state = ?State::StageTwoFailure(err));
+                state_monitor!(state = ?State::StageTwoFailure(err));
                 sleep(error_sleep_duration).await;
                 continue;
             }
 
-            tracing::trace!(state = ?State::SleepingSecondStage((SystemTime::now() + 2 * sleep_delta).into()));
+            state_monitor!(state = ?State::SleepingSecondStage((SystemTime::now() + 2 * sleep_delta).into()));
             sleep(sleep_delta * 2).await;
         }
     }

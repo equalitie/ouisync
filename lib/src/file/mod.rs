@@ -16,6 +16,7 @@ use crate::{
 };
 use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tracing::instrument;
 
 pub struct File {
     blob: Blob,
@@ -30,11 +31,11 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let mut conn = branch.db().acquire().await?;
+        let mut tx = branch.db().begin_read().await?;
         let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
 
         Ok(Self {
-            blob: Blob::open(&mut conn, branch, locator).await?,
+            blob: Blob::open(&mut tx, branch, locator).await?,
             parent,
             write_lock,
         })
@@ -67,18 +68,19 @@ impl File {
 
     /// Reads data from this file. See [`Blob::read`] for more info.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        let mut conn = self.branch().db().acquire().await?;
-        self.blob.read(&mut conn, buffer).await
+        let mut tx = self.branch().db().begin_read().await?;
+        self.blob.read(&mut tx, buffer).await
     }
 
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        let mut conn = self.branch().db().acquire().await?;
-        self.blob.read_to_end(&mut conn).await
+        let mut tx = self.branch().db().begin_read().await?;
+        self.blob.read_to_end(&mut tx).await
     }
 
     /// Writes `buffer` into this file.
+    #[instrument(skip_all, fields(buffer.len = buffer.len()))]
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut tx = self.branch().db().begin_shared_write().await?;
         self.acquire_write_lock()?;
@@ -89,19 +91,21 @@ impl File {
 
     /// Seeks to an offset in the file.
     pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut conn = self.branch().db().acquire().await?;
-        self.blob.seek(&mut conn, pos).await
+        let mut tx = self.branch().db().begin_read().await?;
+        self.blob.seek(&mut tx, pos).await
     }
 
     /// Truncates the file to the given length.
+    #[instrument(skip(self))]
     pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut conn = self.branch().db().acquire().await?;
+        let mut tx = self.branch().db().begin_read().await?;
         self.acquire_write_lock()?;
-        self.blob.truncate(&mut conn, len).await
+        self.blob.truncate(&mut tx, len).await
     }
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
+    #[instrument(skip_all)]
     pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
@@ -158,8 +162,8 @@ impl File {
         let new_parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
         let new_blob = {
-            let mut conn = dst_branch.db().acquire().await?;
-            Blob::open(&mut conn, dst_branch.clone(), *self.blob.locator()).await?
+            let mut tx = dst_branch.db().begin_read().await?;
+            Blob::open(&mut tx, dst_branch.clone(), *self.blob.locator()).await?
         };
 
         self.blob = new_blob;

@@ -1,6 +1,6 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
-use std::{fmt, mem::size_of, time::Duration};
-use tokio::time;
+use std::{fmt, mem::size_of};
+use tokio::time::{self, Duration};
 
 type BarrierId = u64;
 type Round = u32;
@@ -79,7 +79,7 @@ impl<'a> Barrier<'a> {
         #[cfg(test)]
         println!("{:x} >> RST", self.barrier_id);
 
-        tracing::trace!(barrier = "sending reset");
+        state_monitor!(barrier = "sending reset");
         // I think we send this empty message in order to break the encryption on the other side and
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
@@ -106,7 +106,7 @@ impl<'a> Barrier<'a> {
             assert!(round <= their_round);
 
             if round < their_round {
-                tracing::trace!(barrier = "catching up on step 0");
+                state_monitor!(barrier = "catching up on step 0");
                 // They are ahead of us, but on the same step. So play along, bump our round to
                 // theirs and pretend we did the step zero with the same round.
                 round = their_round;
@@ -142,7 +142,7 @@ impl<'a> Barrier<'a> {
             break;
         }
 
-        tracing::trace!(barrier = "done");
+        state_monitor!(barrier = "done");
         Ok(())
     }
 
@@ -154,11 +154,11 @@ impl<'a> Barrier<'a> {
         let our_step = Step::Zero;
 
         loop {
-            tracing::trace!(barrier = "step 0 sending");
+            state_monitor!(barrier = "step 0 sending");
             self.send(barrier_id, our_round, our_step).await?;
 
             loop {
-                tracing::trace!(barrier = "step 0 receiving");
+                state_monitor!(barrier = "step 0 receiving");
                 let (barrier_id, their_round, their_step) = match self
                     .recv(
                         #[cfg(test)]
@@ -191,12 +191,12 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
     ) -> Result<Option<Msg>, BarrierError> {
-        tracing::trace!(barrier = "step 1 sending");
+        state_monitor!(barrier = "step 1 sending");
         let our_step = Step::One;
         self.send(barrier_id, our_round, our_step).await?;
 
         loop {
-            tracing::trace!(barrier = "step 1 receiving");
+            state_monitor!(barrier = "step 1 receiving");
             let recv = self.recv(
                 #[cfg(test)]
                 our_round,
@@ -400,11 +400,11 @@ mod tests {
     use super::*;
     use crate::scoped_task::{self, ScopedJoinHandle};
     use async_trait::async_trait;
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
     use tokio::{
         sync::{mpsc, Mutex},
         task,
-        time::timeout,
+        time::{timeout, Duration},
     };
 
     struct Stepper {

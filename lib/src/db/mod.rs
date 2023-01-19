@@ -1,12 +1,16 @@
+#[macro_use]
+mod macros;
+
+mod connection;
 mod id;
 mod migrations;
 
 pub use id::DatabaseId;
 
+use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
-        Sqlite, SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions,
-        SqliteSynchronous,
+        Sqlite, SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
     },
     Row, SqlitePool,
 };
@@ -24,9 +28,11 @@ use tokio::{
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
 
+pub(crate) use self::connection::Connection;
+
 /// Database connection pool.
 #[derive(Clone)]
-pub struct Pool {
+pub(crate) struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
     // Pool with a single writable connection.
@@ -89,7 +95,7 @@ impl Pool {
             tx.commit().await?;
         }
 
-        Ok(WriteTransaction(self.write.begin().await?))
+        Ok(WriteTransaction(ReadTransaction(self.write.begin().await?)))
     }
 
     /// Begin a shared write transaction. Unlike regular write transaction, a shared write
@@ -105,7 +111,7 @@ impl Pool {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
         if shared_tx.is_none() {
-            *shared_tx = Some(WriteTransaction(self.write.begin().await?));
+            *shared_tx = Some(WriteTransaction(ReadTransaction(self.write.begin().await?)));
         }
 
         Ok(SharedWriteTransaction(shared_tx))
@@ -123,24 +129,20 @@ impl Pool {
     }
 }
 
-/// Database connection
-// TODO: create a newtype for this which hides `begin` (use the ref-cast crate)
-pub type Connection = SqliteConnection;
-
 /// Database connection from pool
-pub struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
+pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
 
 impl Deref for PoolConnection {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        Connection::ref_cast(self.0.deref())
     }
 }
 
 impl DerefMut for PoolConnection {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        Connection::ref_cast_mut(self.0.deref_mut())
     }
 }
 
@@ -152,49 +154,49 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 #[derive(Debug)]
-pub struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
 
 impl Deref for ReadTransaction {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        Connection::ref_cast(self.0.deref())
     }
 }
 
 impl DerefMut for ReadTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        Connection::ref_cast_mut(self.0.deref_mut())
     }
 }
 
-/// Transaction that allows writing to the database.
+impl_executor_by_deref!(ReadTransaction);
+
+/// Transaction that allows both reading and writing.
 #[derive(Debug)]
-pub struct WriteTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct WriteTransaction(ReadTransaction);
 
 impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.0.commit().await
-    }
-
-    pub async fn rollback(self) -> Result<(), sqlx::Error> {
-        self.0.rollback().await
+        self.0 .0.commit().await
     }
 }
 
 impl Deref for WriteTransaction {
-    type Target = Connection;
+    type Target = ReadTransaction;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
 impl DerefMut for WriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        &mut self.0
     }
 }
+
+impl_executor_by_deref!(WriteTransaction);
 
 /// Shared write transaction
 ///
@@ -202,17 +204,12 @@ impl DerefMut for WriteTransaction {
 
 // NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
 // `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
-pub struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
+pub(crate) struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
 
 impl SharedWriteTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().commit().await
-    }
-
-    pub async fn rollback(mut self) -> Result<(), sqlx::Error> {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.take().unwrap().rollback().await
     }
 }
 
