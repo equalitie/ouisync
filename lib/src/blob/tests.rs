@@ -2,15 +2,14 @@ use super::*;
 use crate::{
     access_control::WriteSecrets,
     block::{self, BLOCK_SIZE},
+    branch::BranchShared,
     crypto::sign::PublicKey,
     error::Error,
-    file::FileCache,
     index::BranchData,
     test_utils,
 };
 use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
-use std::sync::Arc;
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::sync::broadcast;
@@ -460,7 +459,6 @@ async fn fork_and_write_case(
     rng_seed: u64,
 ) {
     let (mut rng, _base_dir, pool, src_branch) = setup(rng_seed).await;
-    let mut tx = pool.begin_write().await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
     let dst_branch = BranchData::new(PublicKey::random(), event_tx.clone());
@@ -468,7 +466,7 @@ async fn fork_and_write_case(
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let src_locator = if src_locator_is_root {
@@ -479,14 +477,17 @@ async fn fork_and_write_case(
 
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
+    let mut tx = pool.begin_write().await.unwrap();
     let mut blob = Blob::create(src_branch.clone(), src_locator);
     blob.write(&mut tx, &src_content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
 
-    fork(&mut tx, *src_locator.blob_id(), &src_branch, &dst_branch)
+    fork(*src_locator.blob_id(), &src_branch, &dst_branch)
         .await
         .unwrap();
 
+    let mut tx = pool.begin_write().await.unwrap();
     let mut blob = Blob::open(&mut tx, dst_branch.clone(), src_locator)
         .await
         .unwrap();
@@ -535,7 +536,7 @@ async fn fork_is_idempotent() {
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let locator = Locator::head(rng.gen());
@@ -548,11 +549,9 @@ async fn fork_is_idempotent() {
     tx.commit().await.unwrap();
 
     for i in 0..2 {
-        let mut tx = pool.begin_write().await.unwrap();
-        fork(&mut tx, *locator.blob_id(), &src_branch, &dst_branch)
+        fork(*locator.blob_id(), &src_branch, &dst_branch)
             .await
-            .unwrap_or_else(|error| panic!("try_fork failed in iteration {}: {:?}", i, error));
-        tx.commit().await.unwrap();
+            .unwrap_or_else(|error| panic!("fork failed in iteration {}: {:?}", i, error));
     }
 }
 
@@ -566,7 +565,7 @@ async fn fork_then_remove_src_branch() {
         pool.clone(),
         dst_branch,
         src_branch.keys().clone(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     let locator_0 = Locator::head(rng.gen());
@@ -580,12 +579,16 @@ async fn fork_then_remove_src_branch() {
     let mut blob_1 = Blob::create(src_branch.clone(), locator_1);
     blob_1.flush(&mut tx).await.unwrap();
 
-    fork(&mut tx, *locator_0.blob_id(), &src_branch, &dst_branch)
+    tx.commit().await.unwrap();
+
+    fork(*locator_0.blob_id(), &src_branch, &dst_branch)
         .await
         .unwrap();
 
     drop(blob_0);
     drop(blob_1);
+
+    let mut tx = pool.begin_write().await.unwrap();
 
     // Remove the src branch
     src_branch
@@ -649,7 +652,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
         pool.clone(),
         branch,
         secrets.into(),
-        Arc::new(FileCache::new(event_tx)),
+        BranchShared::new(event_tx),
     );
 
     (rng, base_dir, pool, branch)

@@ -10,7 +10,6 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::cmp::Ordering;
 use tracing::instrument;
 
 /// Info about an entry in the context of its parent directory.
@@ -65,43 +64,68 @@ impl ParentContext {
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
         let blob_id = *src_entry_data.blob_id().ok_or(Error::EntryNotFound)?;
 
+        // Fork the parent directory first.
         let mut directory = directory.fork(dst_branch).await?;
-        let mut content = directory.entries.clone();
+
+        let new_context = Self {
+            directory_id: *directory.locator().blob_id(),
+            entry_name: self.entry_name.clone(),
+            parent: directory.parent.clone().map(Box::new),
+        };
+
+        // Check whether the fork is allowed, to avoid the hard work in case it isn't.
+        match directory
+            .entries
+            .check_insert(directory.branch(), self.entry_name(), &src_entry_data)
+        {
+            Ok(()) => (),
+            Err(EntryExists::Same) => {
+                // The entry was already forked concurrently. This is treated as OK to maintain
+                // idempotency.
+                return Ok(new_context);
+            }
+            Err(EntryExists::Different | EntryExists::Concurrent | EntryExists::Open) => {
+                return Err(Error::EntryExists);
+            }
+        }
+
+        // Pin the blob so that it's not garbage collected prematurely.
+        let _pin = dst_branch.pin_blob(blob_id);
+
+        // Fork the blob first without inserting it into the dst directory. This is because
+        // `blob::fork` is not atomic and in case it's interrupted, we don't want overwrite the dst
+        // entry yet. This makes the blob temporarily unreachable but it's OK because we pinned it
+        // earlier.
+        blob::fork(blob_id, src_branch, dst_branch).await?;
+
+        // Now atomically insert the blob entry into the dst directory. If this fails, the
+        // previously forked blob is unpinned and eventually garbage collected. This should however
+        // be rare because we checked whether the insert can be done earlier, before forking the
+        // blob. It can happen if the dst entry was modified concurrently while the blob was being
+        // forked.
+        let mut tx = directory.branch().db().begin_write().await?;
+        let mut content = directory.load(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 
         match content.insert(directory.branch(), self.entry_name.clone(), src_entry_data) {
             Ok(()) => {
-                let mut tx = directory.branch().db().begin_write().await?;
                 directory.save(&mut tx, &content).await?;
-                blob::fork(&mut tx, blob_id, src_branch, dst_branch).await?;
                 directory
                     .commit(tx, content, &VersionVectorOp::Merge(src_vv))
                     .await?;
             }
-            Err(EntryExists { new, old }) => {
-                // It's possible that another task has already forked this entry. If that's the
-                // case then we return success.
-                if Some(&blob_id) != old.blob_id() {
-                    return Err(Error::EntryExists);
-                }
-
-                match new.version_vector().partial_cmp(old.version_vector()) {
-                    Some(Ordering::Less | Ordering::Equal) => (),
-                    Some(Ordering::Greater) | None => return Err(Error::EntryExists),
-                }
+            Err(EntryExists::Same) => {
+                // The entry was already forked concurrently. This is treated as OK to maintain
+                // idempotency.
+            }
+            Err(EntryExists::Different | EntryExists::Concurrent | EntryExists::Open) => {
+                // Dst entry was modified concurrently in an incompatible way and can't be
+                // overwritten.
+                return Err(Error::EntryExists);
             }
         };
 
-        tracing::trace!("done");
-
-        let directory_id = *directory.locator().blob_id();
-        let parent = directory.parent.clone();
-
-        Ok(Self {
-            directory_id,
-            entry_name: self.entry_name.clone(),
-            parent: parent.map(Box::new),
-        })
+        Ok(new_context)
     }
 
     pub(super) fn entry_name(&self) -> &str {

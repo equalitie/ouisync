@@ -10,7 +10,7 @@ use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
-    branch::Branch,
+    branch::{Branch, BranchShared},
     crypto::{
         cipher,
         sign::{self, PublicKey},
@@ -22,7 +22,7 @@ use crate::{
     directory::{Directory, EntryType, MissingBlockStrategy},
     error::{Error, Result},
     event::Event,
-    file::{File, FileCache},
+    file::File,
     index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
@@ -182,7 +182,7 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            file_cache: Arc::new(FileCache::new(event_tx)),
+            branch_shared: BranchShared::new(event_tx),
         });
 
         let local_branch = if shared.secrets.can_write() {
@@ -627,8 +627,7 @@ struct Shared {
     store: Store,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
-    // Cache for open files to track multiple instances of the same file.
-    file_cache: Arc<FileCache>,
+    branch_shared: BranchShared,
 }
 
 impl Shared {
@@ -661,7 +660,7 @@ impl Shared {
             self.store.db().clone(),
             data,
             keys,
-            self.file_cache.clone(),
+            self.branch_shared.clone(),
         ))
     }
 }

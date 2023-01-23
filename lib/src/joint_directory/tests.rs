@@ -1,12 +1,15 @@
 use super::*;
 use crate::{
-    access_control::WriteSecrets, branch::Branch, crypto::sign::PublicKey, db,
-    directory::MissingBlockStrategy, file::FileCache, index::BranchData,
+    access_control::WriteSecrets,
+    branch::{Branch, BranchShared},
+    crypto::sign::PublicKey,
+    db,
+    directory::MissingBlockStrategy,
+    index::BranchData,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use rand::{rngs::StdRng, SeedableRng};
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 
@@ -1020,17 +1023,17 @@ async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, Vec<B
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
-    let file_cache = Arc::new(FileCache::new(event_tx.clone()));
+    let shared = BranchShared::new(event_tx.clone());
 
     let branches = (0..branch_count)
         .map(|_| {
             let id = PublicKey::generate(&mut rng);
             let event_tx = event_tx.clone();
             let secrets = secrets.clone();
-            let file_cache = file_cache.clone();
+            let shared = shared.clone();
 
             let data = BranchData::new(id, event_tx);
-            Branch::new(pool.clone(), data, secrets.into(), file_cache)
+            Branch::new(pool.clone(), data, secrets.into(), shared)
         })
         .collect();
 
