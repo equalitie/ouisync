@@ -15,7 +15,7 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
-    ptr, thread,
+    thread,
     time::Duration,
 };
 use tokio::{
@@ -32,17 +32,11 @@ use tracing::Span;
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
-    port: Port<Result<()>>,
+    port: Port<Result<SessionHandle>>,
 ) {
     let sender = Sender {
         post_c_object_fn: mem::transmute(post_c_object_fn),
     };
-
-    if !SESSION.is_null() {
-        // Session already exists.
-        sender.send_result(port, Ok(()));
-        return;
-    }
 
     let root_monitor = StateMonitor::make_root();
     let session_monitor = root_monitor.make_child("Session");
@@ -101,16 +95,19 @@ pub unsafe extern "C" fn session_open(
             _logger: logger,
         };
 
-        assert!(SESSION.is_null());
-        SESSION = Box::into_raw(Box::new(session));
+        let session = SessionHandle::new(Box::new(session));
 
-        sender.send_result(port, Ok(()));
+        sender.send_result(port, Ok(session));
     });
 }
 
 /// Retrieve a serialized state monitor corresponding to the `path`.
 #[no_mangle]
-pub unsafe extern "C" fn session_get_state_monitor(path: *const u8, path_len: u64) -> Bytes {
+pub unsafe extern "C" fn session_get_state_monitor(
+    session: SessionHandle,
+    path: *const u8,
+    path_len: u64,
+) -> Bytes {
     let path = std::slice::from_raw_parts(path, path_len as usize);
     let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
         Ok(path) => path,
@@ -126,7 +123,7 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const u8, path_len: u6
         .into_iter()
         .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
-    if let Some(monitor) = get().root_monitor.locate(path) {
+    if let Some(monitor) = session.get().root_monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
         Bytes::from_vec(bytes)
     } else {
@@ -137,6 +134,7 @@ pub unsafe extern "C" fn session_get_state_monitor(path: *const u8, path_len: u6
 /// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_subscribe(
+    session: SessionHandle,
     path: *const u8,
     path_len: u64,
     port: Port<()>,
@@ -156,9 +154,9 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
         .into_iter()
         .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
-    let session = get();
+    let session = session.get();
     let sender = session.sender();
-    if let Some(monitor) = get().root_monitor.locate(path) {
+    if let Some(monitor) = session.root_monitor.locate(path) {
         let mut rx = monitor.subscribe();
 
         let handle = session.runtime().spawn(async move {
@@ -190,11 +188,8 @@ pub unsafe extern "C" fn session_state_monitor_unsubscribe(
 
 /// Closes the ouisync session.
 #[no_mangle]
-pub unsafe extern "C" fn session_close() {
-    let session = mem::replace(&mut SESSION, ptr::null_mut());
-    if !session.is_null() {
-        let _ = Box::from_raw(session);
-    }
+pub unsafe extern "C" fn session_close(session: SessionHandle) {
+    session.release();
 }
 
 /// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
@@ -204,14 +199,8 @@ pub unsafe extern "C" fn session_close() {
 /// is being detached we can't do any async await on the dart side anymore, and thus need to do it
 /// here.
 #[no_mangle]
-pub unsafe extern "C" fn session_shutdown_network_and_close() {
-    let session = mem::replace(&mut SESSION, ptr::null_mut());
-
-    if session.is_null() {
-        return;
-    }
-
-    let session = Box::from_raw(session);
+pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
+    let session = session.release();
 
     // Preserving lifetime of the unused variables as well so as to not interfere with the
     // `shutdown` function.
@@ -226,7 +215,7 @@ pub unsafe extern "C" fn session_shutdown_network_and_close() {
     } = *session;
 
     runtime.block_on(async move {
-        time::timeout(Duration::from_millis(500), network.shutdown())
+        time::timeout(Duration::from_millis(500), network.handle().shutdown())
             .await
             .unwrap_or(())
     });
@@ -259,32 +248,7 @@ pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
     let _ = bytes.into_vec();
 }
 
-pub(super) unsafe fn with<T, F>(port: Port<Result<T>>, f: F)
-where
-    F: FnOnce(Context<T>) -> Result<()>,
-    T: Into<DartCObject>,
-{
-    assert!(!SESSION.is_null(), "session is not initialized");
-
-    let session = &*SESSION;
-    let context = Context { session, port };
-
-    let _runtime_guard = context.session.runtime.enter();
-
-    match f(context) {
-        Ok(()) => (),
-        Err(error) => session.sender.send_result(port, Err(error)),
-    }
-}
-
-pub(super) unsafe fn get<'a>() -> &'a Session {
-    assert!(!SESSION.is_null(), "session is not initialized");
-    &*SESSION
-}
-
-static mut SESSION: *mut Session = ptr::null_mut();
-
-pub(super) struct Session {
+pub struct Session {
     runtime: Runtime,
     device_id: DeviceId,
     network: Network,
@@ -295,22 +259,41 @@ pub(super) struct Session {
 }
 
 impl Session {
-    pub(super) fn runtime(&self) -> &Runtime {
+    pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
+    where
+        F: FnOnce(Context<T>) -> Result<()>,
+        T: Into<DartCObject>,
+    {
+        let context = Context {
+            session: self,
+            port,
+        };
+        let _runtime_guard = context.session.runtime.enter();
+
+        match f(context) {
+            Ok(()) => (),
+            Err(error) => self.sender.send_result(port, Err(error)),
+        }
+    }
+
+    pub(crate) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
 
-    pub(super) fn sender(&self) -> Sender {
+    pub(crate) fn sender(&self) -> Sender {
         self.sender
     }
 
-    pub(super) fn network(&self) -> &Network {
+    pub(crate) fn network(&self) -> &Network {
         &self.network
     }
 
-    pub(super) fn repos_span(&self) -> &Span {
+    pub(crate) fn repos_span(&self) -> &Span {
         &self.repos_span
     }
 }
+
+pub type SessionHandle = UniqueHandle<Session>;
 
 pub(super) struct Context<'a, T> {
     session: &'a Session,

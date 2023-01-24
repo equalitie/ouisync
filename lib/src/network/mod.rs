@@ -236,28 +236,6 @@ impl Network {
     pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.connection_deduplicator.on_change()
     }
-
-    /// Gracefully disconnect from peers. Failing to call this function on app termination will
-    /// cause the peers to now learn that we disconnected just now. They will still find out later
-    /// once the keep-alive mechanism kicks in, but in the mean time we will not be able to
-    /// reconnect (by starting the app again) because the remote peer will keep dropping new
-    /// connections from us.
-    pub async fn shutdown(&self) {
-        // TODO: Would be a nice-to-have to also wait for all the spawned tasks here (e.g. dicovery
-        // mechanisms).
-        let mut message_brokers = {
-            let mut state = self.inner.state.lock().unwrap();
-            match state.message_brokers.take() {
-                Some(brokers) => brokers,
-                None => {
-                    tracing::warn!("Network already shut down");
-                    return;
-                }
-            }
-        };
-
-        shutdown_brokers(&mut message_brokers).await;
-    }
 }
 
 /// Handle for the network which can be cheaply cloned and sent to other threads.
@@ -307,6 +285,28 @@ impl Handle {
     /// Is the network enabled
     pub fn is_bound(&self) -> bool {
         self.inner.gateway.is_bound()
+    }
+
+    /// Gracefully disconnect from peers. Failing to call this function on app termination will
+    /// cause the peers to now learn that we disconnected just now. They will still find out later
+    /// once the keep-alive mechanism kicks in, but in the mean time we will not be able to
+    /// reconnect (by starting the app again) because the remote peer will keep dropping new
+    /// connections from us.
+    pub async fn shutdown(&self) {
+        // TODO: Would be a nice-to-have to also wait for all the spawned tasks here (e.g. dicovery
+        // mechanisms).
+        let mut message_brokers = {
+            let mut state = self.inner.state.lock().unwrap();
+            match state.message_brokers.take() {
+                Some(brokers) => brokers,
+                None => {
+                    tracing::warn!("Network already shut down");
+                    return;
+                }
+            }
+        };
+
+        shutdown_brokers(&mut message_brokers).await;
     }
 }
 

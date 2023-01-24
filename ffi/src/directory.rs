@@ -1,5 +1,6 @@
 use super::{
-    repository, session,
+    repository,
+    session::SessionHandle,
     utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
 };
 use ouisync_lib::{EntryType, Repository, Result};
@@ -17,11 +18,12 @@ impl Directory {
 
 #[no_mangle]
 pub unsafe extern "C" fn directory_create(
+    session: SessionHandle,
     repo: SharedHandle<Repository>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -34,11 +36,12 @@ pub unsafe extern "C" fn directory_create(
 
 #[no_mangle]
 pub unsafe extern "C" fn directory_open(
+    session: SessionHandle,
     repo: SharedHandle<Repository>,
     path: *const c_char,
     port: Port<Result<UniqueHandle<Directory>>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
         let repo = repo.get();
 
@@ -64,11 +67,12 @@ pub unsafe extern "C" fn directory_open(
 /// Removes the directory at the given path from the repository. The directory must be empty.
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove(
+    session: SessionHandle,
     repo: SharedHandle<Repository>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
@@ -79,11 +83,12 @@ pub unsafe extern "C" fn directory_remove(
 /// Removes the directory at the given path including its content from the repository.
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove_recursively(
+    session: SessionHandle,
     repo: SharedHandle<Repository>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let repo = repo.get();
         let path = utils::ptr_to_path_buf(path)?;
 
