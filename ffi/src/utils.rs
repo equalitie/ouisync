@@ -9,7 +9,6 @@ use std::{
     mem,
     os::raw::c_char,
     ptr,
-    sync::Arc,
 };
 
 /// Type-safe wrapper over native dart SendPort.
@@ -35,33 +34,6 @@ impl<T> Clone for Port<T> {
 
 impl<T> Copy for Port<T> {}
 
-/// FFI handle to a resource with shared ownership.
-#[repr(transparent)]
-pub struct SharedHandle<T>(u64, PhantomData<*const T>);
-
-impl<T> SharedHandle<T> {
-    pub fn new(resource: Arc<T>) -> Self {
-        Self(Arc::into_raw(resource) as _, PhantomData)
-    }
-
-    pub unsafe fn get(self) -> Arc<T> {
-        let res1 = Arc::from_raw(self.0 as *mut T);
-        let res2 = res1.clone();
-        mem::forget(res1);
-        res2
-    }
-
-    pub unsafe fn release(self) -> Arc<T> {
-        Arc::from_raw(self.0 as *mut _)
-    }
-}
-
-impl<T> From<SharedHandle<T>> for DartCObject {
-    fn from(handle: SharedHandle<T>) -> Self {
-        DartCObject::from(handle.0)
-    }
-}
-
 /// FFI handle to a resource with unique ownership.
 #[repr(transparent)]
 pub struct UniqueHandle<T>(u64, PhantomData<*const T>);
@@ -83,49 +55,6 @@ impl<T> UniqueHandle<T> {
 impl<T> From<UniqueHandle<T>> for DartCObject {
     fn from(handle: UniqueHandle<T>) -> Self {
         DartCObject::from(handle.0)
-    }
-}
-
-/// FFI handle to a resource with unique ownership that can also be null.
-#[repr(transparent)]
-pub struct UniqueNullableHandle<T>(u64, PhantomData<*const T>);
-
-impl<T> UniqueNullableHandle<T> {
-    pub const NULL: Self = Self(0, PhantomData);
-
-    pub fn new(resource: Box<T>) -> Self {
-        Self(Box::into_raw(resource) as _, PhantomData)
-    }
-
-    pub unsafe fn release(self) -> Option<Box<T>> {
-        if self.0 != 0 {
-            Some(Box::from_raw(self.0 as *mut _))
-        } else {
-            None
-        }
-    }
-}
-
-impl<T> From<UniqueNullableHandle<T>> for DartCObject {
-    fn from(handle: UniqueNullableHandle<T>) -> Self {
-        DartCObject::from(handle.0)
-    }
-}
-
-/// FFI handle to a borrowed resource.
-#[repr(transparent)]
-pub struct RefHandle<T>(u64, PhantomData<*const T>);
-
-impl<T> RefHandle<T> {
-    pub const NULL: Self = Self(0, PhantomData);
-
-    pub fn new(resource: &T) -> Self {
-        Self(resource as *const _ as _, PhantomData)
-    }
-
-    pub unsafe fn get(&self) -> &T {
-        assert!(self.0 != 0);
-        &*(self.0 as *const _)
     }
 }
 

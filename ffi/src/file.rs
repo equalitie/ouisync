@@ -1,15 +1,15 @@
 use super::{
+    registry::Handle,
     repository::RepositoryHolder,
-    session,
-    utils::{self, AssumeSend, Port, SharedHandle},
+    session::SessionHandle,
+    utils::{self, AssumeSend, Port},
 };
-use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Repository, Result};
+use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Result};
 use std::{
     convert::TryInto,
     io::SeekFrom,
     os::raw::{c_char, c_int},
     slice,
-    sync::Arc,
 };
 
 pub struct FileHolder {
@@ -19,44 +19,54 @@ pub struct FileHolder {
 
 #[no_mangle]
 pub unsafe extern "C" fn file_open(
-    repo: SharedHandle<RepositoryHolder>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
-    port: Port<Result<SharedHandle<FileHolder>>>,
+    port: Port<Result<Handle<FileHolder>>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let local_branch = repo.repository.local_branch().ok();
+        let registry = ctx.files().clone();
 
         ctx.spawn(async move {
             let file = repo.repository.open_file(&path).await?;
-            Ok(SharedHandle::new(Arc::new(FileHolder {
+            let holder = FileHolder {
                 file: AsyncMutex::new(file),
                 local_branch,
-            })))
+            };
+            let handle = registry.insert(holder);
+
+            Ok(handle)
         })
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn file_create(
-    repo: SharedHandle<RepositoryHolder>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
-    port: Port<Result<SharedHandle<FileHolder>>>,
+    port: Port<Result<Handle<FileHolder>>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let local_branch = repo.repository.local_branch()?;
+        let registry = ctx.files().clone();
 
         ctx.spawn(async move {
             let mut file = repo.repository.create_file(&path).await?;
             file.flush().await?;
 
-            Ok(SharedHandle::new(Arc::new(FileHolder {
+            let holder = FileHolder {
                 file: AsyncMutex::new(file),
                 local_branch: Some(local_branch),
-            })))
+            };
+            let handle = registry.insert(holder);
+
+            Ok(handle)
         })
     })
 }
@@ -64,30 +74,46 @@ pub unsafe extern "C" fn file_create(
 /// Remove (delete) the file at the given path from the repository.
 #[no_mangle]
 pub unsafe extern "C" fn file_remove(
-    repo: SharedHandle<Repository>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
-        let repo = repo.get();
+    session.get().with(port, |ctx| {
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry(&path).await })
+        ctx.spawn(async move { repo.repository.remove_entry(&path).await })
     })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn file_close(handle: SharedHandle<FileHolder>, port: Port<Result<()>>) {
-    session::with(port, |ctx| {
-        let holder = handle.release();
-        ctx.spawn(async move { holder.file.lock().await.flush().await })
+pub unsafe extern "C" fn file_close(
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
+    port: Port<Result<()>>,
+) {
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().remove(handle);
+
+        ctx.spawn(async move {
+            if let Some(holder) = holder {
+                holder.file.lock().await.flush().await
+            } else {
+                Ok(())
+            }
+        })
     })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn file_flush(handle: SharedHandle<FileHolder>, port: Port<Result<()>>) {
-    session::with(port, |ctx| {
-        let holder = handle.get();
+pub unsafe extern "C" fn file_flush(
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
+    port: Port<Result<()>>,
+) {
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().get(handle);
         ctx.spawn(async move { holder.file.lock().await.flush().await })
     })
 }
@@ -96,14 +122,15 @@ pub unsafe extern "C" fn file_flush(handle: SharedHandle<FileHolder>, port: Port
 /// (zero on EOF).
 #[no_mangle]
 pub unsafe extern "C" fn file_read(
-    handle: SharedHandle<FileHolder>,
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
     offset: u64,
     buffer: *mut u8,
     len: u64,
     port: Port<Result<u64>>,
 ) {
-    session::with(port, |ctx| {
-        let holder = handle.get();
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().get(handle);
 
         let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
@@ -124,14 +151,15 @@ pub unsafe extern "C" fn file_read(
 /// Write `len` bytes from `buffer` into the file.
 #[no_mangle]
 pub unsafe extern "C" fn file_write(
-    handle: SharedHandle<FileHolder>,
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
     offset: u64,
     buffer: *const u8,
     len: u64,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
-        let holder = handle.get();
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().get(handle);
 
         let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
@@ -158,12 +186,14 @@ pub unsafe extern "C" fn file_write(
 /// Truncate the file to `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn file_truncate(
-    handle: SharedHandle<FileHolder>,
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
     len: u64,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
-        let holder = handle.get();
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().get(handle);
+
         ctx.spawn(async move {
             let mut file = holder.file.lock().await;
 
@@ -183,9 +213,14 @@ pub unsafe extern "C" fn file_truncate(
 
 /// Retrieve the size of the file in bytes.
 #[no_mangle]
-pub unsafe extern "C" fn file_len(handle: SharedHandle<FileHolder>, port: Port<Result<u64>>) {
-    session::with(port, |ctx| {
-        let holder = handle.get();
+pub unsafe extern "C" fn file_len(
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
+    port: Port<Result<u64>>,
+) {
+    session.get().with(port, |ctx| {
+        let holder = ctx.files().get(handle);
+
         ctx.spawn(async move { Ok(holder.file.lock().await.len()) })
     })
 }
@@ -197,15 +232,16 @@ pub unsafe extern "C" fn file_len(handle: SharedHandle<FileHolder>, port: Port<R
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd(
-    handle: SharedHandle<FileHolder>,
+    session: SessionHandle,
+    handle: Handle<FileHolder>,
     fd: c_int,
     port: Port<Result<()>>,
 ) {
     use std::os::unix::io::FromRawFd;
     use tokio::fs;
 
-    session::with(port, |ctx| {
-        let src = handle.get();
+    session.get().with(port, |ctx| {
+        let src = ctx.files().get(handle);
         let mut dst = fs::File::from_raw_fd(fd);
 
         ctx.spawn(async move {

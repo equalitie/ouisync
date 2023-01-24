@@ -1,9 +1,11 @@
 use super::{
-    repository, session,
-    utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
+    registry::Handle,
+    repository::{self, RepositoryHolder, ENTRY_TYPE_INVALID},
+    session::SessionHandle,
+    utils::{self, Port},
 };
-use ouisync_lib::{EntryType, Repository, Result};
-use std::{convert::TryInto, ffi::CString, os::raw::c_char};
+use ouisync_lib::{EntryType, Result};
+use std::{convert::TryInto, ffi::CString, os::raw::c_char, ptr};
 
 // Currently this is only a read-only snapshot of a directory.
 pub struct Directory(Vec<DirEntry>);
@@ -15,18 +17,24 @@ impl Directory {
     }
 }
 
+struct DirEntry {
+    name: CString,
+    entry_type: EntryType,
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn directory_create(
-    repo: SharedHandle<Repository>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
 
         ctx.spawn(async move {
-            repo.create_directory(path).await?;
+            repo.repository.create_directory(path).await?;
             Ok(())
         })
     })
@@ -34,16 +42,18 @@ pub unsafe extern "C" fn directory_create(
 
 #[no_mangle]
 pub unsafe extern "C" fn directory_open(
-    repo: SharedHandle<Repository>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
-    port: Port<Result<UniqueHandle<Directory>>>,
+    port: Port<Result<Handle<Directory>>>,
 ) {
-    session::with(port, |ctx| {
+    session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
+        let registry = ctx.directories().clone();
 
         ctx.spawn(async move {
-            let dir = repo.open_directory(path).await?;
+            let dir = repo.repository.open_directory(path).await?;
             let entries = dir
                 .entries()
                 .map(|entry| DirEntry {
@@ -54,9 +64,9 @@ pub unsafe extern "C" fn directory_open(
                 })
                 .collect();
             let entries = Directory(entries);
-            let entries = Box::new(entries);
+            let handle = registry.insert(entries);
 
-            Ok(UniqueHandle::new(entries))
+            Ok(handle)
         })
     })
 }
@@ -64,65 +74,74 @@ pub unsafe extern "C" fn directory_open(
 /// Removes the directory at the given path from the repository. The directory must be empty.
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove(
-    repo: SharedHandle<Repository>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
-        let repo = repo.get();
+    session.get().with(port, |ctx| {
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry(path).await })
+        ctx.spawn(async move { repo.repository.remove_entry(path).await })
     })
 }
 
 /// Removes the directory at the given path including its content from the repository.
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove_recursively(
-    repo: SharedHandle<Repository>,
+    session: SessionHandle,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
-    session::with(port, |ctx| {
-        let repo = repo.get();
+    session.get().with(port, |ctx| {
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry_recursively(path).await })
+        ctx.spawn(async move { repo.repository.remove_entry_recursively(path).await })
     })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn directory_close(handle: UniqueHandle<Directory>) {
-    handle.release();
+pub unsafe extern "C" fn directory_close(session: SessionHandle, handle: Handle<Directory>) {
+    session.get().directories.remove(handle);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn directory_num_entries(handle: UniqueHandle<Directory>) -> u64 {
-    handle.get().0.len() as u64
+pub unsafe extern "C" fn directory_num_entries(
+    session: SessionHandle,
+    handle: Handle<Directory>,
+) -> u64 {
+    session.get().directories.get(handle).0.len() as u64
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn directory_get_entry(
-    handle: UniqueHandle<Directory>,
+pub unsafe extern "C" fn directory_entry_name(
+    session: SessionHandle,
+    handle: Handle<Directory>,
     index: u64,
-) -> RefHandle<DirEntry> {
-    match handle.get().get(index) {
-        Some(entry) => RefHandle::new(entry),
-        None => RefHandle::NULL,
-    }
-}
-
-pub struct DirEntry {
-    name: CString,
-    entry_type: EntryType,
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn dir_entry_name(handle: RefHandle<DirEntry>) -> *const c_char {
-    handle.get().name.as_ptr()
+) -> *const c_char {
+    session
+        .get()
+        .directories
+        .get(handle)
+        .get(index)
+        .map(|entry| entry.name.as_ptr())
+        .unwrap_or(ptr::null())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dir_entry_type(handle: RefHandle<DirEntry>) -> u8 {
-    repository::entry_type_to_num(handle.get().entry_type)
+pub unsafe extern "C" fn directory_entry_type(
+    session: SessionHandle,
+    handle: Handle<Directory>,
+    index: u64,
+) -> u8 {
+    session
+        .get()
+        .directories
+        .get(handle)
+        .get(index)
+        .map(|entry| repository::entry_type_to_num(entry.entry_type))
+        .unwrap_or(ENTRY_TYPE_INVALID)
 }

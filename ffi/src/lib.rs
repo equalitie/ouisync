@@ -15,3 +15,4 @@ pub mod session;
 
 mod dart;
 mod logger;
+mod registry;
