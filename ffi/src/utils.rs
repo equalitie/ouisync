@@ -9,7 +9,6 @@ use std::{
     mem,
     os::raw::c_char,
     ptr,
-    sync::Arc,
 };
 
 /// Type-safe wrapper over native dart SendPort.
@@ -34,33 +33,6 @@ impl<T> Clone for Port<T> {
 }
 
 impl<T> Copy for Port<T> {}
-
-/// FFI handle to a resource with shared ownership.
-#[repr(transparent)]
-pub struct SharedHandle<T>(u64, PhantomData<*const T>);
-
-impl<T> SharedHandle<T> {
-    pub fn new(resource: Arc<T>) -> Self {
-        Self(Arc::into_raw(resource) as _, PhantomData)
-    }
-
-    pub unsafe fn get(self) -> Arc<T> {
-        let res1 = Arc::from_raw(self.0 as *mut T);
-        let res2 = res1.clone();
-        mem::forget(res1);
-        res2
-    }
-
-    pub unsafe fn release(self) -> Arc<T> {
-        Arc::from_raw(self.0 as *mut _)
-    }
-}
-
-impl<T> From<SharedHandle<T>> for DartCObject {
-    fn from(handle: SharedHandle<T>) -> Self {
-        DartCObject::from(handle.0)
-    }
-}
 
 /// FFI handle to a resource with unique ownership.
 #[repr(transparent)]

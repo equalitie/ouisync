@@ -1,6 +1,7 @@
 use super::{
     dart::{DartCObject, PostDartCObjectFn},
     error::{ErrorCode, ToErrorCode},
+    file::FileHolder,
     logger::Logger,
     registry::Registry,
     repository::RepositoryHolder,
@@ -97,6 +98,7 @@ pub unsafe extern "C" fn session_open(
             repos_span,
             _logger: logger,
             repositories: Arc::new(Registry::new()),
+            files: Arc::new(Registry::new()),
         };
 
         let session = SessionHandle::new(Box::new(session));
@@ -261,6 +263,7 @@ pub struct Session {
     _logger: Logger,
 
     pub(crate) repositories: Arc<Registry<RepositoryHolder>>,
+    pub(crate) files: Arc<Registry<FileHolder>>,
 }
 
 impl Session {
@@ -337,6 +340,10 @@ where
 
     pub(crate) fn repositories(&self) -> &Arc<Registry<RepositoryHolder>> {
         &self.session.repositories
+    }
+
+    pub(crate) fn files(&self) -> &Arc<Registry<FileHolder>> {
+        &self.session.files
     }
 }
 
