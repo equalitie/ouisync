@@ -58,23 +58,6 @@ impl<T> From<UniqueHandle<T>> for DartCObject {
     }
 }
 
-/// FFI handle to a borrowed resource.
-#[repr(transparent)]
-pub struct RefHandle<T>(u64, PhantomData<*const T>);
-
-impl<T> RefHandle<T> {
-    pub const NULL: Self = Self(0, PhantomData);
-
-    pub fn new(resource: &T) -> Self {
-        Self(resource as *const _ as _, PhantomData)
-    }
-
-    pub unsafe fn get(&self) -> &T {
-        assert!(self.0 != 0);
-        &*(self.0 as *const _)
-    }
-}
-
 // Wrapper that bypasses the type-checker to allow sending non-Send types across threads.
 // Highly unsafe!
 #[derive(Clone, Copy)]
