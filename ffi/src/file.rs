@@ -1,9 +1,10 @@
 use super::{
+    registry::Handle,
     repository::RepositoryHolder,
     session::SessionHandle,
     utils::{self, AssumeSend, Port, SharedHandle},
 };
-use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Repository, Result};
+use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Result};
 use std::{
     convert::TryInto,
     io::SeekFrom,
@@ -20,13 +21,13 @@ pub struct FileHolder {
 #[no_mangle]
 pub unsafe extern "C" fn file_open(
     session: SessionHandle,
-    repo: SharedHandle<RepositoryHolder>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<SharedHandle<FileHolder>>>,
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let local_branch = repo.repository.local_branch().ok();
 
         ctx.spawn(async move {
@@ -42,13 +43,13 @@ pub unsafe extern "C" fn file_open(
 #[no_mangle]
 pub unsafe extern "C" fn file_create(
     session: SessionHandle,
-    repo: SharedHandle<RepositoryHolder>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<SharedHandle<FileHolder>>>,
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let local_branch = repo.repository.local_branch()?;
 
         ctx.spawn(async move {
@@ -67,15 +68,15 @@ pub unsafe extern "C" fn file_create(
 #[no_mangle]
 pub unsafe extern "C" fn file_remove(
     session: SessionHandle,
-    repo: SharedHandle<Repository>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry(&path).await })
+        ctx.spawn(async move { repo.repository.remove_entry(&path).await })
     })
 }
 

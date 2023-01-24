@@ -2,6 +2,8 @@ use super::{
     dart::{DartCObject, PostDartCObjectFn},
     error::{ErrorCode, ToErrorCode},
     logger::Logger,
+    registry::Registry,
+    repository::RepositoryHolder,
     utils::{self, Bytes, Port, UniqueHandle, UniqueNullableHandle},
 };
 use camino::Utf8Path;
@@ -15,6 +17,7 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
+    sync::Arc,
     thread,
     time::Duration,
 };
@@ -93,6 +96,7 @@ pub unsafe extern "C" fn session_open(
             root_monitor,
             repos_span,
             _logger: logger,
+            repositories: Arc::new(Registry::new()),
         };
 
         let session = SessionHandle::new(Box::new(session));
@@ -206,12 +210,11 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
     // `shutdown` function.
     let Session {
         runtime,
-        device_id: _device_id,
         network,
-        sender: _sender,
         root_monitor,
         repos_span,
         _logger,
+        ..
     } = *session;
 
     runtime.block_on(async move {
@@ -256,6 +259,8 @@ pub struct Session {
     root_monitor: StateMonitor,
     repos_span: Span,
     _logger: Logger,
+
+    pub(crate) repositories: Arc<Registry<RepositoryHolder>>,
 }
 
 impl Session {
@@ -328,6 +333,10 @@ where
 
     pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
         tracing::info_span!(parent: self.repos_span(), "repo", ?store)
+    }
+
+    pub(crate) fn repositories(&self) -> &Arc<Registry<RepositoryHolder>> {
+        &self.session.repositories
     }
 }
 

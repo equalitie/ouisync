@@ -1,13 +1,14 @@
 use super::{
+    registry::Handle,
     session::SessionHandle,
-    utils::{self, Bytes, Port, SharedHandle, UniqueHandle},
+    utils::{self, Bytes, Port, UniqueHandle},
 };
 use ouisync_lib::{
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{os::raw::c_char, ptr, slice, str::FromStr, sync::Arc};
+use std::{os::raw::c_char, ptr, slice, str::FromStr};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 use tracing::Instrument;
 
@@ -42,7 +43,7 @@ pub unsafe extern "C" fn repository_create(
     local_read_password: *const c_char,
     local_write_password: *const c_char,
     share_token: *const c_char,
-    port: Port<Result<SharedHandle<RepositoryHolder>>>,
+    port: Port<Result<Handle<RepositoryHolder>>>,
 ) {
     session.get().with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
@@ -61,6 +62,7 @@ pub unsafe extern "C" fn repository_create(
         };
 
         let span = ctx.repo_span(&store);
+        let registry = ctx.repositories().clone();
 
         ctx.spawn(
             async move {
@@ -88,12 +90,14 @@ pub unsafe extern "C" fn repository_create(
                 registration.enable_dht();
                 registration.enable_pex();
 
-                let holder = Arc::new(RepositoryHolder {
+                let holder = RepositoryHolder {
                     repository,
                     registration,
-                });
+                };
 
-                Ok(SharedHandle::new(holder))
+                let handle = registry.insert(holder);
+
+                Ok(handle)
             }
             .instrument(span),
         )
@@ -106,7 +110,7 @@ pub unsafe extern "C" fn repository_open(
     session: SessionHandle,
     store: *const c_char,
     local_password: *const c_char,
-    port: Port<Result<SharedHandle<RepositoryHolder>>>,
+    port: Port<Result<Handle<RepositoryHolder>>>,
 ) {
     session.get().with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
@@ -116,6 +120,7 @@ pub unsafe extern "C" fn repository_open(
         let local_password = utils::ptr_to_pwd(local_password)?;
 
         let span = ctx.repo_span(&store);
+        let registry = ctx.repositories().clone();
 
         ctx.spawn(
             async move {
@@ -132,12 +137,14 @@ pub unsafe extern "C" fn repository_open(
                 registration.enable_dht();
                 registration.enable_pex();
 
-                let holder = Arc::new(RepositoryHolder {
+                let holder = RepositoryHolder {
                     repository,
                     registration,
-                });
+                };
 
-                Ok(SharedHandle::new(holder))
+                let handle = registry.insert(holder);
+
+                Ok(handle)
             }
             .instrument(span),
         )
@@ -157,13 +164,13 @@ pub unsafe extern "C" fn repository_open(
 #[no_mangle]
 pub unsafe extern "C" fn repository_set_read_access(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     local_read_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
 
         let access_secrets = if share_token.is_null() {
             // Repository shall attempt to use the one it's currently using.
@@ -198,13 +205,13 @@ pub unsafe extern "C" fn repository_set_read_access(
 #[no_mangle]
 pub unsafe extern "C" fn repository_set_read_and_write_access(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     local_rw_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
 
         let access_secrets = if share_token.is_null() {
             // Repository shall attempt to use the one it's currently using.
@@ -238,11 +245,11 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
 #[no_mangle]
 pub unsafe extern "C" fn repository_remove_read_key(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
         ctx.spawn(async move { holder.repository.remove_read_key().await })
     })
 }
@@ -251,11 +258,11 @@ pub unsafe extern "C" fn repository_remove_read_key(
 #[no_mangle]
 pub unsafe extern "C" fn repository_remove_write_key(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
         ctx.spawn(async move { holder.repository.remove_write_key().await })
     })
 }
@@ -264,12 +271,19 @@ pub unsafe extern "C" fn repository_remove_write_key(
 #[no_mangle]
 pub unsafe extern "C" fn repository_close(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.release();
-        ctx.spawn(async move { holder.repository.close().await })
+        let holder = ctx.repositories().remove(handle);
+
+        ctx.spawn(async move {
+            if let Some(holder) = holder {
+                holder.repository.close().await
+            } else {
+                Ok(())
+            }
+        })
     })
 }
 
@@ -277,11 +291,12 @@ pub unsafe extern "C" fn repository_close(
 #[no_mangle]
 pub unsafe extern "C" fn repository_requires_local_password_for_reading(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<bool>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
+
         ctx.spawn(async move {
             holder
                 .repository
@@ -295,11 +310,12 @@ pub unsafe extern "C" fn repository_requires_local_password_for_reading(
 #[no_mangle]
 pub unsafe extern "C" fn repository_requires_local_password_for_writing(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<bool>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
+
         ctx.spawn(async move {
             holder
                 .repository
@@ -309,25 +325,16 @@ pub unsafe extern "C" fn repository_requires_local_password_for_writing(
     })
 }
 
-/// Return the RepositoryId of the repository in the low hex format.
-/// User is responsible for deallocating the returned string.
-#[deprecated = "use repository_info_hash instead"]
-#[no_mangle]
-pub unsafe extern "C" fn repository_low_hex_id(
-    handle: SharedHandle<RepositoryHolder>,
-) -> *const c_char {
-    let holder = handle.get();
-    utils::str_to_ptr(&hex::encode(holder.repository.secrets().id().as_ref()))
-}
-
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
 /// unique, non-secret identifier of the repository.
 /// User is responsible for deallocating the returned string.
 #[no_mangle]
 pub unsafe extern "C" fn repository_info_hash(
-    handle: SharedHandle<RepositoryHolder>,
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
 ) -> *const c_char {
-    let holder = handle.get();
+    let holder = session.get().repositories.get(handle);
+
     utils::str_to_ptr(&hex::encode(
         network::repository_info_hash(holder.repository.secrets().id()).as_ref(),
     ))
@@ -338,11 +345,12 @@ pub unsafe extern "C" fn repository_info_hash(
 #[no_mangle]
 pub unsafe extern "C" fn repository_database_id(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<Vec<u8>>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
+
         ctx.spawn(async move { Ok(holder.repository.database_id().await?.as_ref().to_vec()) })
     })
 }
@@ -352,12 +360,12 @@ pub unsafe extern "C" fn repository_database_id(
 #[no_mangle]
 pub unsafe extern "C" fn repository_entry_type(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<u8>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
         let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move {
@@ -374,13 +382,13 @@ pub unsafe extern "C" fn repository_entry_type(
 #[no_mangle]
 pub unsafe extern "C" fn repository_move_entry(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     src: *const c_char,
     dst: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
         let src = utils::ptr_to_path_buf(src)?;
         let dst = utils::ptr_to_path_buf(dst)?;
 
@@ -400,12 +408,12 @@ pub unsafe extern "C" fn repository_move_entry(
 #[no_mangle]
 pub unsafe extern "C" fn repository_subscribe(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<()>,
 ) -> UniqueHandle<JoinHandle<()>> {
     let session = session.get();
     let sender = session.sender();
-    let holder = handle.get();
+    let holder = session.repositories.get(handle);
 
     let mut rx = holder.repository.subscribe();
 
@@ -433,17 +441,25 @@ pub unsafe extern "C" fn repository_subscribe(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_is_dht_enabled(handle: SharedHandle<RepositoryHolder>) -> bool {
-    handle.get().registration.is_dht_enabled()
+pub unsafe extern "C" fn repository_is_dht_enabled(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) -> bool {
+    session
+        .get()
+        .repositories
+        .get(handle)
+        .registration
+        .is_dht_enabled()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_enable_dht(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
 ) {
     let session = session.get();
-    let holder = handle.get();
+    let holder = session.repositories.get(handle);
 
     // HACK: the `enable_dht` call isn't async so spawning it should not be necessary. However,
     // calling it directly (even with entered runtime context) sometimes causes crash in the app
@@ -457,35 +473,67 @@ pub unsafe extern "C" fn repository_enable_dht(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_dht(handle: SharedHandle<RepositoryHolder>) {
-    handle.get().registration.disable_dht()
+pub unsafe extern "C" fn repository_disable_dht(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) {
+    session
+        .get()
+        .repositories
+        .get(handle)
+        .registration
+        .disable_dht()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_is_pex_enabled(handle: SharedHandle<RepositoryHolder>) -> bool {
-    handle.get().registration.is_pex_enabled()
+pub unsafe extern "C" fn repository_is_pex_enabled(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) -> bool {
+    session
+        .get()
+        .repositories
+        .get(handle)
+        .registration
+        .is_pex_enabled()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_enable_pex(handle: SharedHandle<RepositoryHolder>) {
-    handle.get().registration.enable_pex()
+pub unsafe extern "C" fn repository_enable_pex(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) {
+    session
+        .get()
+        .repositories
+        .get(handle)
+        .registration
+        .enable_pex()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_disable_pex(handle: SharedHandle<RepositoryHolder>) {
-    handle.get().registration.disable_pex()
+pub unsafe extern "C" fn repository_disable_pex(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) {
+    session
+        .get()
+        .repositories
+        .get(handle)
+        .registration
+        .disable_pex()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     access_mode: u8,
     name: *const c_char,
     port: Port<Result<String>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
         let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
 
@@ -499,8 +547,11 @@ pub unsafe extern "C" fn repository_create_share_token(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repository_access_mode(handle: SharedHandle<RepositoryHolder>) -> u8 {
-    let holder = handle.get();
+pub unsafe extern "C" fn repository_access_mode(
+    session: SessionHandle,
+    handle: Handle<RepositoryHolder>,
+) -> u8 {
+    let holder = session.get().repositories.get(handle);
     access_mode_to_num(holder.repository.access_mode())
 }
 
@@ -508,11 +559,12 @@ pub unsafe extern "C" fn repository_access_mode(handle: SharedHandle<RepositoryH
 #[no_mangle]
 pub unsafe extern "C" fn repository_sync_progress(
     session: SessionHandle,
-    handle: SharedHandle<RepositoryHolder>,
+    handle: Handle<RepositoryHolder>,
     port: Port<Result<Vec<u8>>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = handle.get();
+        let holder = ctx.repositories().get(handle);
+
         ctx.spawn(async move {
             let progress = holder.repository.sync_progress().await?;
             // unwrap is OK because serialization into a vector has no reason to fail
@@ -539,26 +591,6 @@ pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
     };
 
     access_mode_to_num(token.access_mode())
-}
-
-/// Return the RepositoryId of the repository corresponding to the share token in the low hex format.
-/// User is responsible for deallocating the returned string.
-#[deprecated = "use share_token_info_hash instead"]
-#[no_mangle]
-pub unsafe extern "C" fn share_token_repository_low_hex_id(token: *const c_char) -> *const c_char {
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    let token: ShareToken = if let Ok(token) = token.parse() {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    utils::str_to_ptr(&hex::encode(token.id().as_ref()))
 }
 
 /// Returns the info-hash of the repository corresponding to the share token formatted as hex

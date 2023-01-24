@@ -1,9 +1,10 @@
 use super::{
-    repository,
+    registry::Handle,
+    repository::{self, RepositoryHolder},
     session::SessionHandle,
-    utils::{self, Port, RefHandle, SharedHandle, UniqueHandle},
+    utils::{self, Port, RefHandle, UniqueHandle},
 };
-use ouisync_lib::{EntryType, Repository, Result};
+use ouisync_lib::{EntryType, Result};
 use std::{convert::TryInto, ffi::CString, os::raw::c_char};
 
 // Currently this is only a read-only snapshot of a directory.
@@ -19,16 +20,16 @@ impl Directory {
 #[no_mangle]
 pub unsafe extern "C" fn directory_create(
     session: SessionHandle,
-    repo: SharedHandle<Repository>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
 
         ctx.spawn(async move {
-            repo.create_directory(path).await?;
+            repo.repository.create_directory(path).await?;
             Ok(())
         })
     })
@@ -37,16 +38,16 @@ pub unsafe extern "C" fn directory_create(
 #[no_mangle]
 pub unsafe extern "C" fn directory_open(
     session: SessionHandle,
-    repo: SharedHandle<Repository>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<UniqueHandle<Directory>>>,
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
 
         ctx.spawn(async move {
-            let dir = repo.open_directory(path).await?;
+            let dir = repo.repository.open_directory(path).await?;
             let entries = dir
                 .entries()
                 .map(|entry| DirEntry {
@@ -68,15 +69,15 @@ pub unsafe extern "C" fn directory_open(
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove(
     session: SessionHandle,
-    repo: SharedHandle<Repository>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry(path).await })
+        ctx.spawn(async move { repo.repository.remove_entry(path).await })
     })
 }
 
@@ -84,15 +85,15 @@ pub unsafe extern "C" fn directory_remove(
 #[no_mangle]
 pub unsafe extern "C" fn directory_remove_recursively(
     session: SessionHandle,
-    repo: SharedHandle<Repository>,
+    repo: Handle<RepositoryHolder>,
     path: *const c_char,
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = repo.get();
+        let repo = ctx.repositories().get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
-        ctx.spawn(async move { repo.remove_entry_recursively(path).await })
+        ctx.spawn(async move { repo.repository.remove_entry_recursively(path).await })
     })
 }
 
