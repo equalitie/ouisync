@@ -208,7 +208,7 @@ async fn main() -> Result<()> {
 
     terminated().await?;
 
-    time::timeout(Duration::from_secs(1), network.shutdown())
+    time::timeout(Duration::from_secs(1), network.handle().shutdown())
         .await
         .unwrap_or(());
 
