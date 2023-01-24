@@ -3,9 +3,9 @@ use super::{
     error::{ErrorCode, ToErrorCode},
     file::FileHolder,
     logger::Logger,
-    registry::Registry,
+    registry::{Handle, NullableHandle, Registry},
     repository::RepositoryHolder,
-    utils::{self, Bytes, Port, UniqueHandle, UniqueNullableHandle},
+    utils::{self, Bytes, Port, UniqueHandle},
 };
 use camino::Utf8Path;
 use ouisync_lib::{
@@ -99,6 +99,7 @@ pub unsafe extern "C" fn session_open(
             _logger: logger,
             repositories: Arc::new(Registry::new()),
             files: Arc::new(Registry::new()),
+            tasks: Arc::new(Registry::new()),
         };
 
         let session = SessionHandle::new(Box::new(session));
@@ -144,7 +145,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
     path: *const u8,
     path_len: u64,
     port: Port<()>,
-) -> UniqueNullableHandle<JoinHandle<()>> {
+) -> NullableHandle<JoinHandle<()>> {
     let path = std::slice::from_raw_parts(path, path_len as usize);
     let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
         Ok(path) => path,
@@ -153,7 +154,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
                 "Failed to parse input in session_state_monitor_subscribe as MessagePack: {:?}",
                 e
             );
-            return UniqueNullableHandle::NULL;
+            return NullableHandle::NULL;
         }
     };
     let path = path
@@ -176,19 +177,22 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
             }
         });
 
-        UniqueNullableHandle::new(Box::new(handle))
+        session.tasks.insert(handle).into()
     } else {
-        UniqueNullableHandle::NULL
+        NullableHandle::NULL
     }
 }
 
 /// Unsubscribe from the above "on change" StateMonitor events.
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_unsubscribe(
-    handle: UniqueNullableHandle<JoinHandle<()>>,
+    session: SessionHandle,
+    handle: NullableHandle<JoinHandle<()>>,
 ) {
-    if let Some(handle) = handle.release() {
-        handle.abort();
+    if let Ok(handle) = handle.try_into() {
+        if let Some(handle) = session.get().tasks.remove(handle) {
+            handle.abort();
+        }
     }
 }
 
@@ -233,8 +237,13 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 
 /// Cancel a notification subscription.
 #[no_mangle]
-pub unsafe extern "C" fn subscription_cancel(handle: UniqueHandle<JoinHandle<()>>) {
-    handle.release().abort();
+pub unsafe extern "C" fn subscription_cancel(
+    session: SessionHandle,
+    handle: Handle<JoinHandle<()>>,
+) {
+    if let Some(handle) = session.get().tasks.remove(handle) {
+        handle.abort();
+    }
 }
 
 /// Deallocate string that has been allocated on the rust side
@@ -264,6 +273,7 @@ pub struct Session {
 
     pub(crate) repositories: Arc<Registry<RepositoryHolder>>,
     pub(crate) files: Arc<Registry<FileHolder>>,
+    pub(crate) tasks: Arc<Registry<JoinHandle<()>>>,
 }
 
 impl Session {

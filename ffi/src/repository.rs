@@ -1,7 +1,7 @@
 use super::{
     registry::Handle,
     session::SessionHandle,
-    utils::{self, Bytes, Port, UniqueHandle},
+    utils::{self, Bytes, Port},
 };
 use ouisync_lib::{
     network::{self, Registration},
@@ -410,7 +410,7 @@ pub unsafe extern "C" fn repository_subscribe(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
     port: Port<()>,
-) -> UniqueHandle<JoinHandle<()>> {
+) -> Handle<JoinHandle<()>> {
     let session = session.get();
     let sender = session.sender();
     let holder = session.repositories.get(handle);
@@ -437,7 +437,7 @@ pub unsafe extern "C" fn repository_subscribe(
         }
     });
 
-    UniqueHandle::new(Box::new(handle))
+    session.tasks.insert(handle)
 }
 
 #[no_mangle]

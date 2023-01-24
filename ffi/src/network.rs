@@ -1,6 +1,7 @@
 use super::{
+    registry::Handle,
     session::SessionHandle,
-    utils::{self, Bytes, Port, UniqueHandle},
+    utils::{self, Bytes, Port},
 };
 use ouisync_lib::{network::peer_addr::PeerAddr, Result};
 use std::{
@@ -58,7 +59,7 @@ pub unsafe extern "C" fn network_bind(
 pub unsafe extern "C" fn network_subscribe(
     session: SessionHandle,
     port: Port<u8>,
-) -> UniqueHandle<JoinHandle<()>> {
+) -> Handle<JoinHandle<()>> {
     let session = session.get();
     let sender = session.sender();
 
@@ -94,7 +95,7 @@ pub unsafe extern "C" fn network_subscribe(
         }
     });
 
-    UniqueHandle::new(Box::new(handle))
+    session.tasks.insert(handle)
 }
 
 /// Gracefully disconnect from peers.
