@@ -14,10 +14,12 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 camino = "1.0.9"
+futures-util = { workspace = true }
 hex = "0.4.3"
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rmp-serde = "1.1.0"
 scoped_task = { path = "../scoped_task" }
+serde = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = "0.18.0"
 tracing = { workspace = true }
