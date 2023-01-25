@@ -9,19 +9,15 @@ use super::{
     utils::{self, Bytes, Port, UniqueHandle},
 };
 use camino::Utf8Path;
-use ouisync_lib::{
-    device_id::{self, DeviceId},
-    network::Network,
-    ConfigStore, Error, MonitorId, Result, StateMonitor,
-};
+use ouisync_lib::{network::Network, ConfigStore, Error, MonitorId, Result, StateMonitor};
 use std::{
     ffi::CString,
     future::Future,
     mem,
     os::raw::{c_char, c_void},
     path::PathBuf,
+    ptr,
     sync::Arc,
-    thread,
     time::Duration,
 };
 use tokio::{
@@ -31,6 +27,30 @@ use tokio::{
 };
 use tracing::Span;
 
+#[repr(C)]
+pub struct SessionOpenResult {
+    session: SessionHandle,
+    error_code: ErrorCode,
+    error_message: *const c_char,
+}
+
+impl From<Result<Session>> for SessionOpenResult {
+    fn from(result: Result<Session>) -> Self {
+        match result {
+            Ok(session) => Self {
+                session: SessionHandle::new(Box::new(session)),
+                error_code: ErrorCode::Ok,
+                error_message: ptr::null(),
+            },
+            Err(error) => Self {
+                session: SessionHandle::NULL,
+                error_code: error.to_error_code(),
+                error_message: utils::str_to_ptr(&error.to_string()),
+            },
+        }
+    }
+}
+
 /// Opens the ouisync session. `post_c_object_fn` should be a pointer to the dart's
 /// `NativeApi.postCObject` function cast to `Pointer<Void>` (the casting is necessary to work
 /// around limitations of the binding generators).
@@ -38,24 +58,17 @@ use tracing::Span;
 pub unsafe extern "C" fn session_open(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
-    port: Port<Result<SessionHandle>>,
-) {
+) -> SessionOpenResult {
     let sender = Sender {
         post_c_object_fn: mem::transmute(post_c_object_fn),
     };
 
     let configs_path = match utils::ptr_to_native_path_buf(configs_path) {
         Ok(configs_path) => configs_path,
-        Err(error) => {
-            sender.send_result(port, Err(error));
-            return;
-        }
+        Err(error) => return Err(error).into(),
     };
 
-    Session::create(sender, configs_path, move |result| {
-        let result = result.map(|session| SessionHandle::new(Box::new(session)));
-        sender.send_result(port, result);
-    });
+    Session::create(sender, configs_path).into()
 }
 
 /// Retrieve a serialized state monitor corresponding to the `path`.
@@ -212,72 +225,48 @@ pub struct Session {
 }
 
 impl Session {
-    pub(crate) fn create<F>(sender: Sender, configs_path: PathBuf, on_done: F)
-    where
-        F: FnOnce(Result<Self>) + Send + 'static,
-    {
+    pub(crate) fn create(sender: Sender, configs_path: PathBuf) -> Result<Self> {
+        let config = ConfigStore::new(configs_path);
+
         let root_monitor = StateMonitor::make_root();
         let session_monitor = root_monitor.make_child("Session");
         let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
 
         // Init logger
-        let logger = match Logger::new(panic_counter, root_monitor.clone()) {
-            Ok(logger) => logger,
-            Err(error) => {
-                on_done(Err(Error::InitializeLogger(error)));
-                return;
-            }
+        let logger =
+            Logger::new(panic_counter, root_monitor.clone()).map_err(Error::InitializeLogger)?;
+
+        // Create runtime
+        let runtime = runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(Error::InitializeRuntime)?;
+        let _enter = runtime.enter(); // runtime context is needed for some of the following calls
+
+        let network = {
+            let _enter = tracing::info_span!("Network").entered();
+            Network::new(config.clone())
         };
 
-        let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                on_done(Err(Error::InitializeRuntime(error)));
-                return;
-            }
+        let repos_span = tracing::info_span!("Repositories");
+
+        let session = Session {
+            runtime,
+            state: Arc::new(State {
+                root_monitor,
+                repos_span,
+                config,
+                network,
+                repositories: Registry::new(),
+                directories: Registry::new(),
+                files: Registry::new(),
+                tasks: Registry::new(),
+            }),
+            sender,
+            _logger: logger,
         };
 
-        let config = ConfigStore::new(configs_path);
-
-        // NOTE: spawning a separate thread and using `runtime.block_on` instead of using
-        // `runtime.spawn` to avoid moving the runtime into "itself" which would be problematic because
-        // if there was an error the runtime would be dropped inside an async context which would panic.
-        thread::spawn(move || {
-            let device_id = match runtime.block_on(device_id::get_or_create(&config)) {
-                Ok(device_id) => device_id,
-                Err(error) => {
-                    on_done(Err(error));
-                    return;
-                }
-            };
-
-            let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-
-            let network = {
-                let _enter = tracing::info_span!("Network").entered();
-                Network::new(config)
-            };
-
-            let repos_span = tracing::info_span!("Repositories");
-
-            let session = Session {
-                runtime,
-                state: Arc::new(State {
-                    root_monitor,
-                    repos_span,
-                    device_id,
-                    network,
-                    repositories: Registry::new(),
-                    directories: Registry::new(),
-                    files: Registry::new(),
-                    tasks: Registry::new(),
-                }),
-                sender,
-                _logger: logger,
-            };
-
-            on_done(Ok(session));
-        });
+        Ok(session)
     }
 
     pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
@@ -311,7 +300,7 @@ pub type SessionHandle = UniqueHandle<Session>;
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
     pub repos_span: Span,
-    pub device_id: DeviceId,
+    pub config: ConfigStore,
     pub network: Network,
     pub repositories: Registry<RepositoryHolder>,
     pub directories: Registry<Directory>,

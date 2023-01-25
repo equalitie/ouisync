@@ -39,11 +39,14 @@ impl<T> Copy for Port<T> {}
 pub struct UniqueHandle<T: 'static>(u64, PhantomData<&'static T>);
 
 impl<T> UniqueHandle<T> {
+    pub const NULL: Self = Self(0, PhantomData);
+
     pub fn new(resource: Box<T>) -> Self {
         Self(Box::into_raw(resource) as _, PhantomData)
     }
 
     pub unsafe fn get(&self) -> &T {
+        assert_ne!(self.0, 0, "invalid handle");
         &*(self.0 as *const _)
     }
 

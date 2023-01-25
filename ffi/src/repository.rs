@@ -4,6 +4,7 @@ use super::{
     utils::{self, Bytes, Port},
 };
 use ouisync_lib::{
+    device_id,
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
@@ -47,7 +48,6 @@ pub unsafe extern "C" fn repository_create(
 ) {
     session.get().with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        let device_id = ctx.state().device_id;
         let network_handle = ctx.state().network.handle();
 
         let local_read_password = utils::ptr_to_pwd(local_read_password)?;
@@ -66,6 +66,8 @@ pub unsafe extern "C" fn repository_create(
 
         ctx.spawn(
             async move {
+                let device_id = device_id::get_or_create(&state.config).await?;
+
                 let db = RepositoryDb::create(store.into_std_path_buf()).await?;
 
                 let local_read_key = if let Some(local_read_password) = local_read_password {
@@ -114,7 +116,6 @@ pub unsafe extern "C" fn repository_open(
 ) {
     session.get().with(port, |ctx| {
         let store = utils::ptr_to_path_buf(store)?;
-        let device_id = ctx.state().device_id;
         let network_handle = ctx.state().network.handle();
 
         let local_password = utils::ptr_to_pwd(local_password)?;
@@ -124,6 +125,8 @@ pub unsafe extern "C" fn repository_open(
 
         ctx.spawn(
             async move {
+                let device_id = device_id::get_or_create(&state.config).await?;
+
                 let repository = Repository::open(
                     store.into_std_path_buf(),
                     device_id,
