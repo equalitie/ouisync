@@ -672,6 +672,43 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn send_on_two_streams_parallel() {
+        let (client, server) = setup_two_dispatchers().await;
+
+        let channel0 = MessageChannel::random();
+        let channel1 = MessageChannel::random();
+
+        let send_content0 = b"one two three";
+        let send_content1 = b"four five six";
+
+        let mut send_tasks = vec![];
+
+        let client_sink0 = client.open_send(channel0);
+        let client_sink1 = client.open_send(channel1);
+
+        for (sink, content) in [(client_sink0, send_content0), (client_sink1, send_content1)] {
+            send_tasks.push(tokio::task::spawn(async move {
+                sink.send(content.to_vec()).await.unwrap();
+            }));
+        }
+
+        for task in send_tasks {
+            task.await.unwrap();
+        }
+
+        let server_stream0 = server.open_recv(channel0);
+        let server_stream1 = server.open_recv(channel1);
+
+        for (mut server_stream, send_content) in [
+            (server_stream0, send_content0),
+            (server_stream1, send_content1),
+        ] {
+            let recv_content = server_stream.recv().await.unwrap();
+            assert_eq!(recv_content, send_content);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn drop_stream() {
         let (mut client, server) = setup().await;
 
@@ -750,6 +787,18 @@ mod tests {
         server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         (client_writer, server_dispatcher)
+    }
+
+    async fn setup_two_dispatchers() -> (MessageDispatcher, MessageDispatcher) {
+        let (client, server) = create_connected_sockets().await;
+
+        let client_dispatcher = MessageDispatcher::new();
+        client_dispatcher.bind(client, ConnectionPermit::dummy());
+
+        let server_dispatcher = MessageDispatcher::new();
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
+
+        (client_dispatcher, server_dispatcher)
     }
 
     async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
