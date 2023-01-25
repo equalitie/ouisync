@@ -477,31 +477,26 @@ impl Future for Recv<'_> {
 // NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
 // provides an async `send` method.
 struct MultiSink {
-    inner: Mutex<MultiSinkInner>,
+    sinks: Mutex<Vec<PermittedSink>>,
 }
 
 impl MultiSink {
     fn new() -> Self {
         Self {
-            inner: Mutex::new(MultiSinkInner {
-                sinks: Vec::new(),
-                waker: None,
-            }),
+            sinks: Mutex::new(Vec::new()),
         }
     }
 
     fn add(&self, sink: PermittedSink) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sinks.push(sink);
-        inner.wake();
+        self.sinks.lock().unwrap().push(sink);
     }
 
     async fn close(&self) {
         // TODO: Other functions should fail if called after the call to this function.
 
-        let (mut sinks, waker) = {
-            let mut inner = self.inner.lock().unwrap();
-            (std::mem::take(&mut inner.sinks), inner.waker.take())
+        let mut sinks = {
+            let mut sinks = self.sinks.lock().unwrap();
+            std::mem::take(&mut *sinks)
         };
 
         let mut futures = Vec::with_capacity(sinks.len());
@@ -511,10 +506,6 @@ impl MultiSink {
         }
 
         futures_util::future::join_all(futures).await;
-
-        if let Some(waker) = waker {
-            waker.wake();
-        }
     }
 
     // Returns whether the send succeeded.
@@ -528,82 +519,59 @@ impl MultiSink {
     fn send(&self, message: Message) -> Send {
         Send {
             message: Some(message),
-            inner: &self.inner,
+            sinks: &self.sinks,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().sinks.is_empty()
+        self.sinks.lock().unwrap().is_empty()
     }
 
     fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.inner
+        self.sinks
             .lock()
             .unwrap()
-            .sinks
             .iter()
             .map(|sink| sink.connection_info())
             .collect()
     }
 }
 
-struct MultiSinkInner {
-    sinks: Vec<PermittedSink>,
-    waker: Option<Waker>,
-}
-
-impl MultiSinkInner {
-    fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-}
-
 // Future returned from [`MultiSink::send`].
 struct Send<'a> {
     message: Option<Message>,
-    inner: &'a Mutex<MultiSinkInner>,
+    sinks: &'a Mutex<Vec<PermittedSink>>,
 }
 
 impl Future for Send<'_> {
     type Output = Result<(), ChannelClosed>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut sinks = self.sinks.lock().unwrap();
 
         loop {
-            let sink = if let Some(sink) = inner.sinks.first_mut() {
+            let sink = if let Some(sink) = sinks.first_mut() {
                 sink
             } else {
                 return Poll::Ready(Err(ChannelClosed));
             };
 
             let message = match sink.poll_ready_unpin(cx) {
-                Poll::Ready(Ok(())) => {
-                    if let Some(message) = self.message.take() {
-                        message
-                    } else {
-                        return Poll::Ready(Ok(()));
-                    }
-                }
+                Poll::Ready(Ok(())) => self.message.take().expect("polled Send after completion"),
                 Poll::Ready(Err(error)) => {
-                    inner.sinks.swap_remove(0);
+                    sinks.swap_remove(0);
                     self.message = Some(error.message);
                     continue;
                 }
-                Poll::Pending => {
-                    if inner.waker.is_none() {
-                        inner.waker = Some(cx.waker().clone());
-                    }
-
-                    return Poll::Pending;
-                }
+                Poll::Pending => return Poll::Pending,
             };
 
-            if let Err(error) = sink.start_send_unpin(message) {
-                inner.sinks.swap_remove(0);
-                self.message = Some(error.message);
+            match sink.start_send_unpin(message) {
+                Ok(()) => return Poll::Ready(Ok(())),
+                Err(error) => {
+                    sinks.swap_remove(0);
+                    self.message = Some(error.message);
+                }
             }
         }
     }
