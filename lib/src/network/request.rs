@@ -1,9 +1,9 @@
 use super::{message::Request, repository_stats::RepositoryStats};
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    scoped_task::{self, ScopedJoinHandle},
     sync::uninitialized_watch,
 };
+use scoped_task::ScopedJoinHandle;
 use std::{
     future,
     sync::{Arc, Mutex},

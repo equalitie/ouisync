@@ -1,5 +1,5 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, scoped_task, WriteSecrets};
+use crate::{blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, WriteSecrets};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;

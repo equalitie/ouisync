@@ -8,9 +8,9 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
-    scoped_task::{self, ScopedJoinHandle},
     store::{BlockRequestMode, Store},
 };
+use scoped_task::ScopedJoinHandle;
 use std::{collections::VecDeque, future, sync::Arc};
 use tokio::{
     select,

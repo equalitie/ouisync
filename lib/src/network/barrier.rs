@@ -398,8 +398,8 @@ impl std::fmt::Debug for Step {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scoped_task::{self, ScopedJoinHandle};
     use async_trait::async_trait;
+    use scoped_task::ScopedJoinHandle;
     use std::sync::Arc;
     use tokio::{
         sync::{mpsc, Mutex},

@@ -269,6 +269,11 @@ impl Session {
         Ok(session)
     }
 
+    /// Start accepting clients. Returns the port on which the interface socket is listening.
+    pub(crate) async fn start(&self) -> Result<u16> {
+        todo!()
+    }
+
     pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
     where
         F: FnOnce(Context<T>) -> Result<()>,

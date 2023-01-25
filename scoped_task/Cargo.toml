@@ -1,0 +1,12 @@
+[package]
+name = "scoped_task"
+description = "Async tasks that automatically abort when their handle is dropped"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["rt"] }
+

@@ -2,16 +2,14 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::{
-    collections::HashMap,
-    scoped_task::{self, ScopedJoinHandle},
-};
+use crate::collections::HashMap;
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
 use futures_util::{stream, StreamExt};
 use net::quic;
 use rand::Rng;
+use scoped_task::ScopedJoinHandle;
 use std::{
     future::pending,
     io,

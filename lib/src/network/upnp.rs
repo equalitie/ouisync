@@ -1,8 +1,5 @@
 use super::ip;
-use crate::{
-    collections::{hash_map, HashMap},
-    scoped_task::{self, ScopedJoinHandle},
-};
+use crate::collections::{hash_map, HashMap};
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -11,6 +8,7 @@ use rupnp::{
     ssdp::{SearchTarget, URN},
     Device, Service,
 };
+use scoped_task::ScopedJoinHandle;
 use std::{
     fmt,
     future::Future,

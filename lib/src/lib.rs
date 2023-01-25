@@ -33,7 +33,6 @@ mod locator;
 mod metadata;
 mod progress;
 mod repository;
-mod scoped_task;
 mod state_monitor;
 mod store;
 mod sync;

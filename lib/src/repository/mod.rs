@@ -27,11 +27,11 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     metadata, path,
     progress::Progress,
-    scoped_task::{self, ScopedJoinHandle},
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
+use scoped_task::ScopedJoinHandle;
 use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},

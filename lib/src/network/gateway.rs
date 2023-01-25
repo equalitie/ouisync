@@ -3,7 +3,6 @@ use super::{
 };
 use crate::{
     config::{ConfigEntry, ConfigStore},
-    scoped_task::{self, ScopedJoinHandle},
     sync::atomic_slot::AtomicSlot,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -11,6 +10,7 @@ use net::{
     quic,
     tcp::{TcpListener, TcpStream},
 };
+use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 use tokio::{
