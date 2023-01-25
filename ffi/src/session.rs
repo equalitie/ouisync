@@ -87,7 +87,12 @@ pub unsafe extern "C" fn session_open(
         };
 
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-        let network = Network::new(config);
+
+        let network = {
+            let _enter = tracing::info_span!("Network").entered();
+            Network::new(config)
+        };
+
         let repos_span = tracing::info_span!("Repositories");
 
         let session = Session {
