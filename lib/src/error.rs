@@ -44,10 +44,13 @@ pub enum Error {
     DirectoryNotEmpty,
     #[error("operation is not supported")]
     OperationNotSupported,
+    // TODO: move the FFI-only error variants to a FFI specific error type
     #[error("failed to initialize logger")]
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
+    #[error("interface error")]
+    Interface(#[source] io::Error),
     #[error("failed to write into writer")]
     Writer(#[source] io::Error),
     #[error("request timeout")]

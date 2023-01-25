@@ -55,6 +55,17 @@ impl From<u8> for DartCObject {
     }
 }
 
+impl From<u16> for DartCObject {
+    fn from(value: u16) -> Self {
+        DartCObject {
+            type_: DartCObjectType::Int32,
+            value: DartCObjectValue {
+                as_int32: value as i32,
+            },
+        }
+    }
+}
+
 impl From<bool> for DartCObject {
     fn from(value: bool) -> Self {
         DartCObject {

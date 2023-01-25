@@ -52,6 +52,7 @@ impl ToErrorCode for Error {
             | Self::OffsetOutOfRange
             | Self::InitializeLogger(_)
             | Self::InitializeRuntime(_)
+            | Self::Interface(_)
             | Self::Writer(_)
             | Self::RequestTimeout
             // TODO: add separate code for `StorageVersionMismatch`

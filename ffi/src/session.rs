@@ -3,6 +3,7 @@ use super::{
     directory::Directory,
     error::{ErrorCode, ToErrorCode},
     file::FileHolder,
+    listener::{self, ListenerStatus},
     logger::Logger,
     registry::{Handle, NullableHandle, Registry},
     repository::RepositoryHolder,
@@ -14,7 +15,7 @@ use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,
     future::Future,
-    mem,
+    io, mem,
     os::raw::{c_char, c_void},
     path::PathBuf,
     ptr,
@@ -23,6 +24,7 @@ use std::{
 };
 use tokio::{
     runtime::{self, Runtime},
+    sync::watch,
     time,
 };
 use tracing::Span;
@@ -69,6 +71,39 @@ pub unsafe extern "C" fn session_open(
     };
 
     Session::create(sender, configs_path).into()
+}
+
+/// Get the interface listener port
+#[no_mangle]
+pub unsafe extern "C" fn session_interface_listener_port(
+    session: SessionHandle,
+    port: Port<Result<u16>>,
+) {
+    let session = session.get();
+    let mut rx = session.listener_status_rx.clone();
+
+    session.with(port, |ctx| {
+        ctx.spawn(async move {
+            loop {
+                match &*rx.borrow_and_update() {
+                    ListenerStatus::Starting => (),
+                    ListenerStatus::Running(addr) => return Ok(addr.port()),
+                    ListenerStatus::Failed(error) => {
+                        // NOTE: `io::Error` is not `Clone` and we can't move it out here so we
+                        // reconstruct it here instead as a workaround.
+                        return Err(Error::Interface(io::Error::new(
+                            error.kind(),
+                            error.to_string(),
+                        )));
+                    }
+                }
+
+                rx.changed()
+                    .await
+                    .expect("interface listener unexpectedly terminated");
+            }
+        })
+    })
 }
 
 /// Retrieve a serialized state monitor corresponding to the `path`.
@@ -217,6 +252,8 @@ pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
 pub struct Session {
     runtime: Runtime,
     pub(crate) state: Arc<State>,
+    _listener_task: ScopedJoinHandle<()>,
+    listener_status_rx: watch::Receiver<ListenerStatus>,
     sender: Sender,
     _logger: Logger,
 }
@@ -247,28 +284,32 @@ impl Session {
 
         let repos_span = tracing::info_span!("Repositories");
 
+        let state = Arc::new(State {
+            root_monitor,
+            repos_span,
+            config,
+            network,
+            repositories: Registry::new(),
+            directories: Registry::new(),
+            files: Registry::new(),
+            tasks: Registry::new(),
+        });
+
+        let (listener_status_tx, listener_status_rx) = watch::channel(ListenerStatus::Starting);
+
+        let listener_task = runtime.spawn(listener::run(state.clone(), listener_status_tx));
+        let listener_task = ScopedJoinHandle(listener_task);
+
         let session = Session {
             runtime,
-            state: Arc::new(State {
-                root_monitor,
-                repos_span,
-                config,
-                network,
-                repositories: Registry::new(),
-                directories: Registry::new(),
-                files: Registry::new(),
-                tasks: Registry::new(),
-            }),
+            state,
+            _listener_task: listener_task,
+            listener_status_rx,
             sender,
             _logger: logger,
         };
 
         Ok(session)
-    }
-
-    /// Start listening for client connections. Returns the listening port.
-    pub(crate) async fn listen(&self) -> Result<u16> {
-        todo!()
     }
 
     pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
