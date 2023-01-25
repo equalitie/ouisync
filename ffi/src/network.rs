@@ -45,7 +45,7 @@ pub unsafe extern "C" fn network_bind(
         .flatten()
         .collect();
 
-        let network_handle = ctx.network().handle();
+        let network_handle = ctx.state().network.handle();
 
         ctx.spawn(async move {
             network_handle.bind(&addrs).await;
@@ -63,8 +63,8 @@ pub unsafe extern "C" fn network_subscribe(
     let session = session.get();
     let sender = session.sender();
 
-    let mut on_protocol_mismatch = session.network().on_protocol_mismatch();
-    let mut on_peer_set_change = session.network().on_peer_set_change();
+    let mut on_protocol_mismatch = session.state.network.on_protocol_mismatch();
+    let mut on_peer_set_change = session.state.network.on_peer_set_change();
 
     let handle = session.runtime().spawn(async move {
         // TODO: This loop exits when the first of the watched channels closes. It might be less
@@ -95,14 +95,14 @@ pub unsafe extern "C" fn network_subscribe(
         }
     });
 
-    session.tasks.insert(handle)
+    session.state.tasks.insert(handle)
 }
 
 /// Gracefully disconnect from peers.
 #[no_mangle]
 pub unsafe extern "C" fn network_shutdown(session: SessionHandle, port: Port<Result<()>>) {
     session.get().with(port, |ctx| {
-        let handle = ctx.network().handle();
+        let handle = ctx.state().network.handle();
 
         ctx.spawn(async move {
             handle.shutdown().await;
@@ -121,7 +121,8 @@ pub unsafe extern "C" fn network_shutdown(session: SessionHandle, port: Port<Res
 pub unsafe extern "C" fn network_tcp_listener_local_addr_v4(session: SessionHandle) -> *mut c_char {
     session
         .get()
-        .network()
+        .state
+        .network
         .tcp_listener_local_addr_v4()
         .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
         .unwrap_or(ptr::null_mut())
@@ -137,7 +138,8 @@ pub unsafe extern "C" fn network_tcp_listener_local_addr_v4(session: SessionHand
 pub unsafe extern "C" fn network_tcp_listener_local_addr_v6(session: SessionHandle) -> *mut c_char {
     session
         .get()
-        .network()
+        .state
+        .network
         .tcp_listener_local_addr_v6()
         .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
         .unwrap_or(ptr::null_mut())
@@ -155,7 +157,8 @@ pub unsafe extern "C" fn network_quic_listener_local_addr_v4(
 ) -> *mut c_char {
     session
         .get()
-        .network()
+        .state
+        .network
         .quic_listener_local_addr_v4()
         .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
         .unwrap_or(ptr::null_mut())
@@ -173,7 +176,8 @@ pub unsafe extern "C" fn network_quic_listener_local_addr_v6(
 ) -> *mut c_char {
     session
         .get()
-        .network()
+        .state
+        .network
         .quic_listener_local_addr_v6()
         .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
         .unwrap_or(ptr::null_mut())
@@ -210,7 +214,8 @@ pub unsafe extern "C" fn network_add_user_provided_quic_peer(
     let _runtime_guard = session.runtime().enter();
 
     session
-        .network()
+        .state
+        .network
         .add_user_provided_peer(&PeerAddr::Quic(addr));
 
     true
@@ -245,7 +250,8 @@ pub unsafe extern "C" fn network_remove_user_provided_quic_peer(
 
     session
         .get()
-        .network()
+        .state
+        .network
         .remove_user_provided_peer(&PeerAddr::Quic(addr));
 
     true
@@ -254,7 +260,7 @@ pub unsafe extern "C" fn network_remove_user_provided_quic_peer(
 /// Return the list of peers with which we're connected, serialized with msgpack.
 #[no_mangle]
 pub unsafe extern "C" fn network_connected_peers(session: SessionHandle) -> Bytes {
-    let peer_info = session.get().network().collect_peer_info();
+    let peer_info = session.get().state.network.collect_peer_info();
     let bytes = rmp_serde::to_vec(&peer_info).unwrap();
     Bytes::from_vec(bytes)
 }
@@ -264,21 +270,21 @@ pub unsafe extern "C" fn network_connected_peers(session: SessionHandle) -> Byte
 #[no_mangle]
 pub unsafe extern "C" fn network_this_runtime_id(session: SessionHandle) -> *const c_char {
     utils::str_to_ptr(&hex::encode(
-        session.get().network().this_runtime_id().as_ref(),
+        session.get().state.network.this_runtime_id().as_ref(),
     ))
 }
 
 /// Return our currently used protocol version number.
 #[no_mangle]
 pub unsafe extern "C" fn network_current_protocol_version(session: SessionHandle) -> u32 {
-    session.get().network().current_protocol_version()
+    session.get().state.network.current_protocol_version()
 }
 
 /// Return the highest seen protocol version number. The value returned is always higher
 /// or equal to the value returned from network_current_protocol_version() fn.
 #[no_mangle]
 pub unsafe extern "C" fn network_highest_seen_protocol_version(session: SessionHandle) -> u32 {
-    session.get().network().highest_seen_protocol_version()
+    session.get().state.network.highest_seen_protocol_version()
 }
 
 /// Enables port forwarding (UPnP)
@@ -286,19 +292,19 @@ pub unsafe extern "C" fn network_highest_seen_protocol_version(session: SessionH
 pub unsafe extern "C" fn network_enable_port_forwarding(session: SessionHandle) {
     let session = session.get();
     let _enter = session.runtime().enter();
-    session.network().enable_port_forwarding()
+    session.state.network.enable_port_forwarding()
 }
 
 /// Disables port forwarding (UPnP)
 #[no_mangle]
 pub unsafe extern "C" fn network_disable_port_forwarding(session: SessionHandle) {
-    session.get().network().disable_port_forwarding()
+    session.get().state.network.disable_port_forwarding()
 }
 
 /// Checks whether port forwarding (UPnP) is enabled
 #[no_mangle]
 pub unsafe extern "C" fn network_is_port_forwarding_enabled(session: SessionHandle) -> bool {
-    session.get().network().is_port_forwarding_enabled()
+    session.get().state.network.is_port_forwarding_enabled()
 }
 
 /// Enables local discovery
@@ -306,17 +312,17 @@ pub unsafe extern "C" fn network_is_port_forwarding_enabled(session: SessionHand
 pub unsafe extern "C" fn network_enable_local_discovery(session: SessionHandle) {
     let session = session.get();
     let _enter = session.runtime().enter();
-    session.network().enable_local_discovery()
+    session.state.network.enable_local_discovery()
 }
 
 /// Disables local discovery
 #[no_mangle]
 pub unsafe extern "C" fn network_disable_local_discovery(session: SessionHandle) {
-    session.get().network().disable_local_discovery()
+    session.get().state.network.disable_local_discovery()
 }
 
 /// Checks whether local discovery is enabled
 #[no_mangle]
 pub unsafe extern "C" fn network_is_local_discovery_enabled(session: SessionHandle) -> bool {
-    session.get().network().is_local_discovery_enabled()
+    session.get().state.network.is_local_discovery_enabled()
 }

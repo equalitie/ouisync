@@ -31,7 +31,7 @@ pub unsafe extern "C" fn directory_create(
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
 
         ctx.spawn(async move {
             repo.repository.create_directory(path).await?;
@@ -49,8 +49,8 @@ pub unsafe extern "C" fn directory_open(
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.repositories().get(repo);
-        let registry = ctx.directories().clone();
+        let repo = ctx.state().repositories.get(repo);
+        let state = ctx.state().clone();
 
         ctx.spawn(async move {
             let dir = repo.repository.open_directory(path).await?;
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn directory_open(
                 })
                 .collect();
             let entries = Directory(entries);
-            let handle = registry.insert(entries);
+            let handle = state.directories.insert(entries);
 
             Ok(handle)
         })
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn directory_remove(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move { repo.repository.remove_entry(path).await })
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn directory_remove_recursively(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move { repo.repository.remove_entry_recursively(path).await })
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn directory_remove_recursively(
 
 #[no_mangle]
 pub unsafe extern "C" fn directory_close(session: SessionHandle, handle: Handle<Directory>) {
-    session.get().directories.remove(handle);
+    session.get().state.directories.remove(handle);
 }
 
 #[no_mangle]
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn directory_num_entries(
     session: SessionHandle,
     handle: Handle<Directory>,
 ) -> u64 {
-    session.get().directories.get(handle).0.len() as u64
+    session.get().state.directories.get(handle).0.len() as u64
 }
 
 #[no_mangle]
@@ -124,6 +124,7 @@ pub unsafe extern "C" fn directory_entry_name(
 ) -> *const c_char {
     session
         .get()
+        .state
         .directories
         .get(handle)
         .get(index)
@@ -139,6 +140,7 @@ pub unsafe extern "C" fn directory_entry_type(
 ) -> u8 {
     session
         .get()
+        .state
         .directories
         .get(handle)
         .get(index)

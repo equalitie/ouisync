@@ -26,9 +26,9 @@ pub unsafe extern "C" fn file_open(
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
         let local_branch = repo.repository.local_branch().ok();
-        let registry = ctx.files().clone();
+        let state = ctx.state().clone();
 
         ctx.spawn(async move {
             let file = repo.repository.open_file(&path).await?;
@@ -36,7 +36,7 @@ pub unsafe extern "C" fn file_open(
                 file: AsyncMutex::new(file),
                 local_branch,
             };
-            let handle = registry.insert(holder);
+            let handle = state.files.insert(holder);
 
             Ok(handle)
         })
@@ -52,9 +52,9 @@ pub unsafe extern "C" fn file_create(
 ) {
     session.get().with(port, |ctx| {
         let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
         let local_branch = repo.repository.local_branch()?;
-        let registry = ctx.files().clone();
+        let state = ctx.state().clone();
 
         ctx.spawn(async move {
             let mut file = repo.repository.create_file(&path).await?;
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn file_create(
                 file: AsyncMutex::new(file),
                 local_branch: Some(local_branch),
             };
-            let handle = registry.insert(holder);
+            let handle = state.files.insert(holder);
 
             Ok(handle)
         })
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn file_remove(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let repo = ctx.repositories().get(repo);
+        let repo = ctx.state().repositories.get(repo);
         let path = utils::ptr_to_path_buf(path)?;
 
         ctx.spawn(async move { repo.repository.remove_entry(&path).await })
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn file_close(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().remove(handle);
+        let holder = ctx.state().files.remove(handle);
 
         ctx.spawn(async move {
             if let Some(holder) = holder {
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn file_flush(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().get(handle);
+        let holder = ctx.state().files.get(handle);
         ctx.spawn(async move { holder.file.lock().await.flush().await })
     })
 }
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn file_read(
     port: Port<Result<u64>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().get(handle);
+        let holder = ctx.state().files.get(handle);
 
         let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn file_write(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().get(handle);
+        let holder = ctx.state().files.get(handle);
 
         let buffer = AssumeSend::new(buffer);
         let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn file_truncate(
     port: Port<Result<()>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().get(handle);
+        let holder = ctx.state().files.get(handle);
 
         ctx.spawn(async move {
             let mut file = holder.file.lock().await;
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn file_len(
     port: Port<Result<u64>>,
 ) {
     session.get().with(port, |ctx| {
-        let holder = ctx.files().get(handle);
+        let holder = ctx.state().files.get(handle);
 
         ctx.spawn(async move { Ok(holder.file.lock().await.len()) })
     })
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     use tokio::fs;
 
     session.get().with(port, |ctx| {
-        let src = ctx.files().get(handle);
+        let src = ctx.state().files.get(handle);
         let mut dst = fs::File::from_raw_fd(fd);
 
         ctx.spawn(async move {

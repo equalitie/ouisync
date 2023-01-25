@@ -36,7 +36,7 @@ impl<T> Copy for Port<T> {}
 
 /// FFI handle to a resource with unique ownership.
 #[repr(transparent)]
-pub struct UniqueHandle<T>(u64, PhantomData<*const T>);
+pub struct UniqueHandle<T: 'static>(u64, PhantomData<&'static T>);
 
 impl<T> UniqueHandle<T> {
     pub fn new(resource: Box<T>) -> Self {

@@ -19,6 +19,7 @@ use std::{
     future::Future,
     mem,
     os::raw::{c_char, c_void},
+    path::PathBuf,
     sync::Arc,
     thread,
     time::Duration,
@@ -43,27 +44,6 @@ pub unsafe extern "C" fn session_open(
         post_c_object_fn: mem::transmute(post_c_object_fn),
     };
 
-    let root_monitor = StateMonitor::make_root();
-    let session_monitor = root_monitor.make_child("Session");
-    let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
-
-    // Init logger
-    let logger = match Logger::new(panic_counter, root_monitor.clone()) {
-        Ok(logger) => logger,
-        Err(error) => {
-            sender.send_result(port, Err(Error::InitializeLogger(error)));
-            return;
-        }
-    };
-
-    let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            sender.send_result(port, Err(Error::InitializeRuntime(error)));
-            return;
-        }
-    };
-
     let configs_path = match utils::ptr_to_native_path_buf(configs_path) {
         Ok(configs_path) => configs_path,
         Err(error) => {
@@ -72,46 +52,9 @@ pub unsafe extern "C" fn session_open(
         }
     };
 
-    let config = ConfigStore::new(configs_path);
-
-    // NOTE: spawning a separate thread and using `runtime.block_on` instead of using
-    // `runtime.spawn` to avoid moving the runtime into "itself" which would be problematic because
-    // if there was an error the runtime would be dropped inside an async context which would panic.
-    thread::spawn(move || {
-        let device_id = match runtime.block_on(device_id::get_or_create(&config)) {
-            Ok(device_id) => device_id,
-            Err(error) => {
-                sender.send_result(port, Err(error));
-                return;
-            }
-        };
-
-        let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-
-        let network = {
-            let _enter = tracing::info_span!("Network").entered();
-            Network::new(config)
-        };
-
-        let repos_span = tracing::info_span!("Repositories");
-
-        let session = Session {
-            runtime,
-            device_id,
-            network,
-            sender,
-            root_monitor,
-            repos_span,
-            _logger: logger,
-            repositories: Arc::new(Registry::new()),
-            directories: Arc::new(Registry::new()),
-            files: Arc::new(Registry::new()),
-            tasks: Arc::new(Registry::new()),
-        };
-
-        let session = SessionHandle::new(Box::new(session));
-
-        sender.send_result(port, Ok(session));
+    Session::create(sender, configs_path, move |result| {
+        let result = result.map(|session| SessionHandle::new(Box::new(session)));
+        sender.send_result(port, result);
     });
 }
 
@@ -137,7 +80,7 @@ pub unsafe extern "C" fn session_get_state_monitor(
         .into_iter()
         .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
 
-    if let Some(monitor) = session.get().root_monitor.locate(path) {
+    if let Some(monitor) = session.get().state.root_monitor.locate(path) {
         let bytes = rmp_serde::to_vec(&monitor).unwrap();
         Bytes::from_vec(bytes)
     } else {
@@ -170,7 +113,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
 
     let session = session.get();
     let sender = session.sender();
-    if let Some(monitor) = session.root_monitor.locate(path) {
+    if let Some(monitor) = session.state.root_monitor.locate(path) {
         let mut rx = monitor.subscribe();
 
         let handle = session.runtime().spawn(async move {
@@ -184,7 +127,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
             }
         });
 
-        session.tasks.insert(handle).into()
+        session.state.tasks.insert(handle).into()
     } else {
         NullableHandle::NULL
     }
@@ -197,7 +140,7 @@ pub unsafe extern "C" fn session_state_monitor_unsubscribe(
     handle: NullableHandle<JoinHandle<()>>,
 ) {
     if let Ok(handle) = handle.try_into() {
-        if let Some(handle) = session.get().tasks.remove(handle) {
+        if let Some(handle) = session.get().state.tasks.remove(handle) {
             handle.abort();
         }
     }
@@ -217,29 +160,21 @@ pub unsafe extern "C" fn session_close(session: SessionHandle) {
 /// here.
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    let session = session.release();
-
-    // Preserving lifetime of the unused variables as well so as to not interfere with the
-    // `shutdown` function.
     let Session {
         runtime,
-        network,
-        root_monitor,
-        repos_span,
+        state,
         _logger,
         ..
-    } = *session;
+    } = *session.release();
 
     runtime.block_on(async move {
-        time::timeout(Duration::from_millis(500), network.handle().shutdown())
-            .await
-            .unwrap_or(())
+        time::timeout(
+            Duration::from_millis(500),
+            state.network.handle().shutdown(),
+        )
+        .await
+        .unwrap_or(())
     });
-
-    // Force drop order
-    drop(runtime);
-    drop(root_monitor);
-    drop(repos_span);
 }
 
 /// Cancel a notification subscription.
@@ -248,7 +183,7 @@ pub unsafe extern "C" fn subscription_cancel(
     session: SessionHandle,
     handle: Handle<JoinHandle<()>>,
 ) {
-    if let Some(handle) = session.get().tasks.remove(handle) {
+    if let Some(handle) = session.get().state.tasks.remove(handle) {
         handle.abort();
     }
 }
@@ -271,20 +206,80 @@ pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
 
 pub struct Session {
     runtime: Runtime,
-    device_id: DeviceId,
-    network: Network,
+    pub(crate) state: Arc<State>,
     sender: Sender,
-    root_monitor: StateMonitor,
-    repos_span: Span,
     _logger: Logger,
-
-    pub(crate) repositories: Arc<Registry<RepositoryHolder>>,
-    pub(crate) directories: Arc<Registry<Directory>>,
-    pub(crate) files: Arc<Registry<FileHolder>>,
-    pub(crate) tasks: Arc<Registry<JoinHandle<()>>>,
 }
 
 impl Session {
+    pub(crate) fn create<F>(sender: Sender, configs_path: PathBuf, on_done: F)
+    where
+        F: FnOnce(Result<Self>) + Send + 'static,
+    {
+        let root_monitor = StateMonitor::make_root();
+        let session_monitor = root_monitor.make_child("Session");
+        let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
+
+        // Init logger
+        let logger = match Logger::new(panic_counter, root_monitor.clone()) {
+            Ok(logger) => logger,
+            Err(error) => {
+                on_done(Err(Error::InitializeLogger(error)));
+                return;
+            }
+        };
+
+        let runtime = match runtime::Builder::new_multi_thread().enable_all().build() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                on_done(Err(Error::InitializeRuntime(error)));
+                return;
+            }
+        };
+
+        let config = ConfigStore::new(configs_path);
+
+        // NOTE: spawning a separate thread and using `runtime.block_on` instead of using
+        // `runtime.spawn` to avoid moving the runtime into "itself" which would be problematic because
+        // if there was an error the runtime would be dropped inside an async context which would panic.
+        thread::spawn(move || {
+            let device_id = match runtime.block_on(device_id::get_or_create(&config)) {
+                Ok(device_id) => device_id,
+                Err(error) => {
+                    on_done(Err(error));
+                    return;
+                }
+            };
+
+            let _enter = runtime.enter(); // runtime context is needed for some of the following calls
+
+            let network = {
+                let _enter = tracing::info_span!("Network").entered();
+                Network::new(config)
+            };
+
+            let repos_span = tracing::info_span!("Repositories");
+
+            let session = Session {
+                runtime,
+                state: Arc::new(State {
+                    root_monitor,
+                    repos_span,
+                    device_id,
+                    network,
+                    repositories: Registry::new(),
+                    directories: Registry::new(),
+                    files: Registry::new(),
+                    tasks: Registry::new(),
+                }),
+                sender,
+                _logger: logger,
+            };
+
+            on_done(Ok(session));
+        });
+    }
+
     pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
     where
         F: FnOnce(Context<T>) -> Result<()>,
@@ -309,17 +304,26 @@ impl Session {
     pub(crate) fn sender(&self) -> Sender {
         self.sender
     }
-
-    pub(crate) fn network(&self) -> &Network {
-        &self.network
-    }
-
-    pub(crate) fn repos_span(&self) -> &Span {
-        &self.repos_span
-    }
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
+
+pub(crate) struct State {
+    pub root_monitor: StateMonitor,
+    pub repos_span: Span,
+    pub device_id: DeviceId,
+    pub network: Network,
+    pub repositories: Registry<RepositoryHolder>,
+    pub directories: Registry<Directory>,
+    pub files: Registry<FileHolder>,
+    pub tasks: Registry<JoinHandle<()>>,
+}
+
+impl State {
+    pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
+        tracing::info_span!(parent: &self.repos_span, "repo", ?store)
+    }
+}
 
 pub(super) struct Context<'a, T> {
     session: &'a Session,
@@ -340,32 +344,8 @@ where
         Ok(())
     }
 
-    pub(super) fn network(&self) -> &Network {
-        &self.session.network
-    }
-
-    pub(super) fn device_id(&self) -> &DeviceId {
-        &self.session.device_id
-    }
-
-    pub(super) fn repos_span(&self) -> &Span {
-        self.session.repos_span()
-    }
-
-    pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
-        tracing::info_span!(parent: self.repos_span(), "repo", ?store)
-    }
-
-    pub(crate) fn repositories(&self) -> &Arc<Registry<RepositoryHolder>> {
-        &self.session.repositories
-    }
-
-    pub(super) fn directories(&self) -> &Arc<Registry<Directory>> {
-        &self.session.directories
-    }
-
-    pub(crate) fn files(&self) -> &Arc<Registry<FileHolder>> {
-        &self.session.files
+    pub(super) fn state(&self) -> &Arc<State> {
+        &self.session.state
     }
 }
 
