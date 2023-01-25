@@ -10,6 +10,7 @@ use super::{
 };
 use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, Error, MonitorId, Result, StateMonitor};
+use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,
     future::Future,
@@ -22,7 +23,6 @@ use std::{
 };
 use tokio::{
     runtime::{self, Runtime},
-    task::JoinHandle,
     time,
 };
 use tracing::Span;
@@ -108,7 +108,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
     path: *const u8,
     path_len: u64,
     port: Port<()>,
-) -> NullableHandle<JoinHandle<()>> {
+) -> NullableHandle<ScopedJoinHandle<()>> {
     let path = std::slice::from_raw_parts(path, path_len as usize);
     let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
         Ok(path) => path,
@@ -139,6 +139,7 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
                 time::sleep(Duration::from_millis(200)).await;
             }
         });
+        let handle = ScopedJoinHandle(handle);
 
         session.state.tasks.insert(handle).into()
     } else {
@@ -150,12 +151,10 @@ pub unsafe extern "C" fn session_state_monitor_subscribe(
 #[no_mangle]
 pub unsafe extern "C" fn session_state_monitor_unsubscribe(
     session: SessionHandle,
-    handle: NullableHandle<JoinHandle<()>>,
+    handle: NullableHandle<ScopedJoinHandle<()>>,
 ) {
     if let Ok(handle) = handle.try_into() {
-        if let Some(handle) = session.get().state.tasks.remove(handle) {
-            handle.abort();
-        }
+        session.get().state.tasks.remove(handle);
     }
 }
 
@@ -194,11 +193,9 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 #[no_mangle]
 pub unsafe extern "C" fn subscription_cancel(
     session: SessionHandle,
-    handle: Handle<JoinHandle<()>>,
+    handle: Handle<ScopedJoinHandle<()>>,
 ) {
-    if let Some(handle) = session.get().state.tasks.remove(handle) {
-        handle.abort();
-    }
+    session.get().state.tasks.remove(handle);
 }
 
 /// Deallocate string that has been allocated on the rust side
@@ -269,8 +266,8 @@ impl Session {
         Ok(session)
     }
 
-    /// Start accepting clients. Returns the port on which the interface socket is listening.
-    pub(crate) async fn start(&self) -> Result<u16> {
+    /// Start listening for client connections. Returns the listening port.
+    pub(crate) async fn listen(&self) -> Result<u16> {
         todo!()
     }
 
@@ -310,7 +307,7 @@ pub(crate) struct State {
     pub repositories: Registry<RepositoryHolder>,
     pub directories: Registry<Directory>,
     pub files: Registry<FileHolder>,
-    pub tasks: Registry<JoinHandle<()>>,
+    pub tasks: Registry<ScopedJoinHandle<()>>,
 }
 
 impl State {

@@ -4,13 +4,14 @@ use super::{
     utils::{self, Bytes, Port},
 };
 use ouisync_lib::{network::peer_addr::PeerAddr, Result};
+use scoped_task::ScopedJoinHandle;
 use std::{
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     os::raw::c_char,
     ptr,
     str::FromStr,
 };
-use tokio::{select, task::JoinHandle};
+use tokio::select;
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
 pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
@@ -59,7 +60,7 @@ pub unsafe extern "C" fn network_bind(
 pub unsafe extern "C" fn network_subscribe(
     session: SessionHandle,
     port: Port<u8>,
-) -> Handle<JoinHandle<()>> {
+) -> Handle<ScopedJoinHandle<()>> {
     let session = session.get();
     let sender = session.sender();
 
@@ -94,6 +95,7 @@ pub unsafe extern "C" fn network_subscribe(
             }
         }
     });
+    let handle = ScopedJoinHandle(handle);
 
     session.state.tasks.insert(handle)
 }
@@ -124,7 +126,7 @@ pub unsafe extern "C" fn network_tcp_listener_local_addr_v4(session: SessionHand
         .state
         .network
         .tcp_listener_local_addr_v4()
-        .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
+        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
         .unwrap_or(ptr::null_mut())
 }
 
@@ -141,7 +143,7 @@ pub unsafe extern "C" fn network_tcp_listener_local_addr_v6(session: SessionHand
         .state
         .network
         .tcp_listener_local_addr_v6()
-        .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
+        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
         .unwrap_or(ptr::null_mut())
 }
 
@@ -160,7 +162,7 @@ pub unsafe extern "C" fn network_quic_listener_local_addr_v4(
         .state
         .network
         .quic_listener_local_addr_v4()
-        .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
+        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
         .unwrap_or(ptr::null_mut())
 }
 
@@ -179,7 +181,7 @@ pub unsafe extern "C" fn network_quic_listener_local_addr_v6(
         .state
         .network
         .quic_listener_local_addr_v6()
-        .map(|local_addr| utils::str_to_ptr(&format!("{}", local_addr)))
+        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
         .unwrap_or(ptr::null_mut())
 }
 

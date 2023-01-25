@@ -53,8 +53,7 @@ pub(crate) async fn receive_block(
 
     let ids = update_summaries_with_stack(tx, nodes)
         .await?
-        .into_iter()
-        .map(|(writer_id, _)| writer_id)
+        .into_keys()
         .collect();
 
     Ok(ids)

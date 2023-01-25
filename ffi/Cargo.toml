@@ -17,6 +17,7 @@ camino = "1.0.9"
 hex = "0.4.3"
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rmp-serde = "1.1.0"
+scoped_task = { path = "../scoped_task" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

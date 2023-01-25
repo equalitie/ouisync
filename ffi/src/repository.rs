@@ -9,8 +9,9 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
+use scoped_task::ScopedJoinHandle;
 use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
-use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -421,7 +422,7 @@ pub unsafe extern "C" fn repository_subscribe(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
     port: Port<()>,
-) -> Handle<JoinHandle<()>> {
+) -> Handle<ScopedJoinHandle<()>> {
     let session = session.get();
     let sender = session.sender();
     let holder = session.state.repositories.get(handle);
@@ -447,6 +448,7 @@ pub unsafe extern "C" fn repository_subscribe(
             sender.send(port, ());
         }
     });
+    let handle = ScopedJoinHandle(handle);
 
     session.state.tasks.insert(handle)
 }
@@ -683,7 +685,7 @@ pub unsafe extern "C" fn share_token_normalize(token: *const c_char) -> *const c
         return ptr::null();
     };
 
-    utils::str_to_ptr(&format!("{}", token))
+    utils::str_to_ptr(&token.to_string())
 }
 
 /// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
