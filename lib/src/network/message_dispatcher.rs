@@ -673,6 +673,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn send_on_two_streams_parallel() {
+        use tokio::{task, time::timeout};
+
         let (client, server) = setup_two_dispatchers().await;
 
         let channel0 = MessageChannel::random();
@@ -687,13 +689,16 @@ mod tests {
         let client_sink1 = client.open_send(channel1);
 
         for (sink, content) in [(client_sink0, send_content0), (client_sink1, send_content1)] {
-            send_tasks.push(tokio::task::spawn(async move {
+            send_tasks.push(task::spawn(async move {
                 sink.send(content.to_vec()).await.unwrap();
             }));
         }
 
         for task in send_tasks {
-            task.await.unwrap();
+            timeout(Duration::from_secs(3), task)
+                .await
+                .expect("Timed out")
+                .expect("Send failed");
         }
 
         let server_stream0 = server.open_recv(channel0);
