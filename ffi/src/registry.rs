@@ -1,7 +1,8 @@
 use crate::dart::DartCObject;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt,
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -45,7 +46,7 @@ impl<T> Registry<T> {
     }
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct Handle<T: 'static> {
@@ -70,6 +71,12 @@ impl<T> Handle<T> {
             id,
             _type: PhantomData,
         }
+    }
+}
+
+impl<T> fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("Handle").field(&self.id).finish()
     }
 }
 

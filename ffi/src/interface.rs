@@ -186,6 +186,10 @@ async fn handle_request(state: &State, request: Request) -> Result<SuccessRespon
             let handle = repository::open(state, path, password).await?;
             SuccessResponse::Repository(handle)
         }
+        Request::CloseRepository(handle) => {
+            repository::close(state, handle).await?;
+            SuccessResponse::Empty
+        }
     };
 
     Ok(response)
@@ -212,6 +216,7 @@ enum Request {
         path: String,
         password: Option<String>,
     },
+    CloseRepository(Handle<RepositoryHolder>),
 }
 
 #[derive(Serialize)]
@@ -240,6 +245,7 @@ enum Response {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum SuccessResponse {
+    Empty,
     Repository(Handle<RepositoryHolder>),
 }
 

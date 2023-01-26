@@ -139,6 +139,17 @@ pub(crate) async fn open(
     .await
 }
 
+/// Closes a repository.
+pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+    let holder = state.repositories.remove(handle);
+
+    if let Some(holder) = holder {
+        holder.repository.close().await
+    } else {
+        Ok(())
+    }
+}
+
 /// If `share_token` is null, the function will try with the currently active access secrets in the
 /// repository. Note that passing `share_token` explicitly (as opposed to implicitly using the
 /// currently active secrets) may be used to increase access permissions.
@@ -260,26 +271,6 @@ pub unsafe extern "C" fn repository_remove_write_key(
     session.get().with(port, |ctx| {
         let holder = ctx.state().repositories.get(handle);
         ctx.spawn(async move { holder.repository.remove_write_key().await })
-    })
-}
-
-/// Closes a repository.
-#[no_mangle]
-pub unsafe extern "C" fn repository_close(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.remove(handle);
-
-        ctx.spawn(async move {
-            if let Some(holder) = holder {
-                holder.repository.close().await
-            } else {
-                Ok(())
-            }
-        })
     })
 }
 
