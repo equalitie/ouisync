@@ -160,35 +160,31 @@ pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Re
 /// If `local_read_password` is null, the repository will become readable without a password.
 /// To remove the read (and write) permission use the `repository_remove_read_access`
 /// function.
-#[no_mangle]
-pub unsafe extern "C" fn repository_set_read_access(
-    session: SessionHandle,
+pub(crate) async fn set_read_access(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    local_read_password: *const c_char,
-    share_token: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
+    local_read_password: Option<String>,
+    share_token: Option<String>,
+) -> Result<()> {
+    let holder = state.repositories.get(handle);
 
-        let access_secrets = if share_token.is_null() {
-            // Repository shall attempt to use the one it's currently using.
-            None
-        } else {
-            let share_token = utils::ptr_to_str(share_token)?;
-            let share_token: ShareToken = share_token.parse()?;
-            Some(share_token.into_secrets())
-        };
+    let access_secrets = if let Some(share_token) = share_token {
+        let share_token: ShareToken = share_token.parse()?;
+        Some(share_token.into_secrets())
+    } else {
+        // Repository shall attempt to use the one it's currently using.
+        None
+    };
 
-        let local_read_secret = utils::ptr_to_pwd(local_read_password)?.map(LocalSecret::Password);
+    let local_read_secret = local_read_password
+        .as_deref()
+        .map(Password::new)
+        .map(LocalSecret::Password);
 
-        ctx.spawn(async move {
-            holder
-                .repository
-                .set_read_access(local_read_secret.as_ref(), access_secrets.as_ref())
-                .await
-        })
-    })
+    holder
+        .repository
+        .set_read_access(local_read_secret, access_secrets)
+        .await
 }
 
 /// If `share_token` is null, the function will try with the currently active access secrets in the
@@ -207,188 +203,141 @@ pub unsafe extern "C" fn repository_set_read_access(
 /// preferred to keep the writer ID as it was, this reduces the number of writers in Version
 /// Vectors for every entry in the repository (files and directories) and thus reduces traffic and
 /// CPU usage when calculating causal relationships.
-#[no_mangle]
-pub unsafe extern "C" fn repository_set_read_and_write_access(
-    session: SessionHandle,
+pub(crate) async fn set_read_and_write_access(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    local_old_rw_password: *const c_char,
-    local_new_rw_password: *const c_char,
-    share_token: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
+    local_old_rw_password: Option<String>,
+    local_new_rw_password: Option<String>,
+    share_token: Option<String>,
+) -> Result<()> {
+    let holder = state.repositories.get(handle);
 
-        let access_secrets = if share_token.is_null() {
-            // Repository shall attempt to use the one it's currently using.
-            None
-        } else {
-            let share_token = utils::ptr_to_str(share_token)?;
-            let share_token: ShareToken = share_token.parse()?;
-            Some(share_token.into_secrets())
-        };
+    let access_secrets = if let Some(share_token) = share_token {
+        let share_token: ShareToken = share_token.parse()?;
+        Some(share_token.into_secrets())
+    } else {
+        // Repository shall attempt to use the one it's currently using.
+        None
+    };
 
-        let local_old_rw_secret =
-            utils::ptr_to_pwd(local_old_rw_password)?.map(LocalSecret::Password);
+    let local_old_rw_secret = local_rw_password
+        .as_deref()
+        .map(Password::new)
+        .map(LocalSecret::Password);
 
-        let local_new_rw_secret =
-            utils::ptr_to_pwd(local_new_rw_password)?.map(LocalSecret::Password);
+    let local_new_rw_secret = local_rw_password
+        .as_deref()
+        .map(Password::new)
+        .map(LocalSecret::Password);
 
-        ctx.spawn(async move {
-            holder
-                .repository
-                .set_read_and_write_access(
-                    local_old_rw_secret.as_ref(),
-                    local_new_rw_secret.as_ref(),
-                    access_secrets.as_ref(),
-                )
-                .await
-        })
-    })
+    holder
+        .repository
+        .set_read_access(local_rw_secret.clone(), access_secrets.clone())
+        .await?;
+
+    holder
+        .repository
+        .set_read_and_write_access(local_old_rw_secret, local_new_rw_secret, access_secrets)
+        .await?;
+
+    Ok(())
 }
 
 /// Note that after removing read key the user may still read the repository if they previously had
 /// write key set up.
-#[no_mangle]
-pub unsafe extern "C" fn repository_remove_read_key(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-        ctx.spawn(async move { holder.repository.remove_read_key().await })
-    })
+pub(crate) async fn remove_read_key(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+    let holder = state.repositories.get(handle);
+    holder.repository.remove_read_key().await
 }
 
 /// Note that removing the write key will leave read key intact.
-#[no_mangle]
-pub unsafe extern "C" fn repository_remove_write_key(
-    session: SessionHandle,
+pub(crate) async fn remove_write_key(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-        ctx.spawn(async move { holder.repository.remove_write_key().await })
-    })
+) -> Result<()> {
+    let holder = state.repositories.get(handle);
+    holder.repository.remove_write_key().await
 }
 
 /// Returns true if the repository requires a local password to be opened for reading.
-#[no_mangle]
-pub unsafe extern "C" fn repository_requires_local_password_for_reading(
-    session: SessionHandle,
+pub(crate) async fn requires_local_password_for_reading(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    port: Port<Result<bool>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-
-        ctx.spawn(async move {
-            holder
-                .repository
-                .requires_local_password_for_reading()
-                .await
-        })
-    })
+) -> Result<bool> {
+    let holder = state.repositories.get(handle);
+    holder
+        .repository
+        .requires_local_password_for_reading()
+        .await
 }
 
 /// Returns true if the repository requires a local password to be opened for writing.
-#[no_mangle]
-pub unsafe extern "C" fn repository_requires_local_password_for_writing(
-    session: SessionHandle,
+pub(crate) async fn requires_local_password_for_writing(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    port: Port<Result<bool>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-
-        ctx.spawn(async move {
-            holder
-                .repository
-                .requires_local_password_for_writing()
-                .await
-        })
-    })
+) -> Result<bool> {
+    let holder = state.repositories.get(handle);
+    holder
+        .repository
+        .requires_local_password_for_writing()
+        .await
 }
 
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
 /// unique, non-secret identifier of the repository.
 /// User is responsible for deallocating the returned string.
-#[no_mangle]
-pub unsafe extern "C" fn repository_info_hash(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-) -> *const c_char {
-    let holder = session.get().state.repositories.get(handle);
+pub(crate) fn info_hash(state: &State, handle: Handle<RepositoryHolder>) -> String {
+    let holder = state.repositories.get(handle);
+    let info_hash = network::repository_info_hash(holder.repository.secrets().id());
 
-    utils::str_to_ptr(&hex::encode(
-        network::repository_info_hash(holder.repository.secrets().id()).as_ref(),
-    ))
+    hex::encode(info_hash)
 }
 
 /// Returns an ID that is randomly generated once per repository. Can be used to store local user
 /// data per repository (e.g. passwords behind biometric storage).
-#[no_mangle]
-pub unsafe extern "C" fn repository_database_id(
-    session: SessionHandle,
+pub(crate) async fn database_id(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    port: Port<Result<Vec<u8>>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-
-        ctx.spawn(async move { Ok(holder.repository.database_id().await?.as_ref().to_vec()) })
-    })
+) -> Result<Vec<u8>> {
+    let holder = state.repositories.get(handle);
+    Ok(holder.repository.database_id().await?.as_ref().to_vec())
 }
 
 /// Returns the type of repository entry (file, directory, ...).
 /// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
-#[no_mangle]
-pub unsafe extern "C" fn repository_entry_type(
-    session: SessionHandle,
+pub(crate) async fn entry_type(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<u8>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-        let path = utils::ptr_to_path_buf(path)?;
+    path: String,
+) -> Result<u8> {
+    let holder = state.repositories.get(handle);
+    let path = Utf8PathBuf::from(path);
 
-        ctx.spawn(async move {
-            match holder.repository.lookup_type(path).await {
-                Ok(entry_type) => Ok(entry_type_to_num(entry_type)),
-                Err(Error::EntryNotFound) => Ok(ENTRY_TYPE_INVALID),
-                Err(error) => Err(error),
-            }
-        })
-    })
+    match holder.repository.lookup_type(path).await {
+        Ok(entry_type) => Ok(entry_type_to_num(entry_type)),
+        Err(Error::EntryNotFound) => Ok(ENTRY_TYPE_INVALID),
+        Err(error) => Err(error),
+    }
 }
 
 /// Move/rename entry from src to dst.
-#[no_mangle]
-pub unsafe extern "C" fn repository_move_entry(
-    session: SessionHandle,
+pub(crate) async fn move_entry(
+    state: &State,
     handle: Handle<RepositoryHolder>,
-    src: *const c_char,
-    dst: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-        let src = utils::ptr_to_path_buf(src)?;
-        let dst = utils::ptr_to_path_buf(dst)?;
+    src: String,
+    dst: String,
+) -> Result<()> {
+    let holder = state.repositories.get(handle);
+    let src = Utf8PathBuf::from(src);
+    let dst = Utf8PathBuf::from(dst);
 
-        ctx.spawn(async move {
-            let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
-            let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
+    let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
+    let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
 
-            holder
-                .repository
-                .move_entry(src_dir, src_name, dst_dir, dst_name)
-                .await
-        })
-    })
+    holder
+        .repository
+        .move_entry(src_dir, src_name, dst_dir, dst_name)
+        .await
 }
 
 /// Subscribe to change notifications from the repository.

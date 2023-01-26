@@ -168,28 +168,68 @@ async fn handle(state: &State, envelope: ClientEnvelope) -> ServerEnvelope {
     }
 }
 
-async fn handle_request(state: &State, request: Request) -> Result<SuccessResponse> {
+async fn handle_request(state: &State, request: Request) -> Result<Value> {
     tracing::debug!(?request);
 
     let response = match request {
-        Request::CreateRepository {
+        Request::RepositoryCreate {
             path,
             read_password,
             write_password,
             share_token,
-        } => {
-            let handle =
-                repository::create(state, path, read_password, write_password, share_token).await?;
-            SuccessResponse::Repository(handle)
+        } => repository::create(state, path, read_password, write_password, share_token)
+            .await?
+            .into(),
+        Request::RepositoryOpen { path, password } => {
+            repository::open(state, path, password).await?.into()
         }
-        Request::OpenRepository { path, password } => {
-            let handle = repository::open(state, path, password).await?;
-            SuccessResponse::Repository(handle)
+        Request::RepositoryClose(handle) => repository::close(state, handle).await?.into(),
+        Request::RepositorySetReadAccess {
+            repository,
+            read_password,
+            share_token,
+        } => repository::set_read_access(state, repository, read_password, share_token)
+            .await?
+            .into(),
+        Request::RepositorySetReadAndWriteAccess {
+            repository,
+            password,
+            share_token,
+        } => repository::set_read_and_write_access(state, repository, password, share_token)
+            .await?
+            .into(),
+        Request::RepositoryRemoveReadKey(handle) => {
+            repository::remove_read_key(state, handle).await?.into()
         }
-        Request::CloseRepository(handle) => {
-            repository::close(state, handle).await?;
-            SuccessResponse::Empty
+        Request::RepositoryRemoveWriteKey(handle) => {
+            repository::remove_write_key(state, handle).await?.into()
         }
+        Request::RepositoryRequiresLocalPasswordForReading(handle) => {
+            repository::requires_local_password_for_reading(state, handle)
+                .await?
+                .into()
+        }
+        Request::RepositoryRequiresLocalPasswordForWriting(handle) => {
+            repository::requires_local_password_for_writing(state, handle)
+                .await?
+                .into()
+        }
+        Request::RepositoryInfoHash(handle) => repository::info_hash(state, handle).into(),
+        Request::RepositoryDatabaseId(handle) => {
+            repository::database_id(state, handle).await?.into()
+        }
+        Request::RepositoryEntryType { repository, path } => {
+            repository::entry_type(state, repository, path)
+                .await?
+                .into()
+        }
+        Request::RepositoryMoveEntry {
+            repository,
+            src,
+            dst,
+        } => repository::move_entry(state, repository, src, dst)
+            .await?
+            .into(),
     };
 
     Ok(response)
@@ -206,17 +246,42 @@ struct ClientEnvelope {
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "args")]
 enum Request {
-    CreateRepository {
+    RepositoryCreate {
         path: String,
         read_password: Option<String>,
         write_password: Option<String>,
         share_token: Option<String>,
     },
-    OpenRepository {
+    RepositoryOpen {
         path: String,
         password: Option<String>,
     },
-    CloseRepository(Handle<RepositoryHolder>),
+    RepositoryClose(Handle<RepositoryHolder>),
+    RepositorySetReadAccess {
+        repository: Handle<RepositoryHolder>,
+        read_password: Option<String>,
+        share_token: Option<String>,
+    },
+    RepositorySetReadAndWriteAccess {
+        repository: Handle<RepositoryHolder>,
+        password: Option<String>,
+        share_token: Option<String>,
+    },
+    RepositoryRemoveReadKey(Handle<RepositoryHolder>),
+    RepositoryRemoveWriteKey(Handle<RepositoryHolder>),
+    RepositoryRequiresLocalPasswordForReading(Handle<RepositoryHolder>),
+    RepositoryRequiresLocalPasswordForWriting(Handle<RepositoryHolder>),
+    RepositoryInfoHash(Handle<RepositoryHolder>),
+    RepositoryDatabaseId(Handle<RepositoryHolder>),
+    RepositoryEntryType {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+    },
+    RepositoryMoveEntry {
+        repository: Handle<RepositoryHolder>,
+        src: String,
+        dst: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -238,15 +303,55 @@ enum ServerMessage {
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Response {
-    Success(SuccessResponse),
+    Success(Value),
     Failure { code: ErrorCode, message: String },
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum SuccessResponse {
-    Empty,
+enum Value {
+    Unit,
+    Bool(bool),
+    U8(u8),
+    Bytes(Vec<u8>),
+    String(String),
     Repository(Handle<RepositoryHolder>),
+}
+
+impl From<()> for Value {
+    fn from(_: ()) -> Self {
+        Self::Unit
+    }
+}
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<u8> for Value {
+    fn from(value: u8) -> Self {
+        Self::U8(value)
+    }
+}
+
+impl From<Vec<u8>> for Value {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value)
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<Handle<RepositoryHolder>> for Value {
+    fn from(value: Handle<RepositoryHolder>) -> Self {
+        Self::Repository(value)
+    }
 }
 
 #[derive(Serialize)]
