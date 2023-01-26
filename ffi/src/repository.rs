@@ -1,9 +1,11 @@
-use super::{
+use super::utils::{self, Bytes, Port};
+use crate::{
     registry::Handle,
-    session::SessionHandle,
-    utils::{self, Bytes, Port},
+    session::{SessionHandle, State},
 };
+use camino::Utf8PathBuf;
 use ouisync_lib::{
+    crypto::Password,
     device_id,
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
@@ -31,6 +33,76 @@ pub struct RepositoryHolder {
 ///
 /// local_read_password  |  local_write_password  |  token access  |  result
 /// ---------------------+------------------------+----------------+------------------------------
+/// None or any          |  None or any           |  blind         |  blind replica
+/// None                 |  None or any           |  read          |  read without password
+/// read_pwd             |  None or any           |  read          |  read with read_pwd as password
+/// None                 |  None                  |  write         |  read and write without password
+/// any                  |  None                  |  write         |  read (only!) with password
+/// None                 |  any                   |  write         |  read without password, require password for writing
+/// any                  |  any                   |  write         |  read with password, write with (same or different) password
+pub(crate) async fn create(
+    state: &State,
+    store: String,
+    local_read_password: Option<String>,
+    local_write_password: Option<String>,
+    share_token: Option<String>,
+) -> Result<Handle<RepositoryHolder>> {
+    let store = Utf8PathBuf::from(store);
+    let local_read_password = local_read_password.as_deref().map(Password::new);
+    let local_write_password = local_write_password.as_deref().map(Password::new);
+
+    let access_secrets = if let Some(share_token) = share_token {
+        let share_token: ShareToken = share_token.parse()?;
+        share_token.into_secrets()
+    } else {
+        AccessSecrets::random_write()
+    };
+
+    let span = state.repo_span(&store);
+
+    async {
+        let device_id = device_id::get_or_create(&state.config).await?;
+
+        let db = RepositoryDb::create(store.into_std_path_buf()).await?;
+
+        let local_read_key = if let Some(local_read_password) = local_read_password {
+            Some(db.password_to_key(local_read_password).await?)
+        } else {
+            None
+        };
+
+        let local_write_key = if let Some(local_write_password) = local_write_password {
+            Some(db.password_to_key(local_write_password).await?)
+        } else {
+            None
+        };
+
+        let access = Access::new(local_read_key, local_write_key, access_secrets);
+        let repository = Repository::create(db, device_id, access).await?;
+
+        let registration = state.network.handle().register(repository.store().clone());
+
+        // TODO: consider leaving the decision to enable DHT, PEX to the app.
+        registration.enable_dht();
+        registration.enable_pex();
+
+        let holder = RepositoryHolder {
+            repository,
+            registration,
+        };
+
+        let handle = state.repositories.insert(holder);
+
+        Ok(handle)
+    }
+    .instrument(span)
+    .await
+}
+
+/// Creates a new repository and set access to it based on the following table:
+///
+/// local_read_password  |  local_write_password  |  token access  |  result
+/// ---------------------+------------------------+----------------+------------------------------
 /// null or any          |  null or any           |  blind         |  blind replica
 /// null                 |  null or any           |  read          |  read without password
 /// read_pwd             |  null or any           |  read          |  read with read_pwd as password
@@ -48,62 +120,23 @@ pub unsafe extern "C" fn repository_create(
     port: Port<Result<Handle<RepositoryHolder>>>,
 ) {
     session.get().with(port, |ctx| {
-        let store = utils::ptr_to_path_buf(store)?;
-        let network_handle = ctx.state().network.handle();
+        let store = utils::ptr_to_string(store)?;
+        let local_read_password = utils::ptr_to_maybe_string(local_read_password)?;
+        let local_write_password = utils::ptr_to_maybe_string(local_write_password)?;
+        let share_token = utils::ptr_to_maybe_string(share_token)?;
 
-        let local_read_password = utils::ptr_to_pwd(local_read_password)?;
-        let local_write_password = utils::ptr_to_pwd(local_write_password)?;
-
-        let access_secrets = if share_token.is_null() {
-            AccessSecrets::random_write()
-        } else {
-            let share_token = utils::ptr_to_str(share_token)?;
-            let share_token: ShareToken = share_token.parse()?;
-            share_token.into_secrets()
-        };
-
-        let span = ctx.state().repo_span(&store);
         let state = ctx.state().clone();
 
-        ctx.spawn(
-            async move {
-                let device_id = device_id::get_or_create(&state.config).await?;
-
-                let db = RepositoryDb::create(store.into_std_path_buf()).await?;
-
-                let local_read_key = if let Some(local_read_password) = local_read_password {
-                    Some(db.password_to_key(local_read_password).await?)
-                } else {
-                    None
-                };
-
-                let local_write_key = if let Some(local_write_password) = local_write_password {
-                    Some(db.password_to_key(local_write_password).await?)
-                } else {
-                    None
-                };
-
-                let access = Access::new(local_read_key, local_write_key, access_secrets);
-
-                let repository = Repository::create(db, device_id, access).await?;
-
-                let registration = network_handle.register(repository.store().clone());
-
-                // TODO: consider leaving the decision to enable DHT, PEX to the app.
-                registration.enable_dht();
-                registration.enable_pex();
-
-                let holder = RepositoryHolder {
-                    repository,
-                    registration,
-                };
-
-                let handle = state.repositories.insert(holder);
-
-                Ok(handle)
-            }
-            .instrument(span),
-        )
+        ctx.spawn(async move {
+            create(
+                &state,
+                store,
+                local_read_password,
+                local_write_password,
+                share_token,
+            )
+            .await
+        })
     })
 }
 

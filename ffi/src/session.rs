@@ -75,10 +75,7 @@ pub unsafe extern "C" fn session_open(
 
 /// Get the interface listener port
 #[no_mangle]
-pub unsafe extern "C" fn session_interface_listener_port(
-    session: SessionHandle,
-    port: Port<Result<u16>>,
-) {
+pub unsafe extern "C" fn session_interface_port(session: SessionHandle, port: Port<Result<u16>>) {
     let session = session.get();
     let mut rx = session.interface_server_status_rx.clone();
 

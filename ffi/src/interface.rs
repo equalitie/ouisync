@@ -1,4 +1,9 @@
-use crate::{error::ErrorCode, registry::Handle, repository::RepositoryHolder, session::State};
+use crate::{
+    error::{ErrorCode, ToErrorCode},
+    registry::Handle,
+    repository::{self, RepositoryHolder},
+    session::State,
+};
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
 use ouisync_lib::Result;
 use serde::{Deserialize, Serialize};
@@ -86,10 +91,6 @@ async fn client(stream: TcpStream, addr: SocketAddr, state: Arc<State>) {
                 handlers.push(handle(&state, client_envelope));
             }
             Some(server_envelope) = handlers.next() => {
-                let Some(server_envelope) = server_envelope else {
-                    continue;
-                };
-
                 send(&mut socket, server_envelope).await;
             }
         }
@@ -135,7 +136,7 @@ async fn receive(socket: &mut Socket) -> Option<ClientEnvelope> {
 }
 
 async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
-    let buffer = match rmp_serde::to_vec(&envelope) {
+    let buffer = match rmp_serde::to_vec_named(&envelope) {
         Ok(buffer) => buffer,
         Err(error) => {
             tracing::error!(?error, "failed to encode server message");
@@ -148,57 +149,88 @@ async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
     }
 }
 
-async fn handle(state: &State, envelope: ClientEnvelope) -> Option<ServerEnvelope> {
+async fn handle(state: &State, envelope: ClientEnvelope) -> ServerEnvelope {
     let response = match handle_request(state, envelope.message).await {
-        Ok(response) => response,
+        Ok(response) => Response::Success(response),
         Err(error) => {
             tracing::error!(?error, "failed to handle request");
-            return None;
+
+            Response::Failure {
+                code: error.to_error_code(),
+                message: error.to_string(),
+            }
         }
     };
 
-    Some(ServerEnvelope {
+    ServerEnvelope {
         id: envelope.id,
         message: ServerMessage::Response(response),
-    })
+    }
 }
 
-async fn handle_request(_state: &State, request: Request) -> Result<Response> {
+async fn handle_request(state: &State, request: Request) -> Result<SuccessResponse> {
     tracing::debug!(?request);
 
-    todo!()
+    let response = match request {
+        Request::CreateRepository {
+            path,
+            read_password,
+            write_password,
+            share_token,
+        } => {
+            let handle =
+                repository::create(state, path, read_password, write_password, share_token).await?;
+            SuccessResponse::Repository(handle)
+        }
+    };
+
+    Ok(response)
 }
 
 #[derive(Deserialize)]
 struct ClientEnvelope {
     id: u64,
+    #[serde(flatten)]
     message: Request,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "method", content = "args")]
 enum Request {
-    CreateRepository,
+    CreateRepository {
+        path: String,
+        read_password: Option<String>,
+        write_password: Option<String>,
+        share_token: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 struct ServerEnvelope {
     id: u64,
+    #[serde(flatten)]
     message: ServerMessage,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 enum ServerMessage {
     Response(Response),
     Notification(Notification),
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 enum Response {
     Success(SuccessResponse),
     Failure { code: ErrorCode, message: String },
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
 enum SuccessResponse {
     Repository(Handle<RepositoryHolder>),
 }

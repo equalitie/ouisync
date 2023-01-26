@@ -47,8 +47,10 @@ impl<T> Registry<T> {
 
 #[derive(Clone, Copy, Serialize)]
 #[repr(transparent)]
+#[serde(transparent)]
 pub struct Handle<T: 'static> {
     id: u64,
+    #[serde()]
     _type: PhantomData<&'static T>,
 }
 
