@@ -182,6 +182,10 @@ async fn handle_request(state: &State, request: Request) -> Result<SuccessRespon
                 repository::create(state, path, read_password, write_password, share_token).await?;
             SuccessResponse::Repository(handle)
         }
+        Request::OpenRepository { path, password } => {
+            let handle = repository::open(state, path, password).await?;
+            SuccessResponse::Repository(handle)
+        }
     };
 
     Ok(response)
@@ -203,6 +207,10 @@ enum Request {
         read_password: Option<String>,
         write_password: Option<String>,
         share_token: Option<String>,
+    },
+    OpenRepository {
+        path: String,
+        password: Option<String>,
     },
 }
 

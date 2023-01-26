@@ -95,14 +95,6 @@ pub unsafe fn ptr_to_maybe_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>
     ))
 }
 
-pub unsafe fn ptr_to_maybe_string(ptr: *const c_char) -> Result<Option<String>> {
-    Ok(ptr_to_maybe_str(ptr)?.map(|str| str.to_owned()))
-}
-
-pub unsafe fn ptr_to_string(ptr: *const c_char) -> Result<String> {
-    Ok(ptr_to_str(ptr)?.to_owned())
-}
-
 pub unsafe fn ptr_to_pwd(ptr: *const c_char) -> Result<Option<Password>> {
     if ptr.is_null() {
         Ok(None)
