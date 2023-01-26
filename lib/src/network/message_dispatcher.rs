@@ -648,17 +648,20 @@ mod tests {
         let channel0 = MessageChannel::random();
         let channel1 = MessageChannel::random();
 
-        let send_content0 = b"one two three";
-        let send_content1 = b"four five six";
+        let num_messages = 2;
 
         let mut send_tasks = vec![];
 
         let client_sink0 = client.open_send(channel0);
         let client_sink1 = client.open_send(channel1);
 
-        for (sink, content) in [(client_sink0, send_content0), (client_sink1, send_content1)] {
+        let build_message = |channel, i| format!("{:?}:{}", channel, i).as_bytes().to_vec();
+
+        for sink in [client_sink0, client_sink1] {
             send_tasks.push(task::spawn(async move {
-                sink.send(content.to_vec()).await.unwrap();
+                for i in 0..num_messages {
+                    sink.send(build_message(sink.channel, i)).await.unwrap();
+                }
             }));
         }
 
@@ -672,12 +675,11 @@ mod tests {
         let server_stream0 = server.open_recv(channel0);
         let server_stream1 = server.open_recv(channel1);
 
-        for (mut server_stream, send_content) in [
-            (server_stream0, send_content0),
-            (server_stream1, send_content1),
-        ] {
-            let recv_content = server_stream.recv().await.unwrap();
-            assert_eq!(recv_content, send_content);
+        for mut server_stream in [server_stream0, server_stream1] {
+            for i in 0..num_messages {
+                let recv_content = server_stream.recv().await.unwrap();
+                assert_eq!(recv_content, build_message(server_stream.channel, i));
+            }
         }
     }
 
