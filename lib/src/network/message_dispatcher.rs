@@ -20,7 +20,11 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
-use tokio::{runtime, select, sync::watch, time::Duration};
+use tokio::{
+    runtime, select,
+    sync::{watch, Mutex as AsyncMutex},
+    time::Duration,
+};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
@@ -477,12 +481,14 @@ impl Future for Recv<'_> {
 // NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
 // provides an async `send` method.
 struct MultiSink {
+    single_send: AsyncMutex<()>,
     sinks: Mutex<Vec<PermittedSink>>,
 }
 
 impl MultiSink {
     fn new() -> Self {
         Self {
+            single_send: AsyncMutex::new(()),
             sinks: Mutex::new(Vec::new()),
         }
     }
@@ -508,19 +514,13 @@ impl MultiSink {
         futures_util::future::join_all(futures).await;
     }
 
-    // Returns whether the send succeeded.
-    //
-    // Equivalent to
-    //
-    // ```ignore
-    // async fn send(&self, message: Message) -> bool;
-    // ```
-    //
-    fn send(&self, message: Message) -> Send {
+    async fn send(&self, message: Message) -> Result<(), ChannelClosed> {
+        let _lock = self.single_send.lock().await;
         Send {
             message: Some(message),
             sinks: &self.sinks,
         }
+        .await
     }
 
     fn is_empty(&self) -> bool {
@@ -648,7 +648,7 @@ mod tests {
         let channel0 = MessageChannel::random();
         let channel1 = MessageChannel::random();
 
-        let num_messages = 2;
+        let num_messages = 20;
 
         let mut send_tasks = vec![];
 
