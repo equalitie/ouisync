@@ -20,7 +20,11 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
-use tokio::{runtime, select, sync::watch, time::Duration};
+use tokio::{
+    runtime, select,
+    sync::{watch, Mutex as AsyncMutex},
+    time::Duration,
+};
 
 // Time after which if no message is received, the connection is dropped.
 const KEEP_ALIVE_RECV_INTERVAL: Duration = Duration::from_secs(60);
@@ -477,31 +481,28 @@ impl Future for Recv<'_> {
 // NOTE: Doesn't actually implement the `Sink` trait currently because we don't need it, only
 // provides an async `send` method.
 struct MultiSink {
-    inner: Mutex<MultiSinkInner>,
+    single_send: AsyncMutex<()>,
+    sinks: Mutex<Vec<PermittedSink>>,
 }
 
 impl MultiSink {
     fn new() -> Self {
         Self {
-            inner: Mutex::new(MultiSinkInner {
-                sinks: Vec::new(),
-                waker: None,
-            }),
+            single_send: AsyncMutex::new(()),
+            sinks: Mutex::new(Vec::new()),
         }
     }
 
     fn add(&self, sink: PermittedSink) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.sinks.push(sink);
-        inner.wake();
+        self.sinks.lock().unwrap().push(sink);
     }
 
     async fn close(&self) {
         // TODO: Other functions should fail if called after the call to this function.
 
-        let (mut sinks, waker) = {
-            let mut inner = self.inner.lock().unwrap();
-            (std::mem::take(&mut inner.sinks), inner.waker.take())
+        let mut sinks = {
+            let mut sinks = self.sinks.lock().unwrap();
+            std::mem::take(&mut *sinks)
         };
 
         let mut futures = Vec::with_capacity(sinks.len());
@@ -511,99 +512,66 @@ impl MultiSink {
         }
 
         futures_util::future::join_all(futures).await;
-
-        if let Some(waker) = waker {
-            waker.wake();
-        }
     }
 
-    // Returns whether the send succeeded.
-    //
-    // Equivalent to
-    //
-    // ```ignore
-    // async fn send(&self, message: Message) -> bool;
-    // ```
-    //
-    fn send(&self, message: Message) -> Send {
+    async fn send(&self, message: Message) -> Result<(), ChannelClosed> {
+        let _lock = self.single_send.lock().await;
         Send {
             message: Some(message),
-            inner: &self.inner,
+            sinks: &self.sinks,
         }
+        .await
     }
 
     fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().sinks.is_empty()
+        self.sinks.lock().unwrap().is_empty()
     }
 
     fn connection_infos(&self) -> HashSet<ConnectionInfo> {
-        self.inner
+        self.sinks
             .lock()
             .unwrap()
-            .sinks
             .iter()
             .map(|sink| sink.connection_info())
             .collect()
     }
 }
 
-struct MultiSinkInner {
-    sinks: Vec<PermittedSink>,
-    waker: Option<Waker>,
-}
-
-impl MultiSinkInner {
-    fn wake(&mut self) {
-        if let Some(waker) = self.waker.take() {
-            waker.wake()
-        }
-    }
-}
-
 // Future returned from [`MultiSink::send`].
 struct Send<'a> {
     message: Option<Message>,
-    inner: &'a Mutex<MultiSinkInner>,
+    sinks: &'a Mutex<Vec<PermittedSink>>,
 }
 
 impl Future for Send<'_> {
     type Output = Result<(), ChannelClosed>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut sinks = self.sinks.lock().unwrap();
 
         loop {
-            let sink = if let Some(sink) = inner.sinks.first_mut() {
+            let sink = if let Some(sink) = sinks.first_mut() {
                 sink
             } else {
                 return Poll::Ready(Err(ChannelClosed));
             };
 
             let message = match sink.poll_ready_unpin(cx) {
-                Poll::Ready(Ok(())) => {
-                    if let Some(message) = self.message.take() {
-                        message
-                    } else {
-                        return Poll::Ready(Ok(()));
-                    }
-                }
+                Poll::Ready(Ok(())) => self.message.take().expect("polled Send after completion"),
                 Poll::Ready(Err(error)) => {
-                    inner.sinks.swap_remove(0);
+                    sinks.swap_remove(0);
                     self.message = Some(error.message);
                     continue;
                 }
-                Poll::Pending => {
-                    if inner.waker.is_none() {
-                        inner.waker = Some(cx.waker().clone());
-                    }
-
-                    return Poll::Pending;
-                }
+                Poll::Pending => return Poll::Pending,
             };
 
-            if let Err(error) = sink.start_send_unpin(message) {
-                inner.sinks.swap_remove(0);
-                self.message = Some(error.message);
+            match sink.start_send_unpin(message) {
+                Ok(()) => return Poll::Ready(Ok(())),
+                Err(error) => {
+                    sinks.swap_remove(0);
+                    self.message = Some(error.message);
+                }
             }
         }
     }
@@ -668,6 +636,50 @@ mod tests {
         ] {
             let recv_content = server_stream.recv().await.unwrap();
             assert_eq!(recv_content, send_content);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_on_two_streams_parallel() {
+        use tokio::{task, time::timeout};
+
+        let (client, server) = setup_two_dispatchers().await;
+
+        let channel0 = MessageChannel::random();
+        let channel1 = MessageChannel::random();
+
+        let num_messages = 20;
+
+        let mut send_tasks = vec![];
+
+        let client_sink0 = client.open_send(channel0);
+        let client_sink1 = client.open_send(channel1);
+
+        let build_message = |channel, i| format!("{:?}:{}", channel, i).as_bytes().to_vec();
+
+        for sink in [client_sink0, client_sink1] {
+            send_tasks.push(task::spawn(async move {
+                for i in 0..num_messages {
+                    sink.send(build_message(sink.channel, i)).await.unwrap();
+                }
+            }));
+        }
+
+        for task in send_tasks {
+            timeout(Duration::from_secs(3), task)
+                .await
+                .expect("Timed out")
+                .expect("Send failed");
+        }
+
+        let server_stream0 = server.open_recv(channel0);
+        let server_stream1 = server.open_recv(channel1);
+
+        for mut server_stream in [server_stream0, server_stream1] {
+            for i in 0..num_messages {
+                let recv_content = server_stream.recv().await.unwrap();
+                assert_eq!(recv_content, build_message(server_stream.channel, i));
+            }
         }
     }
 
@@ -750,6 +762,18 @@ mod tests {
         server_dispatcher.bind(server, ConnectionPermit::dummy());
 
         (client_writer, server_dispatcher)
+    }
+
+    async fn setup_two_dispatchers() -> (MessageDispatcher, MessageDispatcher) {
+        let (client, server) = create_connected_sockets().await;
+
+        let client_dispatcher = MessageDispatcher::new();
+        client_dispatcher.bind(client, ConnectionPermit::dummy());
+
+        let server_dispatcher = MessageDispatcher::new();
+        server_dispatcher.bind(server, ConnectionPermit::dummy());
+
+        (client_dispatcher, server_dispatcher)
     }
 
     async fn create_connected_sockets() -> (raw::Stream, raw::Stream) {
