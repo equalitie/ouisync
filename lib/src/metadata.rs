@@ -104,12 +104,9 @@ pub(crate) async fn get_writer_id(
 pub(crate) async fn set_writer_id(
     tx: &mut db::WriteTransaction,
     writer_id: &sign::PublicKey,
-    device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<()> {
     set(tx, WRITER_ID, writer_id.as_ref(), local_key).await?;
-    set_public(tx, DEVICE_ID, device_id.as_ref()).await?;
-
     Ok(())
 }
 
@@ -124,6 +121,14 @@ pub(crate) async fn check_device_id(
 ) -> Result<bool> {
     let old_device_id: DeviceId = get_public(conn, DEVICE_ID).await?;
     Ok(old_device_id == *device_id)
+}
+
+pub(crate) async fn set_device_id(
+    tx: &mut db::WriteTransaction,
+    device_id: &DeviceId,
+) -> Result<()> {
+    set_public(tx, DEVICE_ID, device_id.as_ref()).await?;
+    Ok(())
 }
 
 // -------------------------------------------------------------------

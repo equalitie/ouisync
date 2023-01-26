@@ -291,7 +291,10 @@ impl Repository {
             None
         };
 
+        let writer_id = metadata::get_writer_id(&mut tx, local_write_key.as_ref()).await?;
+
         metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
+        metadata::set_writer_id(&mut tx, &writer_id, local_write_key.as_ref()).await?;
 
         tx.commit().await?;
 
@@ -673,7 +676,8 @@ async fn generate_writer_id(
     // TODO: we should be storing the SK in the db, not the PK.
     let writer_id = sign::SecretKey::random();
     let writer_id = PublicKey::from(&writer_id);
-    metadata::set_writer_id(tx, &writer_id, device_id, local_key).await?;
+    metadata::set_writer_id(tx, &writer_id, local_key).await?;
+    metadata::set_device_id(tx, device_id).await?;
 
     Ok(writer_id)
 }
