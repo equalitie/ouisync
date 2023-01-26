@@ -1,6 +1,8 @@
 use ouisync_lib::Error;
+use serde::Serialize;
 use std::io;
 
+#[derive(Serialize)]
 #[repr(C)]
 pub enum ErrorCode {
     /// No error

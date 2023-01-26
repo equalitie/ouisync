@@ -1,4 +1,5 @@
 use crate::dart::DartCObject;
+use serde::Serialize;
 use std::{
     collections::HashMap,
     marker::PhantomData,
@@ -44,7 +45,7 @@ impl<T> Registry<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
 #[repr(transparent)]
 pub struct Handle<T: 'static> {
     id: u64,

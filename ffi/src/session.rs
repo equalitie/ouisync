@@ -3,7 +3,7 @@ use super::{
     directory::Directory,
     error::{ErrorCode, ToErrorCode},
     file::FileHolder,
-    listener::{self, ListenerStatus},
+    interface::{self, ServerStatus},
     logger::Logger,
     registry::{Handle, NullableHandle, Registry},
     repository::RepositoryHolder,
@@ -80,15 +80,15 @@ pub unsafe extern "C" fn session_interface_listener_port(
     port: Port<Result<u16>>,
 ) {
     let session = session.get();
-    let mut rx = session.listener_status_rx.clone();
+    let mut rx = session.interface_server_status_rx.clone();
 
     session.with(port, |ctx| {
         ctx.spawn(async move {
             loop {
                 match &*rx.borrow_and_update() {
-                    ListenerStatus::Starting => (),
-                    ListenerStatus::Running(addr) => return Ok(addr.port()),
-                    ListenerStatus::Failed(error) => {
+                    ServerStatus::Starting => (),
+                    ServerStatus::Running(addr) => return Ok(addr.port()),
+                    ServerStatus::Failed(error) => {
                         // NOTE: `io::Error` is not `Clone` and we can't move it out here so we
                         // reconstruct it here instead as a workaround.
                         return Err(Error::Interface(io::Error::new(
@@ -252,8 +252,8 @@ pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
 pub struct Session {
     runtime: Runtime,
     pub(crate) state: Arc<State>,
-    _listener_task: ScopedJoinHandle<()>,
-    listener_status_rx: watch::Receiver<ListenerStatus>,
+    _interface_server_task: ScopedJoinHandle<()>,
+    interface_server_status_rx: watch::Receiver<ServerStatus>,
     sender: Sender,
     _logger: Logger,
 }
@@ -295,16 +295,20 @@ impl Session {
             tasks: Registry::new(),
         });
 
-        let (listener_status_tx, listener_status_rx) = watch::channel(ListenerStatus::Starting);
+        let (interface_server_status_tx, interface_server_status_rx) =
+            watch::channel(ServerStatus::Starting);
 
-        let listener_task = runtime.spawn(listener::run(state.clone(), listener_status_tx));
-        let listener_task = ScopedJoinHandle(listener_task);
+        let interface_server_task = runtime.spawn(interface::run_server(
+            state.clone(),
+            interface_server_status_tx,
+        ));
+        let interface_server_task = ScopedJoinHandle(interface_server_task);
 
         let session = Session {
             runtime,
             state,
-            _listener_task: listener_task,
-            listener_status_rx,
+            _interface_server_task: interface_server_task,
+            interface_server_status_rx,
             sender,
             _logger: logger,
         };
