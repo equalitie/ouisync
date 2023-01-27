@@ -199,14 +199,21 @@ pub unsafe extern "C" fn repository_set_read_access(
 /// Attempting to change the secret without enough permissions will fail with PermissionDenied
 /// error.
 ///
-/// If `local_rw_password` is null, the repository will become read and writable without a
+/// If `local_new_rw_password` is null, the repository will become read and writable without a
 /// password.  To remove the read and write access use the
 /// `repository_remove_read_and_write_access` function.
+///
+/// The `local_old_rw_password` is optional (may be a null pointer), if it is set the previously
+/// used "writer ID" shall be used, otherwise a new one shall be generated. Note that it is
+/// preferred to keep the writer ID as it was, this reduces the number of writers in Version
+/// Vectors for every entry in the repository (files and directories) and thus reduces traffic and
+/// CPU usage when calculating causal relationships.
 #[no_mangle]
 pub unsafe extern "C" fn repository_set_read_and_write_access(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
-    local_rw_password: *const c_char,
+    local_old_rw_password: *const c_char,
+    local_new_rw_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<()>>,
 ) {
@@ -222,17 +229,23 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
             Some(share_token.into_secrets())
         };
 
-        let local_rw_secret = utils::ptr_to_pwd(local_rw_password)?.map(LocalSecret::Password);
+        let local_old_rw_secret =
+            utils::ptr_to_pwd(local_old_rw_password)?.map(LocalSecret::Password);
+
+        let local_new_rw_secret =
+            utils::ptr_to_pwd(local_new_rw_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
+            // TODO: Both should succeed or none (do it in a DB transaction).
+
             holder
                 .repository
-                .set_read_access(local_rw_secret.clone(), access_secrets.clone())
+                .set_read_access(local_new_rw_secret.clone(), access_secrets.clone())
                 .await?;
 
             holder
                 .repository
-                .set_write_access(local_rw_secret, access_secrets)
+                .set_write_access(local_old_rw_secret, local_new_rw_secret, access_secrets)
                 .await?;
 
             Ok(())

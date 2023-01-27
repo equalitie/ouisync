@@ -266,7 +266,8 @@ impl Repository {
 
     pub async fn set_write_access(
         &self,
-        local_write_secret: Option<LocalSecret>,
+        local_old_write_secret: Option<LocalSecret>,
+        local_new_write_secret: Option<LocalSecret>,
         secrets: Option<AccessSecrets>,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
@@ -285,16 +286,22 @@ impl Repository {
 
         let mut tx = self.db().begin_write().await?;
 
-        let local_write_key = if let Some(secret) = local_write_secret {
+        let local_new_write_key = if let Some(secret) = local_new_write_secret {
             Some(metadata::secret_to_key(&mut tx, secret).await?)
         } else {
             None
         };
 
-        let writer_id = metadata::get_writer_id(&mut tx, local_write_key.as_ref()).await?;
+        let writer_id = if let Some(local_old_write_secret) = local_old_write_secret {
+            let local_old_write_key =
+                metadata::secret_to_key(&mut tx, local_old_write_secret).await?;
+            metadata::get_writer_id(&mut tx, Some(&local_old_write_key)).await?
+        } else {
+            generate_writer_id()
+        };
 
-        metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
-        metadata::set_writer_id(&mut tx, &writer_id, local_write_key.as_ref()).await?;
+        metadata::set_write_key(&mut tx, write_key, local_new_write_key.as_ref()).await?;
+        metadata::set_writer_id(&mut tx, &writer_id, local_new_write_key.as_ref()).await?;
 
         tx.commit().await?;
 
