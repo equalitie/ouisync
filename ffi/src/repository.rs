@@ -8,7 +8,7 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{os::raw::c_char, ptr, slice, str::FromStr};
+use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 use tracing::Instrument;
 
@@ -524,10 +524,13 @@ pub unsafe extern "C" fn repository_disable_pex(
         .disable_pex()
 }
 
+/// The `password` parameter is optional, if `null` the current access level of the opened
+/// repository is used. If provided, the highest access level that the password can unlock is used.
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
+    password: *const c_char,
     access_mode: u8,
     name: *const c_char,
     port: Port<Result<String>>,
@@ -536,10 +539,22 @@ pub unsafe extern "C" fn repository_create_share_token(
         let holder = ctx.repositories().get(handle);
         let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
+        let password = utils::ptr_to_pwd(password)?;
 
         ctx.spawn(async move {
-            let access_secrets = holder.repository.secrets().with_mode(access_mode);
-            let share_token = ShareToken::from(access_secrets).with_name(name);
+            let access_secrets = if let Some(password) = password {
+                Cow::Owned(
+                    holder
+                        .repository
+                        .unlock_secrets(LocalSecret::Password(password))
+                        .await?,
+                )
+            } else {
+                Cow::Borrowed(holder.repository.secrets())
+            };
+
+            let share_token =
+                ShareToken::from(access_secrets.with_mode(access_mode)).with_name(name);
 
             Ok(share_token.to_string())
         })

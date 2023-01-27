@@ -78,7 +78,7 @@ impl Repository {
         let mut tx = db.pool.begin_write().await?;
 
         let this_writer_id =
-            generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
+            generate_and_store_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
 
         metadata::initialize_access_secrets(&mut tx, &access).await?;
 
@@ -142,7 +142,7 @@ impl Repository {
                 metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
+                generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
@@ -321,6 +321,20 @@ impl Repository {
 
     pub fn secrets(&self) -> &AccessSecrets {
         &self.shared.secrets
+    }
+
+    pub async fn unlock_secrets(&self, local_secret: LocalSecret) -> Result<AccessSecrets> {
+        // TODO: We don't really want to write here, but the `password_to_key` function requires a
+        // transaction. Consider changing it so that it only needs a connection (writing the seed would
+        // be done only during the db initialization explicitly).
+        let mut tx = self.db().begin_write().await?;
+
+        let local_key = match local_secret {
+            LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
+            LocalSecret::SecretKey(key) => key,
+        };
+
+        Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
     }
 
     pub fn store(&self) -> &Store {
@@ -668,17 +682,22 @@ impl Shared {
     }
 }
 
-async fn generate_writer_id(
+// TODO: Writer IDs are currently practically just UUIDs with no real security (any replica with a
+// write access may impersonate any other replica).
+fn generate_writer_id() -> sign::PublicKey {
+    let writer_id = sign::SecretKey::random();
+    let writer_id = PublicKey::from(&writer_id);
+    writer_id
+}
+
+async fn generate_and_store_writer_id(
     tx: &mut db::WriteTransaction,
     device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {
-    // TODO: we should be storing the SK in the db, not the PK.
-    let writer_id = sign::SecretKey::random();
-    let writer_id = PublicKey::from(&writer_id);
+    let writer_id = generate_writer_id();
     metadata::set_writer_id(tx, &writer_id, local_key).await?;
     metadata::set_device_id(tx, device_id).await?;
-
     Ok(writer_id)
 }
 
