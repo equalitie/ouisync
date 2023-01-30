@@ -8,10 +8,11 @@ use crate::{
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
 use ouisync_lib::{Result, StateMonitor};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{
-    io,
-    net::{Ipv4Addr, SocketAddr},
+    fmt, io,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    str::FromStr,
     sync::Arc,
 };
 use tokio::{
@@ -295,9 +296,26 @@ async fn dispatch_request(
             quic_v6,
             tcp_v4,
             tcp_v6,
-        } => network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6)
-            .await?
-            .into(),
+        } => {
+            network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6).await;
+            ().into()
+        }
+        Request::NetworkTcpListenerLocalAddrV4 => {
+            network::tcp_listener_local_addr_v4(server_state).into()
+        }
+        Request::NetworkTcpListenerLocalAddrV6 => {
+            network::tcp_listener_local_addr_v6(server_state).into()
+        }
+        Request::NetworkQuicListenerLocalAddrV4 => {
+            network::quic_listener_local_addr_v4(server_state).into()
+        }
+        Request::NetworkQuicListenerLocalAddrV6 => {
+            network::quic_listener_local_addr_v6(server_state).into()
+        }
+        Request::NetworkShutdown => {
+            network::shutdown(server_state).await;
+            ().into()
+        }
         Request::StateMonitorGet(path) => state_monitor::get(server_state, path)?.into(),
         Request::StateMonitorSubscribe(path) => {
             state_monitor::subscribe(server_state, client_state, path)?.into()
@@ -362,11 +380,20 @@ enum Request {
     },
     NetworkSubscribe,
     NetworkBind {
-        quic_v4: Option<String>,
-        quic_v6: Option<String>,
-        tcp_v4: Option<String>,
-        tcp_v6: Option<String>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        quic_v4: Option<SocketAddrV4>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        quic_v6: Option<SocketAddrV6>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        tcp_v4: Option<SocketAddrV4>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        tcp_v6: Option<SocketAddrV6>,
     },
+    NetworkTcpListenerLocalAddrV4,
+    NetworkTcpListenerLocalAddrV6,
+    NetworkQuicListenerLocalAddrV4,
+    NetworkQuicListenerLocalAddrV6,
+    NetworkShutdown,
     StateMonitorGet(String),
     StateMonitorSubscribe(String),
     Unsubscribe(SubscriptionHandle),
@@ -398,7 +425,7 @@ enum Response {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Value {
-    Unit,
+    None,
     Bool(bool),
     U8(u8),
     Bytes(Vec<u8>),
@@ -410,7 +437,7 @@ enum Value {
 
 impl From<()> for Value {
     fn from(_: ()) -> Self {
-        Self::Unit
+        Self::None
     }
 }
 
@@ -456,9 +483,46 @@ impl From<StateMonitor> for Value {
     }
 }
 
+impl<T> From<Option<T>> for Value
+where
+    Value: From<T>,
+{
+    fn from(value: Option<T>) -> Self {
+        if let Some(value) = value {
+            Self::from(value)
+        } else {
+            Self::None
+        }
+    }
+}
+
+impl From<SocketAddr> for Value {
+    fn from(value: SocketAddr) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) enum Notification {
     Repository,
     Network(NetworkEvent),
     StateMonitor,
+}
+
+// fn deserialize_from_str<'de, D: Deserializer<'de>, T: FromStr>(de: D) -> Result<T, D::Error> {
+
+// }
+
+fn deserialize_as_option_str<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    let s = Option::<&str>::deserialize(de)?;
+    if let Some(s) = s {
+        Ok(Some(s.parse().map_err(serde::de::Error::custom)?))
+    } else {
+        Ok(None)
+    }
 }

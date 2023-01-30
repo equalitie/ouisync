@@ -1,14 +1,13 @@
-use super::utils::{self, Bytes, Port};
+use super::utils::{self, Bytes};
 use crate::{
     interface::{ClientState, Notification},
     session::{ServerState, SessionHandle, SubscriptionHandle},
 };
-use ouisync_lib::{network::peer_addr::PeerAddr, Error, Result};
+use ouisync_lib::network::peer_addr::PeerAddr;
 use serde::Serialize;
 use std::{
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     os::raw::c_char,
-    ptr,
     str::FromStr,
 };
 use tokio::select;
@@ -30,20 +29,11 @@ pub(crate) enum NetworkEvent {
 /// parse or are were of incorrect type (e.g. IPv4 instead of IpV6).
 pub(crate) async fn bind(
     state: &ServerState,
-    quic_v4: Option<String>,
-    quic_v6: Option<String>,
-    tcp_v4: Option<String>,
-    tcp_v6: Option<String>,
-) -> Result<()> {
-    fn parse<T: FromStr>(src: &str) -> Result<T> {
-        src.parse().map_err(|_| Error::MalformedData)
-    }
-
-    let quic_v4: Option<SocketAddrV4> = quic_v4.as_deref().map(parse).transpose()?;
-    let quic_v6: Option<SocketAddrV6> = quic_v6.as_deref().map(parse).transpose()?;
-    let tcp_v4: Option<SocketAddrV4> = tcp_v4.as_deref().map(parse).transpose()?;
-    let tcp_v6: Option<SocketAddrV6> = tcp_v6.as_deref().map(parse).transpose()?;
-
+    quic_v4: Option<SocketAddrV4>,
+    quic_v6: Option<SocketAddrV6>,
+    tcp_v4: Option<SocketAddrV4>,
+    tcp_v6: Option<SocketAddrV6>,
+) {
     let addrs: Vec<_> = [
         quic_v4.map(|a| PeerAddr::Quic(a.into())),
         quic_v6.map(|a| PeerAddr::Quic(a.into())),
@@ -55,8 +45,6 @@ pub(crate) async fn bind(
     .collect();
 
     state.network.handle().bind(&addrs).await;
-
-    Ok(())
 }
 
 /// Subscribe to network event notifications.
@@ -102,88 +90,28 @@ pub(crate) fn subscribe(
 }
 
 /// Gracefully disconnect from peers.
-#[no_mangle]
-pub unsafe extern "C" fn network_shutdown(session: SessionHandle, port: Port<Result<()>>) {
-    session.get().with(port, |ctx| {
-        let handle = ctx.state().network.handle();
-
-        ctx.spawn(async move {
-            handle.shutdown().await;
-            Ok(())
-        })
-    })
+pub(crate) async fn shutdown(state: &ServerState) {
+    state.network.handle().shutdown().await;
 }
 
-/// Return the local TCP network endpoint as a string. The format is "<IPv4>:<PORT>". The
-/// returned pointer may be null if we did not bind to a TCP IPv4 address.
-///
-/// Example: "192.168.1.1:65522"
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
-#[no_mangle]
-pub unsafe extern "C" fn network_tcp_listener_local_addr_v4(session: SessionHandle) -> *mut c_char {
-    session
-        .get()
-        .state
-        .network
-        .tcp_listener_local_addr_v4()
-        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
-        .unwrap_or(ptr::null_mut())
+/// Return the local TCP network endpoint or None if we did not bind to a TCP IPv4 address.
+pub(crate) fn tcp_listener_local_addr_v4(state: &ServerState) -> Option<SocketAddr> {
+    state.network.tcp_listener_local_addr_v4()
 }
 
-/// Return the local TCP network endpoint as a string. The format is "<[IPv6]>:<PORT>". The
-/// returned pointer pointer may be null if we did bind to a TCP IPv6 address.
-///
-/// Example: "[2001:db8::1]:65522"
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
-#[no_mangle]
-pub unsafe extern "C" fn network_tcp_listener_local_addr_v6(session: SessionHandle) -> *mut c_char {
-    session
-        .get()
-        .state
-        .network
-        .tcp_listener_local_addr_v6()
-        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
-        .unwrap_or(ptr::null_mut())
+/// Return the local TCP network endpoint as or None if we did not bind to a TCP IPv6 address.
+pub(crate) fn tcp_listener_local_addr_v6(state: &ServerState) -> Option<SocketAddr> {
+    state.network.tcp_listener_local_addr_v6()
 }
 
-/// Return the local QUIC/UDP network endpoint as a string. The format is "<IPv4>:<PORT>". The
-/// returned pointer may be null if we did not bind to a QUIC/UDP IPv4 address.
-///
-/// Example: "192.168.1.1:65522"
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
-#[no_mangle]
-pub unsafe extern "C" fn network_quic_listener_local_addr_v4(
-    session: SessionHandle,
-) -> *mut c_char {
-    session
-        .get()
-        .state
-        .network
-        .quic_listener_local_addr_v4()
-        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
-        .unwrap_or(ptr::null_mut())
+/// Return the local QUIC/UDP network endpoint or None if we did not bind to a QUIC/UDP IPv4 address.
+pub(crate) fn quic_listener_local_addr_v4(state: &ServerState) -> Option<SocketAddr> {
+    state.network.quic_listener_local_addr_v4()
 }
 
-/// Return the local QUIC/UDP network endpoint as a string. The format is "<[IPv6]>:<PORT>". The
-/// returned pointer may be null if we did bind to a QUIC/UDP IPv6 address.
-///
-/// Example: "[2001:db8::1]:65522"
-///
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer.
-#[no_mangle]
-pub unsafe extern "C" fn network_quic_listener_local_addr_v6(
-    session: SessionHandle,
-) -> *mut c_char {
-    session
-        .get()
-        .state
-        .network
-        .quic_listener_local_addr_v6()
-        .map(|local_addr| utils::str_to_ptr(&local_addr.to_string()))
-        .unwrap_or(ptr::null_mut())
+/// Return the local QUIC/UDP network endpoint or None if we did bind to a QUIC/UDP IPv6 address.
+pub(crate) fn quic_listener_local_addr_v6(state: &ServerState) -> Option<SocketAddr> {
+    state.network.quic_listener_local_addr_v6()
 }
 
 /// Add a QUIC endpoint to which which OuiSync shall attempt to connect. Upon failure or success
