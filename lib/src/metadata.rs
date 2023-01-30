@@ -11,6 +11,7 @@ use crate::{
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
+use std::borrow::Cow;
 use zeroize::Zeroize;
 
 // Metadata keys
@@ -45,13 +46,13 @@ pub(crate) async fn password_to_key(
     ))
 }
 
-pub(crate) async fn secret_to_key(
+pub(crate) async fn secret_to_key<'a>(
     tx: &mut db::WriteTransaction,
-    secret: LocalSecret,
-) -> Result<cipher::SecretKey> {
+    secret: &'a LocalSecret,
+) -> Result<Cow<'a, cipher::SecretKey>> {
     match secret {
-        LocalSecret::Password(password) => password_to_key(tx, &password).await,
-        LocalSecret::SecretKey(key) => Ok(key),
+        LocalSecret::Password(password) => password_to_key(tx, &password).await.map(Cow::Owned),
+        LocalSecret::SecretKey(key) => Ok(Cow::Borrowed(key)),
     }
 }
 

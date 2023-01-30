@@ -186,7 +186,7 @@ pub unsafe extern "C" fn repository_set_read_access(
         ctx.spawn(async move {
             holder
                 .repository
-                .set_read_access(local_read_secret, access_secrets)
+                .set_read_access(local_read_secret.as_ref(), access_secrets.as_ref())
                 .await
         })
     })
@@ -236,19 +236,14 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
             utils::ptr_to_pwd(local_new_rw_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
-            // TODO: Both should succeed or none (do it in a DB transaction).
-
             holder
                 .repository
-                .set_read_access(local_new_rw_secret.clone(), access_secrets.clone())
-                .await?;
-
-            holder
-                .repository
-                .set_write_access(local_old_rw_secret, local_new_rw_secret, access_secrets)
-                .await?;
-
-            Ok(())
+                .set_read_and_write_access(
+                    local_old_rw_secret.as_ref(),
+                    local_new_rw_secret.as_ref(),
+                    access_secrets.as_ref(),
+                )
+                .await
         })
     })
 }
