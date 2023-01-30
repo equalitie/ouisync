@@ -193,11 +193,18 @@ async fn handle_request(state: &State, request: Request) -> Result<Value> {
             .into(),
         Request::RepositorySetReadAndWriteAccess {
             repository,
-            password,
+            old_password,
+            new_password,
             share_token,
-        } => repository::set_read_and_write_access(state, repository, password, share_token)
-            .await?
-            .into(),
+        } => repository::set_read_and_write_access(
+            state,
+            repository,
+            old_password,
+            new_password,
+            share_token,
+        )
+        .await?
+        .into(),
         Request::RepositoryRemoveReadKey(handle) => {
             repository::remove_read_key(state, handle).await?.into()
         }
@@ -264,7 +271,8 @@ enum Request {
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
-        password: Option<String>,
+        old_password: Option<String>,
+        new_password: Option<String>,
         share_token: Option<String>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),

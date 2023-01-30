@@ -174,7 +174,7 @@ fn local_discovery() {
     for (src_port, dst_port) in [(7001, 7002), (7002, 7001)] {
         let barrier = barrier.clone();
 
-        env.actor(&format!("node-{}", src_port), async move {
+        env.actor(&format!("node-{src_port}"), async move {
             let network = actor::create_unbound_network();
             network
                 .handle()

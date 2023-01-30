@@ -323,7 +323,7 @@ impl Actor {
         let num = self.repo_counter.get();
         self.repo_counter.set(num + 1);
 
-        self.base_dir.join(format!("repo-{}.db", num))
+        self.base_dir.join(format!("repo-{num}.db"))
     }
 }
 
@@ -495,7 +495,7 @@ pub(crate) async fn check_file_version_content(
             tracing::warn!(path, ?error, "open failed");
             return false;
         }
-        Err(error) => panic!("unexpected error: {:?}", error),
+        Err(error) => panic!("unexpected error: {error:?}"),
     };
 
     tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
@@ -507,7 +507,7 @@ pub(crate) async fn check_file_version_content(
             tracing::warn!(path, ?error, "read failed");
             return false;
         }
-        Err(error) => panic!("unexpected error: {:?}", error),
+        Err(error) => panic!("unexpected error: {error:?}"),
     };
 
     if actual_content == expected_content {
@@ -538,7 +538,7 @@ pub(crate) async fn check_entry_exists(
     match result {
         Ok(()) => true,
         Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
-        Err(error) => panic!("unexpected error: {:?}", error),
+        Err(error) => panic!("unexpected error: {error:?}"),
     }
 }
 
@@ -554,7 +554,7 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
         match parent.lookup_unique(name) {
             Ok(_) => false,
             Err(Error::EntryNotFound) => true,
-            Err(error) => panic!("unexpected error: {:?}", error),
+            Err(error) => panic!("unexpected error: {error:?}"),
         }
     })
     .await

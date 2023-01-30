@@ -145,13 +145,13 @@ impl<'a> From<&'a SecretKey> for PublicKey {
 
 impl fmt::Display for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:x}", self)
+        write!(f, "{self:x}")
     }
 }
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:8x}", self)
+        write!(f, "{self:8x}")
     }
 }
 

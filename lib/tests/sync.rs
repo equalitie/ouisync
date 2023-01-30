@@ -228,7 +228,7 @@ fn transfer_many_files() {
             let (_network, repo, _reg) = actor::setup().await;
 
             for (index, content) in files.iter().enumerate() {
-                let name = format!("file-{}.dat", index);
+                let name = format!("file-{index}.dat");
                 let mut file = repo.create_file(&name).await.unwrap();
                 common::write_in_chunks(&mut file, content, 4096).await;
                 file.flush().await.unwrap();
@@ -244,7 +244,7 @@ fn transfer_many_files() {
             network.connect("writer");
 
             for (index, content) in files.iter().enumerate() {
-                let name = format!("file-{}.dat", index);
+                let name = format!("file-{index}.dat");
                 common::expect_file_content(&repo, &name, content).await;
             }
 
@@ -869,7 +869,7 @@ async fn expect_local_directory_exists(repo: &Repository, path: &str) {
         match repo.open_directory(path).await {
             Ok(dir) => dir.has_local_version(),
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
-            Err(error) => panic!("unexpected error: {:?}", error),
+            Err(error) => panic!("unexpected error: {error:?}"),
         }
     })
     .await

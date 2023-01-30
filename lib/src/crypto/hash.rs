@@ -75,13 +75,13 @@ impl Ord for Hash {
 
 impl fmt::Display for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:x}", self)
+        write!(f, "{self:x}")
     }
 }
 
 impl fmt::Debug for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:8x}", self)
+        write!(f, "{self:8x}")
     }
 }
 

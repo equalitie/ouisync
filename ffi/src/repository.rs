@@ -183,7 +183,7 @@ pub(crate) async fn set_read_access(
 
     holder
         .repository
-        .set_read_access(local_read_secret, access_secrets)
+        .set_read_access(local_read_secret.as_ref(), access_secrets.as_ref())
         .await
 }
 
@@ -220,24 +220,23 @@ pub(crate) async fn set_read_and_write_access(
         None
     };
 
-    let local_old_rw_secret = local_rw_password
+    let local_old_rw_secret = local_old_rw_password
         .as_deref()
         .map(Password::new)
         .map(LocalSecret::Password);
 
-    let local_new_rw_secret = local_rw_password
+    let local_new_rw_secret = local_new_rw_password
         .as_deref()
         .map(Password::new)
         .map(LocalSecret::Password);
 
     holder
         .repository
-        .set_read_access(local_rw_secret.clone(), access_secrets.clone())
-        .await?;
-
-    holder
-        .repository
-        .set_read_and_write_access(local_old_rw_secret, local_new_rw_secret, access_secrets)
+        .set_read_and_write_access(
+            local_old_rw_secret.as_ref(),
+            local_new_rw_secret.as_ref(),
+            access_secrets.as_ref(),
+        )
         .await?;
 
     Ok(())
@@ -481,7 +480,8 @@ pub unsafe extern "C" fn repository_create_share_token(
         let holder = ctx.state().repositories.get(handle);
         let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
-        let password = utils::ptr_to_pwd(password)?;
+        let password = utils::ptr_to_maybe_str(password)?;
+        let password = password.map(Password::new);
 
         ctx.spawn(async move {
             let access_secrets = if let Some(password) = password {

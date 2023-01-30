@@ -19,7 +19,7 @@ fn write_file(c: &mut Criterion) {
     group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(
-        BenchmarkId::from_parameter(format!("{}@{}", file_size, buffer_size)),
+        BenchmarkId::from_parameter(format!("{file_size}@{buffer_size}")),
         |b| {
             b.iter_batched_ref(
                 || {
@@ -57,7 +57,7 @@ fn read_file(c: &mut Criterion) {
     group.sample_size(50);
     group.throughput(Throughput::Bytes(file_size));
     group.bench_function(
-        BenchmarkId::from_parameter(format!("{}@{}", file_size, buffer_size)),
+        BenchmarkId::from_parameter(format!("{file_size}@{buffer_size}")),
         |b| {
             let file_name = Utf8Path::new("file.dat");
 
