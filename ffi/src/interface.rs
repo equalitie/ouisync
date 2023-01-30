@@ -7,7 +7,7 @@ use crate::{
     state_monitor,
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
-use ouisync_lib::Result;
+use ouisync_lib::{Result, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::{
     io,
@@ -290,6 +290,7 @@ async fn dispatch_request(
             .await?
             .into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
+        Request::StateMonitorGet(path) => state_monitor::get(server_state, path)?.into(),
         Request::StateMonitorSubscribe(path) => {
             state_monitor::subscribe(server_state, client_state, path)?.into()
         }
@@ -352,6 +353,7 @@ enum Request {
         dst: String,
     },
     NetworkSubscribe,
+    StateMonitorGet(String),
     StateMonitorSubscribe(String),
     Unsubscribe(SubscriptionHandle),
 }
@@ -389,6 +391,7 @@ enum Value {
     String(String),
     Repository(Handle<RepositoryHolder>),
     Subscription(SubscriptionHandle),
+    StateMonitor(StateMonitor),
 }
 
 impl From<()> for Value {
@@ -430,6 +433,12 @@ impl From<Handle<RepositoryHolder>> for Value {
 impl From<SubscriptionHandle> for Value {
     fn from(value: SubscriptionHandle) -> Self {
         Self::Subscription(value)
+    }
+}
+
+impl From<StateMonitor> for Value {
+    fn from(value: StateMonitor) -> Self {
+        Self::StateMonitor(value)
     }
 }
 

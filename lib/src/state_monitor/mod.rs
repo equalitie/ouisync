@@ -42,18 +42,20 @@ impl MonitorId {
     }
 }
 
+impl fmt::Display for MonitorId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.name, self.disambiguator)
+    }
+}
+
 impl FromStr for MonitorId {
     type Err = MonitorIdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
 
-        if let Some(index) = s.find('[') {
-            if !s.ends_with(']') {
-                return Err(MonitorIdParseError);
-            }
-
-            let disambiguator = &s[index + 1..s.len() - 1];
+        if let Some(index) = s.find(':') {
+            let disambiguator = &s[index + 1..];
             let disambiguator = disambiguator.parse().map_err(|_| MonitorIdParseError)?;
 
             Ok(Self {
@@ -78,18 +80,16 @@ fn test_parse_monitor_id() {
     assert_eq!(id.name, "foo");
     assert_eq!(id.disambiguator, 0);
 
-    let id: MonitorId = "bar[0]".parse().unwrap();
+    let id: MonitorId = "bar:0".parse().unwrap();
     assert_eq!(id.name, "bar");
     assert_eq!(id.disambiguator, 0);
 
-    let id: MonitorId = "baz[1]".parse().unwrap();
+    let id: MonitorId = "baz:1".parse().unwrap();
     assert_eq!(id.name, "baz");
     assert_eq!(id.disambiguator, 1);
 
-    assert!("baz[2".parse::<MonitorId>().is_err());
-    assert!("baz[3]qux".parse::<MonitorId>().is_err());
-    assert!("baz[qux]".parse::<MonitorId>().is_err());
-    assert!("baz[]".parse::<MonitorId>().is_err());
+    assert!("baz:".parse::<MonitorId>().is_err());
+    assert!("baz:qux".parse::<MonitorId>().is_err());
 }
 
 // --- StateMonitor
@@ -501,7 +501,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (id, entry) in self.0.iter() {
             map.serialize_entry(
-                &format!("{}:{}", id.disambiguator, id.name),
+                &id.to_string(),
                 &entry
                     .child
                     .upgrade()
