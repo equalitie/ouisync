@@ -384,7 +384,7 @@ impl Repository {
             LocalSecret::SecretKey(key) => key,
         };
 
-        Ok(metadata::get_access_secrets(&mut tx, Some(&local_key)).await?)
+        metadata::get_access_secrets(&mut tx, Some(&local_key)).await
     }
 
     pub fn store(&self) -> &Store {
@@ -736,8 +736,7 @@ impl Shared {
 // write access may impersonate any other replica).
 fn generate_writer_id() -> sign::PublicKey {
     let writer_id = sign::SecretKey::random();
-    let writer_id = PublicKey::from(&writer_id);
-    writer_id
+    PublicKey::from(&writer_id)
 }
 
 async fn generate_and_store_writer_id(

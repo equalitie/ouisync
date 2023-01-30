@@ -51,7 +51,7 @@ pub(crate) async fn secret_to_key<'a>(
     secret: &'a LocalSecret,
 ) -> Result<Cow<'a, cipher::SecretKey>> {
     match secret {
-        LocalSecret::Password(password) => password_to_key(tx, &password).await.map(Cow::Owned),
+        LocalSecret::Password(password) => password_to_key(tx, password).await.map(Cow::Owned),
         LocalSecret::SecretKey(key) => Ok(Cow::Borrowed(key)),
     }
 }
