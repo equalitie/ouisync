@@ -3,7 +3,7 @@ use crate::{
     interface::{ClientState, Notification},
     session::{ServerState, SessionHandle, SubscriptionHandle},
 };
-use ouisync_lib::{network::peer_addr::PeerAddr, Result};
+use ouisync_lib::{network::peer_addr::PeerAddr, Error, Result};
 use serde::Serialize;
 use std::{
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
@@ -26,40 +26,37 @@ pub(crate) enum NetworkEvent {
 /// Binds the network to the specified addresses.
 /// Rebinds if already bound. If any of the addresses is null, that particular protocol/family
 /// combination is not bound. If all are null the network is disabled.
-/// Yields `Ok` if the binding was successful, `Err` if any of the given addresses failed to
+/// Returns `Ok` if the binding was successful, `Err` if any of the given addresses failed to
 /// parse or are were of incorrect type (e.g. IPv4 instead of IpV6).
-#[no_mangle]
-pub unsafe extern "C" fn network_bind(
-    session: SessionHandle,
-    quic_v4: *const c_char,
-    quic_v6: *const c_char,
-    tcp_v4: *const c_char,
-    tcp_v6: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let quic_v4: Option<SocketAddrV4> = utils::parse_from_ptr(quic_v4)?;
-        let quic_v6: Option<SocketAddrV6> = utils::parse_from_ptr(quic_v6)?;
-        let tcp_v4: Option<SocketAddrV4> = utils::parse_from_ptr(tcp_v4)?;
-        let tcp_v6: Option<SocketAddrV6> = utils::parse_from_ptr(tcp_v6)?;
+pub(crate) async fn bind(
+    state: &ServerState,
+    quic_v4: Option<String>,
+    quic_v6: Option<String>,
+    tcp_v4: Option<String>,
+    tcp_v6: Option<String>,
+) -> Result<()> {
+    fn parse<T: FromStr>(src: &str) -> Result<T> {
+        src.parse().map_err(|_| Error::MalformedData)
+    }
 
-        let addrs: Vec<_> = [
-            quic_v4.map(|a| PeerAddr::Quic(a.into())),
-            quic_v6.map(|a| PeerAddr::Quic(a.into())),
-            tcp_v4.map(|a| PeerAddr::Tcp(a.into())),
-            tcp_v6.map(|a| PeerAddr::Tcp(a.into())),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+    let quic_v4: Option<SocketAddrV4> = quic_v4.as_deref().map(parse).transpose()?;
+    let quic_v6: Option<SocketAddrV6> = quic_v6.as_deref().map(parse).transpose()?;
+    let tcp_v4: Option<SocketAddrV4> = tcp_v4.as_deref().map(parse).transpose()?;
+    let tcp_v6: Option<SocketAddrV6> = tcp_v6.as_deref().map(parse).transpose()?;
 
-        let network_handle = ctx.state().network.handle();
+    let addrs: Vec<_> = [
+        quic_v4.map(|a| PeerAddr::Quic(a.into())),
+        quic_v6.map(|a| PeerAddr::Quic(a.into())),
+        tcp_v4.map(|a| PeerAddr::Tcp(a.into())),
+        tcp_v6.map(|a| PeerAddr::Tcp(a.into())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
-        ctx.spawn(async move {
-            network_handle.bind(&addrs).await;
-            Ok(())
-        })
-    })
+    state.network.handle().bind(&addrs).await;
+
+    Ok(())
 }
 
 /// Subscribe to network event notifications.

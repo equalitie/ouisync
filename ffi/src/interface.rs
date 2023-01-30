@@ -290,6 +290,14 @@ async fn dispatch_request(
             .await?
             .into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
+        Request::NetworkBind {
+            quic_v4,
+            quic_v6,
+            tcp_v4,
+            tcp_v6,
+        } => network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6)
+            .await?
+            .into(),
         Request::StateMonitorGet(path) => state_monitor::get(server_state, path)?.into(),
         Request::StateMonitorSubscribe(path) => {
             state_monitor::subscribe(server_state, client_state, path)?.into()
@@ -353,6 +361,12 @@ enum Request {
         dst: String,
     },
     NetworkSubscribe,
+    NetworkBind {
+        quic_v4: Option<String>,
+        quic_v6: Option<String>,
+        tcp_v4: Option<String>,
+        tcp_v6: Option<String>,
+    },
     StateMonitorGet(String),
     StateMonitorSubscribe(String),
     Unsubscribe(SubscriptionHandle),
