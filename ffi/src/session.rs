@@ -221,15 +221,6 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
     });
 }
 
-/// Cancel a notification subscription.
-#[no_mangle]
-pub unsafe extern "C" fn subscription_cancel(
-    session: SessionHandle,
-    handle: Handle<ScopedJoinHandle<()>>,
-) {
-    session.get().state.tasks.remove(handle);
-}
-
 /// Deallocate string that has been allocated on the rust side
 #[no_mangle]
 pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
@@ -246,9 +237,14 @@ pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
     let _ = bytes.into_vec();
 }
 
+/// Cancel a notification subscription.
+pub(crate) fn unsubscribe(state: &ServerState, handle: SubscriptionHandle) {
+    state.tasks.remove(handle);
+}
+
 pub struct Session {
     runtime: Runtime,
-    pub(crate) state: Arc<State>,
+    pub(crate) state: Arc<ServerState>,
     _interface_server_task: ScopedJoinHandle<()>,
     interface_server_status_rx: watch::Receiver<ServerStatus>,
     sender: Sender,
@@ -281,7 +277,7 @@ impl Session {
 
         let repos_span = tracing::info_span!("Repositories");
 
-        let state = Arc::new(State {
+        let state = Arc::new(ServerState {
             root_monitor,
             repos_span,
             config,
@@ -341,7 +337,7 @@ impl Session {
 
 pub type SessionHandle = UniqueHandle<Session>;
 
-pub(crate) struct State {
+pub(crate) struct ServerState {
     pub root_monitor: StateMonitor,
     pub repos_span: Span,
     pub config: ConfigStore,
@@ -352,11 +348,13 @@ pub(crate) struct State {
     pub tasks: Registry<ScopedJoinHandle<()>>,
 }
 
-impl State {
+impl ServerState {
     pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
         tracing::info_span!(parent: &self.repos_span, "repo", ?store)
     }
 }
+
+pub(super) type SubscriptionHandle = Handle<ScopedJoinHandle<()>>;
 
 pub(super) struct Context<'a, T> {
     session: &'a Session,
@@ -377,7 +375,7 @@ where
         Ok(())
     }
 
-    pub(super) fn state(&self) -> &Arc<State> {
+    pub(super) fn state(&self) -> &Arc<ServerState> {
         &self.session.state
     }
 }

@@ -1,7 +1,8 @@
 use super::utils::{self, Bytes, Port};
 use crate::{
+    interface::{ClientState, Notification},
     registry::Handle,
-    session::{SessionHandle, State},
+    session::{ServerState, SessionHandle, SubscriptionHandle},
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{
@@ -11,9 +12,8 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
-use scoped_task::ScopedJoinHandle;
 use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast::error::RecvError, oneshot};
 use tracing::Instrument;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -41,7 +41,7 @@ pub struct RepositoryHolder {
 /// None                 |  any                   |  write         |  read without password, require password for writing
 /// any                  |  any                   |  write         |  read with password, write with (same or different) password
 pub(crate) async fn create(
-    state: &State,
+    state: &ServerState,
     store: String,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
@@ -101,7 +101,7 @@ pub(crate) async fn create(
 
 /// Opens an existing repository.
 pub(crate) async fn open(
-    state: &State,
+    state: &ServerState,
     store: String,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
@@ -140,7 +140,7 @@ pub(crate) async fn open(
 }
 
 /// Closes a repository.
-pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn close(state: &ServerState, handle: Handle<RepositoryHolder>) -> Result<()> {
     let holder = state.repositories.remove(handle);
 
     if let Some(holder) = holder {
@@ -161,7 +161,7 @@ pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Re
 /// To remove the read (and write) permission use the `repository_remove_read_access`
 /// function.
 pub(crate) async fn set_read_access(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
     local_read_password: Option<String>,
     share_token: Option<String>,
@@ -204,7 +204,7 @@ pub(crate) async fn set_read_access(
 /// Vectors for every entry in the repository (files and directories) and thus reduces traffic and
 /// CPU usage when calculating causal relationships.
 pub(crate) async fn set_read_and_write_access(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
     local_old_rw_password: Option<String>,
     local_new_rw_password: Option<String>,
@@ -244,14 +244,17 @@ pub(crate) async fn set_read_and_write_access(
 
 /// Note that after removing read key the user may still read the repository if they previously had
 /// write key set up.
-pub(crate) async fn remove_read_key(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn remove_read_key(
+    state: &ServerState,
+    handle: Handle<RepositoryHolder>,
+) -> Result<()> {
     let holder = state.repositories.get(handle);
     holder.repository.remove_read_key().await
 }
 
 /// Note that removing the write key will leave read key intact.
 pub(crate) async fn remove_write_key(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
@@ -260,7 +263,7 @@ pub(crate) async fn remove_write_key(
 
 /// Returns true if the repository requires a local password to be opened for reading.
 pub(crate) async fn requires_local_password_for_reading(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
     let holder = state.repositories.get(handle);
@@ -272,7 +275,7 @@ pub(crate) async fn requires_local_password_for_reading(
 
 /// Returns true if the repository requires a local password to be opened for writing.
 pub(crate) async fn requires_local_password_for_writing(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
     let holder = state.repositories.get(handle);
@@ -285,7 +288,7 @@ pub(crate) async fn requires_local_password_for_writing(
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
 /// unique, non-secret identifier of the repository.
 /// User is responsible for deallocating the returned string.
-pub(crate) fn info_hash(state: &State, handle: Handle<RepositoryHolder>) -> String {
+pub(crate) fn info_hash(state: &ServerState, handle: Handle<RepositoryHolder>) -> String {
     let holder = state.repositories.get(handle);
     let info_hash = network::repository_info_hash(holder.repository.secrets().id());
 
@@ -295,7 +298,7 @@ pub(crate) fn info_hash(state: &State, handle: Handle<RepositoryHolder>) -> Stri
 /// Returns an ID that is randomly generated once per repository. Can be used to store local user
 /// data per repository (e.g. passwords behind biometric storage).
 pub(crate) async fn database_id(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<Vec<u8>> {
     let holder = state.repositories.get(handle);
@@ -305,7 +308,7 @@ pub(crate) async fn database_id(
 /// Returns the type of repository entry (file, directory, ...).
 /// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
 pub(crate) async fn entry_type(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
     path: String,
 ) -> Result<u8> {
@@ -321,7 +324,7 @@ pub(crate) async fn entry_type(
 
 /// Move/rename entry from src to dst.
 pub(crate) async fn move_entry(
-    state: &State,
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
     src: String,
     dst: String,
@@ -340,21 +343,23 @@ pub(crate) async fn move_entry(
 }
 
 /// Subscribe to change notifications from the repository.
-#[no_mangle]
-pub unsafe extern "C" fn repository_subscribe(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-    port: Port<()>,
-) -> Handle<ScopedJoinHandle<()>> {
-    let session = session.get();
-    let sender = session.sender();
-    let holder = session.state.repositories.get(handle);
+pub(crate) fn subscribe(
+    server_state: &ServerState,
+    client_state: &ClientState,
+    repository_handle: Handle<RepositoryHolder>,
+) -> Result<SubscriptionHandle> {
+    let holder = server_state.repositories.get(repository_handle);
+    let (subscription_id_tx, subscription_id_rx) = oneshot::channel();
 
-    let mut rx = holder.repository.subscribe();
+    let mut notification_rx = holder.repository.subscribe();
+    let notification_tx = client_state.notification_tx.clone();
 
-    let handle = session.runtime().spawn(async move {
+    let subscription_task = scoped_task::spawn(async move {
+        // unwrap is OK because we send the handle after this spawn.
+        let subscription_id = subscription_id_rx.await.unwrap();
+
         loop {
-            match rx.recv().await {
+            match notification_rx.recv().await {
                 // Only `BlockReceived` events cause user-observable changes
                 Ok(Event {
                     payload: Payload::BlockReceived { .. },
@@ -368,12 +373,18 @@ pub unsafe extern "C" fn repository_subscribe(
                 Err(RecvError::Closed) => break,
             }
 
-            sender.send(port, ());
+            notification_tx
+                .send((subscription_id, Notification::Repository))
+                .await
+                .ok();
         }
     });
-    let handle = ScopedJoinHandle(handle);
+    let subscription_handle = server_state.tasks.insert(subscription_task);
 
-    session.state.tasks.insert(handle)
+    // unwrap OK because we immediately receive in the task spawned above.
+    subscription_id_tx.send(subscription_handle.id()).unwrap();
+
+    Ok(subscription_handle)
 }
 
 #[no_mangle]

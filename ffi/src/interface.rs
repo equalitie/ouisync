@@ -2,7 +2,7 @@ use crate::{
     error::{ErrorCode, ToErrorCode},
     registry::Handle,
     repository::{self, RepositoryHolder},
-    session::State,
+    session::{self, ServerState, SubscriptionHandle},
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
 use ouisync_lib::Result;
@@ -15,7 +15,7 @@ use std::{
 use tokio::{
     net::{TcpListener, TcpStream},
     select,
-    sync::watch,
+    sync::{mpsc, watch},
     task::JoinSet,
 };
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
@@ -29,7 +29,7 @@ pub(crate) enum ServerStatus {
     Failed(io::Error),
 }
 
-pub(crate) async fn run_server(state: Arc<State>, status_tx: watch::Sender<ServerStatus>) {
+pub(crate) async fn run_server(state: Arc<ServerState>, status_tx: watch::Sender<ServerStatus>) {
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -56,7 +56,7 @@ pub(crate) async fn run_server(state: Arc<State>, status_tx: watch::Sender<Serve
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
-                clients.spawn(client(stream, addr, state.clone()));
+                clients.spawn(run_client(stream, addr, state.clone()));
             }
             Err(error) => {
                 status_tx.send(ServerStatus::Failed(error)).ok();
@@ -66,8 +66,12 @@ pub(crate) async fn run_server(state: Arc<State>, status_tx: watch::Sender<Serve
     }
 }
 
-#[instrument(skip(stream, state))]
-async fn client(stream: TcpStream, addr: SocketAddr, state: Arc<State>) {
+pub(crate) struct ClientState {
+    pub notification_tx: mpsc::Sender<(u64, Notification)>,
+}
+
+#[instrument(skip(stream, server_state))]
+async fn run_client(stream: TcpStream, addr: SocketAddr, server_state: Arc<ServerState>) {
     // Convert to websocket
     let mut socket = match tokio_tungstenite::accept_async(stream).await {
         Ok(stream) => stream,
@@ -79,7 +83,10 @@ async fn client(stream: TcpStream, addr: SocketAddr, state: Arc<State>) {
 
     tracing::debug!("accepted");
 
-    let mut handlers = FuturesUnordered::new();
+    let (notification_tx, mut notification_rx) = mpsc::channel(1);
+    let client_state = ClientState { notification_tx };
+
+    let mut request_handlers = FuturesUnordered::new();
 
     loop {
         select! {
@@ -88,10 +95,15 @@ async fn client(stream: TcpStream, addr: SocketAddr, state: Arc<State>) {
                     break;
                 };
 
-                handlers.push(handle(&state, client_envelope));
+                request_handlers.push(handle_request(&server_state, &client_state, client_envelope));
             }
-            Some(server_envelope) = handlers.next() => {
-                send(&mut socket, server_envelope).await;
+            notification = notification_rx.recv() => {
+                // unwrap is OK because the sender exists at this point.
+                let (id, notification) = notification.unwrap();
+                send_notification(&mut socket, id, notification).await;
+            }
+            Some((id, result)) = request_handlers.next() => {
+                send_response(&mut socket, id, result).await;
             }
         }
     }
@@ -135,6 +147,32 @@ async fn receive(socket: &mut Socket) -> Option<ClientEnvelope> {
     }
 }
 
+async fn send_response(socket: &mut Socket, id: u64, result: Result<Value>) {
+    let response = match result {
+        Ok(response) => Response::Success(response),
+        Err(error) => Response::Failure {
+            code: error.to_error_code(),
+            message: error.to_string(),
+        },
+    };
+
+    let envelope = ServerEnvelope {
+        id,
+        message: ServerMessage::Response(response),
+    };
+
+    send(socket, envelope).await;
+}
+
+async fn send_notification(socket: &mut Socket, id: u64, notification: Notification) {
+    let envelope = ServerEnvelope {
+        id,
+        message: ServerMessage::Notification(notification),
+    };
+
+    send(socket, envelope).await;
+}
+
 async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
     let buffer = match rmp_serde::to_vec_named(&envelope) {
         Ok(buffer) => buffer,
@@ -149,26 +187,25 @@ async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
     }
 }
 
-async fn handle(state: &State, envelope: ClientEnvelope) -> ServerEnvelope {
-    let response = match handle_request(state, envelope.message).await {
-        Ok(response) => Response::Success(response),
-        Err(error) => {
-            tracing::error!(?error, "failed to handle request");
+async fn handle_request(
+    server_state: &ServerState,
+    client_state: &ClientState,
+    envelope: ClientEnvelope,
+) -> (u64, Result<Value>) {
+    let result = dispatch_request(server_state, client_state, envelope.message).await;
 
-            Response::Failure {
-                code: error.to_error_code(),
-                message: error.to_string(),
-            }
-        }
-    };
-
-    ServerEnvelope {
-        id: envelope.id,
-        message: ServerMessage::Response(response),
+    if let Err(error) = &result {
+        tracing::error!(?error, "failed to handle request");
     }
+
+    (envelope.id, result)
 }
 
-async fn handle_request(state: &State, request: Request) -> Result<Value> {
+async fn dispatch_request(
+    server_state: &ServerState,
+    client_state: &ClientState,
+    request: Request,
+) -> Result<Value> {
     tracing::debug!(?request);
 
     let response = match request {
@@ -177,18 +214,27 @@ async fn handle_request(state: &State, request: Request) -> Result<Value> {
             read_password,
             write_password,
             share_token,
-        } => repository::create(state, path, read_password, write_password, share_token)
-            .await?
-            .into(),
+        } => repository::create(
+            server_state,
+            path,
+            read_password,
+            write_password,
+            share_token,
+        )
+        .await?
+        .into(),
         Request::RepositoryOpen { path, password } => {
-            repository::open(state, path, password).await?.into()
+            repository::open(server_state, path, password).await?.into()
         }
-        Request::RepositoryClose(handle) => repository::close(state, handle).await?.into(),
+        Request::RepositoryClose(handle) => repository::close(server_state, handle).await?.into(),
+        Request::RepositorySubscribe(handle) => {
+            repository::subscribe(server_state, client_state, handle)?.into()
+        }
         Request::RepositorySetReadAccess {
             repository,
             read_password,
             share_token,
-        } => repository::set_read_access(state, repository, read_password, share_token)
+        } => repository::set_read_access(server_state, repository, read_password, share_token)
             .await?
             .into(),
         Request::RepositorySetReadAndWriteAccess {
@@ -197,7 +243,7 @@ async fn handle_request(state: &State, request: Request) -> Result<Value> {
             new_password,
             share_token,
         } => repository::set_read_and_write_access(
-            state,
+            server_state,
             repository,
             old_password,
             new_password,
@@ -206,27 +252,31 @@ async fn handle_request(state: &State, request: Request) -> Result<Value> {
         .await?
         .into(),
         Request::RepositoryRemoveReadKey(handle) => {
-            repository::remove_read_key(state, handle).await?.into()
+            repository::remove_read_key(server_state, handle)
+                .await?
+                .into()
         }
         Request::RepositoryRemoveWriteKey(handle) => {
-            repository::remove_write_key(state, handle).await?.into()
+            repository::remove_write_key(server_state, handle)
+                .await?
+                .into()
         }
         Request::RepositoryRequiresLocalPasswordForReading(handle) => {
-            repository::requires_local_password_for_reading(state, handle)
+            repository::requires_local_password_for_reading(server_state, handle)
                 .await?
                 .into()
         }
         Request::RepositoryRequiresLocalPasswordForWriting(handle) => {
-            repository::requires_local_password_for_writing(state, handle)
+            repository::requires_local_password_for_writing(server_state, handle)
                 .await?
                 .into()
         }
-        Request::RepositoryInfoHash(handle) => repository::info_hash(state, handle).into(),
+        Request::RepositoryInfoHash(handle) => repository::info_hash(server_state, handle).into(),
         Request::RepositoryDatabaseId(handle) => {
-            repository::database_id(state, handle).await?.into()
+            repository::database_id(server_state, handle).await?.into()
         }
         Request::RepositoryEntryType { repository, path } => {
-            repository::entry_type(state, repository, path)
+            repository::entry_type(server_state, repository, path)
                 .await?
                 .into()
         }
@@ -234,9 +284,13 @@ async fn handle_request(state: &State, request: Request) -> Result<Value> {
             repository,
             src,
             dst,
-        } => repository::move_entry(state, repository, src, dst)
+        } => repository::move_entry(server_state, repository, src, dst)
             .await?
             .into(),
+        Request::Unsubscribe(handle) => {
+            session::unsubscribe(server_state, handle);
+            ().into()
+        }
     };
 
     Ok(response)
@@ -264,6 +318,7 @@ enum Request {
         password: Option<String>,
     },
     RepositoryClose(Handle<RepositoryHolder>),
+    RepositorySubscribe(Handle<RepositoryHolder>),
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         read_password: Option<String>,
@@ -290,6 +345,7 @@ enum Request {
         src: String,
         dst: String,
     },
+    Unsubscribe(SubscriptionHandle),
 }
 
 #[derive(Serialize)]
@@ -324,6 +380,7 @@ enum Value {
     Bytes(Vec<u8>),
     String(String),
     Repository(Handle<RepositoryHolder>),
+    Subscription(SubscriptionHandle),
 }
 
 impl From<()> for Value {
@@ -362,5 +419,13 @@ impl From<Handle<RepositoryHolder>> for Value {
     }
 }
 
+impl From<SubscriptionHandle> for Value {
+    fn from(value: SubscriptionHandle) -> Self {
+        Self::Subscription(value)
+    }
+}
+
 #[derive(Serialize)]
-enum Notification {}
+pub(crate) enum Notification {
+    Repository,
+}

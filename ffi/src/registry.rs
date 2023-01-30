@@ -72,6 +72,10 @@ impl<T> Handle<T> {
             _type: PhantomData,
         }
     }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 impl<T> fmt::Debug for Handle<T> {
