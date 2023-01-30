@@ -5,12 +5,12 @@ use super::{
     file::FileHolder,
     interface::{self, ServerStatus},
     logger::Logger,
-    registry::{Handle, NullableHandle, Registry},
+    registry::{Handle, Registry},
     repository::RepositoryHolder,
     utils::{self, Bytes, Port, UniqueHandle},
 };
 use camino::Utf8Path;
-use ouisync_lib::{network::Network, ConfigStore, Error, MonitorId, Result, StateMonitor};
+use ouisync_lib::{network::Network, ConfigStore, Error, Result, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,
@@ -101,93 +101,6 @@ pub unsafe extern "C" fn session_interface_port(session: SessionHandle, port: Po
             }
         })
     })
-}
-
-/// Retrieve a serialized state monitor corresponding to the `path`.
-#[no_mangle]
-pub unsafe extern "C" fn session_get_state_monitor(
-    session: SessionHandle,
-    path: *const u8,
-    path_len: u64,
-) -> Bytes {
-    let path = std::slice::from_raw_parts(path, path_len as usize);
-    let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(
-                "Failed to parse input in session_get_state_monitor as MessagePack: {:?}",
-                e
-            );
-            return Bytes::NULL;
-        }
-    };
-    let path = path
-        .into_iter()
-        .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
-
-    if let Some(monitor) = session.get().state.root_monitor.locate(path) {
-        let bytes = rmp_serde::to_vec(&monitor).unwrap();
-        Bytes::from_vec(bytes)
-    } else {
-        Bytes::NULL
-    }
-}
-
-/// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
-#[no_mangle]
-pub unsafe extern "C" fn session_state_monitor_subscribe(
-    session: SessionHandle,
-    path: *const u8,
-    path_len: u64,
-    port: Port<()>,
-) -> NullableHandle<ScopedJoinHandle<()>> {
-    let path = std::slice::from_raw_parts(path, path_len as usize);
-    let path: Vec<(String, u64)> = match rmp_serde::from_slice(path) {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(
-                "Failed to parse input in session_state_monitor_subscribe as MessagePack: {:?}",
-                e
-            );
-            return NullableHandle::NULL;
-        }
-    };
-    let path = path
-        .into_iter()
-        .map(|(name, disambiguator)| MonitorId::new(name, disambiguator));
-
-    let session = session.get();
-    let sender = session.sender();
-    if let Some(monitor) = session.state.root_monitor.locate(path) {
-        let mut rx = monitor.subscribe();
-
-        let handle = session.runtime().spawn(async move {
-            loop {
-                match rx.changed().await {
-                    Ok(()) => sender.send(port, ()),
-                    Err(_) => return,
-                }
-                // Prevent flooding the app with too many "on change" notifications.
-                time::sleep(Duration::from_millis(200)).await;
-            }
-        });
-        let handle = ScopedJoinHandle(handle);
-
-        session.state.tasks.insert(handle).into()
-    } else {
-        NullableHandle::NULL
-    }
-}
-
-/// Unsubscribe from the above "on change" StateMonitor events.
-#[no_mangle]
-pub unsafe extern "C" fn session_state_monitor_unsubscribe(
-    session: SessionHandle,
-    handle: NullableHandle<ScopedJoinHandle<()>>,
-) {
-    if let Ok(handle) = handle.try_into() {
-        session.get().state.tasks.remove(handle);
-    }
 }
 
 /// Closes the ouisync session.
@@ -329,10 +242,6 @@ impl Session {
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
-
-    pub(crate) fn sender(&self) -> Sender {
-        self.sender
-    }
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
@@ -412,12 +321,5 @@ impl Sender {
                 (self.post_c_object_fn)(port, &mut error.to_string().into());
             }
         }
-    }
-
-    pub(crate) unsafe fn send<T>(&self, port: Port<T>, value: T)
-    where
-        T: Into<DartCObject>,
-    {
-        (self.post_c_object_fn)(port.into(), &mut value.into());
     }
 }

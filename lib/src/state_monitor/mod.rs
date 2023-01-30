@@ -13,6 +13,7 @@ use std::{
     convert::Into,
     fmt,
     ops::Drop,
+    str::FromStr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
@@ -39,6 +40,56 @@ impl MonitorId {
             disambiguator,
         }
     }
+}
+
+impl FromStr for MonitorId {
+    type Err = MonitorIdParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+
+        if let Some(index) = s.find('[') {
+            if !s.ends_with(']') {
+                return Err(MonitorIdParseError);
+            }
+
+            let disambiguator = &s[index + 1..s.len() - 1];
+            let disambiguator = disambiguator.parse().map_err(|_| MonitorIdParseError)?;
+
+            Ok(Self {
+                name: s[..index].to_owned(),
+                disambiguator,
+            })
+        } else {
+            Ok(Self {
+                name: s.to_owned(),
+                disambiguator: 0,
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MonitorIdParseError;
+
+#[test]
+fn test_parse_monitor_id() {
+    let id: MonitorId = "foo".parse().unwrap();
+    assert_eq!(id.name, "foo");
+    assert_eq!(id.disambiguator, 0);
+
+    let id: MonitorId = "bar[0]".parse().unwrap();
+    assert_eq!(id.name, "bar");
+    assert_eq!(id.disambiguator, 0);
+
+    let id: MonitorId = "baz[1]".parse().unwrap();
+    assert_eq!(id.name, "baz");
+    assert_eq!(id.disambiguator, 1);
+
+    assert!("baz[2".parse::<MonitorId>().is_err());
+    assert!("baz[3]qux".parse::<MonitorId>().is_err());
+    assert!("baz[qux]".parse::<MonitorId>().is_err());
+    assert!("baz[]".parse::<MonitorId>().is_err());
 }
 
 // --- StateMonitor
@@ -148,7 +199,7 @@ impl StateMonitor {
         Self { shared: child }
     }
 
-    pub fn locate<I: Iterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {
+    pub fn locate<I: IntoIterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {
         self.shared.locate(path).map(|shared| {
             shared.increment_refcount();
             Self { shared }
@@ -253,7 +304,8 @@ impl StateMonitorShared {
         })
     }
 
-    fn locate<I: Iterator<Item = MonitorId>>(self: &Arc<Self>, mut path: I) -> Option<Arc<Self>> {
+    fn locate<I: IntoIterator<Item = MonitorId>>(self: &Arc<Self>, path: I) -> Option<Arc<Self>> {
+        let mut path = path.into_iter();
         let child_id = match path.next() {
             Some(child_id) => child_id,
             None => return Some(self.clone()),

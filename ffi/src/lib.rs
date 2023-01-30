@@ -17,3 +17,4 @@ mod dart;
 mod interface;
 mod logger;
 mod registry;
+mod state_monitor;

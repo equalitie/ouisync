@@ -121,43 +121,6 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-pub struct NullableHandle<T: 'static>(Handle<T>);
-
-impl<T> NullableHandle<T> {
-    pub(crate) const NULL: Self = Self(Handle {
-        id: 0,
-        _type: PhantomData,
-    });
-}
-
-impl<T> From<Handle<T>> for NullableHandle<T> {
-    fn from(handle: Handle<T>) -> Self {
-        Self(handle)
-    }
-}
-
-impl<T> TryFrom<NullableHandle<T>> for Handle<T> {
-    type Error = NullError;
-
-    fn try_from(handle: NullableHandle<T>) -> Result<Self, Self::Error> {
-        if handle.0.id == 0 {
-            Err(NullError)
-        } else {
-            Ok(handle.0)
-        }
-    }
-}
-
-pub struct NullError;
-
-impl<T> From<NullableHandle<T>> for DartCObject {
-    fn from(handle: NullableHandle<T>) -> Self {
-        DartCObject::from(handle.0)
-    }
-}
-
 impl<T> From<Handle<T>> for DartCObject {
     fn from(handle: Handle<T>) -> Self {
         DartCObject::from(handle.id)

@@ -4,6 +4,7 @@ use crate::{
     registry::Handle,
     repository::{self, RepositoryHolder},
     session::{self, ServerState, SubscriptionHandle},
+    state_monitor,
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
 use ouisync_lib::Result;
@@ -289,6 +290,9 @@ async fn dispatch_request(
             .await?
             .into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
+        Request::StateMonitorSubscribe(path) => {
+            state_monitor::subscribe(server_state, client_state, path)?.into()
+        }
         Request::Unsubscribe(handle) => {
             session::unsubscribe(server_state, handle);
             ().into()
@@ -348,6 +352,7 @@ enum Request {
         dst: String,
     },
     NetworkSubscribe,
+    StateMonitorSubscribe(String),
     Unsubscribe(SubscriptionHandle),
 }
 
@@ -432,4 +437,5 @@ impl From<SubscriptionHandle> for Value {
 pub(crate) enum Notification {
     Repository,
     Network(NetworkEvent),
+    StateMonitor,
 }
