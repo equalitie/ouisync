@@ -17,10 +17,16 @@ impl<T> Registry<T> {
         Self(RwLock::new(HashMap::new()))
     }
 
-    pub fn insert(&self, item: T) -> Handle<T> {
+    pub fn vacant_entry(&self) -> VacantEntry<T> {
         let handle = Handle::new();
-        self.0.write().unwrap().insert(handle.id, Arc::new(item));
-        handle
+        VacantEntry {
+            registry: self,
+            handle,
+        }
+    }
+
+    pub fn insert(&self, item: T) -> Handle<T> {
+        self.vacant_entry().insert(item)
     }
 
     pub fn remove(&self, handle: Handle<T>) -> Option<T> {
@@ -46,7 +52,30 @@ impl<T> Registry<T> {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct VacantEntry<'a, T>
+where
+    T: 'static,
+{
+    registry: &'a Registry<T>,
+    handle: Handle<T>,
+}
+
+impl<T> VacantEntry<'_, T> {
+    pub fn handle(&self) -> Handle<T> {
+        self.handle
+    }
+
+    pub fn insert(self, value: T) -> Handle<T> {
+        self.registry
+            .0
+            .write()
+            .unwrap()
+            .insert(self.handle.id, Arc::new(value));
+        self.handle
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct Handle<T: 'static> {
@@ -56,7 +85,7 @@ pub struct Handle<T: 'static> {
 }
 
 impl<T> Handle<T> {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
         // Make sure `id` is never 0 as that is reserved for the `NULL` handle.
@@ -77,6 +106,14 @@ impl<T> Handle<T> {
         self.id
     }
 }
+
+impl<T> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Handle<T> {}
 
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -1,10 +1,10 @@
-use super::{
-    registry::Handle,
-    session::SessionHandle,
-    utils::{self, Bytes, Port},
+use super::utils::{self, Bytes, Port};
+use crate::{
+    interface::{ClientState, Notification},
+    session::{ServerState, SessionHandle, SubscriptionHandle},
 };
 use ouisync_lib::{network::peer_addr::PeerAddr, Result};
-use scoped_task::ScopedJoinHandle;
+use serde::Serialize;
 use std::{
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     os::raw::c_char,
@@ -15,6 +15,13 @@ use tokio::select;
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
 pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
+
+#[derive(Serialize)]
+#[repr(u8)]
+pub(crate) enum NetworkEvent {
+    ProtocolVersionMismatch = NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
+    PeerSetChange = NETWORK_EVENT_PEER_SET_CHANGE,
+}
 
 /// Binds the network to the specified addresses.
 /// Rebinds if already bound. If any of the addresses is null, that particular protocol/family
@@ -56,48 +63,45 @@ pub unsafe extern "C" fn network_bind(
 }
 
 /// Subscribe to network event notifications.
-#[no_mangle]
-pub unsafe extern "C" fn network_subscribe(
-    session: SessionHandle,
-    port: Port<u8>,
-) -> Handle<ScopedJoinHandle<()>> {
-    let session = session.get();
-    let sender = session.sender();
+pub(crate) fn subscribe(
+    server_state: &ServerState,
+    client_state: &ClientState,
+) -> SubscriptionHandle {
+    let mut on_protocol_mismatch = server_state.network.on_protocol_mismatch();
+    let mut on_peer_set_change = server_state.network.on_peer_set_change();
 
-    let mut on_protocol_mismatch = session.state.network.on_protocol_mismatch();
-    let mut on_peer_set_change = session.state.network.on_peer_set_change();
+    let notification_tx = client_state.notification_tx.clone();
 
-    let handle = session.runtime().spawn(async move {
+    let entry = server_state.tasks.vacant_entry();
+    let subscription_id = entry.handle().id();
+
+    let handle = scoped_task::spawn(async move {
         // TODO: This loop exits when the first of the watched channels closes. It might be less
         // error prone to keep the loop until all of the channels are closed.
         loop {
-            select! {
+            let event = select! {
                 e = on_protocol_mismatch.changed() => {
                     match e {
-                        Ok(()) => {
-                            sender.send(port, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH);
-                        },
-                        Err(_) => {
-                            return;
-                        }
+                        Ok(()) => NetworkEvent::ProtocolVersionMismatch,
+                        Err(_) => return,
                     }
                 },
                 e = on_peer_set_change.changed() => {
                     match e {
-                        Ok(()) => {
-                            sender.send(port, NETWORK_EVENT_PEER_SET_CHANGE);
-                        },
-                        Err(_) => {
-                            return;
-                        }
+                        Ok(()) => NetworkEvent::PeerSetChange,
+                        Err(_) => return,
                     }
                 }
-            }
+            };
+
+            notification_tx
+                .send((subscription_id, Notification::Network(event)))
+                .await
+                .ok();
         }
     });
-    let handle = ScopedJoinHandle(handle);
 
-    session.state.tasks.insert(handle)
+    entry.insert(handle)
 }
 
 /// Gracefully disconnect from peers.

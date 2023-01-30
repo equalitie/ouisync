@@ -1,5 +1,6 @@
 use crate::{
     error::{ErrorCode, ToErrorCode},
+    network::{self, NetworkEvent},
     registry::Handle,
     repository::{self, RepositoryHolder},
     session::{self, ServerState, SubscriptionHandle},
@@ -228,7 +229,7 @@ async fn dispatch_request(
         }
         Request::RepositoryClose(handle) => repository::close(server_state, handle).await?.into(),
         Request::RepositorySubscribe(handle) => {
-            repository::subscribe(server_state, client_state, handle)?.into()
+            repository::subscribe(server_state, client_state, handle).into()
         }
         Request::RepositorySetReadAccess {
             repository,
@@ -287,6 +288,7 @@ async fn dispatch_request(
         } => repository::move_entry(server_state, repository, src, dst)
             .await?
             .into(),
+        Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
         Request::Unsubscribe(handle) => {
             session::unsubscribe(server_state, handle);
             ().into()
@@ -345,6 +347,7 @@ enum Request {
         src: String,
         dst: String,
     },
+    NetworkSubscribe,
     Unsubscribe(SubscriptionHandle),
 }
 
@@ -428,4 +431,5 @@ impl From<SubscriptionHandle> for Value {
 #[derive(Serialize)]
 pub(crate) enum Notification {
     Repository,
+    Network(NetworkEvent),
 }

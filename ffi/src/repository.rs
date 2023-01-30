@@ -13,7 +13,7 @@ use ouisync_lib::{
     Repository, RepositoryDb, Result, ShareToken,
 };
 use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
-use tokio::sync::{broadcast::error::RecvError, oneshot};
+use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
 pub const ENTRY_TYPE_INVALID: u8 = 0;
@@ -347,17 +347,16 @@ pub(crate) fn subscribe(
     server_state: &ServerState,
     client_state: &ClientState,
     repository_handle: Handle<RepositoryHolder>,
-) -> Result<SubscriptionHandle> {
+) -> SubscriptionHandle {
     let holder = server_state.repositories.get(repository_handle);
-    let (subscription_id_tx, subscription_id_rx) = oneshot::channel();
 
     let mut notification_rx = holder.repository.subscribe();
     let notification_tx = client_state.notification_tx.clone();
 
-    let subscription_task = scoped_task::spawn(async move {
-        // unwrap is OK because we send the handle after this spawn.
-        let subscription_id = subscription_id_rx.await.unwrap();
+    let entry = server_state.tasks.vacant_entry();
+    let subscription_id = entry.handle().id();
 
+    let subscription_task = scoped_task::spawn(async move {
         loop {
             match notification_rx.recv().await {
                 // Only `BlockReceived` events cause user-observable changes
@@ -379,12 +378,8 @@ pub(crate) fn subscribe(
                 .ok();
         }
     });
-    let subscription_handle = server_state.tasks.insert(subscription_task);
 
-    // unwrap OK because we immediately receive in the task spawned above.
-    subscription_id_tx.send(subscription_handle.id()).unwrap();
-
-    Ok(subscription_handle)
+    entry.insert(subscription_task)
 }
 
 #[no_mangle]
