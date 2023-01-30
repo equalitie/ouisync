@@ -8,7 +8,7 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{os::raw::c_char, ptr, slice, str::FromStr};
+use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
 use tokio::{sync::broadcast::error::RecvError, task::JoinHandle};
 use tracing::Instrument;
 
@@ -186,7 +186,7 @@ pub unsafe extern "C" fn repository_set_read_access(
         ctx.spawn(async move {
             holder
                 .repository
-                .set_read_access(local_read_secret, access_secrets)
+                .set_read_access(local_read_secret.as_ref(), access_secrets.as_ref())
                 .await
         })
     })
@@ -199,14 +199,21 @@ pub unsafe extern "C" fn repository_set_read_access(
 /// Attempting to change the secret without enough permissions will fail with PermissionDenied
 /// error.
 ///
-/// If `local_rw_password` is null, the repository will become read and writable without a
+/// If `local_new_rw_password` is null, the repository will become read and writable without a
 /// password.  To remove the read and write access use the
 /// `repository_remove_read_and_write_access` function.
+///
+/// The `local_old_rw_password` is optional (may be a null pointer), if it is set the previously
+/// used "writer ID" shall be used, otherwise a new one shall be generated. Note that it is
+/// preferred to keep the writer ID as it was, this reduces the number of writers in Version
+/// Vectors for every entry in the repository (files and directories) and thus reduces traffic and
+/// CPU usage when calculating causal relationships.
 #[no_mangle]
 pub unsafe extern "C" fn repository_set_read_and_write_access(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
-    local_rw_password: *const c_char,
+    local_old_rw_password: *const c_char,
+    local_new_rw_password: *const c_char,
     share_token: *const c_char,
     port: Port<Result<()>>,
 ) {
@@ -222,20 +229,21 @@ pub unsafe extern "C" fn repository_set_read_and_write_access(
             Some(share_token.into_secrets())
         };
 
-        let local_rw_secret = utils::ptr_to_pwd(local_rw_password)?.map(LocalSecret::Password);
+        let local_old_rw_secret =
+            utils::ptr_to_pwd(local_old_rw_password)?.map(LocalSecret::Password);
+
+        let local_new_rw_secret =
+            utils::ptr_to_pwd(local_new_rw_password)?.map(LocalSecret::Password);
 
         ctx.spawn(async move {
             holder
                 .repository
-                .set_read_access(local_rw_secret.clone(), access_secrets.clone())
-                .await?;
-
-            holder
-                .repository
-                .set_write_access(local_rw_secret, access_secrets)
-                .await?;
-
-            Ok(())
+                .set_read_and_write_access(
+                    local_old_rw_secret.as_ref(),
+                    local_new_rw_secret.as_ref(),
+                    access_secrets.as_ref(),
+                )
+                .await
         })
     })
 }
@@ -524,10 +532,13 @@ pub unsafe extern "C" fn repository_disable_pex(
         .disable_pex()
 }
 
+/// The `password` parameter is optional, if `null` the current access level of the opened
+/// repository is used. If provided, the highest access level that the password can unlock is used.
 #[no_mangle]
 pub unsafe extern "C" fn repository_create_share_token(
     session: SessionHandle,
     handle: Handle<RepositoryHolder>,
+    password: *const c_char,
     access_mode: u8,
     name: *const c_char,
     port: Port<Result<String>>,
@@ -536,10 +547,22 @@ pub unsafe extern "C" fn repository_create_share_token(
         let holder = ctx.repositories().get(handle);
         let access_mode = access_mode_from_num(access_mode)?;
         let name = utils::ptr_to_str(name)?.to_owned();
+        let password = utils::ptr_to_pwd(password)?;
 
         ctx.spawn(async move {
-            let access_secrets = holder.repository.secrets().with_mode(access_mode);
-            let share_token = ShareToken::from(access_secrets).with_name(name);
+            let access_secrets = if let Some(password) = password {
+                Cow::Owned(
+                    holder
+                        .repository
+                        .unlock_secrets(LocalSecret::Password(password))
+                        .await?,
+                )
+            } else {
+                Cow::Borrowed(holder.repository.secrets())
+            };
+
+            let share_token =
+                ShareToken::from(access_secrets.with_mode(access_mode)).with_name(name);
 
             Ok(share_token.to_string())
         })

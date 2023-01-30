@@ -78,7 +78,7 @@ impl Repository {
         let mut tx = db.pool.begin_write().await?;
 
         let this_writer_id =
-            generate_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
+            generate_and_store_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
 
         metadata::initialize_access_secrets(&mut tx, &access).await?;
 
@@ -142,7 +142,7 @@ impl Repository {
                 metadata::get_writer_id(&mut tx, local_key.as_ref()).await?
             } else {
                 // Replica id changed. Must generate new writer id.
-                generate_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
+                generate_and_store_writer_id(&mut tx, &device_id, local_key.as_ref()).await?
             }
         } else {
             PublicKey::from(&sign::SecretKey::random())
@@ -232,8 +232,21 @@ impl Repository {
 
     pub async fn set_read_access(
         &self,
-        local_read_secret: Option<LocalSecret>,
-        secrets: Option<AccessSecrets>,
+        local_read_secret: Option<&LocalSecret>,
+        secrets: Option<&AccessSecrets>,
+    ) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+        self.set_read_access_in(&mut tx, local_read_secret, secrets)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_read_access_in(
+        &self,
+        tx: &mut db::WriteTransaction,
+        local_read_secret: Option<&LocalSecret>,
+        secrets: Option<&AccessSecrets>,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -249,25 +262,48 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
-        let mut tx = self.db().begin_write().await?;
-
-        let local_read_key = if let Some(secret) = local_read_secret {
-            Some(metadata::secret_to_key(&mut tx, secret).await?)
+        let local_read_key = if let Some(local_secret) = local_read_secret {
+            Some(metadata::secret_to_key(tx, local_secret).await?)
         } else {
             None
         };
 
-        metadata::set_read_key(&mut tx, secrets.id(), read_key, local_read_key.as_ref()).await?;
-
-        tx.commit().await?;
+        metadata::set_read_key(
+            tx,
+            secrets.id(),
+            read_key,
+            // Option<Cow<SecretKey>> -> Option<&SecretKey>
+            local_read_key.as_ref().map(|k| k.as_ref()),
+        )
+        .await?;
 
         Ok(())
     }
 
-    pub async fn set_write_access(
+    // Making this function public instead of the `set_read_access_in` and `set_write_access_in`
+    // separately to make the setting both (read and write) accesses ACID without having to make
+    // the db::WriteTransaction public.
+    pub async fn set_read_and_write_access(
         &self,
-        local_write_secret: Option<LocalSecret>,
-        secrets: Option<AccessSecrets>,
+        local_old_secret: Option<&LocalSecret>,
+        local_new_secret: Option<&LocalSecret>,
+        secrets: Option<&AccessSecrets>,
+    ) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+        self.set_read_access_in(&mut tx, local_new_secret, secrets)
+            .await?;
+        self.set_write_access_in(&mut tx, local_old_secret, local_new_secret, secrets)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_write_access_in(
+        &self,
+        tx: &mut db::WriteTransaction,
+        local_old_write_secret: Option<&LocalSecret>,
+        local_new_write_secret: Option<&LocalSecret>,
+        secrets: Option<&AccessSecrets>,
     ) -> Result<()> {
         let secrets = match secrets.as_ref() {
             Some(secrets) => secrets,
@@ -283,20 +319,34 @@ impl Repository {
             None => return Err(Error::PermissionDenied),
         };
 
-        let mut tx = self.db().begin_write().await?;
-
-        let local_write_key = if let Some(secret) = local_write_secret {
-            Some(metadata::secret_to_key(&mut tx, secret).await?)
+        let local_new_write_key = if let Some(secret) = local_new_write_secret {
+            Some(metadata::secret_to_key(tx, secret).await?)
         } else {
             None
         };
 
-        let writer_id = metadata::get_writer_id(&mut tx, local_write_key.as_ref()).await?;
+        let writer_id = if let Some(local_old_write_secret) = local_old_write_secret {
+            let local_old_write_key = metadata::secret_to_key(tx, local_old_write_secret).await?;
+            metadata::get_writer_id(tx, Some(&local_old_write_key)).await?
+        } else {
+            generate_writer_id()
+        };
 
-        metadata::set_write_key(&mut tx, write_key, local_write_key.as_ref()).await?;
-        metadata::set_writer_id(&mut tx, &writer_id, local_write_key.as_ref()).await?;
+        metadata::set_write_key(
+            tx,
+            write_key,
+            // Option<Cow<SecretKey>> -> Option<&SecretKey>
+            local_new_write_key.as_ref().map(|k| k.as_ref()),
+        )
+        .await?;
 
-        tx.commit().await?;
+        metadata::set_writer_id(
+            tx,
+            &writer_id,
+            // Option<Cow<SecretKey>> -> Option<&SecretKey>
+            local_new_write_key.as_ref().map(|k| k.as_ref()),
+        )
+        .await?;
 
         Ok(())
     }
@@ -321,6 +371,20 @@ impl Repository {
 
     pub fn secrets(&self) -> &AccessSecrets {
         &self.shared.secrets
+    }
+
+    pub async fn unlock_secrets(&self, local_secret: LocalSecret) -> Result<AccessSecrets> {
+        // TODO: We don't really want to write here, but the `password_to_key` function requires a
+        // transaction. Consider changing it so that it only needs a connection (writing the seed would
+        // be done only during the db initialization explicitly).
+        let mut tx = self.db().begin_write().await?;
+
+        let local_key = match local_secret {
+            LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
+            LocalSecret::SecretKey(key) => key,
+        };
+
+        metadata::get_access_secrets(&mut tx, Some(&local_key)).await
     }
 
     pub fn store(&self) -> &Store {
@@ -668,17 +732,21 @@ impl Shared {
     }
 }
 
-async fn generate_writer_id(
+// TODO: Writer IDs are currently practically just UUIDs with no real security (any replica with a
+// write access may impersonate any other replica).
+fn generate_writer_id() -> sign::PublicKey {
+    let writer_id = sign::SecretKey::random();
+    PublicKey::from(&writer_id)
+}
+
+async fn generate_and_store_writer_id(
     tx: &mut db::WriteTransaction,
     device_id: &DeviceId,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {
-    // TODO: we should be storing the SK in the db, not the PK.
-    let writer_id = sign::SecretKey::random();
-    let writer_id = PublicKey::from(&writer_id);
+    let writer_id = generate_writer_id();
     metadata::set_writer_id(tx, &writer_id, local_key).await?;
     metadata::set_device_id(tx, device_id).await?;
-
     Ok(writer_id)
 }
 
