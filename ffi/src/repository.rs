@@ -395,52 +395,28 @@ pub(crate) fn set_dht_enabled(
     let reg = &state.repositories.get(handle).registration;
 
     if enabled {
-        reg.enable_dht();
+        reg.enable_dht()
     } else {
-        reg.disable_dht();
+        reg.disable_dht()
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn repository_is_pex_enabled(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-) -> bool {
-    session
-        .get()
-        .state
-        .repositories
-        .get(handle)
-        .registration
-        .is_pex_enabled()
+pub(crate) fn is_pex_enabled(state: &ServerState, handle: Handle<RepositoryHolder>) -> bool {
+    state.repositories.get(handle).registration.is_pex_enabled()
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn repository_enable_pex(
-    session: SessionHandle,
+pub(crate) fn set_pex_enabled(
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
+    enabled: bool,
 ) {
-    session
-        .get()
-        .state
-        .repositories
-        .get(handle)
-        .registration
-        .enable_pex()
-}
+    let reg = &state.repositories.get(handle).registration;
 
-#[no_mangle]
-pub unsafe extern "C" fn repository_disable_pex(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-) {
-    session
-        .get()
-        .state
-        .repositories
-        .get(handle)
-        .registration
-        .disable_pex()
+    if enabled {
+        reg.enable_pex()
+    } else {
+        reg.disable_pex()
+    }
 }
 
 /// The `password` parameter is optional, if `null` the current access level of the opened

@@ -61,6 +61,11 @@ pub(crate) enum Request {
         repository: Handle<RepositoryHolder>,
         enabled: bool,
     },
+    RepositoryIsPexEnabled(Handle<RepositoryHolder>),
+    RepositorySetPexEnabled {
+        repository: Handle<RepositoryHolder>,
+        enabled: bool,
+    },
     NetworkSubscribe,
     NetworkBind {
         #[serde(deserialize_with = "deserialize_as_option_str")]
@@ -169,6 +174,16 @@ pub(crate) async fn dispatch(
             enabled,
         } => {
             repository::set_dht_enabled(server_state, repository, enabled);
+            ().into()
+        }
+        Request::RepositoryIsPexEnabled(repository) => {
+            repository::is_pex_enabled(server_state, repository).into()
+        }
+        Request::RepositorySetPexEnabled {
+            repository,
+            enabled,
+        } => {
+            repository::set_pex_enabled(server_state, repository, enabled);
             ().into()
         }
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
