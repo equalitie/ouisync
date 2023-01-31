@@ -26,13 +26,13 @@ use tokio::{
 };
 
 #[repr(C)]
-pub struct SessionOpenResult {
+pub struct SessionCreateResult {
     session: SessionHandle,
     error_code: ErrorCode,
     error_message: *const c_char,
 }
 
-impl From<Result<Session>> for SessionOpenResult {
+impl From<Result<Session>> for SessionCreateResult {
     fn from(result: Result<Session>) -> Self {
         match result {
             Ok(session) => Self {
@@ -56,7 +56,7 @@ impl From<Result<Session>> for SessionOpenResult {
 pub unsafe extern "C" fn session_create(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
-) -> SessionOpenResult {
+) -> SessionCreateResult {
     let port_sender = PortSender {
         post_c_object_fn: mem::transmute(post_c_object_fn),
     };

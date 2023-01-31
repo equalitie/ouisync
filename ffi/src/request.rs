@@ -56,6 +56,11 @@ pub(crate) enum Request {
         src: String,
         dst: String,
     },
+    RepositoryIsDhtEnabled(Handle<RepositoryHolder>),
+    RepositorySetDhtEnabled {
+        repository: Handle<RepositoryHolder>,
+        enabled: bool,
+    },
     NetworkSubscribe,
     NetworkBind {
         #[serde(deserialize_with = "deserialize_as_option_str")]
@@ -156,6 +161,16 @@ pub(crate) async fn dispatch(
         } => repository::move_entry(server_state, repository, src, dst)
             .await?
             .into(),
+        Request::RepositoryIsDhtEnabled(repository) => {
+            repository::is_dht_enabled(server_state, repository).into()
+        }
+        Request::RepositorySetDhtEnabled {
+            repository,
+            enabled,
+        } => {
+            repository::set_dht_enabled(server_state, repository, enabled);
+            ().into()
+        }
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
         Request::NetworkBind {
             quic_v4,
