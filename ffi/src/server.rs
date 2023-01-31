@@ -8,7 +8,7 @@ use ouisync_lib::{Error, Result};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{select, sync::mpsc, task::JoinSet};
 
-pub(crate) struct Server {
+pub struct Server {
     listener: socket::ws::Listener,
 }
 
@@ -26,7 +26,7 @@ impl Server {
         loop {
             match self.listener.accept().await {
                 Ok(stream) => {
-                    clients.spawn(run_client(stream, state.clone()));
+                    clients.spawn(run_client(stream.into(), state.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
@@ -37,7 +37,7 @@ impl Server {
     }
 }
 
-async fn run_client(mut stream: socket::ws::Stream, server_state: Arc<ServerState>) {
+pub(crate) async fn run_client(mut stream: socket::Stream, server_state: Arc<ServerState>) {
     let (notification_tx, mut notification_rx) = mpsc::channel(1);
     let client_state = ClientState { notification_tx };
 
@@ -66,7 +66,7 @@ async fn run_client(mut stream: socket::ws::Stream, server_state: Arc<ServerStat
     }
 }
 
-async fn receive(stream: &mut socket::ws::Stream) -> Option<ClientEnvelope> {
+async fn receive(stream: &mut socket::Stream) -> Option<ClientEnvelope> {
     loop {
         let buffer = match stream.try_next().await {
             Ok(Some(buffer)) => buffer,
@@ -92,7 +92,7 @@ async fn receive(stream: &mut socket::ws::Stream) -> Option<ClientEnvelope> {
     }
 }
 
-async fn send(stream: &mut socket::ws::Stream, envelope: ServerEnvelope) {
+async fn send(stream: &mut socket::Stream, envelope: ServerEnvelope) {
     let buffer = match rmp_serde::to_vec_named(&envelope) {
         Ok(buffer) => buffer,
         Err(error) => {
