@@ -19,5 +19,6 @@ mod protocol;
 mod registry;
 mod request;
 mod server;
+mod socket;
 mod state;
 mod state_monitor;

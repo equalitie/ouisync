@@ -42,7 +42,7 @@ serde = { workspace = true }
 slab = "0.4.6"
 sqlx = { version = "0.6.2", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"
-thiserror = "1.0.31"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1.9"
 tokio-util = "0.7.4"

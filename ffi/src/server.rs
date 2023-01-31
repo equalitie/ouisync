@@ -1,34 +1,22 @@
 use crate::{
     protocol::{ClientEnvelope, ServerEnvelope, Value},
-    request,
+    request, socket,
     state::{ClientState, ServerState},
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
 use ouisync_lib::{Error, Result};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    select,
-    sync::mpsc,
-    task::JoinSet,
-};
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+use tokio::{select, sync::mpsc, task::JoinSet};
 
 pub(crate) struct Server {
-    listener: TcpListener,
+    listener: socket::ws::Listener,
 }
 
 impl Server {
     pub async fn bind(addr: SocketAddr) -> Result<Self> {
-        let listener = TcpListener::bind(addr).await.map_err(Error::Interface)?;
-
-        match listener.local_addr() {
-            Ok(addr) => tracing::debug!("server bound to {:?}", addr),
-            Err(error) => {
-                tracing::error!(?error, "failed to retrieve server local address")
-            }
-        }
-
+        let listener = socket::ws::Listener::bind(addr)
+            .await
+            .map_err(Error::Interface)?;
         Ok(Self { listener })
     }
 
@@ -37,8 +25,7 @@ impl Server {
 
         loop {
             match self.listener.accept().await {
-                Ok((stream, addr)) => {
-                    tracing::debug!("client accepted at {:?}", addr);
+                Ok(stream) => {
                     clients.spawn(run_client(stream, state.clone()));
                 }
                 Err(error) => {
@@ -50,16 +37,7 @@ impl Server {
     }
 }
 
-async fn run_client(stream: TcpStream, server_state: Arc<ServerState>) {
-    // Convert to websocket
-    let mut socket = match tokio_tungstenite::accept_async(stream).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::error!(?error, "failed to upgrade tcp socket to websocket");
-            return;
-        }
-    };
-
+async fn run_client(mut stream: socket::ws::Stream, server_state: Arc<ServerState>) {
     let (notification_tx, mut notification_rx) = mpsc::channel(1);
     let client_state = ClientState { notification_tx };
 
@@ -67,7 +45,7 @@ async fn run_client(stream: TcpStream, server_state: Arc<ServerState>) {
 
     loop {
         select! {
-            client_envelope = receive(&mut socket) => {
+            client_envelope = receive(&mut stream) => {
                 let Some(client_envelope) = client_envelope else {
                     break;
                 };
@@ -78,22 +56,20 @@ async fn run_client(stream: TcpStream, server_state: Arc<ServerState>) {
                 // unwrap is OK because the sender exists at this point.
                 let (id, notification) = notification.unwrap();
                 let envelope = ServerEnvelope::notification(id,notification);
-                send(&mut socket, envelope).await;
+                send(&mut stream, envelope).await;
             }
             Some((id, result)) = request_handlers.next() => {
                 let envelope = ServerEnvelope::response(id, result);
-                send(&mut socket, envelope).await;
+                send(&mut stream, envelope).await;
             }
         }
     }
 }
 
-type Socket = WebSocketStream<TcpStream>;
-
-async fn receive(socket: &mut Socket) -> Option<ClientEnvelope> {
+async fn receive(stream: &mut socket::ws::Stream) -> Option<ClientEnvelope> {
     loop {
-        let message = match socket.try_next().await {
-            Ok(Some(message)) => message,
+        let buffer = match stream.try_next().await {
+            Ok(Some(buffer)) => buffer,
             Ok(None) => {
                 tracing::debug!("disconnected");
                 return None;
@@ -101,18 +77,6 @@ async fn receive(socket: &mut Socket) -> Option<ClientEnvelope> {
             Err(error) => {
                 tracing::error!(?error, "failed to receive client message");
                 return None;
-            }
-        };
-
-        let buffer = match message {
-            Message::Binary(buffer) => buffer,
-            Message::Text(_)
-            | Message::Ping(_)
-            | Message::Pong(_)
-            | Message::Close(_)
-            | Message::Frame(_) => {
-                tracing::debug!(?message, "unexpected message type");
-                continue;
             }
         };
 
@@ -128,7 +92,7 @@ async fn receive(socket: &mut Socket) -> Option<ClientEnvelope> {
     }
 }
 
-async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
+async fn send(stream: &mut socket::ws::Stream, envelope: ServerEnvelope) {
     let buffer = match rmp_serde::to_vec_named(&envelope) {
         Ok(buffer) => buffer,
         Err(error) => {
@@ -137,7 +101,7 @@ async fn send(socket: &mut Socket, envelope: ServerEnvelope) {
         }
     };
 
-    if let Err(error) = socket.send(Message::Binary(buffer)).await {
+    if let Err(error) = stream.send(buffer).await {
         tracing::error!(?error, "failed to send server message");
     }
 }
