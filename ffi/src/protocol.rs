@@ -1,4 +1,5 @@
 use crate::{
+    directory::Directory,
     error::{ErrorCode, ToErrorCode},
     network::NetworkEvent,
     registry::Handle,
@@ -74,6 +75,7 @@ pub(crate) enum Value {
     String(String),
     Repository(Handle<RepositoryHolder>),
     Subscription(SubscriptionHandle),
+    Directory(Directory),
     StateMonitor(StateMonitor),
 }
 
@@ -122,6 +124,12 @@ impl From<SubscriptionHandle> for Value {
 impl From<StateMonitor> for Value {
     fn from(value: StateMonitor) -> Self {
         Self::StateMonitor(value)
+    }
+}
+
+impl From<Directory> for Value {
+    fn from(value: Directory) -> Self {
+        Self::Directory(value)
     }
 }
 

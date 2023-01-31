@@ -208,7 +208,6 @@ impl Session {
             config,
             network,
             repositories: Registry::new(),
-            directories: Registry::new(),
             files: Registry::new(),
             tasks: Registry::new(),
         });

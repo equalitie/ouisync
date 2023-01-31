@@ -306,19 +306,19 @@ pub(crate) async fn database_id(
     Ok(holder.repository.database_id().await?.as_ref().to_vec())
 }
 
-/// Returns the type of repository entry (file, directory, ...).
-/// If the entry doesn't exists, returns `ENTRY_TYPE_INVALID`, not an error.
+/// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
+/// exist.
 pub(crate) async fn entry_type(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
     path: String,
-) -> Result<u8> {
+) -> Result<Option<u8>> {
     let holder = state.repositories.get(handle);
     let path = Utf8PathBuf::from(path);
 
     match holder.repository.lookup_type(path).await {
-        Ok(entry_type) => Ok(entry_type_to_num(entry_type)),
-        Err(Error::EntryNotFound) => Ok(ENTRY_TYPE_INVALID),
+        Ok(entry_type) => Ok(Some(entry_type_to_num(entry_type))),
+        Err(Error::EntryNotFound) => Ok(None),
         Err(error) => Err(error),
     }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    network,
+    directory, network,
     protocol::Value,
     registry::Handle,
     repository::{self, RepositoryHolder},
@@ -65,6 +65,14 @@ pub(crate) enum Request {
     RepositorySetPexEnabled {
         repository: Handle<RepositoryHolder>,
         enabled: bool,
+    },
+    DirectoryCreate {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+    },
+    DirectoryOpen {
+        repository: Handle<RepositoryHolder>,
+        path: String,
     },
     NetworkSubscribe,
     NetworkBind {
@@ -185,6 +193,16 @@ pub(crate) async fn dispatch(
         } => {
             repository::set_pex_enabled(server_state, repository, enabled);
             ().into()
+        }
+        Request::DirectoryCreate { repository, path } => {
+            directory::create(server_state, repository, path)
+                .await?
+                .into()
+        }
+        Request::DirectoryOpen { repository, path } => {
+            directory::open(server_state, repository, path)
+                .await?
+                .into()
         }
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
         Request::NetworkBind {

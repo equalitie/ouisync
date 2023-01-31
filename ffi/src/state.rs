@@ -1,6 +1,5 @@
 use crate::{
-    directory::Directory, file::FileHolder, protocol::Notification, registry::Registry,
-    repository::RepositoryHolder,
+    file::FileHolder, protocol::Notification, registry::Registry, repository::RepositoryHolder,
 };
 use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
@@ -14,7 +13,6 @@ pub(crate) struct ServerState {
     pub config: ConfigStore,
     pub network: Network,
     pub repositories: Registry<RepositoryHolder>,
-    pub directories: Registry<Directory>,
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
 }
