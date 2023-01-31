@@ -14,7 +14,10 @@ pub mod repository;
 pub mod session;
 
 mod dart;
-mod interface;
 mod logger;
+mod protocol;
 mod registry;
+mod request;
+mod server;
+mod state;
 mod state_monitor;

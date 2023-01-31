@@ -1,8 +1,9 @@
 use super::utils::{self, Bytes, Port};
 use crate::{
-    interface::{ClientState, Notification},
+    protocol::Notification,
     registry::Handle,
-    session::{ServerState, SessionHandle, SubscriptionHandle},
+    session::{SessionHandle, SubscriptionHandle},
+    state::{ClientState, ServerState},
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{

@@ -1,7 +1,8 @@
 use super::utils::{self, Bytes};
 use crate::{
-    interface::{ClientState, Notification},
-    session::{ServerState, SessionHandle, SubscriptionHandle},
+    protocol::Notification,
+    session::{SessionHandle, SubscriptionHandle},
+    state::{ClientState, ServerState},
 };
 use ouisync_lib::network::peer_addr::PeerAddr;
 use serde::Serialize;

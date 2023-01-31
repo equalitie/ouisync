@@ -1,21 +1,19 @@
-use super::{
+use crate::{
     dart::{DartCObject, PostDartCObjectFn},
-    directory::Directory,
     error::{ErrorCode, ToErrorCode},
-    file::FileHolder,
-    interface::{self, ServerStatus},
     logger::Logger,
     registry::{Handle, Registry},
-    repository::RepositoryHolder,
+    server::Server,
+    state::ServerState,
     utils::{self, Bytes, Port, UniqueHandle},
 };
-use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, Error, Result, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,
     future::Future,
-    io, mem,
+    mem,
+    net::SocketAddr,
     os::raw::{c_char, c_void},
     path::PathBuf,
     ptr,
@@ -24,10 +22,8 @@ use std::{
 };
 use tokio::{
     runtime::{self, Runtime},
-    sync::watch,
     time,
 };
-use tracing::Span;
 
 #[repr(C)]
 pub struct SessionOpenResult {
@@ -73,34 +69,50 @@ pub unsafe extern "C" fn session_open(
     Session::create(sender, configs_path).into()
 }
 
-/// Get the interface listener port
+/// Starts interface servers listening on a websocket.
 #[no_mangle]
-pub unsafe extern "C" fn session_interface_port(session: SessionHandle, port: Port<Result<u16>>) {
+pub unsafe extern "C" fn session_start_server(
+    session: SessionHandle,
+    addr: *const c_char,
+    port: Port<Result<ServerHandle>>,
+) {
     let session = session.get();
-    let mut rx = session.interface_server_status_rx.clone();
+    let state = session.state.clone();
+    let sender = session.sender;
 
-    session.with(port, |ctx| {
-        ctx.spawn(async move {
-            loop {
-                match &*rx.borrow_and_update() {
-                    ServerStatus::Starting => (),
-                    ServerStatus::Running(addr) => return Ok(addr.port()),
-                    ServerStatus::Failed(error) => {
-                        // NOTE: `io::Error` is not `Clone` and we can't move it out here so we
-                        // reconstruct it here instead as a workaround.
-                        return Err(Error::Interface(io::Error::new(
-                            error.kind(),
-                            error.to_string(),
-                        )));
-                    }
-                }
-
-                rx.changed()
-                    .await
-                    .expect("interface listener unexpectedly terminated");
+    let addr: SocketAddr =
+        match utils::ptr_to_str(addr).and_then(|s| s.parse().map_err(|_| Error::MalformedData)) {
+            Ok(addr) => addr,
+            Err(error) => {
+                sender.send_result(port, Err(error));
+                return;
             }
-        })
-    })
+        };
+
+    let entry = session.servers.vacant_entry();
+    let server_handle = entry.handle();
+
+    let _enter = session.runtime.enter();
+    let task = scoped_task::spawn(async move {
+        let server = match Server::bind(addr).await {
+            Ok(server) => server,
+            Err(error) => {
+                sender.send_result(port, Err(error));
+                return;
+            }
+        };
+
+        sender.send_result(port, Ok(server_handle));
+
+        server.run(state).await
+    });
+
+    entry.insert(task);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn session_stop_server(session: SessionHandle, server: ServerHandle) {
+    session.get().servers.remove(server);
 }
 
 /// Closes the ouisync session.
@@ -158,8 +170,7 @@ pub(crate) fn unsubscribe(state: &ServerState, handle: SubscriptionHandle) {
 pub struct Session {
     runtime: Runtime,
     pub(crate) state: Arc<ServerState>,
-    _interface_server_task: ScopedJoinHandle<()>,
-    interface_server_status_rx: watch::Receiver<ServerStatus>,
+    servers: Registry<ScopedJoinHandle<()>>,
     sender: Sender,
     _logger: Logger,
 }
@@ -201,20 +212,10 @@ impl Session {
             tasks: Registry::new(),
         });
 
-        let (interface_server_status_tx, interface_server_status_rx) =
-            watch::channel(ServerStatus::Starting);
-
-        let interface_server_task = runtime.spawn(interface::run_server(
-            state.clone(),
-            interface_server_status_tx,
-        ));
-        let interface_server_task = ScopedJoinHandle(interface_server_task);
-
         let session = Session {
             runtime,
             state,
-            _interface_server_task: interface_server_task,
-            interface_server_status_rx,
+            servers: Registry::new(),
             sender,
             _logger: logger,
         };
@@ -245,23 +246,7 @@ impl Session {
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
-
-pub(crate) struct ServerState {
-    pub root_monitor: StateMonitor,
-    pub repos_span: Span,
-    pub config: ConfigStore,
-    pub network: Network,
-    pub repositories: Registry<RepositoryHolder>,
-    pub directories: Registry<Directory>,
-    pub files: Registry<FileHolder>,
-    pub tasks: Registry<ScopedJoinHandle<()>>,
-}
-
-impl ServerState {
-    pub(super) fn repo_span(&self, store: &Utf8Path) -> Span {
-        tracing::info_span!(parent: &self.repos_span, "repo", ?store)
-    }
-}
+pub type ServerHandle = Handle<ScopedJoinHandle<()>>;
 
 pub(super) type SubscriptionHandle = Handle<ScopedJoinHandle<()>>;
 
