@@ -21,9 +21,8 @@ pub(crate) struct DirEntry {
 pub(crate) async fn create(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<()> {
-    let path = Utf8PathBuf::from(path);
     state
         .repositories
         .get(repo)
@@ -36,9 +35,8 @@ pub(crate) async fn create(
 pub(crate) async fn open(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<Directory> {
-    let path = Utf8PathBuf::from(path);
     let repo = state.repositories.get(repo);
 
     let dir = repo.repository.open_directory(path).await?;
@@ -58,7 +56,7 @@ pub(crate) async fn open(
 pub(crate) async fn remove(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
     recursive: bool,
 ) -> Result<()> {
     let repo = &state.repositories.get(repo).repository;

@@ -9,6 +9,7 @@ use crate::{
     state::{ClientState, ServerState},
     state_monitor,
 };
+use camino::Utf8PathBuf;
 use ouisync_lib::Result;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -22,13 +23,13 @@ use std::{
 #[serde(tag = "method", content = "args")]
 pub(crate) enum Request {
     RepositoryCreate {
-        path: String,
+        path: Utf8PathBuf,
         read_password: Option<String>,
         write_password: Option<String>,
         share_token: Option<String>,
     },
     RepositoryOpen {
-        path: String,
+        path: Utf8PathBuf,
         password: Option<String>,
     },
     RepositoryClose(Handle<RepositoryHolder>),
@@ -52,12 +53,12 @@ pub(crate) enum Request {
     RepositoryDatabaseId(Handle<RepositoryHolder>),
     RepositoryEntryType {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     RepositoryMoveEntry {
         repository: Handle<RepositoryHolder>,
-        src: String,
-        dst: String,
+        src: Utf8PathBuf,
+        dst: Utf8PathBuf,
     },
     RepositoryIsDhtEnabled(Handle<RepositoryHolder>),
     RepositorySetDhtEnabled {
@@ -79,28 +80,28 @@ pub(crate) enum Request {
     RepositorySyncProgress(Handle<RepositoryHolder>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     DirectoryOpen {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     DirectoryRemove {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
         recursive: bool,
     },
     FileOpen {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     FileCreate {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     FileRemove {
         repository: Handle<RepositoryHolder>,
-        path: String,
+        path: Utf8PathBuf,
     },
     FileFlush(Handle<FileHolder>),
     FileClose(Handle<FileHolder>),

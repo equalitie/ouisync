@@ -17,9 +17,8 @@ pub struct FileHolder {
 pub(crate) async fn open(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
-    let path = Utf8PathBuf::from(path);
     let repo = state.repositories.get(repo);
     let local_branch = repo.repository.local_branch().ok();
 
@@ -36,9 +35,8 @@ pub(crate) async fn open(
 pub(crate) async fn create(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
-    let path = Utf8PathBuf::from(path);
     let repo = state.repositories.get(repo);
     let local_branch = repo.repository.local_branch()?;
 
@@ -56,9 +54,8 @@ pub(crate) async fn create(
 pub(crate) async fn remove(
     state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<()> {
-    let path = Utf8PathBuf::from(path);
     state
         .repositories
         .get(repo)

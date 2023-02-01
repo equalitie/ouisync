@@ -13,7 +13,7 @@ version.workspace = true
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-camino = "1.0.9"
+camino = { version = "1.0.9", features = ["serde1"] }
 futures-util = { workspace = true }
 hex = "0.4.3"
 ouisync-lib = { package = "ouisync", path = "../lib" }

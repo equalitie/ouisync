@@ -42,12 +42,11 @@ pub struct RepositoryHolder {
 /// any                  |  any                   |  write         |  read with password, write with (same or different) password
 pub(crate) async fn create(
     state: &ServerState,
-    store: String,
+    store: Utf8PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
     share_token: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let store = Utf8PathBuf::from(store);
     let local_read_password = local_read_password.as_deref().map(Password::new);
     let local_write_password = local_write_password.as_deref().map(Password::new);
 
@@ -102,10 +101,9 @@ pub(crate) async fn create(
 /// Opens an existing repository.
 pub(crate) async fn open(
     state: &ServerState,
-    store: String,
+    store: Utf8PathBuf,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let store = Utf8PathBuf::from(store);
     let local_password = local_password.as_deref().map(Password::new);
 
     let span = state.repo_span(&store);
@@ -310,10 +308,9 @@ pub(crate) async fn database_id(
 pub(crate) async fn entry_type(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
-    path: String,
+    path: Utf8PathBuf,
 ) -> Result<Option<u8>> {
     let holder = state.repositories.get(handle);
-    let path = Utf8PathBuf::from(path);
 
     match holder.repository.lookup_type(path).await {
         Ok(entry_type) => Ok(Some(entry_type_to_num(entry_type))),
@@ -326,13 +323,10 @@ pub(crate) async fn entry_type(
 pub(crate) async fn move_entry(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
-    src: String,
-    dst: String,
+    src: Utf8PathBuf,
+    dst: Utf8PathBuf,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
-    let src = Utf8PathBuf::from(src);
-    let dst = Utf8PathBuf::from(dst);
-
     let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
     let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
 
