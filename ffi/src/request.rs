@@ -103,6 +103,11 @@ pub(crate) enum Request {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
     },
+    FileTruncate {
+        file: Handle<FileHolder>,
+        len: u64,
+    },
+    FileLen(Handle<FileHolder>),
     FileFlush(Handle<FileHolder>),
     FileClose(Handle<FileHolder>),
     NetworkSubscribe,
@@ -284,6 +289,10 @@ pub(crate) async fn dispatch(
         Request::FileRemove { repository, path } => {
             file::remove(server_state, repository, path).await?.into()
         }
+        Request::FileTruncate { file, len } => {
+            file::truncate(server_state, file, len).await?.into()
+        }
+        Request::FileLen(file) => file::len(server_state, file).await.into(),
         Request::FileFlush(file) => file::flush(server_state, file).await?.into(),
         Request::FileClose(file) => file::close(server_state, file).await?.into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),

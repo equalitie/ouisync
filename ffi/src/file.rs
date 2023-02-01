@@ -142,45 +142,30 @@ pub unsafe extern "C" fn file_write(
 }
 
 /// Truncate the file to `len` bytes.
-#[no_mangle]
-pub unsafe extern "C" fn file_truncate(
-    session: SessionHandle,
+pub(crate) async fn truncate(
+    state: &ServerState,
     handle: Handle<FileHolder>,
     len: u64,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.get(handle);
+) -> Result<()> {
+    let holder = state.files.get(handle);
 
-        ctx.spawn(async move {
-            let mut file = holder.file.lock().await;
+    let mut file = holder.file.lock().await;
 
-            let local_branch = holder
-                .local_branch
-                .as_ref()
-                .ok_or(Error::PermissionDenied)?
-                .clone();
+    let local_branch = holder
+        .local_branch
+        .as_ref()
+        .ok_or(Error::PermissionDenied)?
+        .clone();
 
-            file.fork(local_branch).await?;
-            file.truncate(len).await?;
+    file.fork(local_branch).await?;
+    file.truncate(len).await?;
 
-            Ok(())
-        })
-    })
+    Ok(())
 }
 
 /// Retrieve the size of the file in bytes.
-#[no_mangle]
-pub unsafe extern "C" fn file_len(
-    session: SessionHandle,
-    handle: Handle<FileHolder>,
-    port: Port<Result<u64>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.get(handle);
-
-        ctx.spawn(async move { Ok(holder.file.lock().await.len()) })
-    })
+pub(crate) async fn len(state: &ServerState, handle: Handle<FileHolder>) -> u64 {
+    state.files.get(handle).file.lock().await.len()
 }
 
 /// Copy the file contents into the provided raw file descriptor.

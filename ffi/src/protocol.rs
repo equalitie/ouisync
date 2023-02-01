@@ -70,6 +70,7 @@ pub(crate) enum Value {
     Bool(bool),
     U8(u8),
     U32(u32),
+    U64(u64),
     Bytes(Vec<u8>),
     String(String),
     Handle(u64),
@@ -113,6 +114,12 @@ impl From<u8> for Value {
 impl From<u32> for Value {
     fn from(value: u32) -> Self {
         Self::U32(value)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(value: u64) -> Self {
+        Self::U64(value)
     }
 }
 
