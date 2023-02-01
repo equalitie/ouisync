@@ -245,10 +245,6 @@ impl Session {
             Err(error) => self.port_sender.send_result(port, Err(error)),
         }
     }
-
-    pub(crate) fn runtime(&self) -> &Runtime {
-        &self.runtime
-    }
 }
 
 pub type SessionHandle = UniqueHandle<Session>;

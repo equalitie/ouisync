@@ -7,7 +7,7 @@ use crate::{
     request::Request,
     session::SubscriptionHandle,
 };
-use ouisync_lib::{Progress, Result, StateMonitor};
+use ouisync_lib::{PeerInfo, Progress, Result, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
@@ -71,6 +71,7 @@ pub(crate) enum Value {
     None,
     Bool(bool),
     U8(u8),
+    U32(u32),
     Bytes(Vec<u8>),
     String(String),
     Repository(Handle<RepositoryHolder>),
@@ -78,6 +79,7 @@ pub(crate) enum Value {
     Directory(Directory),
     StateMonitor(StateMonitor),
     Progress(Progress),
+    PeerInfo(Vec<PeerInfo>),
 }
 
 impl From<()> for Value {
@@ -95,6 +97,12 @@ impl From<bool> for Value {
 impl From<u8> for Value {
     fn from(value: u8) -> Self {
         Self::U8(value)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Self::U32(value)
     }
 }
 
@@ -156,6 +164,12 @@ impl From<SocketAddr> for Value {
 impl From<Progress> for Value {
     fn from(value: Progress) -> Self {
         Self::Progress(value)
+    }
+}
+
+impl From<Vec<PeerInfo>> for Value {
+    fn from(value: Vec<PeerInfo>) -> Self {
+        Self::PeerInfo(value)
     }
 }
 

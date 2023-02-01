@@ -11,7 +11,7 @@ use ouisync_lib::Result;
 use serde::{Deserialize, Deserializer};
 use std::{
     fmt,
-    net::{SocketAddrV4, SocketAddrV6},
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     str::FromStr,
 };
 
@@ -103,6 +103,16 @@ pub(crate) enum Request {
     NetworkTcpListenerLocalAddrV6,
     NetworkQuicListenerLocalAddrV4,
     NetworkQuicListenerLocalAddrV6,
+    NetworkAddUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
+    NetworkRemoveUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
+    NetworkKnownPeers,
+    NetworkThisRuntimeId,
+    NetworkCurrentProtocolVersion,
+    NetworkHighestSeenProtocolVersion,
+    NetworkIsPortForwardingEnabled,
+    NetworkSetPortForwardingEnabled(bool),
+    NetworkIsLocalDiscoveryEnabled,
+    NetworkSetLocalDiscoveryEnabled(bool),
     NetworkShutdown,
     StateMonitorGet(String),
     StateMonitorSubscribe(String),
@@ -270,6 +280,36 @@ pub(crate) async fn dispatch(
         Request::NetworkQuicListenerLocalAddrV6 => {
             network::quic_listener_local_addr_v6(server_state).into()
         }
+        Request::NetworkAddUserProvidedQuicPeer(addr) => {
+            network::add_user_provided_quic_peer(server_state, addr);
+            ().into()
+        }
+        Request::NetworkRemoveUserProvidedQuicPeer(addr) => {
+            network::remove_user_provided_quic_peer(server_state, addr);
+            ().into()
+        }
+        Request::NetworkKnownPeers => network::known_peers(server_state).into(),
+        Request::NetworkThisRuntimeId => network::this_runtime_id(server_state).into(),
+        Request::NetworkCurrentProtocolVersion => {
+            network::current_protocol_version(server_state).into()
+        }
+        Request::NetworkHighestSeenProtocolVersion => {
+            network::highest_seen_protocol_version(server_state).into()
+        }
+        Request::NetworkIsPortForwardingEnabled => {
+            network::is_port_forwarding_enabled(server_state).into()
+        }
+        Request::NetworkSetPortForwardingEnabled(enabled) => {
+            network::set_port_forwarding_enabled(server_state, enabled);
+            ().into()
+        }
+        Request::NetworkIsLocalDiscoveryEnabled => {
+            network::is_local_discovery_enabled(server_state).into()
+        }
+        Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
+            network::set_local_discovery_enabled(server_state, enabled);
+            ().into()
+        }
         Request::NetworkShutdown => {
             network::shutdown(server_state).await;
             ().into()
@@ -285,6 +325,17 @@ pub(crate) async fn dispatch(
     };
 
     Ok(response)
+}
+
+fn deserialize_as_str<'de, D, T>(de: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    let s = <&str>::deserialize(de)?;
+    let v = s.parse().map_err(serde::de::Error::custom)?;
+    Ok(v)
 }
 
 fn deserialize_as_option_str<'de, D, T>(de: D) -> Result<Option<T>, D::Error>

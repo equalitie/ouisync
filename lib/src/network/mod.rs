@@ -27,8 +27,9 @@ mod server;
 mod tests;
 mod upnp;
 
+pub use self::connection::PeerInfo;
 use self::{
-    connection::{ConnectionDeduplicator, ConnectionPermit, PeerInfo, ReserveResult},
+    connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     dht_discovery::DhtDiscovery,
     gateway::Gateway,
     local_discovery::LocalDiscovery,

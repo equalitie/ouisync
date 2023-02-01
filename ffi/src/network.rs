@@ -1,16 +1,11 @@
-use super::utils::{self, Bytes};
 use crate::{
     protocol::Notification,
-    session::{SessionHandle, SubscriptionHandle},
+    session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
-use ouisync_lib::network::peer_addr::PeerAddr;
+use ouisync_lib::{network::peer_addr::PeerAddr, PeerInfo};
 use serde::Serialize;
-use std::{
-    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
-    os::raw::c_char,
-    str::FromStr,
-};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::select;
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
@@ -118,39 +113,8 @@ pub(crate) fn quic_listener_local_addr_v6(state: &ServerState) -> Option<SocketA
 /// Add a QUIC endpoint to which which OuiSync shall attempt to connect. Upon failure or success
 /// but then disconnection, the endpoint be retried until the below
 /// `network_remove_user_provided_quic_peer` function with the same endpoint is called.
-///
-/// The endpoint provided to this function may be an IPv4 endpoint in the format
-/// "192.168.0.1:1234", or an IPv6 address in the format "[2001:db8:1]:1234".
-///
-/// If the format is not parsed correctly, this function returns `false`, in all other cases it
-/// returns `true`. The latter includes the case when the peer has already been added.
-#[no_mangle]
-pub unsafe extern "C" fn network_add_user_provided_quic_peer(
-    session: SessionHandle,
-    addr: *const c_char,
-) -> bool {
-    let addr = match utils::ptr_to_str(addr) {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-
-    let addr = match SocketAddr::from_str(addr) {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-
-    let session = session.get();
-
-    // The `Network::add_user_provided_peer` function internally calls `task::spawn` so needs the
-    // current Tokio context (thus the `_runtime_guard`).
-    let _runtime_guard = session.runtime().enter();
-
-    session
-        .state
-        .network
-        .add_user_provided_peer(&PeerAddr::Quic(addr));
-
-    true
+pub(crate) fn add_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
+    state.network.add_user_provided_peer(&PeerAddr::Quic(addr));
 }
 
 /// Remove a QUIC endpoint from the list of user provided QUIC peers (added by the above
@@ -159,102 +123,57 @@ pub unsafe extern "C" fn network_add_user_provided_quic_peer(
 /// disconnection if the connection has already been established. But if the peers disconnected due
 /// to other reasons, the connection to this `addr` shall not be reattempted after the call to this
 /// function.
-///
-/// The endpoint provided to this function may be an IPv4 endpoint in the format
-/// "192.168.0.1:1234", or an IPv6 address in the format "[2001:db8:1]:1234".
-///
-/// If the format is not parsed correctly, this function returns `false`, in all other cases it
-/// returns `true`. The latter includes the case when the peer has not been previously added.
-#[no_mangle]
-pub unsafe extern "C" fn network_remove_user_provided_quic_peer(
-    session: SessionHandle,
-    addr: *const c_char,
-) -> bool {
-    let addr = match utils::ptr_to_str(addr) {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-
-    let addr = match SocketAddr::from_str(addr) {
-        Ok(addr) => addr,
-        Err(_) => return false,
-    };
-
-    session
-        .get()
-        .state
+pub(crate) fn remove_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
+    state
         .network
         .remove_user_provided_peer(&PeerAddr::Quic(addr));
-
-    true
 }
 
-/// Return the list of peers with which we're connected, serialized with msgpack.
-#[no_mangle]
-pub unsafe extern "C" fn network_connected_peers(session: SessionHandle) -> Bytes {
-    let peer_info = session.get().state.network.collect_peer_info();
-    let bytes = rmp_serde::to_vec(&peer_info).unwrap();
-    Bytes::from_vec(bytes)
+/// Return the list of known peers.
+pub(crate) fn known_peers(state: &ServerState) -> Vec<PeerInfo> {
+    state.network.collect_peer_info()
 }
 
 /// Returns our runtime id formatted as a hex string.
-/// The caller is responsible for deallocating it.
-#[no_mangle]
-pub unsafe extern "C" fn network_this_runtime_id(session: SessionHandle) -> *const c_char {
-    utils::str_to_ptr(&hex::encode(
-        session.get().state.network.this_runtime_id().as_ref(),
-    ))
+pub(crate) fn this_runtime_id(state: &ServerState) -> String {
+    hex::encode(state.network.this_runtime_id().as_ref())
 }
 
 /// Return our currently used protocol version number.
-#[no_mangle]
-pub unsafe extern "C" fn network_current_protocol_version(session: SessionHandle) -> u32 {
-    session.get().state.network.current_protocol_version()
+pub(crate) fn current_protocol_version(state: &ServerState) -> u32 {
+    state.network.current_protocol_version()
 }
 
 /// Return the highest seen protocol version number. The value returned is always higher
-/// or equal to the value returned from network_current_protocol_version() fn.
-#[no_mangle]
-pub unsafe extern "C" fn network_highest_seen_protocol_version(session: SessionHandle) -> u32 {
-    session.get().state.network.highest_seen_protocol_version()
+/// or equal to the value returned from current_protocol_version() fn.
+pub(crate) fn highest_seen_protocol_version(state: &ServerState) -> u32 {
+    state.network.highest_seen_protocol_version()
 }
 
-/// Enables port forwarding (UPnP)
-#[no_mangle]
-pub unsafe extern "C" fn network_enable_port_forwarding(session: SessionHandle) {
-    let session = session.get();
-    let _enter = session.runtime().enter();
-    session.state.network.enable_port_forwarding()
-}
-
-/// Disables port forwarding (UPnP)
-#[no_mangle]
-pub unsafe extern "C" fn network_disable_port_forwarding(session: SessionHandle) {
-    session.get().state.network.disable_port_forwarding()
+/// Enables/disabled port forwarding (UPnP)
+pub(crate) fn set_port_forwarding_enabled(state: &ServerState, enabled: bool) {
+    if enabled {
+        state.network.enable_port_forwarding()
+    } else {
+        state.network.disable_port_forwarding()
+    }
 }
 
 /// Checks whether port forwarding (UPnP) is enabled
-#[no_mangle]
-pub unsafe extern "C" fn network_is_port_forwarding_enabled(session: SessionHandle) -> bool {
-    session.get().state.network.is_port_forwarding_enabled()
+pub(crate) fn is_port_forwarding_enabled(state: &ServerState) -> bool {
+    state.network.is_port_forwarding_enabled()
 }
 
-/// Enables local discovery
-#[no_mangle]
-pub unsafe extern "C" fn network_enable_local_discovery(session: SessionHandle) {
-    let session = session.get();
-    let _enter = session.runtime().enter();
-    session.state.network.enable_local_discovery()
-}
-
-/// Disables local discovery
-#[no_mangle]
-pub unsafe extern "C" fn network_disable_local_discovery(session: SessionHandle) {
-    session.get().state.network.disable_local_discovery()
+/// Enables/disabled local discovery
+pub(crate) fn set_local_discovery_enabled(state: &ServerState, enabled: bool) {
+    if enabled {
+        state.network.enable_local_discovery()
+    } else {
+        state.network.disable_local_discovery()
+    }
 }
 
 /// Checks whether local discovery is enabled
-#[no_mangle]
-pub unsafe extern "C" fn network_is_local_discovery_enabled(session: SessionHandle) -> bool {
-    session.get().state.network.is_local_discovery_enabled()
+pub(crate) fn is_local_discovery_enabled(state: &ServerState) -> bool {
+    state.network.is_local_discovery_enabled()
 }

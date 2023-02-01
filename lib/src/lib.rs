@@ -57,7 +57,7 @@ pub use self::{
     file::File,
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
-    network::peer_addr::PeerAddr,
+    network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
     repository::{Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
