@@ -2,13 +2,10 @@ use crate::state::ServerState;
 use crate::{
     registry::Handle,
     repository::{entry_type_to_num, RepositoryHolder},
-    session::SessionHandle,
-    utils::{self, Port},
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::Result;
 use serde::Serialize;
-use std::os::raw::c_char;
 
 // Currently this is only a read-only snapshot of a directory.
 #[derive(Serialize)]
@@ -56,34 +53,19 @@ pub(crate) async fn open(
     Ok(Directory(entries))
 }
 
-/// Removes the directory at the given path from the repository. The directory must be empty.
-#[no_mangle]
-pub unsafe extern "C" fn directory_remove(
-    session: SessionHandle,
+/// Removes the directory at the given path from the repository. If `recursive` is true it removes
+/// also the contents, otherwise the directory must be empty.
+pub(crate) async fn remove(
+    state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let repo = ctx.state().repositories.get(repo);
-        let path = utils::ptr_to_path_buf(path)?;
+    path: String,
+    recursive: bool,
+) -> Result<()> {
+    let repo = &state.repositories.get(repo).repository;
 
-        ctx.spawn(async move { repo.repository.remove_entry(path).await })
-    })
-}
-
-/// Removes the directory at the given path including its content from the repository.
-#[no_mangle]
-pub unsafe extern "C" fn directory_remove_recursively(
-    session: SessionHandle,
-    repo: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let repo = ctx.state().repositories.get(repo);
-        let path = utils::ptr_to_path_buf(path)?;
-
-        ctx.spawn(async move { repo.repository.remove_entry_recursively(path).await })
-    })
+    if recursive {
+        repo.remove_entry_recursively(path).await
+    } else {
+        repo.remove_entry(path).await
+    }
 }

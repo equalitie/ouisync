@@ -2,8 +2,9 @@ use ouisync_lib::Error;
 use serde::Serialize;
 use std::io;
 
-#[derive(Serialize)]
-#[repr(C)]
+#[derive(Copy, Clone, Serialize)]
+#[repr(u16)]
+#[serde(into = "u16")]
 pub enum ErrorCode {
     /// No error
     Ok = 0,
@@ -26,7 +27,13 @@ pub enum ErrorCode {
     /// Failed to read from or write into the device ID config file
     DeviceIdConfig = 10,
     /// Unspecified error
-    Other = 65536,
+    Other = 65535,
+}
+
+impl From<ErrorCode> for u16 {
+    fn from(error_code: ErrorCode) -> u16 {
+        error_code as u16
+    }
 }
 
 pub(crate) trait ToErrorCode {

@@ -17,7 +17,6 @@ use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
-pub const ENTRY_TYPE_INVALID: u8 = 0;
 pub const ENTRY_TYPE_FILE: u8 = 1;
 pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
 

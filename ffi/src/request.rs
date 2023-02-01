@@ -74,6 +74,11 @@ pub(crate) enum Request {
         repository: Handle<RepositoryHolder>,
         path: String,
     },
+    DirectoryRemove {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+        recursive: bool,
+    },
     NetworkSubscribe,
     NetworkBind {
         #[serde(deserialize_with = "deserialize_as_option_str")]
@@ -204,6 +209,13 @@ pub(crate) async fn dispatch(
                 .await?
                 .into()
         }
+        Request::DirectoryRemove {
+            repository,
+            path,
+            recursive,
+        } => directory::remove(server_state, repository, path, recursive)
+            .await?
+            .into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
         Request::NetworkBind {
             quic_v4,
