@@ -6,12 +6,14 @@ use crate::{
     registry::Handle,
     repository::{self, RepositoryHolder},
     session::{self, SubscriptionHandle},
+    share_token,
     state::{ClientState, ServerState},
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::Result;
+use ouisync_lib::{Result, ShareToken};
 use serde::{Deserialize, Deserializer};
+use serde_bytes::ByteBuf;
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
@@ -21,12 +23,14 @@ use std::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "args")]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
     RepositoryCreate {
         path: Utf8PathBuf,
         read_password: Option<String>,
         write_password: Option<String>,
-        share_token: Option<String>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        share_token: Option<ShareToken>,
     },
     RepositoryOpen {
         path: Utf8PathBuf,
@@ -37,13 +41,15 @@ pub(crate) enum Request {
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         read_password: Option<String>,
-        share_token: Option<String>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        share_token: Option<ShareToken>,
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
         old_password: Option<String>,
         new_password: Option<String>,
-        share_token: Option<String>,
+        #[serde(deserialize_with = "deserialize_as_option_str")]
+        share_token: Option<ShareToken>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),
     RepositoryRemoveWriteKey(Handle<RepositoryHolder>),
@@ -78,6 +84,12 @@ pub(crate) enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
+    ShareTokenMode(DeserializeAsStr<ShareToken>),
+    ShareTokenInfoHash(DeserializeAsStr<ShareToken>),
+    ShareTokenSuggestedName(DeserializeAsStr<ShareToken>),
+    ShareTokenNormalize(DeserializeAsStr<ShareToken>),
+    ShareTokenEncode(DeserializeAsStr<ShareToken>),
+    ShareTokenDecode(Vec<u8>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -102,6 +114,16 @@ pub(crate) enum Request {
     FileRemove {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
+    },
+    FileRead {
+        file: Handle<FileHolder>,
+        offset: u64,
+        len: u64,
+    },
+    FileWrite {
+        file: Handle<FileHolder>,
+        offset: u64,
+        data: ByteBuf,
     },
     FileTruncate {
         file: Handle<FileHolder>,
@@ -255,6 +277,16 @@ pub(crate) async fn dispatch(
         } => repository::create_share_token(server_state, repository, password, access_mode, name)
             .await?
             .into(),
+        Request::ShareTokenMode(token) => share_token::mode(token.into_value()).into(),
+        Request::ShareTokenInfoHash(token) => share_token::info_hash(token.into_value()).into(),
+        Request::ShareTokenSuggestedName(token) => {
+            share_token::suggested_name(token.into_value()).into()
+        }
+        Request::ShareTokenNormalize(token) => token.into_value().to_string().into(),
+        Request::ShareTokenEncode(token) => share_token::encode(token.into_value()).into(),
+        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
+            .map(|token| token.to_string())
+            .into(),
         Request::RepositoryAccessMode(repository) => {
             repository::access_mode(server_state, repository).into()
         }
@@ -288,6 +320,14 @@ pub(crate) async fn dispatch(
         }
         Request::FileRemove { repository, path } => {
             file::remove(server_state, repository, path).await?.into()
+        }
+        Request::FileRead { file, offset, len } => {
+            file::read(server_state, file, offset, len).await?.into()
+        }
+        Request::FileWrite { file, offset, data } => {
+            file::write(server_state, file, offset, data.into_vec())
+                .await?
+                .into()
         }
         Request::FileTruncate { file, len } => {
             file::truncate(server_state, file, len).await?.into()
@@ -386,5 +426,38 @@ where
         Ok(Some(s.parse().map_err(serde::de::Error::custom)?))
     } else {
         Ok(None)
+    }
+}
+
+// HACK: sometimes `#[serde(deserialize_with = "deserialize_as_str")]` doesn't work for some
+// reason, but this wrapper does.
+#[derive(Deserialize)]
+#[repr(transparent)]
+pub(crate) struct DeserializeAsStr<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    #[serde(deserialize_with = "deserialize_as_str")]
+    value: T,
+}
+
+impl<T> DeserializeAsStr<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    pub fn into_value(self) -> T {
+        self.value
+    }
+}
+
+impl<T> fmt::Debug for DeserializeAsStr<T>
+where
+    T: fmt::Debug + FromStr,
+    T::Err: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.value.fmt(f)
     }
 }

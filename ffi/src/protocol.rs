@@ -7,6 +7,7 @@ use crate::{
 };
 use ouisync_lib::{PeerInfo, Progress, Result, StateMonitor};
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use std::net::SocketAddr;
 
 #[derive(Deserialize)]
@@ -71,7 +72,7 @@ pub(crate) enum Value {
     U8(u8),
     U32(u32),
     U64(u64),
-    Bytes(Vec<u8>),
+    Bytes(ByteBuf),
     String(String),
     Handle(u64),
     Directory(Directory),
@@ -125,7 +126,7 @@ impl From<u64> for Value {
 
 impl From<Vec<u8>> for Value {
     fn from(value: Vec<u8>) -> Self {
-        Self::Bytes(value)
+        Self::Bytes(ByteBuf::from(value))
     }
 }
 

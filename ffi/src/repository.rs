@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-
 use crate::{
     protocol::Notification,
     registry::Handle,
@@ -45,13 +44,12 @@ pub(crate) async fn create(
     store: Utf8PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<Handle<RepositoryHolder>> {
     let local_read_password = local_read_password.as_deref().map(Password::new);
     let local_write_password = local_write_password.as_deref().map(Password::new);
 
     let access_secrets = if let Some(share_token) = share_token {
-        let share_token: ShareToken = share_token.parse()?;
         share_token.into_secrets()
     } else {
         AccessSecrets::random_write()
@@ -162,17 +160,12 @@ pub(crate) async fn set_read_access(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
     local_read_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
 
-    let access_secrets = if let Some(share_token) = share_token {
-        let share_token: ShareToken = share_token.parse()?;
-        Some(share_token.into_secrets())
-    } else {
-        // Repository shall attempt to use the one it's currently using.
-        None
-    };
+    // If None, repository shall attempt to use the one it's currently using.
+    let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_read_secret = local_read_password
         .as_deref()
@@ -206,17 +199,12 @@ pub(crate) async fn set_read_and_write_access(
     handle: Handle<RepositoryHolder>,
     local_old_rw_password: Option<String>,
     local_new_rw_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
 
-    let access_secrets = if let Some(share_token) = share_token {
-        let share_token: ShareToken = share_token.parse()?;
-        Some(share_token.into_secrets())
-    } else {
-        // Repository shall attempt to use the one it's currently using.
-        None
-    };
+    // If None, repository shall attempt to use the one it's currently using.
+    let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_old_rw_secret = local_old_rw_password
         .as_deref()

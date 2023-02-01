@@ -1,13 +1,10 @@
 use crate::{
-    registry::Handle,
-    repository::RepositoryHolder,
-    session::SessionHandle,
-    state::ServerState,
-    utils::{AssumeSend, Port},
+    registry::Handle, repository::RepositoryHolder, session::SessionHandle, state::ServerState,
+    utils::Port,
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Result};
-use std::{convert::TryInto, io::SeekFrom, os::raw::c_int, slice};
+use std::{convert::TryInto, io::SeekFrom, os::raw::c_int};
 
 pub struct FileHolder {
     file: AsyncMutex<File>,
@@ -76,69 +73,49 @@ pub(crate) async fn flush(state: &ServerState, handle: Handle<FileHolder>) -> Re
     state.files.get(handle).file.lock().await.flush().await
 }
 
-/// Read at most `len` bytes from the file into `buffer`. Yields the number of bytes actually read
-/// (zero on EOF).
-#[no_mangle]
-pub unsafe extern "C" fn file_read(
-    session: SessionHandle,
+/// Read at most `len` bytes from the file and returns them. The returned buffer can be shorter
+/// than `len` and empty in case of EOF.
+pub(crate) async fn read(
+    state: &ServerState,
     handle: Handle<FileHolder>,
     offset: u64,
-    buffer: *mut u8,
     len: u64,
-    port: Port<Result<u64>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.get(handle);
+) -> Result<Vec<u8>> {
+    let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+    let mut buffer = vec![0; len];
 
-        let buffer = AssumeSend::new(buffer);
-        let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+    let holder = state.files.get(handle);
+    let mut file = holder.file.lock().await;
 
-        ctx.spawn(async move {
-            let mut file = holder.file.lock().await;
+    file.seek(SeekFrom::Start(offset)).await?;
 
-            file.seek(SeekFrom::Start(offset)).await?;
+    let len = file.read(&mut buffer).await?;
+    buffer.truncate(len);
 
-            let buffer = slice::from_raw_parts_mut(buffer.into_inner(), len);
-            let len = file.read(buffer).await? as u64;
-
-            Ok(len)
-        })
-    })
+    Ok(buffer)
 }
 
 /// Write `len` bytes from `buffer` into the file.
-#[no_mangle]
-pub unsafe extern "C" fn file_write(
-    session: SessionHandle,
+pub(crate) async fn write(
+    state: &ServerState,
     handle: Handle<FileHolder>,
     offset: u64,
-    buffer: *const u8,
-    len: u64,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.get(handle);
+    buffer: Vec<u8>,
+) -> Result<()> {
+    let holder = state.files.get(handle);
+    let mut file = holder.file.lock().await;
 
-        let buffer = AssumeSend::new(buffer);
-        let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+    let local_branch = holder
+        .local_branch
+        .as_ref()
+        .ok_or(Error::PermissionDenied)?
+        .clone();
 
-        ctx.spawn(async move {
-            let buffer = slice::from_raw_parts(buffer.into_inner(), len);
-            let mut file = holder.file.lock().await;
+    file.seek(SeekFrom::Start(offset)).await?;
+    file.fork(local_branch).await?;
+    file.write(&buffer).await?;
 
-            let local_branch = holder
-                .local_branch
-                .as_ref()
-                .ok_or(Error::PermissionDenied)?
-                .clone();
-
-            file.seek(SeekFrom::Start(offset)).await?;
-            file.fork(local_branch).await?;
-            file.write(buffer).await?;
-
-            Ok(())
-        })
-    })
+    Ok(())
 }
 
 /// Truncate the file to `len` bytes.
@@ -169,6 +146,7 @@ pub(crate) async fn len(state: &ServerState, handle: Handle<FileHolder>) -> u64 
 }
 
 /// Copy the file contents into the provided raw file descriptor.
+///
 /// This function takes ownership of the file descriptor and closes it when it finishes. If the
 /// caller needs to access the descriptor afterwards (or while the function is running), he/she
 /// needs to `dup` it before passing it into this function.
@@ -183,13 +161,16 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     use std::os::unix::io::FromRawFd;
     use tokio::fs;
 
-    session.get().with(port, |ctx| {
-        let src = ctx.state().files.get(handle);
-        let mut dst = fs::File::from_raw_fd(fd);
+    let session = session.get();
+    let port_sender = session.port_sender;
 
-        ctx.spawn(async move {
-            let mut src = src.file.lock().await;
-            src.copy_to_writer(&mut dst).await
-        })
-    })
+    let src = session.state.files.get(handle);
+    let mut dst = fs::File::from_raw_fd(fd);
+
+    session.runtime.spawn(async move {
+        let mut src = src.file.lock().await;
+        let result = src.copy_to_writer(&mut dst).await;
+
+        port_sender.send_result(port, result);
+    });
 }

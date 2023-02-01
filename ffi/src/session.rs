@@ -12,7 +12,6 @@ use ouisync_lib::{network::Network, ConfigStore, Error, Result, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,
-    future::Future,
     mem,
     os::raw::{c_char, c_void},
     path::PathBuf,
@@ -61,8 +60,8 @@ pub unsafe extern "C" fn session_create(
         post_c_object_fn: mem::transmute(post_c_object_fn),
     };
 
-    let configs_path = match utils::ptr_to_native_path_buf(configs_path) {
-        Ok(configs_path) => configs_path,
+    let configs_path = match utils::ptr_to_str(configs_path) {
+        Ok(configs_path) => PathBuf::from(configs_path),
         Err(error) => return Err(error).into(),
     };
 
@@ -169,10 +168,10 @@ pub(crate) fn unsubscribe(state: &ServerState, handle: SubscriptionHandle) {
 }
 
 pub struct Session {
-    runtime: Runtime,
+    pub(crate) runtime: Runtime,
     pub(crate) state: Arc<ServerState>,
     senders: Registry<ClientSender>,
-    port_sender: PortSender,
+    pub(crate) port_sender: PortSender,
     _logger: Logger,
 }
 
@@ -228,52 +227,11 @@ impl Session {
         let _enter = self.runtime.enter();
         scoped_task::spawn(server.run(state))
     }
-
-    pub(crate) unsafe fn with<T, F>(&self, port: Port<Result<T>>, f: F)
-    where
-        F: FnOnce(Context<T>) -> Result<()>,
-        T: Into<DartCObject>,
-    {
-        let context = Context {
-            session: self,
-            port,
-        };
-        let _runtime_guard = context.session.runtime.enter();
-
-        match f(context) {
-            Ok(()) => (),
-            Err(error) => self.port_sender.send_result(port, Err(error)),
-        }
-    }
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
 pub type ServerHandle = Handle<ScopedJoinHandle<()>>;
 pub(super) type SubscriptionHandle = Handle<ScopedJoinHandle<()>>;
-
-pub(super) struct Context<'a, T> {
-    session: &'a Session,
-    port: Port<Result<T>>,
-}
-
-impl<T> Context<'_, T>
-where
-    T: Into<DartCObject> + 'static,
-{
-    pub(super) unsafe fn spawn<F>(self, f: F) -> Result<()>
-    where
-        F: Future<Output = Result<T>> + Send + 'static,
-    {
-        self.session
-            .runtime
-            .spawn(self.session.port_sender.invoke(self.port, f));
-        Ok(())
-    }
-
-    pub(super) fn state(&self) -> &Arc<ServerState> {
-        &self.session.state
-    }
-}
 
 // Utility for sending values to dart.
 #[derive(Copy, Clone)]
@@ -282,14 +240,6 @@ pub(super) struct PortSender {
 }
 
 impl PortSender {
-    pub(crate) async unsafe fn invoke<F, T>(self, port: Port<Result<T>>, f: F)
-    where
-        F: Future<Output = Result<T>> + Send + 'static,
-        T: Into<DartCObject> + 'static,
-    {
-        self.send_result(port, f.await)
-    }
-
     pub(crate) unsafe fn send<T>(&self, port: Port<T>, value: T)
     where
         T: Into<DartCObject>,
