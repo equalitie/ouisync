@@ -90,7 +90,7 @@ pub unsafe extern "C" fn session_channel_open(
 
     session
         .runtime
-        .spawn(server::run_client(server_stream.into(), state));
+        .spawn(server::run_client(server_stream, state));
 
     session.runtime.spawn(async move {
         while let Some(payload) = client_rx.recv().await {

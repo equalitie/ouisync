@@ -1,5 +1,4 @@
 use super::dart::{self, DartCObject};
-use camino::Utf8PathBuf;
 use ouisync_lib::{Error, Result};
 use std::path::PathBuf;
 use std::{
@@ -92,10 +91,6 @@ pub unsafe fn ptr_to_maybe_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>
             .to_str()
             .map_err(|_| Error::MalformedData)?,
     ))
-}
-
-pub unsafe fn ptr_to_path_buf(ptr: *const c_char) -> Result<Utf8PathBuf> {
-    Ok(Utf8PathBuf::from(ptr_to_str(ptr)?))
 }
 
 pub unsafe fn ptr_to_native_path_buf(ptr: *const c_char) -> Result<PathBuf> {

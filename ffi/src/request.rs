@@ -1,5 +1,7 @@
 use crate::{
-    directory, network,
+    directory,
+    file::{self, FileHolder},
+    network,
     protocol::Value,
     registry::Handle,
     repository::{self, RepositoryHolder},
@@ -88,6 +90,20 @@ pub(crate) enum Request {
         path: String,
         recursive: bool,
     },
+    FileOpen {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+    },
+    FileCreate {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+    },
+    FileRemove {
+        repository: Handle<RepositoryHolder>,
+        path: String,
+    },
+    FileFlush(Handle<FileHolder>),
+    FileClose(Handle<FileHolder>),
     NetworkSubscribe,
     NetworkBind {
         #[serde(deserialize_with = "deserialize_as_option_str")]
@@ -258,6 +274,17 @@ pub(crate) async fn dispatch(
         } => directory::remove(server_state, repository, path, recursive)
             .await?
             .into(),
+        Request::FileOpen { repository, path } => {
+            file::open(server_state, repository, path).await?.into()
+        }
+        Request::FileCreate { repository, path } => {
+            file::create(server_state, repository, path).await?.into()
+        }
+        Request::FileRemove { repository, path } => {
+            file::remove(server_state, repository, path).await?.into()
+        }
+        Request::FileFlush(file) => file::flush(server_state, file).await?.into(),
+        Request::FileClose(file) => file::close(server_state, file).await?.into(),
         Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
         Request::NetworkBind {
             quic_v4,

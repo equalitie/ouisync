@@ -5,64 +5,18 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-pub(crate) enum Stream {
-    Memory(memory::ServerStream),
-    Ws(ws::Stream),
+pub(crate) trait Stream:
+    futures_util::Stream<Item = io::Result<Vec<u8>>>
+    + futures_util::Sink<Vec<u8>, Error = io::Error>
+    + Unpin
+{
 }
 
-impl From<memory::ServerStream> for Stream {
-    fn from(inner: memory::ServerStream) -> Self {
-        Self::Memory(inner)
-    }
-}
-
-impl From<ws::Stream> for Stream {
-    fn from(inner: ws::Stream) -> Self {
-        Self::Ws(inner)
-    }
-}
-
-impl futures_util::Stream for Stream {
-    type Item = io::Result<Vec<u8>>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.get_mut() {
-            Self::Memory(stream) => Pin::new(stream).poll_next(cx),
-            Self::Ws(stream) => Pin::new(stream).poll_next(cx),
-        }
-    }
-}
-
-impl futures_util::Sink<Vec<u8>> for Stream {
-    type Error = io::Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.get_mut() {
-            Self::Memory(stream) => Pin::new(stream).poll_ready(cx),
-            Self::Ws(stream) => Pin::new(stream).poll_ready(cx),
-        }
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Vec<u8>) -> Result<(), Self::Error> {
-        match self.get_mut() {
-            Self::Memory(stream) => Pin::new(stream).start_send(item),
-            Self::Ws(stream) => Pin::new(stream).start_send(item),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.get_mut() {
-            Self::Memory(stream) => Pin::new(stream).poll_flush(cx),
-            Self::Ws(stream) => Pin::new(stream).poll_flush(cx),
-        }
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.get_mut() {
-            Self::Memory(stream) => Pin::new(stream).poll_close(cx),
-            Self::Ws(stream) => Pin::new(stream).poll_close(cx),
-        }
-    }
+impl<T> Stream for T where
+    T: futures_util::Stream<Item = io::Result<Vec<u8>>>
+        + futures_util::Sink<Vec<u8>, Error = io::Error>
+        + Unpin
+{
 }
 
 pub(crate) mod memory {

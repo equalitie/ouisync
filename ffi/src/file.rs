@@ -1,121 +1,82 @@
-use super::{
+use crate::{
     registry::Handle,
     repository::RepositoryHolder,
     session::SessionHandle,
-    utils::{self, AssumeSend, Port},
+    state::ServerState,
+    utils::{AssumeSend, Port},
 };
+use camino::Utf8PathBuf;
 use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Result};
-use std::{
-    convert::TryInto,
-    io::SeekFrom,
-    os::raw::{c_char, c_int},
-    slice,
-};
+use std::{convert::TryInto, io::SeekFrom, os::raw::c_int, slice};
 
 pub struct FileHolder {
     file: AsyncMutex<File>,
     local_branch: Option<Branch>,
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn file_open(
-    session: SessionHandle,
+pub(crate) async fn open(
+    state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<Handle<FileHolder>>>,
-) {
-    session.get().with(port, |ctx| {
-        let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.state().repositories.get(repo);
-        let local_branch = repo.repository.local_branch().ok();
-        let state = ctx.state().clone();
+    path: String,
+) -> Result<Handle<FileHolder>> {
+    let path = Utf8PathBuf::from(path);
+    let repo = state.repositories.get(repo);
+    let local_branch = repo.repository.local_branch().ok();
 
-        ctx.spawn(async move {
-            let file = repo.repository.open_file(&path).await?;
-            let holder = FileHolder {
-                file: AsyncMutex::new(file),
-                local_branch,
-            };
-            let handle = state.files.insert(holder);
+    let file = repo.repository.open_file(&path).await?;
+    let holder = FileHolder {
+        file: AsyncMutex::new(file),
+        local_branch,
+    };
+    let handle = state.files.insert(holder);
 
-            Ok(handle)
-        })
-    })
+    Ok(handle)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn file_create(
-    session: SessionHandle,
+pub(crate) async fn create(
+    state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<Handle<FileHolder>>>,
-) {
-    session.get().with(port, |ctx| {
-        let path = utils::ptr_to_path_buf(path)?;
-        let repo = ctx.state().repositories.get(repo);
-        let local_branch = repo.repository.local_branch()?;
-        let state = ctx.state().clone();
+    path: String,
+) -> Result<Handle<FileHolder>> {
+    let path = Utf8PathBuf::from(path);
+    let repo = state.repositories.get(repo);
+    let local_branch = repo.repository.local_branch()?;
 
-        ctx.spawn(async move {
-            let mut file = repo.repository.create_file(&path).await?;
-            file.flush().await?;
+    let file = repo.repository.create_file(&path).await?;
+    let holder = FileHolder {
+        file: AsyncMutex::new(file),
+        local_branch: Some(local_branch),
+    };
+    let handle = state.files.insert(holder);
 
-            let holder = FileHolder {
-                file: AsyncMutex::new(file),
-                local_branch: Some(local_branch),
-            };
-            let handle = state.files.insert(holder);
-
-            Ok(handle)
-        })
-    })
+    Ok(handle)
 }
 
 /// Remove (delete) the file at the given path from the repository.
-#[no_mangle]
-pub unsafe extern "C" fn file_remove(
-    session: SessionHandle,
+pub(crate) async fn remove(
+    state: &ServerState,
     repo: Handle<RepositoryHolder>,
-    path: *const c_char,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let repo = ctx.state().repositories.get(repo);
-        let path = utils::ptr_to_path_buf(path)?;
-
-        ctx.spawn(async move { repo.repository.remove_entry(&path).await })
-    })
+    path: String,
+) -> Result<()> {
+    let path = Utf8PathBuf::from(path);
+    state
+        .repositories
+        .get(repo)
+        .repository
+        .remove_entry(&path)
+        .await
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn file_close(
-    session: SessionHandle,
-    handle: Handle<FileHolder>,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.remove(handle);
-
-        ctx.spawn(async move {
-            if let Some(holder) = holder {
-                holder.file.lock().await.flush().await
-            } else {
-                Ok(())
-            }
-        })
-    })
+pub(crate) async fn close(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
+    if let Some(holder) = state.files.remove(handle) {
+        holder.file.lock().await.flush().await
+    } else {
+        Ok(())
+    }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn file_flush(
-    session: SessionHandle,
-    handle: Handle<FileHolder>,
-    port: Port<Result<()>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().files.get(handle);
-        ctx.spawn(async move { holder.file.lock().await.flush().await })
-    })
+pub(crate) async fn flush(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
+    state.files.get(handle).file.lock().await.flush().await
 }
 
 /// Read at most `len` bytes from the file into `buffer`. Yields the number of bytes actually read

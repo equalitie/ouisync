@@ -3,9 +3,7 @@ use crate::{
     error::{ErrorCode, ToErrorCode},
     network::NetworkEvent,
     registry::Handle,
-    repository::RepositoryHolder,
     request::Request,
-    session::SubscriptionHandle,
 };
 use ouisync_lib::{PeerInfo, Progress, Result, StateMonitor};
 use serde::{Deserialize, Serialize};
@@ -74,12 +72,24 @@ pub(crate) enum Value {
     U32(u32),
     Bytes(Vec<u8>),
     String(String),
-    Repository(Handle<RepositoryHolder>),
-    Subscription(SubscriptionHandle),
+    Handle(u64),
     Directory(Directory),
     StateMonitor(StateMonitor),
     Progress(Progress),
     PeerInfo(Vec<PeerInfo>),
+}
+
+impl<T> From<Option<T>> for Value
+where
+    Value: From<T>,
+{
+    fn from(value: Option<T>) -> Self {
+        if let Some(value) = value {
+            Self::from(value)
+        } else {
+            Self::None
+        }
+    }
 }
 
 impl From<()> for Value {
@@ -118,18 +128,6 @@ impl From<String> for Value {
     }
 }
 
-impl From<Handle<RepositoryHolder>> for Value {
-    fn from(value: Handle<RepositoryHolder>) -> Self {
-        Self::Repository(value)
-    }
-}
-
-impl From<SubscriptionHandle> for Value {
-    fn from(value: SubscriptionHandle) -> Self {
-        Self::Subscription(value)
-    }
-}
-
 impl From<StateMonitor> for Value {
     fn from(value: StateMonitor) -> Self {
         Self::StateMonitor(value)
@@ -142,16 +140,9 @@ impl From<Directory> for Value {
     }
 }
 
-impl<T> From<Option<T>> for Value
-where
-    Value: From<T>,
-{
-    fn from(value: Option<T>) -> Self {
-        if let Some(value) = value {
-            Self::from(value)
-        } else {
-            Self::None
-        }
+impl<T> From<Handle<T>> for Value {
+    fn from(value: Handle<T>) -> Self {
+        Self::Handle(value.id())
     }
 }
 
