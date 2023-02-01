@@ -1,8 +1,9 @@
-use super::utils::{self, Bytes, Port};
+use std::borrow::Cow;
+
 use crate::{
     protocol::Notification,
     registry::Handle,
-    session::{SessionHandle, SubscriptionHandle},
+    session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
 use camino::Utf8PathBuf;
@@ -11,9 +12,8 @@ use ouisync_lib::{
     device_id,
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
-    Repository, RepositoryDb, Result, ShareToken,
+    Progress, Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{borrow::Cow, os::raw::c_char, ptr, slice, str::FromStr};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
@@ -187,22 +187,22 @@ pub(crate) async fn set_read_access(
         .await
 }
 
-/// If `share_token` is null, the function will try with the currently active access secrets in the
+/// If `share_token` is `None`, the function will try with the currently active access secrets in the
 /// repository. Note that passing `share_token` explicitly (as opposed to implicitly using the
 /// currently active secrets) may be used to increase access permissions.
 ///
 /// Attempting to change the secret without enough permissions will fail with PermissionDenied
 /// error.
 ///
-/// If `local_new_rw_password` is null, the repository will become read and writable without a
+/// If `local_new_rw_password` is None, the repository will become read and writable without a
 /// password.  To remove the read and write access use the
 /// `repository_remove_read_and_write_access` function.
 ///
-/// The `local_old_rw_password` is optional (may be a null pointer), if it is set the previously
-/// used "writer ID" shall be used, otherwise a new one shall be generated. Note that it is
-/// preferred to keep the writer ID as it was, this reduces the number of writers in Version
-/// Vectors for every entry in the repository (files and directories) and thus reduces traffic and
-/// CPU usage when calculating causal relationships.
+/// The `local_old_rw_password` is optional, if it is set the previously used "writer ID" shall be
+/// used, otherwise a new one shall be generated. Note that it is preferred to keep the writer ID
+/// as it was, this reduces the number of writers in version vectors for every entry in the
+/// repository (files and directories) and thus reduces traffic and CPU usage when calculating
+/// causal relationships.
 pub(crate) async fn set_read_and_write_access(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
@@ -418,194 +418,56 @@ pub(crate) fn set_pex_enabled(
     }
 }
 
-/// The `password` parameter is optional, if `null` the current access level of the opened
+/// The `password` parameter is optional, if `None` the current access level of the opened
 /// repository is used. If provided, the highest access level that the password can unlock is used.
-#[no_mangle]
-pub unsafe extern "C" fn repository_create_share_token(
-    session: SessionHandle,
+pub(crate) async fn create_share_token(
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
-    password: *const c_char,
+    password: Option<String>,
     access_mode: u8,
-    name: *const c_char,
-    port: Port<Result<String>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-        let access_mode = access_mode_from_num(access_mode)?;
-        let name = utils::ptr_to_str(name)?.to_owned();
-        let password = utils::ptr_to_maybe_str(password)?;
-        let password = password.map(Password::new);
+    name: Option<String>,
+) -> Result<String> {
+    let holder = state.repositories.get(handle);
+    let access_mode = access_mode_from_num(access_mode)?;
+    let password = password.as_deref().map(Password::new);
 
-        ctx.spawn(async move {
-            let access_secrets = if let Some(password) = password {
-                Cow::Owned(
-                    holder
-                        .repository
-                        .unlock_secrets(LocalSecret::Password(password))
-                        .await?,
-                )
-            } else {
-                Cow::Borrowed(holder.repository.secrets())
-            };
+    let access_secrets = if let Some(password) = password {
+        Cow::Owned(
+            holder
+                .repository
+                .unlock_secrets(LocalSecret::Password(password))
+                .await?,
+        )
+    } else {
+        Cow::Borrowed(holder.repository.secrets())
+    };
 
-            let share_token =
-                ShareToken::from(access_secrets.with_mode(access_mode)).with_name(name);
+    let share_token = ShareToken::from(access_secrets.with_mode(access_mode));
+    let share_token = if let Some(name) = name {
+        share_token.with_name(name)
+    } else {
+        share_token
+    };
 
-            Ok(share_token.to_string())
-        })
-    })
+    Ok(share_token.to_string())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn repository_access_mode(
-    session: SessionHandle,
-    handle: Handle<RepositoryHolder>,
-) -> u8 {
-    let holder = session.get().state.repositories.get(handle);
+pub(crate) fn access_mode(state: &ServerState, handle: Handle<RepositoryHolder>) -> u8 {
+    let holder = state.repositories.get(handle);
     access_mode_to_num(holder.repository.access_mode())
 }
 
-/// Returns the syncing progress as a float in the 0.0 - 1.0 range.
-#[no_mangle]
-pub unsafe extern "C" fn repository_sync_progress(
-    session: SessionHandle,
+/// Returns the syncing progress.
+pub(crate) async fn sync_progress(
+    state: &ServerState,
     handle: Handle<RepositoryHolder>,
-    port: Port<Result<Vec<u8>>>,
-) {
-    session.get().with(port, |ctx| {
-        let holder = ctx.state().repositories.get(handle);
-
-        ctx.spawn(async move {
-            let progress = holder.repository.sync_progress().await?;
-            // unwrap is OK because serialization into a vector has no reason to fail
-            Ok(rmp_serde::to_vec(&progress).unwrap())
-        })
-    })
-}
-
-/// Returns the access mode of the given share token.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_mode(token: *const c_char) -> u8 {
-    #![allow(clippy::question_mark)] // false positive
-
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return ACCESS_MODE_BLIND;
-    };
-
-    let token: ShareToken = if let Ok(token) = token.parse() {
-        token
-    } else {
-        return ACCESS_MODE_BLIND;
-    };
-
-    access_mode_to_num(token.access_mode())
-}
-
-/// Returns the info-hash of the repository corresponding to the share token formatted as hex
-/// string.
-/// User is responsible for deallocating the returned string.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_info_hash(token: *const c_char) -> *const c_char {
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    let token: ShareToken = if let Ok(token) = token.parse() {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    utils::str_to_ptr(&hex::encode(
-        network::repository_info_hash(token.id()).as_ref(),
-    ))
-}
-
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_suggested_name(token: *const c_char) -> *const c_char {
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    let token: ShareToken = if let Ok(token) = token.parse() {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    utils::str_to_ptr(token.suggested_name().as_ref())
-}
-
-/// Take the input string, decide whether it's a valid OuiSync token and normalize it (remove white
-/// space, unnecessary slashes,...).
-/// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_normalize(token: *const c_char) -> *const c_char {
-    #![allow(clippy::question_mark)] // false positive
-
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    let token: ShareToken = if let Ok(token) = ShareToken::from_str(token) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    utils::str_to_ptr(&token.to_string())
-}
-
-/// IMPORTANT: the caller is responsible for deallocating the returned buffer unless it is `null`.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_encode(token: *const c_char) -> Bytes {
-    #![allow(clippy::question_mark)] // false positive
-
-    let token = if let Ok(token) = utils::ptr_to_str(token) {
-        token
-    } else {
-        return Bytes::NULL;
-    };
-
-    let token: ShareToken = if let Ok(token) = token.parse() {
-        token
-    } else {
-        return Bytes::NULL;
-    };
-
-    let mut buffer = Vec::new();
-    token.encode(&mut buffer);
-
-    Bytes::from_vec(buffer)
-}
-
-/// IMPORTANT: the caller is responsible for deallocating the returned pointer unless it is `null`.
-#[no_mangle]
-pub unsafe extern "C" fn share_token_decode(bytes: *const u8, len: u64) -> *const c_char {
-    let len = if let Ok(len) = len.try_into() {
-        len
-    } else {
-        return ptr::null();
-    };
-
-    let slice = slice::from_raw_parts(bytes, len);
-
-    let token = if let Ok(token) = ShareToken::decode(slice) {
-        token
-    } else {
-        return ptr::null();
-    };
-
-    utils::str_to_ptr(token.to_string().as_ref())
+) -> Result<Progress> {
+    state
+        .repositories
+        .get(handle)
+        .repository
+        .sync_progress()
+        .await
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
@@ -628,7 +490,7 @@ fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
     }
 }
 
-fn access_mode_to_num(mode: AccessMode) -> u8 {
+pub(crate) fn access_mode_to_num(mode: AccessMode) -> u8 {
     match mode {
         AccessMode::Blind => ACCESS_MODE_BLIND,
         AccessMode::Read => ACCESS_MODE_READ,

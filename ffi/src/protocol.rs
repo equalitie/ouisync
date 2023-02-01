@@ -7,7 +7,7 @@ use crate::{
     request::Request,
     session::SubscriptionHandle,
 };
-use ouisync_lib::{Result, StateMonitor};
+use ouisync_lib::{Progress, Result, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
@@ -77,6 +77,7 @@ pub(crate) enum Value {
     Subscription(SubscriptionHandle),
     Directory(Directory),
     StateMonitor(StateMonitor),
+    Progress(Progress),
 }
 
 impl From<()> for Value {
@@ -149,6 +150,12 @@ where
 impl From<SocketAddr> for Value {
     fn from(value: SocketAddr) -> Self {
         Self::String(value.to_string())
+    }
+}
+
+impl From<Progress> for Value {
+    fn from(value: Progress) -> Self {
+        Self::Progress(value)
     }
 }
 

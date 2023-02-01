@@ -12,6 +12,7 @@ pub mod file;
 pub mod network;
 pub mod repository;
 pub mod session;
+pub mod share_token;
 
 mod dart;
 mod logger;

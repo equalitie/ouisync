@@ -38,7 +38,8 @@ pub(crate) enum Request {
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
-        password: Option<String>,
+        old_password: Option<String>,
+        new_password: Option<String>,
         share_token: Option<String>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),
@@ -66,6 +67,14 @@ pub(crate) enum Request {
         repository: Handle<RepositoryHolder>,
         enabled: bool,
     },
+    RepositoryCreateShareToken {
+        repository: Handle<RepositoryHolder>,
+        password: Option<String>,
+        access_mode: u8,
+        name: Option<String>,
+    },
+    RepositoryAccessMode(Handle<RepositoryHolder>),
+    RepositorySyncProgress(Handle<RepositoryHolder>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: String,
@@ -138,11 +147,18 @@ pub(crate) async fn dispatch(
             .into(),
         Request::RepositorySetReadAndWriteAccess {
             repository,
-            password,
+            old_password,
+            new_password,
             share_token,
-        } => repository::set_read_and_write_access(server_state, repository, password, share_token)
-            .await?
-            .into(),
+        } => repository::set_read_and_write_access(
+            server_state,
+            repository,
+            old_password,
+            new_password,
+            share_token,
+        )
+        .await?
+        .into(),
         Request::RepositoryRemoveReadKey(handle) => {
             repository::remove_read_key(server_state, handle)
                 .await?
@@ -198,6 +214,22 @@ pub(crate) async fn dispatch(
         } => {
             repository::set_pex_enabled(server_state, repository, enabled);
             ().into()
+        }
+        Request::RepositoryCreateShareToken {
+            repository,
+            password,
+            access_mode,
+            name,
+        } => repository::create_share_token(server_state, repository, password, access_mode, name)
+            .await?
+            .into(),
+        Request::RepositoryAccessMode(repository) => {
+            repository::access_mode(server_state, repository).into()
+        }
+        Request::RepositorySyncProgress(repository) => {
+            repository::sync_progress(server_state, repository)
+                .await?
+                .into()
         }
         Request::DirectoryCreate { repository, path } => {
             directory::create(server_state, repository, path)

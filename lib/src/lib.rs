@@ -58,6 +58,7 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::peer_addr::PeerAddr,
+    progress::Progress,
     repository::{Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
