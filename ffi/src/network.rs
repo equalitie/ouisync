@@ -11,11 +11,18 @@ use tokio::select;
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
 pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[repr(u8)]
+#[serde(into = "u8")]
 pub(crate) enum NetworkEvent {
     ProtocolVersionMismatch = NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
     PeerSetChange = NETWORK_EVENT_PEER_SET_CHANGE,
+}
+
+impl From<NetworkEvent> for u8 {
+    fn from(event: NetworkEvent) -> Self {
+        event as u8
+    }
 }
 
 /// Binds the network to the specified addresses.

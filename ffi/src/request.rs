@@ -168,7 +168,8 @@ pub(crate) async fn dispatch(
     client_state: &ClientState,
     request: Request,
 ) -> Result<Value> {
-    tracing::debug!(?request);
+    // TODO: This sometimes creates huge log messages (mostly on FileWrite?)
+    // tracing::debug!(?request);
 
     let response = match request {
         Request::RepositoryCreate {

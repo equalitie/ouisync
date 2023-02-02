@@ -27,18 +27,15 @@ pub(crate) struct ServerEnvelope {
 
 impl ServerEnvelope {
     pub fn response(id: u64, result: Result<Value>) -> Self {
-        let response = match result {
-            Ok(response) => Response::Success(response),
-            Err(error) => Response::Failure {
+        let message = match result {
+            Ok(response) => ServerMessage::Success(response),
+            Err(error) => ServerMessage::Failure {
                 code: error.to_error_code(),
                 message: error.to_string(),
             },
         };
 
-        Self {
-            id,
-            message: ServerMessage::Response(response),
-        }
+        Self { id, message }
     }
 
     pub fn notification(id: u64, notification: Notification) -> Self {
@@ -51,17 +48,10 @@ impl ServerEnvelope {
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-#[serde(untagged)]
 pub(crate) enum ServerMessage {
-    Response(Response),
-    Notification(Notification),
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Response {
     Success(Value),
     Failure { code: ErrorCode, message: String },
+    Notification(Notification),
 }
 
 #[derive(Serialize)]
@@ -173,6 +163,7 @@ impl From<Vec<PeerInfo>> for Value {
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
 pub(crate) enum Notification {
     Repository,
     Network(NetworkEvent),
