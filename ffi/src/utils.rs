@@ -3,7 +3,6 @@ use ouisync_lib::{Error, Result};
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,
-    mem,
     os::raw::c_char,
     ptr,
 };
@@ -76,31 +75,4 @@ pub(crate) fn str_to_ptr(s: &str) -> *mut c_char {
     str_to_c_string(s)
         .map(CString::into_raw)
         .unwrap_or(ptr::null_mut())
-}
-
-#[repr(C)]
-pub struct Bytes {
-    pub ptr: *mut u8,
-    pub len: u64,
-}
-
-impl Bytes {
-    pub const NULL: Self = Self {
-        ptr: ptr::null_mut(),
-        len: 0,
-    };
-
-    pub fn from_vec(vec: Vec<u8>) -> Self {
-        let mut slice = vec.into_boxed_slice();
-        let buffer = Self {
-            ptr: slice.as_mut_ptr(),
-            len: slice.len() as u64,
-        };
-        mem::forget(slice);
-        buffer
-    }
-
-    pub unsafe fn into_vec(self) -> Vec<u8> {
-        Vec::from_raw_parts(self.ptr, self.len as usize, self.len as usize)
-    }
 }

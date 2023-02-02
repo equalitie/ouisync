@@ -3,8 +3,8 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use super::{error::ErrorCode, utils::Bytes};
-use std::{ffi::CString, os::raw::c_char};
+use super::error::ErrorCode;
+use std::{ffi::CString, mem, os::raw::c_char};
 
 #[repr(C)]
 pub(crate) struct DartCObject {
@@ -94,15 +94,18 @@ impl From<ErrorCode> for DartCObject {
 
 impl From<Vec<u8>> for DartCObject {
     fn from(value: Vec<u8>) -> Self {
-        let bytes = Bytes::from_vec(value);
+        let mut slice = value.into_boxed_slice();
+        let ptr = slice.as_mut_ptr();
+        let len = slice.len() as u64;
+        mem::forget(slice);
 
         Self {
             type_: DartCObjectType::TypedData,
             value: DartCObjectValue {
                 as_typed_data: DartTypedData {
                     type_: DartTypedDataType::Uint8,
-                    length: bytes.len as isize,
-                    values: bytes.ptr,
+                    length: len as isize,
+                    values: ptr,
                 },
             },
         }
@@ -131,12 +134,11 @@ impl Drop for DartCObject {
 
                     match value.type_ {
                         DartTypedDataType::Uint8 => {
-                            let bytes = Bytes {
-                                ptr: value.values,
-                                len: value.length as u64,
-                            };
-
-                            bytes.into_vec();
+                            let _ = Vec::from_raw_parts(
+                                value.values,
+                                value.length as usize,
+                                value.length as usize,
+                            );
                         }
                     }
                 }

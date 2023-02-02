@@ -40,7 +40,7 @@ pub(crate) enum Request {
     RepositorySubscribe(Handle<RepositoryHolder>),
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
-        read_password: Option<String>,
+        password: Option<String>,
         #[serde(deserialize_with = "deserialize_as_option_str")]
         share_token: Option<ShareToken>,
     },
@@ -89,7 +89,7 @@ pub(crate) enum Request {
     ShareTokenSuggestedName(DeserializeAsStr<ShareToken>),
     ShareTokenNormalize(DeserializeAsStr<ShareToken>),
     ShareTokenEncode(DeserializeAsStr<ShareToken>),
-    ShareTokenDecode(Vec<u8>),
+    ShareTokenDecode(ByteBuf),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -194,9 +194,9 @@ pub(crate) async fn dispatch(
         }
         Request::RepositorySetReadAccess {
             repository,
-            read_password,
+            password,
             share_token,
-        } => repository::set_read_access(server_state, repository, read_password, share_token)
+        } => repository::set_read_access(server_state, repository, password, share_token)
             .await?
             .into(),
         Request::RepositorySetReadAndWriteAccess {
@@ -284,7 +284,7 @@ pub(crate) async fn dispatch(
         }
         Request::ShareTokenNormalize(token) => token.into_value().to_string().into(),
         Request::ShareTokenEncode(token) => share_token::encode(token.into_value()).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
+        Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())
             .map(|token| token.to_string())
             .into(),
         Request::RepositoryAccessMode(repository) => {
@@ -432,7 +432,7 @@ where
 // HACK: sometimes `#[serde(deserialize_with = "deserialize_as_str")]` doesn't work for some
 // reason, but this wrapper does.
 #[derive(Deserialize)]
-#[repr(transparent)]
+#[serde(transparent)]
 pub(crate) struct DeserializeAsStr<T>
 where
     T: FromStr,

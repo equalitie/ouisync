@@ -6,7 +6,7 @@ use crate::{
     server::{self, Server},
     socket::{self, memory::ClientSender},
     state::ServerState,
-    utils::{self, Bytes, Port, UniqueHandle},
+    utils::{self, Port, UniqueHandle},
 };
 use ouisync_lib::{network::Network, ConfigStore, Error, Result, StateMonitor};
 use scoped_task::ScopedJoinHandle;
@@ -154,12 +154,6 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
     }
 
     let _ = CString::from_raw(ptr);
-}
-
-/// Deallocate Bytes that has been allocated on the rust side
-#[no_mangle]
-pub unsafe extern "C" fn free_bytes(bytes: Bytes) {
-    let _ = bytes.into_vec();
 }
 
 /// Cancel a notification subscription.
