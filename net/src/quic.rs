@@ -25,8 +25,7 @@ pub struct Connector {
 
 impl Connector {
     pub async fn connect(&self, remote_addr: SocketAddr) -> Result<Connection> {
-        let quinn::NewConnection { connection, .. } =
-            self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
+        let connection = self.endpoint.connect(remote_addr, CERT_DOMAIN)?.await?;
         let (tx, rx) = connection.open_bi().await?;
         Ok(Connection::new(rx, tx, connection.remote_address()))
     }
@@ -40,25 +39,20 @@ impl Connector {
 
 //------------------------------------------------------------------------------
 pub struct Acceptor {
-    incoming: quinn::Incoming,
+    endpoint: quinn::Endpoint,
     local_addr: SocketAddr,
 }
 
 impl Acceptor {
     pub async fn accept(&mut self) -> Result<Connection> {
-        let incoming_conn = match self.incoming.next().await {
-            Some(incoming_conn) => incoming_conn,
+        let connecting = match self.endpoint.accept().await {
+            Some(connecting) => connecting,
             None => return Err(Error::DoneAccepting),
         };
-        let quinn::NewConnection {
-            connection,
-            mut bi_streams,
-            ..
-        } = incoming_conn.await?;
-        let (tx, rx) = match bi_streams.next().await {
-            Some(r) => r?,
-            None => return Err(Error::DoneAccepting),
-        };
+        // TODO: These following `await` steps should be done outside of this function so we can
+        // start accepting again as soon as possible.
+        let connection = connecting.await?;
+        let (tx, rx) = connection.accept_bi().await?;
         Ok(Connection::new(rx, tx, connection.remote_address()))
     }
 
@@ -319,7 +313,7 @@ pub async fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, Si
     let custom_socket = CustomUdpSocket::bind(bind_addr).await?;
     let side_channel_maker = custom_socket.side_channel_maker();
 
-    let (mut endpoint, incoming) = quinn::Endpoint::new_with_abstract_socket(
+    let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
         Some(server_config),
         custom_socket,
@@ -330,9 +324,11 @@ pub async fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, Si
 
     let local_addr = endpoint.local_addr()?;
 
-    let connector = Connector { endpoint };
+    let connector = Connector {
+        endpoint: endpoint.clone(),
+    };
     let acceptor = Acceptor {
-        incoming,
+        endpoint,
         local_addr,
     };
 
