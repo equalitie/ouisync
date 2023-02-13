@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::OwnedSemaphorePermit,
+    sync::{Mutex as AsyncMutex, OwnedSemaphorePermit},
     time::{self, Duration, Instant},
 };
 
@@ -28,7 +28,7 @@ pub(super) struct PendingRequests {
     stats: Arc<RepositoryStats>,
     map: Arc<Mutex<HashMap<Request, RequestData>>>,
     to_tracker_tx: uninitialized_watch::Sender<()>,
-    from_tracker_rx: uninitialized_watch::Receiver<()>,
+    from_tracker_rx: AsyncMutex<uninitialized_watch::Receiver<()>>,
     _expiration_tracker: ScopedJoinHandle<()>,
 }
 
@@ -42,7 +42,7 @@ impl PendingRequests {
             stats,
             map,
             to_tracker_tx,
-            from_tracker_rx,
+            from_tracker_rx: AsyncMutex::new(from_tracker_rx),
             _expiration_tracker: expiration_tracker,
         }
     }
@@ -61,7 +61,7 @@ impl PendingRequests {
         }
     }
 
-    pub fn remove(&mut self, request: &Request) -> Option<OwnedSemaphorePermit> {
+    pub fn remove(&self, request: &Request) -> Option<OwnedSemaphorePermit> {
         if let Some(data) = self.map.lock().unwrap().remove(request) {
             self.request_removed(request);
             Some(data.permit)
@@ -75,33 +75,29 @@ impl PendingRequests {
     ///
     /// This method is cancel-safe in the sense that no request is removed if the returned future
     /// is dropped before being driven to completion.
-    pub async fn expired(&mut self) {
+    pub async fn expired(&self) {
         // Unwrap OK because the tracker task never returns.
-        self.from_tracker_rx.changed().await.unwrap()
+        self.from_tracker_rx.lock().await.changed().await.unwrap()
     }
 
     fn request_added(&self, request: &Request) {
         match request {
-            Request::RootNode(_, _) | Request::ChildNodes(_, _) => {
+            Request::RootNode(_) | Request::ChildNodes(_) => {
                 self.stats.write().index_requests_inflight += 1
             }
-            Request::Block(_, _) => self.stats.write().block_requests_inflight += 1,
+            Request::Block(_) => self.stats.write().block_requests_inflight += 1,
         }
         self.notify_tracker_task();
     }
 
     fn request_removed(&self, request: &Request) {
         match request {
-            Request::RootNode(_, _) | Request::ChildNodes(_, _) => {
+            Request::RootNode(_) | Request::ChildNodes(_) => {
                 self.stats.write().index_requests_inflight -= 1
             }
-            Request::Block(_, _) => self.stats.write().block_requests_inflight -= 1,
+            Request::Block(_) => self.stats.write().block_requests_inflight -= 1,
         }
         self.notify_tracker_task();
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.lock().unwrap().len()
     }
 
     fn notify_tracker_task(&self) {

@@ -8,9 +8,10 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    scoped_task::{self, ScopedJoinHandle},
     store::{BlockRequestMode, Store},
 };
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, future, sync::Arc};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -19,15 +20,13 @@ use tracing::instrument;
 
 pub(super) struct Client {
     store: Store,
-    tx: mpsc::Sender<Content>,
     rx: mpsc::Receiver<Response>,
-    request_limiter: Arc<Semaphore>,
-    pending_requests: PendingRequests,
-    send_queue: VecDeque<Request>,
-    recv_queue: VecDeque<Success>,
+    pending_requests: Arc<PendingRequests>,
+    request_tx: mpsc::UnboundedSender<Request>,
+    recv_queue: VecDeque<(Success, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
-    stats: Arc<RepositoryStats>,
+    _request_sender: ScopedJoinHandle<()>,
 }
 
 impl Client {
@@ -41,17 +40,22 @@ impl Client {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
 
+        let pending_requests = Arc::new(PendingRequests::new(stats.clone()));
+
+        // We run the sender in a separate task so we can keep sending requests while we're
+        // processing responses (which sometimes takes a while).
+        let (request_sender, request_tx) =
+            start_sender(tx, pending_requests.clone(), request_limiter.clone(), stats);
+
         Self {
             store,
-            tx,
             rx,
-            request_limiter,
-            pending_requests: PendingRequests::new(stats.clone()),
-            send_queue: VecDeque::new(),
+            pending_requests,
+            request_tx,
             recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
             block_tracker,
-            stats,
+            _request_sender: request_sender,
         }
     }
 
@@ -61,7 +65,7 @@ impl Client {
         loop {
             select! {
                 block_id = self.block_tracker.accept() => {
-                    self.send_queue.push_front(Request::Block(block_id));
+                    self.send_request(Request::Block(block_id));
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -70,16 +74,10 @@ impl Client {
                         break;
                     }
                 }
-                send_permit = self.request_limiter.clone().acquire_owned(),
-                    if !self.send_queue.is_empty() =>
-                {
-                    // unwrap is OK because we never `close()` the semaphore.
-                    self.send_request(send_permit.unwrap()).await;
-                }
                 _ = self.pending_requests.expired() => return Err(Error::RequestTimeout),
             }
 
-            while let Some(response) = self.dequeue_response() {
+            while let Some((response, _permit)) = self.dequeue_response() {
                 self.handle_response(response).await?;
             }
         }
@@ -87,37 +85,29 @@ impl Client {
         Ok(())
     }
 
-    async fn send_request(&mut self, permit: OwnedSemaphorePermit) {
-        let request = if let Some(request) = self.send_queue.pop_back() {
-            request
-        } else {
-            // No request scheduled for sending.
-            return;
-        };
-
-        if !self.pending_requests.insert(request, permit) {
-            // The same request is already in-flight.
-            return;
-        }
-
-        self.stats.write().total_requests_cummulative += 1;
-
-        self.tx.send(Content::Request(request)).await.unwrap_or(());
+    fn send_request(&mut self, request: Request) {
+        // Unwrap OK because the sending task never returns.
+        self.request_tx.send(request).unwrap();
     }
 
     fn enqueue_response(&mut self, response: Response) -> Result<()> {
         let response = ProcessedResponse::from(response);
         let request = response.to_request();
 
-        // Only `RootNode` response is allowed to be unsolicited
-        if !self.pending_requests.remove(&request) && !matches!(request, Request::RootNode(_)) {
-            // Unsolicited response
-            return Ok(());
-        }
+        let permit = if let Some(permit) = self.pending_requests.remove(&request) {
+            Some(permit)
+        } else {
+            // Only `RootNode` response is allowed to be unsolicited
+            if !matches!(request, Request::RootNode(_)) {
+                // Unsolicited response
+                return Ok(());
+            }
+            None
+        };
 
         match response {
             ProcessedResponse::Success(response) => {
-                self.recv_queue.push_front(response);
+                self.recv_queue.push_front((response, permit));
             }
             ProcessedResponse::Failure(request) => {
                 tracing::trace!(?request, "request failed");
@@ -134,14 +124,7 @@ impl Client {
         Ok(())
     }
 
-    fn dequeue_response(&mut self) -> Option<Success> {
-        // To avoid en-queueing too many requests to sent (which might become outdated by the time
-        // we get to actually send them) we process a response (which usually produces more
-        // requests to send) only when there are no more requests queued.
-        if !self.send_queue.is_empty() {
-            return None;
-        }
-
+    fn dequeue_response(&mut self) -> Option<(Success, Option<OwnedSemaphorePermit>)> {
         self.recv_queue.pop_back()
     }
 
@@ -179,7 +162,7 @@ impl Client {
 
         if updated {
             tracing::trace!("received updated root node");
-            self.send_queue.push_front(Request::ChildNodes(hash));
+            self.send_request(Request::ChildNodes(hash));
         } else {
             tracing::trace!("received outdated root node");
         }
@@ -207,13 +190,13 @@ impl Client {
         );
 
         for hash in updated_nodes {
-            self.send_queue.push_front(Request::ChildNodes(hash));
+            self.send_request(Request::ChildNodes(hash));
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.send_queue.push_front(Request::RootNode(branch_id));
+            self.send_request(Request::RootNode(branch_id));
         }
 
         Ok(())
@@ -263,7 +246,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.send_queue.push_front(Request::RootNode(branch_id));
+            self.send_request(Request::RootNode(branch_id));
         }
 
         Ok(())
@@ -282,6 +265,46 @@ impl Client {
             Err(error) => Err(error.into()),
         }
     }
+}
+
+fn start_sender(
+    tx: mpsc::Sender<Content>,
+    pending_requests: Arc<PendingRequests>,
+    request_limiter: Arc<Semaphore>,
+    stats: Arc<RepositoryStats>,
+) -> (ScopedJoinHandle<()>, mpsc::UnboundedSender<Request>) {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+
+    let handle = scoped_task::spawn({
+        async move {
+            loop {
+                let request = match request_rx.recv().await {
+                    Some(request) => request,
+                    None => break,
+                };
+
+                // TODO: Postpone sending if we have too many responses queued up in the
+                // `recv_queue`.
+
+                // Unwrap OK because we never `close()` the semaphore.
+                let send_permit = request_limiter.clone().acquire_owned().await.unwrap();
+
+                if !pending_requests.insert(request, send_permit) {
+                    // The same request is already in-flight.
+                    continue;
+                }
+
+                stats.write().total_requests_cummulative += 1;
+
+                tx.send(Content::Request(request)).await.unwrap_or(());
+            }
+
+            // Don't exist so we don't need to check whether `request_tx.send()` fails or not.
+            future::pending::<()>().await;
+        }
+    });
+
+    (handle, request_tx)
 }
 
 enum ProcessedResponse {
