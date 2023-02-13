@@ -1,7 +1,7 @@
 use super::{
     message::{Content, Request, Response},
     repository_stats::RepositoryStats,
-    request::PendingRequests,
+    request::{CompoundPermit, PendingRequests},
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
@@ -17,6 +17,12 @@ use tokio::{
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::instrument;
+
+// Don't send more requests if the number of received responses in the `recv_queue` exceeds this
+// number. Exceeding it means we're processing the responses too slowly so we can decrease the rate
+// at which we're sending requests.
+// TODO: The number is made up, what would be its ideal value?
+const MAX_QUEUED_RESPONSES: usize = 512;
 
 pub(super) struct Client {
     store: Store,
@@ -34,7 +40,7 @@ impl Client {
         store: Store,
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
-        request_limiter: Arc<Semaphore>,
+        peer_request_limiter: Arc<Semaphore>,
         stats: Arc<RepositoryStats>,
     ) -> Self {
         let pool = store.db().clone();
@@ -44,8 +50,12 @@ impl Client {
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
-        let (request_sender, request_tx) =
-            start_sender(tx, pending_requests.clone(), request_limiter.clone(), stats);
+        let (request_sender, request_tx) = start_sender(
+            tx,
+            pending_requests.clone(),
+            peer_request_limiter.clone(),
+            stats,
+        );
 
         Self {
             store,
@@ -270,24 +280,38 @@ impl Client {
 fn start_sender(
     tx: mpsc::Sender<Content>,
     pending_requests: Arc<PendingRequests>,
-    request_limiter: Arc<Semaphore>,
+    peer_request_limiter: Arc<Semaphore>,
     stats: Arc<RepositoryStats>,
 ) -> (ScopedJoinHandle<()>, mpsc::UnboundedSender<Request>) {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
 
     let handle = scoped_task::spawn({
         async move {
+            let client_request_limiter = Arc::new(Semaphore::new(MAX_QUEUED_RESPONSES));
+
             loop {
                 let request = match request_rx.recv().await {
                     Some(request) => request,
                     None => break,
                 };
 
-                // TODO: Postpone sending if we have too many responses queued up in the
-                // `recv_queue`.
+                // Unwraps OK because we never `close()` the semaphores.
+                //
+                // NOTE that the order here is important, we don't want to block the other clients
+                // on this peer if we have too many responses queued up (which is what the
+                // `client_permit` is responsible for limiting)..
+                let client_permit = client_request_limiter
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .unwrap();
 
-                // Unwrap OK because we never `close()` the semaphore.
-                let send_permit = request_limiter.clone().acquire_owned().await.unwrap();
+                let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
+
+                let send_permit = CompoundPermit {
+                    _peer_permit: peer_permit,
+                    client_permit,
+                };
 
                 if !pending_requests.insert(request, send_permit) {
                     // The same request is already in-flight.

@@ -47,7 +47,7 @@ impl PendingRequests {
         }
     }
 
-    pub fn insert(&self, request: Request, permit: OwnedSemaphorePermit) -> bool {
+    pub fn insert(&self, request: Request, permit: CompoundPermit) -> bool {
         match self.map.lock().unwrap().entry(request) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -64,7 +64,9 @@ impl PendingRequests {
     pub fn remove(&self, request: &Request) -> Option<OwnedSemaphorePermit> {
         if let Some(data) = self.map.lock().unwrap().remove(request) {
             self.request_removed(request);
-            Some(data.permit)
+            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
+            // only `drop` it once the request is processed.
+            Some(data.permit.client_permit)
         } else {
             None
         }
@@ -167,5 +169,14 @@ impl Drop for PendingRequests {
 
 struct RequestData {
     timestamp: Instant,
-    permit: OwnedSemaphorePermit,
+    permit: CompoundPermit,
+}
+
+// When sending requests, we need to limit it in two ways:
+//
+// 1. Limit how many requests we send to the peer across all repositories, and
+// 2. Limit sending requests from a Client if too many responses are queued up.
+pub(super) struct CompoundPermit {
+    pub _peer_permit: OwnedSemaphorePermit,
+    pub client_permit: OwnedSemaphorePermit,
 }
