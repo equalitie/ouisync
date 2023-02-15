@@ -333,6 +333,7 @@ async fn failed_block_other_peer() {
             if block::exists(&mut conn, id).await.unwrap() {
                 tracing::warn!("test preconditions not met, trying again");
 
+                drop(conn);
                 drop(conn_bc);
 
                 a_store.db().close().await.unwrap();
