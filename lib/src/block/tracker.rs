@@ -18,7 +18,7 @@ impl BlockTracker {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::default(),
-                    pending_blocks: HashSet::default(),
+                    pending_blocks: HashMap::default(),
                     clients: Slab::new(),
                 }),
                 notify_tx,
@@ -29,7 +29,8 @@ impl BlockTracker {
     /// Begin marking the block with the given id as required. See also [`Require::commit`].
     pub fn begin_require(&self, block_id: BlockId) -> Require {
         let mut inner = self.shared.inner.lock().unwrap();
-        inner.pending_blocks.insert(block_id);
+
+        *inner.pending_blocks.entry(block_id).or_insert(0) += 1;
 
         Require {
             shared: self.shared.clone(),
@@ -94,8 +95,9 @@ pub(crate) struct BlockTrackerClient {
 }
 
 impl BlockTrackerClient {
-    /// Offer to request the given block if it is, or will become, required. Returns `true` if this
-    /// block was offered for the first time, `false` if it was already offered before but not yet
+    /// Offer to request the given block by the client with `client_id` if it is, or will become,
+    /// required. Returns `true` if this block was offered for the first time (by any client), `false` if it was
+    /// already offered before but not yet
     /// accepted or cancelled.
     pub fn offer(&self, block_id: BlockId) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
@@ -216,7 +218,7 @@ impl Require {
     pub fn commit(self) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.pending_blocks.contains(&self.block_id) {
+        if !inner.pending_blocks.contains_key(&self.block_id) {
             // Block already completed in the meantime.
             return;
         }
@@ -242,12 +244,23 @@ impl Require {
 
 impl Drop for Require {
     fn drop(&mut self) {
-        self.shared
+        match self
+            .shared
             .inner
             .lock()
             .unwrap()
             .pending_blocks
-            .remove(&self.block_id);
+            .entry(self.block_id)
+        {
+            Entry::Occupied(mut entry) => {
+                let rc = entry.get_mut();
+                *rc -= 1;
+                if *rc == 0 {
+                    entry.remove();
+                }
+            }
+            Entry::Vacant(_) => {}
+        }
     }
 }
 
@@ -273,7 +286,7 @@ impl Shared {
 // and vice-versa.
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
-    pending_blocks: HashSet<BlockId>,
+    pending_blocks: HashMap<BlockId, usize>,
     clients: Slab<HashSet<BlockId>>,
 }
 
@@ -476,6 +489,22 @@ mod tests {
         require.commit();
 
         assert!(!tracker.contains(&block.id));
+    }
+
+    #[test]
+    fn concurrent_require_and_drop() {
+        let tracker = BlockTracker::new();
+        let client = tracker.client();
+
+        let block = make_block();
+        client.offer(block.id);
+
+        let require1 = tracker.begin_require(block.id);
+        let require2 = tracker.begin_require(block.id);
+        drop(require1);
+        require2.commit();
+
+        assert_eq!(client.try_accept(), Some(block.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
