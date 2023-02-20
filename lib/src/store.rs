@@ -105,7 +105,6 @@ impl Store {
         let handle: task::JoinHandle<Result<()>> = task::spawn(async move {
             tx.commit().await?;
 
-
             // Notify affected branches.
             for writer_id in writer_ids {
                 index.notify(Event::new(Payload::BlockReceived {

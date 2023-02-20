@@ -124,7 +124,7 @@ fn run_tracker(
                 .unwrap()
                 .iter()
                 .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
-                .map(|(k, v)| (k.clone(), v.timestamp));
+                .map(|(k, v)| (*k, v.timestamp));
 
             if let Some((request, timestamp)) = entry {
                 select! {
@@ -136,10 +136,9 @@ fn run_tracker(
                     }
                     _ = time::sleep_until(timestamp + REQUEST_TIMEOUT) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if request_map.lock().unwrap().remove(&request).is_some() {
-                            if from_tracker_tx.send(()).is_err() {
-                                break;
-                            }
+                        if request_map.lock().unwrap().remove(&request).is_some()
+                            && from_tracker_tx.send(()).is_err() {
+                            break;
                         }
                     }
                 };

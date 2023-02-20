@@ -50,12 +50,8 @@ impl Client {
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
-        let (request_sender, request_tx) = start_sender(
-            tx,
-            pending_requests.clone(),
-            peer_request_limiter.clone(),
-            stats,
-        );
+        let (request_sender, request_tx) =
+            start_sender(tx, pending_requests.clone(), peer_request_limiter, stats);
 
         Self {
             store,
