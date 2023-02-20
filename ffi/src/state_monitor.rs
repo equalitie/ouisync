@@ -8,8 +8,7 @@ use std::time::Duration;
 use tokio::time;
 
 /// Retrieve a state monitor corresponding to the `path`.
-pub(crate) fn get(state: &ServerState, path: String) -> Result<StateMonitor> {
-    let path = parse_path(&path)?;
+pub(crate) fn get(state: &ServerState, path: Vec<MonitorId>) -> Result<StateMonitor> {
     state.root_monitor.locate(path).ok_or(Error::EntryNotFound)
 }
 
@@ -17,9 +16,8 @@ pub(crate) fn get(state: &ServerState, path: String) -> Result<StateMonitor> {
 pub(crate) fn subscribe(
     server_state: &ServerState,
     client_state: &ClientState,
-    path: String,
+    path: Vec<MonitorId>,
 ) -> Result<SubscriptionHandle> {
-    let path = parse_path(&path)?;
     let monitor = server_state
         .root_monitor
         .locate(path)
@@ -49,14 +47,4 @@ pub(crate) fn subscribe(
     });
 
     Ok(entry.insert(handle))
-}
-
-fn parse_path(path: &str) -> Result<Vec<MonitorId>> {
-    match path.split('/').map(|s| s.parse()).collect() {
-        Ok(path) => Ok(path),
-        Err(error) => {
-            tracing::error!("Failed to parse state monitor path: {:?}", error);
-            Err(Error::MalformedData)
-        }
-    }
 }

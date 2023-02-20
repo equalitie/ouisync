@@ -5,8 +5,9 @@ use crate::{
     sync::uninitialized_watch,
 };
 use serde::{
+    de::Error as _,
     ser::{SerializeMap, SerializeStruct},
-    Serialize, Serializer,
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
     collections::{btree_map, BTreeMap},
@@ -54,7 +55,7 @@ impl FromStr for MonitorId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
 
-        if let Some(index) = s.find(':') {
+        if let Some(index) = s.rfind(':') {
             let disambiguator = &s[index + 1..];
             let disambiguator = disambiguator.parse().map_err(|_| MonitorIdParseError)?;
 
@@ -71,8 +72,24 @@ impl FromStr for MonitorId {
     }
 }
 
+impl<'de> Deserialize<'de> for MonitorId {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <&str>::deserialize(d)?;
+        s.parse().map_err(D::Error::custom)
+    }
+}
+
 #[derive(Debug)]
 pub struct MonitorIdParseError;
+
+impl fmt::Display for MonitorIdParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse MonitorId")
+    }
+}
 
 #[test]
 fn test_parse_monitor_id() {
@@ -87,6 +104,10 @@ fn test_parse_monitor_id() {
     let id: MonitorId = "baz:1".parse().unwrap();
     assert_eq!(id.name, "baz");
     assert_eq!(id.disambiguator, 1);
+
+    let id: MonitorId = "foo:bar:2".parse().unwrap();
+    assert_eq!(id.name, "foo:bar");
+    assert_eq!(id.disambiguator, 2);
 
     assert!("baz:".parse::<MonitorId>().is_err());
     assert!("baz:qux".parse::<MonitorId>().is_err());

@@ -11,7 +11,7 @@ use crate::{
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{Result, ShareToken};
+use ouisync_lib::{MonitorId, Result, ShareToken};
 use serde::{Deserialize, Deserializer};
 use serde_bytes::ByteBuf;
 use std::{
@@ -158,8 +158,8 @@ pub(crate) enum Request {
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
     NetworkShutdown,
-    StateMonitorGet(String),
-    StateMonitorSubscribe(String),
+    StateMonitorGet(Vec<MonitorId>),
+    StateMonitorSubscribe(Vec<MonitorId>),
     Unsubscribe(SubscriptionHandle),
 }
 
