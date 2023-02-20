@@ -93,7 +93,7 @@ async fn receive(stream: &mut impl socket::Stream) -> Option<ClientEnvelope> {
 }
 
 async fn send(stream: &mut impl socket::Stream, envelope: ServerEnvelope) {
-    let buffer = match rmp_serde::to_vec_named(&envelope) {
+    let buffer = match rmp_serde::to_vec(&envelope) {
         Ok(buffer) => buffer,
         Err(error) => {
             tracing::error!(?error, "failed to encode server message");
