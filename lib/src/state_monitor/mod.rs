@@ -199,7 +199,8 @@ impl StateMonitor {
                 });
                 child
             }
-            btree_map::Entry::Occupied(e) => {
+            btree_map::Entry::Occupied(mut e) => {
+                e.get_mut().refcount += 1;
                 // Unwrap OK because children are responsible for removing themselves from the map
                 // on Drop.
                 e.get().child.upgrade().unwrap()

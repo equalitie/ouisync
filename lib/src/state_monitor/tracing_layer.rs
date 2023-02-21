@@ -113,10 +113,11 @@ impl TraceLayerInner {
     where
         S: for<'a> LookupSpan<'a>,
     {
-        let parent_monitor = match span.parent() {
-            Some(parent_span) => &mut self.spans.get_mut(&parent_span.id()).unwrap().0.monitor,
-            None => &mut self.root_span.monitor,
-        };
+        let parent_monitor = span
+            .parent()
+            .and_then(|parent_span| self.spans.get_mut(&parent_span.id()))
+            .map(|(span, _)| &mut span.monitor)
+            .unwrap_or(&mut self.root_span.monitor);
 
         let mut visitor = AttrsVisitor::new();
         attrs.values().record(&mut visitor);
