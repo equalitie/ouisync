@@ -11,14 +11,9 @@ use crate::{
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{MonitorId, Result, ShareToken};
-use serde::{Deserialize, Deserializer};
+use ouisync_lib::{MonitorId, Result};
+use serde::Deserialize;
 use serde_bytes::ByteBuf;
-use std::{
-    fmt,
-    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
-    str::FromStr,
-};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,8 +24,7 @@ pub(crate) enum Request {
         path: Utf8PathBuf,
         read_password: Option<String>,
         write_password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        share_token: Option<ShareToken>,
+        share_token: Option<String>,
     },
     RepositoryOpen {
         path: Utf8PathBuf,
@@ -41,15 +35,13 @@ pub(crate) enum Request {
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        share_token: Option<ShareToken>,
+        share_token: Option<String>,
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
         old_password: Option<String>,
         new_password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        share_token: Option<ShareToken>,
+        share_token: Option<String>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),
     RepositoryRemoveWriteKey(Handle<RepositoryHolder>),
@@ -84,11 +76,11 @@ pub(crate) enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
-    ShareTokenMode(DeserializeAsStr<ShareToken>),
-    ShareTokenInfoHash(DeserializeAsStr<ShareToken>),
-    ShareTokenSuggestedName(DeserializeAsStr<ShareToken>),
-    ShareTokenNormalize(DeserializeAsStr<ShareToken>),
-    ShareTokenEncode(DeserializeAsStr<ShareToken>),
+    ShareTokenMode(String),
+    ShareTokenInfoHash(String),
+    ShareTokenSuggestedName(String),
+    ShareTokenNormalize(String),
+    ShareTokenEncode(String),
     ShareTokenDecode(ByteBuf),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
@@ -134,21 +126,17 @@ pub(crate) enum Request {
     FileClose(Handle<FileHolder>),
     NetworkSubscribe,
     NetworkBind {
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        quic_v4: Option<SocketAddrV4>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        quic_v6: Option<SocketAddrV6>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        tcp_v4: Option<SocketAddrV4>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
-        tcp_v6: Option<SocketAddrV6>,
+        quic_v4: Option<String>,
+        quic_v6: Option<String>,
+        tcp_v4: Option<String>,
+        tcp_v6: Option<String>,
     },
     NetworkTcpListenerLocalAddrV4,
     NetworkTcpListenerLocalAddrV6,
     NetworkQuicListenerLocalAddrV4,
     NetworkQuicListenerLocalAddrV6,
-    NetworkAddUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
-    NetworkRemoveUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
+    NetworkAddUserProvidedQuicPeer(String),
+    NetworkRemoveUserProvidedQuicPeer(String),
     NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
@@ -278,16 +266,12 @@ pub(crate) async fn dispatch(
         } => repository::create_share_token(server_state, repository, password, access_mode, name)
             .await?
             .into(),
-        Request::ShareTokenMode(token) => share_token::mode(token.into_value()).into(),
-        Request::ShareTokenInfoHash(token) => share_token::info_hash(token.into_value()).into(),
-        Request::ShareTokenSuggestedName(token) => {
-            share_token::suggested_name(token.into_value()).into()
-        }
-        Request::ShareTokenNormalize(token) => token.into_value().to_string().into(),
-        Request::ShareTokenEncode(token) => share_token::encode(token.into_value()).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())
-            .map(|token| token.to_string())
-            .into(),
+        Request::ShareTokenMode(token) => share_token::mode(token)?.into(),
+        Request::ShareTokenInfoHash(token) => share_token::info_hash(token)?.into(),
+        Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token)?.into(),
+        Request::ShareTokenNormalize(token) => share_token::normalize(token)?.into(),
+        Request::ShareTokenEncode(token) => share_token::encode(token)?.into(),
+        Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())?.into(),
         Request::RepositoryAccessMode(repository) => {
             repository::access_mode(server_state, repository).into()
         }
@@ -342,10 +326,9 @@ pub(crate) async fn dispatch(
             quic_v6,
             tcp_v4,
             tcp_v6,
-        } => {
-            network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6).await;
-            ().into()
-        }
+        } => network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6)
+            .await?
+            .into(),
         Request::NetworkTcpListenerLocalAddrV4 => {
             network::tcp_listener_local_addr_v4(server_state).into()
         }
@@ -359,12 +342,10 @@ pub(crate) async fn dispatch(
             network::quic_listener_local_addr_v6(server_state).into()
         }
         Request::NetworkAddUserProvidedQuicPeer(addr) => {
-            network::add_user_provided_quic_peer(server_state, addr);
-            ().into()
+            network::add_user_provided_quic_peer(server_state, addr)?.into()
         }
         Request::NetworkRemoveUserProvidedQuicPeer(addr) => {
-            network::remove_user_provided_quic_peer(server_state, addr);
-            ().into()
+            network::remove_user_provided_quic_peer(server_state, addr)?.into()
         }
         Request::NetworkKnownPeers => network::known_peers(server_state).into(),
         Request::NetworkThisRuntimeId => network::this_runtime_id(server_state).into(),
@@ -403,62 +384,4 @@ pub(crate) async fn dispatch(
     };
 
     Ok(response)
-}
-
-fn deserialize_as_str<'de, D, T>(de: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    let s = <&str>::deserialize(de)?;
-    let v = s.parse().map_err(serde::de::Error::custom)?;
-    Ok(v)
-}
-
-fn deserialize_as_option_str<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    let s = Option::<&str>::deserialize(de)?;
-    if let Some(s) = s {
-        Ok(Some(s.parse().map_err(serde::de::Error::custom)?))
-    } else {
-        Ok(None)
-    }
-}
-
-// HACK: sometimes `#[serde(deserialize_with = "deserialize_as_str")]` doesn't work for some
-// reason, but this wrapper does.
-#[derive(Deserialize)]
-#[serde(transparent)]
-pub(crate) struct DeserializeAsStr<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    #[serde(deserialize_with = "deserialize_as_str")]
-    value: T,
-}
-
-impl<T> DeserializeAsStr<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    pub fn into_value(self) -> T {
-        self.value
-    }
-}
-
-impl<T> fmt::Debug for DeserializeAsStr<T>
-where
-    T: fmt::Debug + FromStr,
-    T::Err: fmt::Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.value.fmt(f)
-    }
 }

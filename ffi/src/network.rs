@@ -3,9 +3,12 @@ use crate::{
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
-use ouisync_lib::{network::peer_addr::PeerAddr, PeerInfo};
+use ouisync_lib::{network::peer_addr::PeerAddr, Error, PeerInfo, Result};
 use serde::Serialize;
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::{
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    str::FromStr,
+};
 use tokio::select;
 
 pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
@@ -32,22 +35,35 @@ impl From<NetworkEvent> for u8 {
 /// parse or are were of incorrect type (e.g. IPv4 instead of IpV6).
 pub(crate) async fn bind(
     state: &ServerState,
-    quic_v4: Option<SocketAddrV4>,
-    quic_v6: Option<SocketAddrV6>,
-    tcp_v4: Option<SocketAddrV4>,
-    tcp_v6: Option<SocketAddrV6>,
-) {
+    quic_v4: Option<String>,
+    quic_v6: Option<String>,
+    tcp_v4: Option<String>,
+    tcp_v6: Option<String>,
+) -> Result<()> {
     let addrs: Vec<_> = [
-        quic_v4.map(|a| PeerAddr::Quic(a.into())),
-        quic_v6.map(|a| PeerAddr::Quic(a.into())),
-        tcp_v4.map(|a| PeerAddr::Tcp(a.into())),
-        tcp_v6.map(|a| PeerAddr::Tcp(a.into())),
+        parse_option(quic_v4)?.map(|a: SocketAddrV4| PeerAddr::Quic(a.into())),
+        parse_option(quic_v6)?.map(|a: SocketAddrV6| PeerAddr::Quic(a.into())),
+        parse_option(tcp_v4)?.map(|a: SocketAddrV4| PeerAddr::Tcp(a.into())),
+        parse_option(tcp_v6)?.map(|a: SocketAddrV6| PeerAddr::Tcp(a.into())),
     ]
     .into_iter()
     .flatten()
     .collect();
 
     state.network.handle().bind(&addrs).await;
+
+    Ok(())
+}
+
+fn parse_option<T>(input: Option<String>) -> Result<Option<T>>
+where
+    T: FromStr,
+{
+    input
+        .as_deref()
+        .map(T::from_str)
+        .transpose()
+        .map_err(|_| Error::MalformedData)
 }
 
 /// Subscribe to network event notifications.
@@ -120,8 +136,11 @@ pub(crate) fn quic_listener_local_addr_v6(state: &ServerState) -> Option<SocketA
 /// Add a QUIC endpoint to which which OuiSync shall attempt to connect. Upon failure or success
 /// but then disconnection, the endpoint be retried until the below
 /// `network_remove_user_provided_quic_peer` function with the same endpoint is called.
-pub(crate) fn add_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
-    state.network.add_user_provided_peer(&PeerAddr::Quic(addr));
+pub(crate) fn add_user_provided_quic_peer(state: &ServerState, addr: String) -> Result<()> {
+    let addr = addr.parse().map_err(|_| Error::MalformedData)?;
+    let addr = PeerAddr::Quic(addr);
+    state.network.add_user_provided_peer(&addr);
+    Ok(())
 }
 
 /// Remove a QUIC endpoint from the list of user provided QUIC peers (added by the above
@@ -130,10 +149,11 @@ pub(crate) fn add_user_provided_quic_peer(state: &ServerState, addr: SocketAddr)
 /// disconnection if the connection has already been established. But if the peers disconnected due
 /// to other reasons, the connection to this `addr` shall not be reattempted after the call to this
 /// function.
-pub(crate) fn remove_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
-    state
-        .network
-        .remove_user_provided_peer(&PeerAddr::Quic(addr));
+pub(crate) fn remove_user_provided_quic_peer(state: &ServerState, addr: String) -> Result<()> {
+    let addr = addr.parse().map_err(|_| Error::MalformedData)?;
+    let addr = PeerAddr::Quic(addr);
+    state.network.remove_user_provided_peer(&addr);
+    Ok(())
 }
 
 /// Return the list of known peers.
