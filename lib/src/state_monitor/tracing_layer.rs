@@ -64,7 +64,8 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             Some(inner) => inner,
             None => panic!("Tracing started prior to setting a monitor (on_event)"),
         };
-        let span_id = ctx.current_span().id().map(|id| id.into_u64());
+        let span = ctx.current_span();
+        let span_id = span.id();
         inner.on_event(event, span_id);
     }
 
@@ -74,7 +75,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             Some(inner) => inner,
             None => panic!("Tracing started prior to setting a monitor (on_close)"),
         };
-        inner.on_close(id.into_u64());
+        inner.on_close(id);
     }
 
     fn on_record(&self, id: &span::Id, record: &Record<'_>, _ctx: Context<'_, S>) {
@@ -83,7 +84,7 @@ impl<S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for Tra
             Some(inner) => inner,
             None => panic!("Tracing started prior to setting a monitor (on_record)"),
         };
-        inner.on_record(id.into_u64(), record);
+        inner.on_record(id, record);
     }
 }
 
@@ -104,7 +105,7 @@ struct Message {
 struct TraceLayerInner {
     root_span: Span,
     root_message: Option<Message>,
-    spans: HashMap<SpanId, (Span, Option<Message>)>,
+    spans: HashMap<span::Id, (Span, Option<Message>)>,
 }
 
 impl TraceLayerInner {
@@ -113,14 +114,7 @@ impl TraceLayerInner {
         S: for<'a> LookupSpan<'a>,
     {
         let parent_monitor = match span.parent() {
-            Some(parent_span) => {
-                &mut self
-                    .spans
-                    .get_mut(&parent_span.id().into_u64())
-                    .unwrap()
-                    .0
-                    .monitor
-            }
+            Some(parent_span) => &mut self.spans.get_mut(&parent_span.id()).unwrap().0.monitor,
             None => &mut self.root_span.monitor,
         };
 
@@ -132,15 +126,14 @@ impl TraceLayerInner {
             format!("{}({})", span.name(), visitor)
         };
 
-        // There is no guarantee that the span shall have a unique name, so we need to disambiguate
-        // it somehow. TODO: Maybe modify the `StateMonitor` class to include some `u64`
-        // disambiguator that is not presented to the user.
-        let span_monitor = parent_monitor.make_non_unique_child(title, id.into_u64());
+        // Span names are not unique but we still assign the same monitor node to all spans with
+        // the same name (under the same parent) for simplicity.
+        let span_monitor = parent_monitor.make_child(title);
 
         let overwritten = self
             .spans
             .insert(
-                id.into_u64(),
+                id.clone(),
                 (
                     Span {
                         monitor: span_monitor,
@@ -154,17 +147,14 @@ impl TraceLayerInner {
         assert!(!overwritten);
     }
 
-    fn on_event(&mut self, event: &Event<'_>, current_span_id: Option<u64>) {
+    fn on_event(&mut self, event: &Event<'_>, current_span_id: Option<&span::Id>) {
         // `event.parent()` is the span that is explicitly passed to a tracing macro (if any).
-        let span_id = event
-            .parent()
-            .map(|span_id| span_id.into_u64())
-            .or(current_span_id);
+        let span_id = event.parent().or(current_span_id);
 
         // It sometimes happens that we get an event that doesn't have a span. We shove it all into
         // the root monitor, although this may not be 100% correct.
         let (span, message) = match span_id {
-            Some(span_id) => match self.spans.get_mut(&span_id) {
+            Some(span_id) => match self.spans.get_mut(span_id) {
                 Some((span, message)) => (span, message),
                 None => (&mut self.root_span, &mut self.root_message),
             },
@@ -202,12 +192,12 @@ impl TraceLayerInner {
         }
     }
 
-    fn on_close(&mut self, span_id: u64) {
+    fn on_close(&mut self, span_id: span::Id) {
         self.spans.remove(&span_id);
     }
 
-    fn on_record(&mut self, span_id: u64, record: &Record<'_>) {
-        let span = match self.spans.get_mut(&span_id) {
+    fn on_record(&mut self, span_id: &span::Id, record: &Record<'_>) {
+        let span = match self.spans.get_mut(span_id) {
             Some((span, _message)) => span,
             None => return,
         };
@@ -215,8 +205,6 @@ impl TraceLayerInner {
         record.record(&mut RecordVisitor { span });
     }
 }
-
-type SpanId = u64;
 
 //--------------------------------------------------------------------
 struct ForEachField<F> {
