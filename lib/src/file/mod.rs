@@ -18,6 +18,10 @@ use std::{fmt, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tracing::instrument;
 
+// When this many blocks are written, the shared transaction is forcefully commited. This prevents
+// the shared transaction from becoming too big.
+const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
+
 pub struct File {
     blob: Blob,
     parent: ParentContext,
@@ -84,7 +88,14 @@ impl File {
     pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
         let mut tx = self.branch().db().begin_shared_write().await?;
         self.acquire_write_lock()?;
-        self.blob.write(&mut tx, buffer).await?;
+        let block_written = self.blob.write(&mut tx, buffer).await?;
+
+        if block_written
+            && self.branch().uncommitted_block_counter().increment() == MAX_UNCOMMITTED_BLOCKS
+        {
+            tx.commit().await?;
+            self.branch().uncommitted_block_counter().reset();
+        }
 
         Ok(())
     }
@@ -121,7 +132,9 @@ impl File {
             )
             .await?;
         tx.commit().await?;
+
         self.branch().data().notify();
+        self.branch().uncommitted_block_counter().reset();
 
         Ok(())
     }
