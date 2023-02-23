@@ -14,6 +14,7 @@ use std::{
     ffi::CString,
     mem,
     os::raw::{c_char, c_void},
+    panic,
     path::PathBuf,
     ptr, slice,
     sync::Arc,
@@ -175,11 +176,17 @@ impl Session {
 
         let root_monitor = StateMonitor::make_root();
         let session_monitor = root_monitor.make_child("Session");
-        let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
 
         // Init logger
-        let logger =
-            Logger::new(panic_counter, root_monitor.clone()).map_err(Error::InitializeLogger)?;
+        let logger = Logger::new(root_monitor.clone()).map_err(Error::InitializeLogger)?;
+
+        // Setup panic counter
+        let panic_counter = session_monitor.make_value::<u32>("panic_counter".into(), 0);
+        let default_panic_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            *panic_counter.get() += 1;
+            default_panic_hook(panic_info);
+        }));
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()

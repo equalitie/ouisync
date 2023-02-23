@@ -1,4 +1,4 @@
-use ouisync_lib::{MonitoredValue, StateMonitor};
+use ouisync_lib::StateMonitor;
 use std::{io, sync::Once};
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
@@ -6,10 +6,9 @@ use tracing_subscriber::EnvFilter;
 pub(crate) struct Logger;
 
 impl Logger {
-    pub fn new(
-        _panic_counter: MonitoredValue<u32>,
-        _trace_monitor: StateMonitor,
-    ) -> Result<Self, io::Error> {
+    pub fn new(_trace_monitor: StateMonitor) -> Result<Self, io::Error> {
+        // TODO: setup tracing layer
+
         static LOG_INIT: Once = Once::new();
         LOG_INIT.call_once(|| {
             tracing_subscriber::fmt()

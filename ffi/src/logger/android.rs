@@ -6,7 +6,7 @@ use ndk_sys::{
 };
 use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
-use ouisync_lib::{MonitoredValue, StateMonitor, TracingLayer};
+use ouisync_lib::{StateMonitor, TracingLayer};
 use std::{
     ffi::{CStr, CString},
     io::{self, BufRead, BufReader, Write},
@@ -25,7 +25,7 @@ use std::{
 // release mode.
 const TAG: &str = "flutter-ouisync";
 
-static TRACING_LAYER: Lazy<TracingLayer> = Lazy::new(|| TracingLayer::new());
+static TRACING_LAYER: Lazy<TracingLayer> = Lazy::new(TracingLayer::new);
 
 pub(crate) struct Logger {
     _stdout: StdRedirect,
@@ -33,16 +33,13 @@ pub(crate) struct Logger {
 }
 
 impl Logger {
-    pub fn new(
-        panic_counter: MonitoredValue<u32>,
-        trace_monitor: StateMonitor,
-    ) -> Result<Self, io::Error> {
+    pub fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
         // This should be set up before `setup_logger` is called, otherwise we won't see
         // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
         let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;
         let stderr = StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?;
 
-        panic::set_hook(Box::new(panic_hook(panic_counter)));
+        panic::set_hook(Box::new(panic_hook));
         setup_logger(trace_monitor);
 
         Ok(Self {
@@ -122,8 +119,7 @@ impl Drop for StdRedirect {
                     ANDROID_LOG_FATAL,
                     format!(
                         "Failed to point the redirected file descriptor \
-                            to its original target (error code:{})",
-                        r
+                            to its original target (error code:{r})",
                     ),
                 );
             }
@@ -233,28 +229,24 @@ fn setup_logger(trace_monitor: StateMonitor) {
 }
 
 // Print panic messages to the andoid log as well.
-fn panic_hook(panic_counter: MonitoredValue<u32>) -> impl Fn(&PanicInfo) {
-    move |info: &PanicInfo| {
-        *panic_counter.get() += 1;
+fn panic_hook(info: &PanicInfo) {
+    let message = match (info.payload().downcast_ref::<&str>(), info.location()) {
+        (Some(message), Some(location)) => format!(
+            "panic '{}' at {}:{}:{}",
+            message,
+            location.file(),
+            location.line(),
+            location.column(),
+        ),
+        (Some(message), None) => format!("panic '{message}'"),
+        (None, Some(location)) => format!(
+            "panic at {}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column()
+        ),
+        (None, None) => "panic".to_string(),
+    };
 
-        let message = match (info.payload().downcast_ref::<&str>(), info.location()) {
-            (Some(message), Some(location)) => format!(
-                "panic '{}' at {}:{}:{}",
-                message,
-                location.file(),
-                location.line(),
-                location.column(),
-            ),
-            (Some(message), None) => format!("panic '{}'", message),
-            (None, Some(location)) => format!(
-                "panic at {}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            ),
-            (None, None) => "panic".to_string(),
-        };
-
-        print(ANDROID_LOG_FATAL, message);
-    }
+    print(ANDROID_LOG_FATAL, message);
 }
