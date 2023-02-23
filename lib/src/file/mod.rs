@@ -133,8 +133,8 @@ impl File {
             .await?;
         tx.commit().await?;
 
-        self.branch().data().notify();
         self.branch().uncommitted_block_counter().reset();
+        self.branch().data().notify();
 
         Ok(())
     }
