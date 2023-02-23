@@ -201,7 +201,11 @@ fn setup_logger(trace_monitor: StateMonitor) {
     TRACING_LAYER.set_monitor(Some(trace_monitor));
 
     tracing_subscriber::registry()
-        .with(TRACING_LAYER.clone())
+        .with(
+            TRACING_LAYER
+                .clone()
+                .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
+        )
         .with(
             fmt::layer()
                 .pretty()
@@ -212,16 +216,15 @@ fn setup_logger(trace_monitor: StateMonitor) {
                 .with_target(false)
                 .with_file(true)
                 .with_line_number(true)
-                .with_filter(LevelFilter::DEBUG),
-        )
-        .with(
-            Targets::new()
-                // show logs from ouisync-ffi
-                .with_target(env!("CARGO_PKG_NAME"), LevelFilter::TRACE)
-                // show logs from ouisync
-                .with_target("ouisync", LevelFilter::TRACE)
-                // show DHT routing table stats
-                .with_target("btdht::routing", LevelFilter::DEBUG),
+                .with_filter(
+                    Targets::new()
+                        // show logs from ouisync-ffi
+                        .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
+                        // show logs from ouisync
+                        .with_target("ouisync", LevelFilter::DEBUG)
+                        // show DHT routing table stats
+                        .with_target("btdht::routing", LevelFilter::DEBUG),
+                ),
         )
         .try_init()
         // `Err` here just means the logger is already initialized, it's OK to ignore it.

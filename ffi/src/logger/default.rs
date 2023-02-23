@@ -1,28 +1,42 @@
-use ouisync_lib::StateMonitor;
-use std::{io, sync::Once};
-use tracing::metadata::LevelFilter;
-use tracing_subscriber::EnvFilter;
+use ouisync_lib::{StateMonitor, TracingLayer};
+use std::io;
+use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    fmt,
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter, Layer,
+};
 
 pub(crate) struct Logger;
 
 impl Logger {
-    pub fn new(_trace_monitor: StateMonitor) -> Result<Self, io::Error> {
-        // TODO: setup tracing layer
+    pub fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
+        let tracing_layer = TracingLayer::new();
+        tracing_layer.set_monitor(Some(trace_monitor));
 
-        static LOG_INIT: Once = Once::new();
-        LOG_INIT.call_once(|| {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::builder()
-                        // Only show the logs if explicitly enabled with the `RUST_LOG` env
-                        // variable.
-                        .with_default_directive(LevelFilter::OFF.into())
-                        .from_env_lossy(),
-                )
-                .with_file(true)
-                .with_line_number(true)
-                .init()
-        });
+        tracing_subscriber::registry()
+            .with(
+                tracing_layer
+                    .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
+            )
+            .with(
+                fmt::layer()
+                    .pretty()
+                    .with_target(false)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_filter(
+                        EnvFilter::builder()
+                            // Only show the logs if explicitly enabled with the `RUST_LOG` env
+                            // variable.
+                            .with_default_directive(LevelFilter::OFF.into())
+                            .from_env_lossy(),
+                    ),
+            )
+            .try_init()
+            // `Err` here just means the logger is already initialized, it's OK to ignore it.
+            .unwrap_or(());
 
         Ok(Self)
     }
