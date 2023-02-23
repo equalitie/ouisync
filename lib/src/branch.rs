@@ -16,7 +16,10 @@ use crate::{
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
@@ -143,6 +146,10 @@ impl Branch {
         self.shared.blob_pins.acquire(blob_id)
     }
 
+    pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
+        &self.shared.uncommitted_block_counter
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         match self.open_root(MissingBlockStrategy::Fail).await {
             Ok(root) => root.debug_print(print).await,
@@ -168,6 +175,8 @@ impl Branch {
 pub(crate) struct BranchShared {
     pub file_cache: Arc<FileCache>,
     pub blob_pins: Arc<BlobPinSet>,
+    // Number of blocks written without committing the shared transaction.
+    pub uncommitted_block_counter: Arc<AtomicCounter>,
 }
 
 impl BranchShared {
@@ -175,7 +184,29 @@ impl BranchShared {
         Self {
             file_cache: Arc::new(FileCache::new(event_tx)),
             blob_pins: Arc::new(BlobPinSet::new()),
+            uncommitted_block_counter: Arc::new(AtomicCounter::new()),
         }
+    }
+}
+
+pub(crate) struct AtomicCounter(AtomicU32);
+
+impl AtomicCounter {
+    pub fn new() -> Self {
+        Self(AtomicU32::new(0))
+    }
+
+    // Increments the counter by one and returns the new value.
+    pub fn increment(&self) -> u32 {
+        self.0
+            .fetch_add(1, Ordering::Relaxed)
+            .checked_add(1)
+            .expect("counter out of range")
+    }
+
+    // Resets the counter back to zero.
+    pub fn reset(&self) {
+        self.0.store(0, Ordering::Relaxed)
     }
 }
 

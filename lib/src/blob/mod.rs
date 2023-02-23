@@ -177,8 +177,15 @@ impl Blob {
     }
 
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
-    pub async fn write(&mut self, tx: &mut db::WriteTransaction, mut buffer: &[u8]) -> Result<()> {
+    /// Returns whether at least one new block was written into the block store dring this
+    /// operation.
+    pub async fn write(
+        &mut self,
+        tx: &mut db::WriteTransaction,
+        mut buffer: &[u8],
+    ) -> Result<bool> {
         let mut snapshot = None;
+        let mut block_written = false;
 
         loop {
             let len = self.current_block.content.write(buffer);
@@ -224,9 +231,11 @@ impl Blob {
             self.write_len(tx, snapshot).await?;
             self.write_current_block(tx, snapshot).await?;
             self.replace_current_block(locator, id, content)?;
+
+            block_written = true;
         }
 
-        Ok(())
+        Ok(block_written)
     }
 
     /// Seek to an offset in the blob.

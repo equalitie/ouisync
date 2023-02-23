@@ -443,6 +443,7 @@ impl SnapshotData {
         );
 
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
+        self.remove_all_older(tx).await?;
 
         Ok(())
     }
