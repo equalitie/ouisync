@@ -130,8 +130,8 @@ pub unsafe extern "C" fn session_channel_send(
     payload_ptr: *mut u8,
     payload_len: u64,
 ) {
-    let payload = slice::from_raw_parts_mut(payload_ptr, payload_len as usize);
-    let payload = payload.to_vec();
+    let payload = slice::from_raw_parts(payload_ptr, payload_len as usize);
+    let payload = payload.into();
 
     session.get().senders.get(sender).send(payload).ok();
 }

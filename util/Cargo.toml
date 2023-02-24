@@ -14,7 +14,7 @@ name = "btdht"
 path = "src/btdht.rs"
 
 [dependencies]
-async-trait   = "0.1.56"
+async-trait = { workspace = true }
 futures-util = { version = "0.3.21", default-features = false }
 btdht = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../lib" }

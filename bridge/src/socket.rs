@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use std::{
     io,
@@ -17,6 +18,13 @@ impl<T> Stream for T where
         + futures_util::Sink<Vec<u8>, Error = io::Error>
         + Unpin
 {
+}
+
+#[async_trait]
+pub trait Acceptor {
+    type Stream: Stream;
+
+    async fn accept(&self) -> io::Result<Self::Stream>;
 }
 
 pub mod memory {
@@ -91,6 +99,81 @@ pub mod memory {
     }
 }
 
+pub mod local {
+    pub use interprocess::local_socket::{
+        tokio::LocalSocketListener, LocalSocketName, ToLocalSocketName,
+    };
+
+    use super::*;
+    use interprocess::local_socket::tokio::LocalSocketStream;
+    use tokio_util::{
+        codec::{length_delimited::LengthDelimitedCodec, Framed},
+        compat::{Compat, FuturesAsyncReadCompatExt},
+    };
+
+    pub struct Listener(LocalSocketListener);
+
+    impl Listener {
+        pub fn bind<'a>(name: impl ToLocalSocketName<'a>) -> io::Result<Self> {
+            Ok(Self(LocalSocketListener::bind(name)?))
+        }
+    }
+
+    #[async_trait]
+    impl Acceptor for Listener {
+        type Stream = Stream;
+
+        async fn accept(&self) -> io::Result<Self::Stream> {
+            Ok(Stream(Framed::new(
+                self.0.accept().await?.compat(),
+                LengthDelimitedCodec::new(),
+            )))
+        }
+    }
+
+    pub struct Stream(Framed<Compat<LocalSocketStream>, LengthDelimitedCodec>);
+
+    impl futures_util::Stream for Stream {
+        type Item = io::Result<Vec<u8>>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Ready(
+                ready!(self.0.poll_next_unpin(cx))
+                    .map(|result| result.map(|bytes| bytes.into_iter().collect())),
+            )
+        }
+    }
+
+    impl futures_util::Sink<Vec<u8>> for Stream {
+        type Error = io::Error;
+
+        fn poll_ready(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            self.0.poll_ready_unpin(cx)
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: Vec<u8>) -> Result<(), Self::Error> {
+            self.0.start_send_unpin(item.into())
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            self.0.poll_flush_unpin(cx)
+        }
+
+        fn poll_close(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            self.0.poll_close_unpin(cx)
+        }
+    }
+}
+
 pub mod ws {
     use super::*;
     use std::net::SocketAddr;
@@ -115,8 +198,13 @@ pub mod ws {
 
             Ok(Self(listener))
         }
+    }
 
-        pub async fn accept(&self) -> io::Result<Stream> {
+    #[async_trait]
+    impl Acceptor for Listener {
+        type Stream = Stream;
+
+        async fn accept(&self) -> io::Result<Self::Stream> {
             match self.0.accept().await {
                 Ok((stream, addr)) => {
                     // Convert to websocket
@@ -151,7 +239,9 @@ pub mod ws {
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             loop {
                 match ready!(self.0.poll_next_unpin(cx)) {
-                    Some(Ok(Message::Binary(payload))) => return Poll::Ready(Some(Ok(payload))),
+                    Some(Ok(Message::Binary(payload))) => {
+                        return Poll::Ready(Some(Ok(payload)));
+                    }
                     Some(Ok(
                         message @ (Message::Text(_)
                         | Message::Ping(_)

@@ -20,6 +20,6 @@ pub use self::{
     error::{Error, ErrorCode, Result},
     file::FileHolder,
     registry::{Handle, Registry},
-    server::{run_client, Server},
+    server::{run_client, run_server},
     state::{ClientState, ServerState},
 };

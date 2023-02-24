@@ -10,9 +10,11 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 camino = { version = "1.0.9", features = ["serde1"] }
 futures-util = { workspace = true }
 hex = "0.4.3"
+interprocess = { version = "1.2.1", features = ["tokio_support"] }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rmp-serde = "1.1.0"
 scoped_task = { path = "../scoped_task" }
@@ -21,7 +23,7 @@ serde_bytes = "0.11.8"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["codec", "compat"] }
 tokio-tungstenite = "0.18.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -2,38 +2,29 @@ use crate::{
     client_message::{self, Request},
     error::{Error, Result},
     server_message::{ServerMessage, Value},
-    socket,
+    socket::{self, Acceptor},
     state::{ClientState, ServerState},
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use tokio::{select, sync::mpsc, task::JoinSet};
 
-pub struct Server {
-    listener: socket::ws::Listener,
-}
+pub async fn run_server<A>(listener: A, state: Arc<ServerState>)
+where
+    A: Acceptor,
+    A::Stream: Send + 'static,
+{
+    let mut clients = JoinSet::new();
 
-impl Server {
-    pub async fn bind(addr: SocketAddr) -> Result<Self> {
-        let listener = socket::ws::Listener::bind(addr)
-            .await
-            .map_err(Error::Bind)?;
-        Ok(Self { listener })
-    }
-
-    pub async fn run(self, state: Arc<ServerState>) {
-        let mut clients = JoinSet::new();
-
-        loop {
-            match self.listener.accept().await {
-                Ok(stream) => {
-                    let state = state.clone();
-                    clients.spawn(async move { run_client(stream, &state).await });
-                }
-                Err(error) => {
-                    tracing::error!(?error, "failed to accept client");
-                    break;
-                }
+    loop {
+        match listener.accept().await {
+            Ok(stream) => {
+                let state = state.clone();
+                clients.spawn(async move { run_client(stream, &state).await });
+            }
+            Err(error) => {
+                tracing::error!(?error, "failed to accept client");
+                break;
             }
         }
     }

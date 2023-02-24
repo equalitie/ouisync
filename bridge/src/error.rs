@@ -13,8 +13,6 @@ pub enum Error {
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
-    #[error("failed to bind listener")]
-    Bind(#[source] io::Error),
     #[error("request is malformed")]
     MalformedRequest(#[source] rmp_serde::decode::Error),
     #[error("argument is not valid")]
@@ -45,9 +43,7 @@ impl Error {
                     | EntryIsDirectory | Writer(_) | RequestTimeout => ErrorCode::Other,
                 }
             }
-            Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Bind(_) => {
-                ErrorCode::Other
-            }
+            Self::InitializeLogger(_) | Self::InitializeRuntime(_) => ErrorCode::Other,
             Self::MalformedRequest(_) => ErrorCode::MalformedRequest,
             Self::InvalidArgument => ErrorCode::InvalidArgument,
         }
