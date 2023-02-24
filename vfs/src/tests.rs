@@ -70,7 +70,7 @@ async fn attempt_to_read_non_existing_directory() {
 
     match fs::read_dir(base_dir.path().join("mnt").join("missing")).await {
         Err(error) if error.kind() == ErrorKind::NotFound => (),
-        Err(error) => panic!("unexpected error {}", error),
+        Err(error) => panic!("unexpected error {error}"),
         Ok(_) => panic!("unexpected success"),
     }
 }

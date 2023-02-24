@@ -236,7 +236,7 @@ impl fmt::Display for PathDisplay<'_> {
                 write!(f, "/")?;
             }
 
-            write!(f, "{}", last)
+            write!(f, "{last}")
         } else {
             Ok(())
         }

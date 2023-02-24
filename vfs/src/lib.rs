@@ -957,9 +957,6 @@ fn to_error_code(error: &Error) -> libc::c_int {
         | Error::MalformedData
         | Error::MalformedDirectory
         | Error::WrongBlockLength(_)
-        | Error::InitializeLogger(_)
-        | Error::InitializeRuntime(_)
-        | Error::Interface(_)
         | Error::Writer(_)
         | Error::StorageVersionMismatch => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,

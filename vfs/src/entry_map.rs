@@ -47,10 +47,10 @@ impl EntryMap {
             let h = index_to_handle(i);
             match entry {
                 JointEntry::File(file) => {
-                    print.display(&format!("{}: {:?}", h, file));
+                    print.display(&format_args!("{h}: {file:?}"));
                 }
                 JointEntry::Directory(dir) => {
-                    print.display(&format!("{}: {:?}", h, dir));
+                    print.display(&format_args!("{h}: {dir:?}"));
                 }
             }
         }

@@ -1,9 +1,13 @@
 use crate::{
-    registry::Handle, repository::RepositoryHolder, session::SessionHandle, state::ServerState,
+    error::{Error, Result},
+    registry::Handle,
+    repository::RepositoryHolder,
+    session::SessionHandle,
+    state::ServerState,
     utils::Port,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, Error, File, Result};
+use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, File};
 use std::{convert::TryInto, io::SeekFrom, os::raw::c_int};
 
 pub struct FileHolder {
@@ -58,19 +62,21 @@ pub(crate) async fn remove(
         .get(repo)
         .repository
         .remove_entry(&path)
-        .await
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn close(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
     if let Some(holder) = state.files.remove(handle) {
-        holder.file.lock().await.flush().await
-    } else {
-        Ok(())
+        holder.file.lock().await.flush().await?
     }
+
+    Ok(())
 }
 
 pub(crate) async fn flush(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
-    state.files.get(handle).file.lock().await.flush().await
+    state.files.get(handle).file.lock().await.flush().await?;
+    Ok(())
 }
 
 /// Read at most `len` bytes from the file and returns them. The returned buffer can be shorter
@@ -81,7 +87,7 @@ pub(crate) async fn read(
     offset: u64,
     len: u64,
 ) -> Result<Vec<u8>> {
-    let len: usize = len.try_into().map_err(|_| Error::OffsetOutOfRange)?;
+    let len: usize = len.try_into().map_err(|_| Error::InvalidArgument)?;
     let mut buffer = vec![0; len];
 
     let holder = state.files.get(handle);
@@ -108,7 +114,7 @@ pub(crate) async fn write(
     let local_branch = holder
         .local_branch
         .as_ref()
-        .ok_or(Error::PermissionDenied)?
+        .ok_or(ouisync_lib::Error::PermissionDenied)?
         .clone();
 
     file.seek(SeekFrom::Start(offset)).await?;
@@ -131,7 +137,7 @@ pub(crate) async fn truncate(
     let local_branch = holder
         .local_branch
         .as_ref()
-        .ok_or(Error::PermissionDenied)?
+        .ok_or(ouisync_lib::Error::PermissionDenied)?
         .clone();
 
     file.fork(local_branch).await?;
@@ -169,7 +175,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 
     session.runtime.spawn(async move {
         let mut src = src.file.lock().await;
-        let result = src.copy_to_writer(&mut dst).await;
+        let result = src.copy_to_writer(&mut dst).await.map_err(Error::from);
 
         port_sender.send_result(port, result);
     });

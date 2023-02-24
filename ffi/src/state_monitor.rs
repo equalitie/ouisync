@@ -1,15 +1,19 @@
 use crate::{
+    error::Result,
     server_message::Notification,
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
-use ouisync_lib::{Error, MonitorId, Result, StateMonitor};
+use ouisync_lib::{MonitorId, StateMonitor};
 use std::time::Duration;
 use tokio::time;
 
 /// Retrieve a state monitor corresponding to the `path`.
 pub(crate) fn get(state: &ServerState, path: Vec<MonitorId>) -> Result<StateMonitor> {
-    state.root_monitor.locate(path).ok_or(Error::EntryNotFound)
+    Ok(state
+        .root_monitor
+        .locate(path)
+        .ok_or(ouisync_lib::Error::EntryNotFound)?)
 }
 
 /// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
@@ -21,7 +25,7 @@ pub(crate) fn subscribe(
     let monitor = server_state
         .root_monitor
         .locate(path)
-        .ok_or(Error::EntryNotFound)?;
+        .ok_or(ouisync_lib::Error::EntryNotFound)?;
     let mut rx = monitor.subscribe();
 
     let notification_tx = client_state.notification_tx.clone();

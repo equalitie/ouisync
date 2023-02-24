@@ -1,5 +1,5 @@
 use super::dart;
-use ouisync_lib::{Error, Result};
+use crate::error::{Error, Result};
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,
@@ -63,12 +63,12 @@ pub(crate) unsafe fn ptr_to_maybe_str<'a>(ptr: *const c_char) -> Result<Option<&
     Ok(Some(
         CStr::from_ptr(ptr)
             .to_str()
-            .map_err(|_| Error::MalformedData)?,
+            .map_err(|_| Error::InvalidArgument)?,
     ))
 }
 
 pub(crate) fn str_to_c_string(s: &str) -> Result<CString> {
-    CString::new(s.as_bytes()).map_err(|_| Error::MalformedData)
+    CString::new(s.as_bytes()).map_err(|_| Error::InvalidArgument)
 }
 
 pub(crate) fn str_to_ptr(s: &str) -> *mut c_char {

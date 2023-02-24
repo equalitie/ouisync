@@ -1,6 +1,58 @@
-use ouisync_lib::Error;
 use serde::Serialize;
 use std::io;
+use thiserror::Error;
+
+/// A specialized `Result` type for convenience.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("library error")]
+    Library(#[from] ouisync_lib::Error),
+    #[error("failed to initialize logger")]
+    InitializeLogger(#[source] io::Error),
+    #[error("failed to initialize runtime")]
+    InitializeRuntime(#[source] io::Error),
+    #[error("failed to bind listener")]
+    Bind(#[source] io::Error),
+    #[error("request is malformed")]
+    MalformedRequest(#[source] rmp_serde::decode::Error),
+    #[error("argument is not valid")]
+    InvalidArgument,
+}
+
+impl Error {
+    pub(crate) fn to_error_code(&self) -> ErrorCode {
+        match self {
+            Self::Library(error) => {
+                use ouisync_lib::Error::*;
+
+                match error {
+                    Db(_) => ErrorCode::Db,
+                    DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
+                    PermissionDenied => ErrorCode::PermissionDenied,
+                    MalformedData | MalformedDirectory => ErrorCode::MalformedData,
+                    EntryExists => ErrorCode::EntryExists,
+                    EntryNotFound => ErrorCode::EntryNotFound,
+                    AmbiguousEntry => ErrorCode::AmbiguousEntry,
+                    DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
+                    OperationNotSupported | ConcurrentWriteNotSupported => {
+                        ErrorCode::OperationNotSupported
+                    }
+                    NonUtf8FileName | OffsetOutOfRange => ErrorCode::InvalidArgument,
+                    StorageVersionMismatch => ErrorCode::StorageVersionMismatch,
+                    BlockNotFound(_) | BlockNotReferenced | WrongBlockLength(_) | EntryIsFile
+                    | EntryIsDirectory | Writer(_) | RequestTimeout => ErrorCode::Other,
+                }
+            }
+            Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Bind(_) => {
+                ErrorCode::Other
+            }
+            Self::MalformedRequest(_) => ErrorCode::MalformedRequest,
+            Self::InvalidArgument => ErrorCode::InvalidArgument,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Serialize)]
 #[repr(u16)]
@@ -26,6 +78,12 @@ pub enum ErrorCode {
     OperationNotSupported = 8,
     /// Failed to read from or write into the device ID config file
     DeviceIdConfig = 10,
+    /// Argument passed to a function is not valid
+    InvalidArgument = 11,
+    /// Interface request is malformed
+    MalformedRequest = 12,
+    /// Storage format version mismatch
+    StorageVersionMismatch = 13,
     /// Unspecified error
     Other = 65535,
 }
@@ -33,45 +91,5 @@ pub enum ErrorCode {
 impl From<ErrorCode> for u16 {
     fn from(error_code: ErrorCode) -> u16 {
         error_code as u16
-    }
-}
-
-pub(crate) trait ToErrorCode {
-    fn to_error_code(&self) -> ErrorCode;
-}
-
-impl ToErrorCode for Error {
-    fn to_error_code(&self) -> ErrorCode {
-        match self {
-            Self::Db(_) => ErrorCode::Db,
-            Self::DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
-            Self::PermissionDenied => ErrorCode::PermissionDenied,
-            Self::MalformedData | Self::MalformedDirectory => ErrorCode::MalformedData,
-            Self::EntryExists => ErrorCode::EntryExists,
-            Self::EntryNotFound => ErrorCode::EntryNotFound,
-            Self::AmbiguousEntry => ErrorCode::AmbiguousEntry,
-            Self::DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
-            Self::OperationNotSupported | Self::ConcurrentWriteNotSupported => ErrorCode::OperationNotSupported,
-            Self::BlockNotFound(_)
-            | Self::BlockNotReferenced
-            | Self::WrongBlockLength(_)
-            | Self::EntryIsFile
-            | Self::EntryIsDirectory
-            | Self::NonUtf8FileName
-            | Self::OffsetOutOfRange
-            | Self::InitializeLogger(_)
-            | Self::InitializeRuntime(_)
-            | Self::Interface(_)
-            | Self::Writer(_)
-            | Self::RequestTimeout
-            // TODO: add separate code for `StorageVersionMismatch`
-            | Self::StorageVersionMismatch => ErrorCode::Other,
-        }
-    }
-}
-
-impl ToErrorCode for io::Error {
-    fn to_error_code(&self) -> ErrorCode {
-        ErrorCode::Other
     }
 }

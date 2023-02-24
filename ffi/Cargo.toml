@@ -21,6 +21,7 @@ rmp-serde = "1.1.0"
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = "0.11.8"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }

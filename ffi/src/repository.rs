@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use crate::{
+    error::{Error, Result},
     registry::Handle,
     server_message::Notification,
     session::SubscriptionHandle,
@@ -10,9 +10,10 @@ use ouisync_lib::{
     crypto::Password,
     device_id,
     network::{self, Registration},
-    path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
-    Progress, Repository, RepositoryDb, Result, ShareToken,
+    path, Access, AccessMode, AccessSecrets, EntryType, Event, LocalSecret, Payload, Progress,
+    Repository, RepositoryDb, ShareToken,
 };
+use std::borrow::Cow;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
@@ -140,10 +141,10 @@ pub(crate) async fn close(state: &ServerState, handle: Handle<RepositoryHolder>)
     let holder = state.repositories.remove(handle);
 
     if let Some(holder) = holder {
-        holder.repository.close().await
-    } else {
-        Ok(())
+        holder.repository.close().await?
     }
+
+    Ok(())
 }
 
 /// If `share_token` is null, the function will try with the currently active access secrets in the
@@ -175,7 +176,9 @@ pub(crate) async fn set_read_access(
     holder
         .repository
         .set_read_access(local_read_secret.as_ref(), access_secrets.as_ref())
-        .await
+        .await?;
+
+    Ok(())
 }
 
 /// If `share_token` is `None`, the function will try with the currently active access secrets in the
@@ -234,8 +237,13 @@ pub(crate) async fn remove_read_key(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<()> {
-    let holder = state.repositories.get(handle);
-    holder.repository.remove_read_key().await
+    state
+        .repositories
+        .get(handle)
+        .repository
+        .remove_read_key()
+        .await?;
+    Ok(())
 }
 
 /// Note that removing the write key will leave read key intact.
@@ -243,8 +251,13 @@ pub(crate) async fn remove_write_key(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<()> {
-    let holder = state.repositories.get(handle);
-    holder.repository.remove_write_key().await
+    state
+        .repositories
+        .get(handle)
+        .repository
+        .remove_write_key()
+        .await?;
+    Ok(())
 }
 
 /// Returns true if the repository requires a local password to be opened for reading.
@@ -252,11 +265,12 @@ pub(crate) async fn requires_local_password_for_reading(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
-    let holder = state.repositories.get(handle);
-    holder
+    Ok(state
+        .repositories
+        .get(handle)
         .repository
         .requires_local_password_for_reading()
-        .await
+        .await?)
 }
 
 /// Returns true if the repository requires a local password to be opened for writing.
@@ -264,11 +278,12 @@ pub(crate) async fn requires_local_password_for_writing(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
-    let holder = state.repositories.get(handle);
-    holder
+    Ok(state
+        .repositories
+        .get(handle)
         .repository
         .requires_local_password_for_writing()
-        .await
+        .await?)
 }
 
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
@@ -302,8 +317,8 @@ pub(crate) async fn entry_type(
 
     match holder.repository.lookup_type(path).await {
         Ok(entry_type) => Ok(Some(entry_type_to_num(entry_type))),
-        Err(Error::EntryNotFound) => Ok(None),
-        Err(error) => Err(error),
+        Err(ouisync_lib::Error::EntryNotFound) => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -315,13 +330,15 @@ pub(crate) async fn move_entry(
     dst: Utf8PathBuf,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
-    let (src_dir, src_name) = path::decompose(&src).ok_or(Error::EntryNotFound)?;
-    let (dst_dir, dst_name) = path::decompose(&dst).ok_or(Error::EntryNotFound)?;
+    let (src_dir, src_name) = path::decompose(&src).ok_or(ouisync_lib::Error::EntryNotFound)?;
+    let (dst_dir, dst_name) = path::decompose(&dst).ok_or(ouisync_lib::Error::EntryNotFound)?;
 
     holder
         .repository
         .move_entry(src_dir, src_name, dst_dir, dst_name)
-        .await
+        .await?;
+
+    Ok(())
 }
 
 /// Subscribe to change notifications from the repository.
@@ -444,12 +461,12 @@ pub(crate) async fn sync_progress(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
 ) -> Result<Progress> {
-    state
+    Ok(state
         .repositories
         .get(handle)
         .repository
         .sync_progress()
-        .await
+        .await?)
 }
 
 pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
@@ -468,7 +485,7 @@ fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
         ACCESS_MODE_BLIND => Ok(AccessMode::Blind),
         ACCESS_MODE_READ => Ok(AccessMode::Read),
         ACCESS_MODE_WRITE => Ok(AccessMode::Write),
-        _ => Err(Error::MalformedData),
+        _ => Err(Error::InvalidArgument),
     }
 }
 

@@ -34,7 +34,7 @@ impl fmt::Display for OpenFlags {
                     write!(f, "|")?;
                 }
 
-                write!(f, "{}", name)?;
+                write!(f, "{name}")?;
                 bar = true;
             }
 

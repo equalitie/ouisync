@@ -1,5 +1,6 @@
 use crate::{
     directory,
+    error::Result,
     file::{self, FileHolder},
     network,
     registry::Handle,
@@ -11,7 +12,7 @@ use crate::{
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{MonitorId, Result, ShareToken};
+use ouisync_lib::{MonitorId, ShareToken};
 use serde::{Deserialize, Deserializer};
 use serde_bytes::ByteBuf;
 use std::{

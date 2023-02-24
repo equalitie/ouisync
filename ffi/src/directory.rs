@@ -1,10 +1,10 @@
 use crate::state::ServerState;
 use crate::{
+    error::Result,
     registry::Handle,
     repository::{entry_type_to_num, RepositoryHolder},
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::Result;
 use serde::Serialize;
 
 // Currently this is only a read-only snapshot of a directory.
@@ -62,8 +62,10 @@ pub(crate) async fn remove(
     let repo = &state.repositories.get(repo).repository;
 
     if recursive {
-        repo.remove_entry_recursively(path).await
+        repo.remove_entry_recursively(path).await?
     } else {
-        repo.remove_entry(path).await
+        repo.remove_entry(path).await?
     }
+
+    Ok(())
 }

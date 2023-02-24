@@ -1,11 +1,11 @@
 use crate::{
     client_message::{self, Request},
+    error::{Error, Result},
     server_message::{ServerMessage, Value},
     socket,
     state::{ClientState, ServerState},
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
-use ouisync_lib::{Error, Result};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{select, sync::mpsc, task::JoinSet};
 
@@ -17,7 +17,7 @@ impl Server {
     pub async fn bind(addr: SocketAddr) -> Result<Self> {
         let listener = socket::ws::Listener::bind(addr)
             .await
-            .map_err(Error::Interface)?;
+            .map_err(Error::Bind)?;
         Ok(Self { listener })
     }
 
@@ -93,7 +93,7 @@ async fn receive(stream: &mut impl socket::Stream) -> Option<(u64, Result<Reques
 
         let body = rmp_serde::from_slice(&buffer[8..]).map_err(|error| {
             tracing::error!(?error, "failed to decode client message body");
-            Error::MalformedData
+            Error::MalformedRequest(error)
         });
 
         return Some((id, body));

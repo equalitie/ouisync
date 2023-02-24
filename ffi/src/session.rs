@@ -1,6 +1,6 @@
 use crate::{
     dart::{DartCObject, PostDartCObjectFn},
-    error::{ErrorCode, ToErrorCode},
+    error::{Error, ErrorCode, Result},
     logger::Logger,
     registry::{Handle, Registry},
     server::{self, Server},
@@ -8,7 +8,7 @@ use crate::{
     state::ServerState,
     utils::{self, Port, UniqueHandle},
 };
-use ouisync_lib::{network::Network, ConfigStore, Error, Result, StateMonitor};
+use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::{
     ffi::CString,

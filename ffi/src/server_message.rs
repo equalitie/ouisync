@@ -1,10 +1,10 @@
 use crate::{
     directory::Directory,
-    error::{ErrorCode, ToErrorCode},
+    error::{ErrorCode, Result},
     network::NetworkEvent,
     registry::Handle,
 };
-use ouisync_lib::{PeerInfo, Progress, Result, StateMonitor};
+use ouisync_lib::{PeerInfo, Progress, StateMonitor};
 use serde::Serialize;
 use serde_bytes::ByteBuf;
 use std::net::SocketAddr;
