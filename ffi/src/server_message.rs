@@ -3,48 +3,11 @@ use crate::{
     error::{ErrorCode, ToErrorCode},
     network::NetworkEvent,
     registry::Handle,
-    request::Request,
 };
 use ouisync_lib::{PeerInfo, Progress, Result, StateMonitor};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_bytes::ByteBuf;
 use std::net::SocketAddr;
-
-#[derive(Deserialize)]
-pub(crate) struct ClientEnvelope {
-    pub id: u64,
-    #[serde(flatten)]
-    pub message: Request,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) struct ServerEnvelope {
-    id: u64,
-    #[serde(flatten)]
-    message: ServerMessage,
-}
-
-impl ServerEnvelope {
-    pub fn response(id: u64, result: Result<Value>) -> Self {
-        let message = match result {
-            Ok(response) => ServerMessage::Success(response),
-            Err(error) => ServerMessage::Failure {
-                code: error.to_error_code(),
-                message: error.to_string(),
-            },
-        };
-
-        Self { id, message }
-    }
-
-    pub fn notification(id: u64, notification: Notification) -> Self {
-        Self {
-            id,
-            message: ServerMessage::Notification(notification),
-        }
-    }
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,6 +15,22 @@ pub(crate) enum ServerMessage {
     Success(Value),
     Failure { code: ErrorCode, message: String },
     Notification(Notification),
+}
+
+impl ServerMessage {
+    pub fn response(result: Result<Value>) -> Self {
+        match result {
+            Ok(response) => Self::Success(response),
+            Err(error) => Self::Failure {
+                code: error.to_error_code(),
+                message: error.to_string(),
+            },
+        }
+    }
+
+    pub fn notification(notification: Notification) -> Self {
+        Self::Notification(notification)
+    }
 }
 
 #[derive(Serialize)]

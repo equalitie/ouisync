@@ -14,12 +14,12 @@ pub mod repository;
 pub mod session;
 pub mod share_token;
 
+mod client_message;
 mod dart;
 mod logger;
-mod protocol;
 mod registry;
-mod request;
 mod server;
+mod server_message;
 mod socket;
 mod state;
 mod state_monitor;

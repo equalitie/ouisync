@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use crate::{
-    protocol::Notification,
     registry::Handle,
+    server_message::Notification,
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
@@ -12,7 +13,6 @@ use ouisync_lib::{
     path, Access, AccessMode, AccessSecrets, EntryType, Error, Event, LocalSecret, Payload,
     Progress, Repository, RepositoryDb, Result, ShareToken,
 };
-use std::{borrow::Cow, str::FromStr};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
 
@@ -44,14 +44,10 @@ pub(crate) async fn create(
     store: Utf8PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<Handle<RepositoryHolder>> {
     let local_read_password = local_read_password.as_deref().map(Password::new);
     let local_write_password = local_write_password.as_deref().map(Password::new);
-    let share_token = share_token
-        .as_deref()
-        .map(ShareToken::from_str)
-        .transpose()?;
 
     let access_secrets = if let Some(share_token) = share_token {
         share_token.into_secrets()
@@ -164,15 +160,11 @@ pub(crate) async fn set_read_access(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
     local_read_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
 
     // If None, repository shall attempt to use the one it's currently using.
-    let share_token = share_token
-        .as_deref()
-        .map(ShareToken::from_str)
-        .transpose()?;
     let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_read_secret = local_read_password
@@ -207,15 +199,11 @@ pub(crate) async fn set_read_and_write_access(
     handle: Handle<RepositoryHolder>,
     local_old_rw_password: Option<String>,
     local_new_rw_password: Option<String>,
-    share_token: Option<String>,
+    share_token: Option<ShareToken>,
 ) -> Result<()> {
     let holder = state.repositories.get(handle);
 
     // If None, repository shall attempt to use the one it's currently using.
-    let share_token = share_token
-        .as_deref()
-        .map(ShareToken::from_str)
-        .transpose()?;
     let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_old_rw_secret = local_old_rw_password
