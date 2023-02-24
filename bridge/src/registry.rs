@@ -1,4 +1,3 @@
-use crate::dart::DartCObject;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -10,7 +9,7 @@ use std::{
     },
 };
 
-pub(crate) struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
+pub struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
 
 impl<T> Registry<T> {
     pub fn new() -> Self {
@@ -52,7 +51,13 @@ impl<T> Registry<T> {
     }
 }
 
-pub(crate) struct VacantEntry<'a, T>
+impl<T> Default for Registry<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct VacantEntry<'a, T>
 where
     T: 'static,
 {
@@ -118,12 +123,6 @@ impl<T> Copy for Handle<T> {}
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.id).finish()
-    }
-}
-
-impl<T> From<Handle<T>> for DartCObject {
-    fn from(handle: Handle<T>) -> Self {
-        DartCObject::from(handle.id)
     }
 }
 

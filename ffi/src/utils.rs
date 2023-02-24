@@ -1,5 +1,5 @@
 use super::dart;
-use crate::error::{Error, Result};
+use ouisync_bridge::{Error, Result};
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,

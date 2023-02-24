@@ -8,10 +8,10 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 
-pub(crate) struct Logger;
+pub struct Logger;
 
 impl Logger {
-    pub fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
+    pub(crate) fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
         let tracing_layer = TracingLayer::new();
         tracing_layer.set_monitor(Some(trace_monitor));
 

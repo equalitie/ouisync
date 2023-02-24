@@ -4,7 +4,6 @@ use std::path::Path;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate the C bindings header
 
-    let ffi_dir = Path::new("ffi");
     let output_path = Path::new("target").join("bindings.h");
 
     Builder::new()
@@ -16,11 +15,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             ..Default::default()
         })
-        .with_src(ffi_dir.join("src").join("lib.rs"))
-        .exclude_item("DartCObject")
-        .exclude_item("DartCObjectType")
-        .exclude_item("DartCObjectValue")
-        .include_item("ErrorCode")
+        .with_src(Path::new("ffi").join("src").join("lib.rs"))
+        .with_src(Path::new("bridge").join("src").join("constants.rs"))
+        .with_src(Path::new("bridge").join("src").join("error.rs"))
+        .with_src(Path::new("bridge").join("src").join("registry.rs"))
         .generate()?
         .write_to_file(output_path);
 

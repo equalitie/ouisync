@@ -1,8 +1,7 @@
 use crate::{
     error::Result,
     server_message::Notification,
-    session::SubscriptionHandle,
-    state::{ClientState, ServerState},
+    state::{ClientState, ServerState, SubscriptionHandle},
 };
 use ouisync_lib::{MonitorId, StateMonitor};
 use std::time::Duration;

@@ -6,8 +6,7 @@ use crate::{
     error::{Error, Result},
     registry::Handle,
     server_message::Notification,
-    session::SubscriptionHandle,
-    state::{ClientState, ServerState},
+    state::{ClientState, ServerState, SubscriptionHandle},
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{

@@ -2,17 +2,15 @@ use crate::{
     error::{Error, Result},
     registry::Handle,
     repository::RepositoryHolder,
-    session::SessionHandle,
     state::ServerState,
-    utils::Port,
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, File};
-use std::{convert::TryInto, io::SeekFrom, os::raw::c_int};
+use std::{convert::TryInto, io::SeekFrom};
 
 pub struct FileHolder {
-    file: AsyncMutex<File>,
-    local_branch: Option<Branch>,
+    pub file: AsyncMutex<File>,
+    pub local_branch: Option<Branch>,
 }
 
 pub(crate) async fn open(
@@ -149,34 +147,4 @@ pub(crate) async fn truncate(
 /// Retrieve the size of the file in bytes.
 pub(crate) async fn len(state: &ServerState, handle: Handle<FileHolder>) -> u64 {
     state.files.get(handle).file.lock().await.len()
-}
-
-/// Copy the file contents into the provided raw file descriptor.
-///
-/// This function takes ownership of the file descriptor and closes it when it finishes. If the
-/// caller needs to access the descriptor afterwards (or while the function is running), he/she
-/// needs to `dup` it before passing it into this function.
-#[cfg(unix)]
-#[no_mangle]
-pub unsafe extern "C" fn file_copy_to_raw_fd(
-    session: SessionHandle,
-    handle: Handle<FileHolder>,
-    fd: c_int,
-    port: Port<Result<()>>,
-) {
-    use std::os::unix::io::FromRawFd;
-    use tokio::fs;
-
-    let session = session.get();
-    let port_sender = session.port_sender;
-
-    let src = session.state.files.get(handle);
-    let mut dst = fs::File::from_raw_fd(fd);
-
-    session.runtime.spawn(async move {
-        let mut src = src.file.lock().await;
-        let result = src.copy_to_writer(&mut dst).await.map_err(Error::from);
-
-        port_sender.send_result(port, result);
-    });
 }

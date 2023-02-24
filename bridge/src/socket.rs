@@ -5,7 +5,7 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-pub(crate) trait Stream:
+pub trait Stream:
     futures_util::Stream<Item = io::Result<Vec<u8>>>
     + futures_util::Sink<Vec<u8>, Error = io::Error>
     + Unpin
@@ -19,7 +19,7 @@ impl<T> Stream for T where
 {
 }
 
-pub(crate) mod memory {
+pub mod memory {
     use super::*;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -91,7 +91,7 @@ pub(crate) mod memory {
     }
 }
 
-pub(crate) mod ws {
+pub mod ws {
     use super::*;
     use std::net::SocketAddr;
     use tokio::net::{TcpListener, TcpStream};

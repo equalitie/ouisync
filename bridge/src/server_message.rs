@@ -35,7 +35,7 @@ impl ServerMessage {
 
 #[derive(Serialize)]
 #[serde(untagged)]
-pub(crate) enum Value {
+pub enum Value {
     None,
     Bool(bool),
     U8(u8),

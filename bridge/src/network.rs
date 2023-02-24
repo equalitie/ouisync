@@ -1,8 +1,7 @@
 use crate::{
     constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
     server_message::Notification,
-    session::SubscriptionHandle,
-    state::{ClientState, ServerState},
+    state::{ClientState, ServerState, SubscriptionHandle},
 };
 use ouisync_lib::{network::peer_addr::PeerAddr, PeerInfo};
 use serde::Serialize;

@@ -27,13 +27,13 @@ const TAG: &str = "flutter-ouisync";
 
 static TRACING_LAYER: Lazy<TracingLayer> = Lazy::new(TracingLayer::new);
 
-pub(crate) struct Logger {
+pub struct Logger {
     _stdout: StdRedirect,
     _stderr: StdRedirect,
 }
 
 impl Logger {
-    pub fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
+    pub(crate) fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
         // This should be set up before `setup_logger` is called, otherwise we won't see
         // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
         let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;

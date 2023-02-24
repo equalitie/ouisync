@@ -22,7 +22,7 @@ pub enum Error {
 }
 
 impl Error {
-    pub(crate) fn to_error_code(&self) -> ErrorCode {
+    pub fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::Library(error) => {
                 use ouisync_lib::Error::*;

@@ -6,9 +6,8 @@ use crate::{
     registry::Handle,
     repository::{self, RepositoryHolder},
     server_message::Value,
-    session::{self, SubscriptionHandle},
     share_token,
-    state::{ClientState, ServerState},
+    state::{self, ClientState, ServerState, SubscriptionHandle},
     state_monitor,
 };
 use camino::Utf8PathBuf;
@@ -25,7 +24,7 @@ use std::{
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "args")]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum Request {
+pub enum Request {
     RepositoryCreate {
         path: Utf8PathBuf,
         read_password: Option<String>,
@@ -164,7 +163,7 @@ pub(crate) enum Request {
     Unsubscribe(SubscriptionHandle),
 }
 
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     server_state: &ServerState,
     client_state: &ClientState,
     request: Request,
@@ -398,7 +397,7 @@ pub(crate) async fn dispatch(
             state_monitor::subscribe(server_state, client_state, path)?.into()
         }
         Request::Unsubscribe(handle) => {
-            session::unsubscribe(server_state, handle);
+            state::unsubscribe(server_state, handle);
             ().into()
         }
     };
@@ -435,7 +434,7 @@ where
 // reason, but this wrapper does.
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub(crate) struct DeserializeAsStr<T>
+pub struct DeserializeAsStr<T>
 where
     T: FromStr,
     T::Err: fmt::Display,

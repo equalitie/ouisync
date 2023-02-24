@@ -21,13 +21,14 @@ impl Server {
         Ok(Self { listener })
     }
 
-    pub(crate) async fn run(self, state: Arc<ServerState>) {
+    pub async fn run(self, state: Arc<ServerState>) {
         let mut clients = JoinSet::new();
 
         loop {
             match self.listener.accept().await {
                 Ok(stream) => {
-                    clients.spawn(run_client(stream, state.clone()));
+                    let state = state.clone();
+                    clients.spawn(async move { run_client(stream, &state).await });
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
@@ -38,7 +39,7 @@ impl Server {
     }
 }
 
-pub(crate) async fn run_client(mut stream: impl socket::Stream, server_state: Arc<ServerState>) {
+pub async fn run_client(mut stream: impl socket::Stream, server_state: &ServerState) {
     let (notification_tx, mut notification_rx) = mpsc::channel(1);
     let client_state = ClientState { notification_tx };
 
@@ -51,7 +52,7 @@ pub(crate) async fn run_client(mut stream: impl socket::Stream, server_state: Ar
                     break;
                 };
 
-                request_handlers.push(handle_request(&server_state, &client_state, id, result));
+                request_handlers.push(handle_request(server_state, &client_state, id, result));
             }
             notification = notification_rx.recv() => {
                 // unwrap is OK because the sender exists at this point.
