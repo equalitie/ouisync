@@ -1,6 +1,7 @@
 use crate::{
-    protocol::{ClientEnvelope, ServerEnvelope, Value},
-    request, socket,
+    client_message::{self, Request},
+    server_message::{ServerMessage, Value},
+    socket,
     state::{ClientState, ServerState},
 };
 use futures_util::{stream::FuturesUnordered, SinkExt, StreamExt, TryStreamExt};
@@ -45,28 +46,28 @@ pub(crate) async fn run_client(mut stream: impl socket::Stream, server_state: Ar
 
     loop {
         select! {
-            client_envelope = receive(&mut stream) => {
-                let Some(client_envelope) = client_envelope else {
+            message = receive(&mut stream) => {
+                let Some((id, result)) = message else {
                     break;
                 };
 
-                request_handlers.push(handle_request(&server_state, &client_state, client_envelope));
+                request_handlers.push(handle_request(&server_state, &client_state, id, result));
             }
             notification = notification_rx.recv() => {
                 // unwrap is OK because the sender exists at this point.
                 let (id, notification) = notification.unwrap();
-                let envelope = ServerEnvelope::notification(id,notification);
-                send(&mut stream, envelope).await;
+                let message = ServerMessage::notification(notification);
+                send(&mut stream, id, message).await;
             }
             Some((id, result)) = request_handlers.next() => {
-                let envelope = ServerEnvelope::response(id, result);
-                send(&mut stream, envelope).await;
+                let message = ServerMessage::response(result);
+                send(&mut stream, id, message).await;
             }
         }
     }
 }
 
-async fn receive(stream: &mut impl socket::Stream) -> Option<ClientEnvelope> {
+async fn receive(stream: &mut impl socket::Stream) -> Option<(u64, Result<Request>)> {
     loop {
         let buffer = match stream.try_next().await {
             Ok(Some(buffer)) => buffer,
@@ -80,25 +81,34 @@ async fn receive(stream: &mut impl socket::Stream) -> Option<ClientEnvelope> {
             }
         };
 
-        let envelope: ClientEnvelope = match rmp_serde::from_slice(&buffer) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                tracing::error!(?error, "failed to decode client message");
-                continue;
-            }
-        };
+        // The message id is encoded separately (big endian u64) followed by the message body
+        // (messagepack encoded byte string). This allows us to decode the id even if the rest of
+        // the message is malformed so that we can send error response back.
 
-        return Some(envelope);
+        let Some(id) = buffer.get(..8) else {
+            tracing::error!("failed to decode client message id");
+            continue;
+        };
+        let id = u64::from_be_bytes(id.try_into().unwrap());
+
+        let body = rmp_serde::from_slice(&buffer[8..]).map_err(|error| {
+            tracing::error!(?error, "failed to decode client message body");
+            Error::MalformedData
+        });
+
+        return Some((id, body));
     }
 }
 
-async fn send(stream: &mut impl socket::Stream, envelope: ServerEnvelope) {
-    let buffer = match rmp_serde::to_vec(&envelope) {
-        Ok(buffer) => buffer,
-        Err(error) => {
-            tracing::error!(?error, "failed to encode server message");
-            return;
-        }
+async fn send(stream: &mut impl socket::Stream, id: u64, message: ServerMessage) {
+    // Here we encode the id separately only for consistency with `receive`.
+
+    let mut buffer = Vec::new();
+    buffer.extend(id.to_be_bytes());
+
+    if let Err(error) = rmp_serde::encode::write(&mut buffer, &message) {
+        tracing::error!(?error, "failed to encode server message");
+        return;
     };
 
     if let Err(error) = stream.send(buffer).await {
@@ -109,13 +119,17 @@ async fn send(stream: &mut impl socket::Stream, envelope: ServerEnvelope) {
 async fn handle_request(
     server_state: &ServerState,
     client_state: &ClientState,
-    envelope: ClientEnvelope,
+    request_id: u64,
+    request: Result<Request>,
 ) -> (u64, Result<Value>) {
-    let result = request::dispatch(server_state, client_state, envelope.message).await;
+    let result = match request {
+        Ok(request) => client_message::dispatch(server_state, client_state, request).await,
+        Err(error) => Err(error),
+    };
 
     if let Err(error) = &result {
         tracing::error!(?error, "failed to handle request");
     }
 
-    (envelope.id, result)
+    (request_id, result)
 }

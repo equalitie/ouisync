@@ -1,6 +1,6 @@
 use crate::{
-    protocol::Notification,
     registry::Handle,
+    server_message::Notification,
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };

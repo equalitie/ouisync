@@ -1,5 +1,6 @@
 use crate::{
-    file::FileHolder, protocol::Notification, registry::Registry, repository::RepositoryHolder,
+    file::FileHolder, registry::Registry, repository::RepositoryHolder,
+    server_message::Notification,
 };
 use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, StateMonitor};

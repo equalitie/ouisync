@@ -1,5 +1,5 @@
 use crate::{
-    protocol::Notification,
+    server_message::Notification,
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
 };
