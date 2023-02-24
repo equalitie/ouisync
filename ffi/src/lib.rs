@@ -6,6 +6,7 @@
 #[macro_use]
 mod utils;
 
+pub mod constants;
 pub mod directory;
 pub mod error;
 pub mod file;

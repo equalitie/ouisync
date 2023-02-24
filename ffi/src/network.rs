@@ -1,4 +1,5 @@
 use crate::{
+    constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
     server_message::Notification,
     session::SubscriptionHandle,
     state::{ClientState, ServerState},
@@ -7,9 +8,6 @@ use ouisync_lib::{network::peer_addr::PeerAddr, PeerInfo};
 use serde::Serialize;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::select;
-
-pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
-pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;
 
 #[derive(Clone, Copy, Serialize)]
 #[repr(u8)]

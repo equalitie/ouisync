@@ -1,0 +1,9 @@
+pub const ENTRY_TYPE_FILE: u8 = 1;
+pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
+
+pub const ACCESS_MODE_BLIND: u8 = 0;
+pub const ACCESS_MODE_READ: u8 = 1;
+pub const ACCESS_MODE_WRITE: u8 = 2;
+
+pub const NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH: u8 = 0;
+pub const NETWORK_EVENT_PEER_SET_CHANGE: u8 = 1;

@@ -1,4 +1,8 @@
 use crate::{
+    constants::{
+        ACCESS_MODE_BLIND, ACCESS_MODE_READ, ACCESS_MODE_WRITE, ENTRY_TYPE_DIRECTORY,
+        ENTRY_TYPE_FILE,
+    },
     error::{Error, Result},
     registry::Handle,
     server_message::Notification,
@@ -16,13 +20,6 @@ use ouisync_lib::{
 use std::borrow::Cow;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::Instrument;
-
-pub const ENTRY_TYPE_FILE: u8 = 1;
-pub const ENTRY_TYPE_DIRECTORY: u8 = 2;
-
-pub const ACCESS_MODE_BLIND: u8 = 0;
-pub const ACCESS_MODE_READ: u8 = 1;
-pub const ACCESS_MODE_WRITE: u8 = 2;
 
 pub struct RepositoryHolder {
     pub(super) repository: Repository,
