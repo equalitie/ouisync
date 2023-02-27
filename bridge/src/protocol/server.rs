@@ -7,7 +7,7 @@ use crate::{
 use ouisync_lib::{PeerInfo, Progress, StateMonitor};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,6 +138,25 @@ impl From<Progress> for Response {
 impl From<Vec<PeerInfo>> for Response {
     fn from(value: Vec<PeerInfo>) -> Self {
         Self::PeerInfo(value)
+    }
+}
+
+impl fmt::Debug for Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Bool(value) => f.debug_tuple("Bool").field(value).finish(),
+            Self::U8(value) => f.debug_tuple("U8").field(value).finish(),
+            Self::U32(value) => f.debug_tuple("U32").field(value).finish(),
+            Self::U64(value) => f.debug_tuple("U64").field(value).finish(),
+            Self::Bytes(_) => write!(f, "Bytes(_)"),
+            Self::String(value) => f.debug_tuple("String").field(value).finish(),
+            Self::Handle(value) => f.debug_tuple("Handle").field(value).finish(),
+            Self::Directory(_) => write!(f, "Directory(_)"),
+            Self::StateMonitor(_) => write!(f, "StateMonitor(_)"),
+            Self::Progress(value) => f.debug_tuple("Progress").field(value).finish(),
+            Self::PeerInfo(_) => write!(f, "PeerInfo(_)"),
+        }
     }
 }
 

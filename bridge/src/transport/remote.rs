@@ -23,20 +23,32 @@ use tokio_tungstenite::{
 
 pub struct RemoteServer {
     listener: TcpListener,
+    local_addr: SocketAddr,
 }
 
 impl RemoteServer {
     pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
 
-        match listener.local_addr() {
-            Ok(addr) => tracing::debug!("server bound to {:?}", addr),
-            Err(error) => {
-                tracing::error!(?error, "failed to retrieve server address")
+        let local_addr = match listener.local_addr() {
+            Ok(addr) => {
+                tracing::debug!("server bound to {:?}", addr);
+                addr
             }
-        }
+            Err(error) => {
+                tracing::error!(?error, "failed to retrieve server address");
+                return Err(error);
+            }
+        };
 
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            local_addr,
+        })
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 }
 
