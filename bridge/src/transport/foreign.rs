@@ -1,7 +1,7 @@
 //! Client and Server than run in the same process but the Client is written in a different
 //! language than the Server.
 
-use super::{utils, Server};
+use super::{socket, Server};
 use crate::state::ServerState;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -32,7 +32,7 @@ impl ForeignServer {
 #[async_trait]
 impl Server for ForeignServer {
     async fn run(self, state: Arc<ServerState>) {
-        utils::handle_server_connection(self.socket, &state).await
+        socket::server_connection::run(self.socket, state).await
     }
 }
 

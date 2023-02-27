@@ -30,7 +30,7 @@ impl NativeClient {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Client for NativeClient {
     async fn invoke(&self, request: Request) -> Result<Response> {
         protocol::dispatch(&self.server_state, &self.client_state, request).await

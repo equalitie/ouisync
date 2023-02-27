@@ -104,3 +104,7 @@ fn init_log() {
         // error here most likely means the logger is already initialized. We can ignore that.
         .ok();
 }
+
+// struct FakeForeignClient {
+//     inner:
+// }

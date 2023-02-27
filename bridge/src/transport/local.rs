@@ -5,7 +5,7 @@ pub use interprocess::local_socket::{
 };
 
 use super::{
-    utils::{self, Invoker},
+    socket::{self, SocketClient},
     Client, Server,
 };
 use crate::{
@@ -43,11 +43,7 @@ impl Server for LocalServer {
             match self.listener.accept().await {
                 Ok(socket) => {
                     let socket = make_socket(socket);
-                    let state = state.clone();
-
-                    connections.spawn(async move {
-                        utils::handle_server_connection(socket, &state).await
-                    });
+                    connections.spawn(socket::server_connection::run(socket, state.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
@@ -59,7 +55,7 @@ impl Server for LocalServer {
 }
 
 pub struct LocalClient {
-    invoker: Invoker<Reader, Writer>,
+    inner: SocketClient<Reader, Writer>,
 }
 
 impl LocalClient {
@@ -70,15 +66,15 @@ impl LocalClient {
         let writer = make_writer(writer);
 
         Ok(Self {
-            invoker: Invoker::new(reader, writer),
+            inner: SocketClient::new(reader, writer),
         })
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Client for LocalClient {
     async fn invoke(&self, request: Request) -> Result<Response> {
-        self.invoker.invoke(request).await
+        self.inner.invoke(request).await
     }
 }
 

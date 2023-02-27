@@ -2,8 +2,7 @@ pub mod foreign;
 pub mod local;
 pub mod native;
 pub mod remote;
-
-mod utils;
+pub mod socket;
 
 use crate::{
     error::Result,
@@ -18,7 +17,7 @@ pub trait Server {
     async fn run(self, state: Arc<ServerState>);
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait Client {
     async fn invoke(&self, request: Request) -> Result<Response>;
 }

@@ -1,6 +1,6 @@
 //! Client and Server than run on different devices.
 
-use super::{utils, Server};
+use super::{socket, Server};
 use crate::state::ServerState;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -75,11 +75,7 @@ impl Server for RemoteServer {
                     tracing::debug!("client accepted at {:?}", addr);
 
                     let socket = Socket(socket);
-                    let state = state.clone();
-
-                    connections.spawn(async move {
-                        utils::handle_server_connection(socket, &state).await
-                    });
+                    connections.spawn(socket::server_connection::run(socket, state.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
