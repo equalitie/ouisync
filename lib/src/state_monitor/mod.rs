@@ -321,6 +321,16 @@ impl Drop for StateMonitor {
     }
 }
 
+// FIXME: temporary code, remove
+impl PartialEq for StateMonitor {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+// FIXME: temporary code, remote
+impl Eq for StateMonitor {}
+
 impl StateMonitorShared {
     fn make_root() -> Arc<Self> {
         Arc::new(StateMonitorShared {

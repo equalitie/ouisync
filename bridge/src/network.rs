@@ -9,7 +9,7 @@ use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use thiserror::Error;
 use tokio::select;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum NetworkEvent {

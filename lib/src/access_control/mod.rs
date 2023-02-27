@@ -15,7 +15,7 @@ use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
 /// Secrets for access to a repository.
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum AccessSecrets {
     Blind {
         id: RepositoryId,
@@ -169,30 +169,6 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
-#[cfg(test)]
-impl PartialEq for AccessSecrets {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (AccessSecrets::Blind { id: id1 }, AccessSecrets::Blind { id: id2 }) => id1.eq(id2),
-            (
-                AccessSecrets::Read {
-                    id: id1,
-                    read_key: k1,
-                },
-                AccessSecrets::Read {
-                    id: id2,
-                    read_key: k2,
-                },
-            ) => id1.eq(id2) && k1 == k2,
-            (AccessSecrets::Write(ss), AccessSecrets::Write(os)) => ss.eq(os),
-            _ => false,
-        }
-    }
-}
-
-#[cfg(test)]
-impl Eq for AccessSecrets {}
-
 /// Secrets for write access.
 #[derive(Clone)]
 pub struct WriteSecrets {
@@ -213,7 +189,6 @@ impl WriteSecrets {
     }
 }
 
-#[cfg(test)]
 impl PartialEq for WriteSecrets {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -222,7 +197,6 @@ impl PartialEq for WriteSecrets {
     }
 }
 
-#[cfg(test)]
 impl Eq for WriteSecrets {}
 
 impl From<sign::Keypair> for WriteSecrets {

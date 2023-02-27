@@ -127,6 +127,14 @@ impl<T> Clone for Handle<T> {
 
 impl<T> Copy for Handle<T> {}
 
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T> Eq for Handle<T> {}
+
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.id).finish()

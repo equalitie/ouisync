@@ -56,7 +56,7 @@ impl Error {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[repr(u16)]
 #[serde(into = "u16")]
 pub enum ErrorCode {

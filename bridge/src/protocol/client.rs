@@ -16,9 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[serde(tag = "method", content = "args")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
     RepositoryCreate {
@@ -164,7 +163,6 @@ pub async fn dispatch(
     client_state: &ClientState,
     request: Request,
 ) -> Result<Response> {
-    // TODO: This sometimes creates huge log messages (mostly on FileWrite?)
     // tracing::debug!(?request);
 
     let response = match request {
@@ -426,7 +424,7 @@ pub mod as_str {
 
     // HACK: sometimes `#[serde(deserialize_with = "as_str::deserialize")]` doesn't work for some
     // reason, but this wrapper does.
-    #[derive(Serialize, Deserialize)]
+    #[derive(Eq, PartialEq, Serialize, Deserialize)]
     #[serde(transparent)]
     pub struct Wrapper<T>
     where
@@ -492,5 +490,29 @@ pub mod as_option_str {
         S: Serializer,
     {
         value.as_ref().map(|value| value.to_string()).serialize(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_deserialize() {
+        let origs = [
+            Request::RepositoryCreate {
+                path: Utf8PathBuf::from("/tmp/repo.db"),
+                read_password: None,
+                write_password: None,
+                share_token: None,
+            },
+            Request::RepositoryClose(Handle::from_id(1)),
+        ];
+
+        for orig in origs {
+            let encoded = rmp_serde::to_vec(&orig).unwrap();
+            let decoded: Request = rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, orig);
+        }
     }
 }

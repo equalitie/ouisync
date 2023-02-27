@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::{fmt, net::SocketAddr};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ServerMessage {
     Success(Response),
@@ -33,8 +33,7 @@ impl ServerMessage {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
 pub enum Response {
     None,
     Bool(bool),
@@ -160,10 +159,42 @@ impl fmt::Debug for Response {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Notification {
     Repository,
     Network(NetworkEvent),
     StateMonitor,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_deserialize() {
+        let origs = [
+            ServerMessage::Success(Response::None),
+            ServerMessage::Success(Response::Bool(true)),
+            ServerMessage::Success(Response::Bool(false)),
+            ServerMessage::Success(Response::U8(0)),
+            ServerMessage::Success(Response::U8(1)),
+            ServerMessage::Success(Response::U8(2)),
+            ServerMessage::Success(Response::U8(u8::MAX)),
+            ServerMessage::Success(Response::U32(0)),
+            ServerMessage::Success(Response::U32(1)),
+            ServerMessage::Success(Response::U32(2)),
+            ServerMessage::Success(Response::U32(u32::MAX)),
+            ServerMessage::Success(Response::U64(0)),
+            ServerMessage::Success(Response::U64(1)),
+            ServerMessage::Success(Response::U64(2)),
+            ServerMessage::Success(Response::U64(u64::MAX)),
+            ServerMessage::Success(Response::Handle(1)),
+        ];
+
+        for orig in origs {
+            let encoded = rmp_serde::to_vec(&orig).unwrap();
+            let decoded: ServerMessage = rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, orig);
+        }
+    }
 }

@@ -47,6 +47,8 @@ async fn local() {
 // // let remote_client = RemoteClient::connect(remote_addr).await.unwrap();
 
 fn setup() -> (TempDir, Arc<ServerState>) {
+    init_log();
+
     let base_dir = TempDir::new().unwrap();
     let root_monitor = StateMonitor::make_root();
     let server_state = ServerState::new(base_dir.path().join("config"), root_monitor).unwrap();
@@ -82,4 +84,23 @@ async fn sanity_check(base_dir: &Path, client: &dyn Client) {
     assert_eq!(access_mode, secrets.access_mode());
 
     // TODO: add more tests
+}
+
+fn init_log() {
+    use tracing::metadata::LevelFilter;
+
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        )
+        // log output is captured by default and only shown on failure. Run tests with
+        // `--nocapture` to override.
+        .with_test_writer()
+        .try_init()
+        // error here most likely means the logger is already initialized. We can ignore that.
+        .ok();
 }

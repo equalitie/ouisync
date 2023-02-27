@@ -8,11 +8,11 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 // Currently this is only a read-only snapshot of a directory.
-#[derive(Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Directory(Vec<DirEntry>);
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DirEntry {
     pub name: String,
     pub entry_type: u8,
