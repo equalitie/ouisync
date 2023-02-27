@@ -3,24 +3,20 @@ use crate::{
     error::Result,
     file::{self, FileHolder},
     network,
+    protocol::Response,
     registry::Handle,
     repository::{self, RepositoryHolder},
-    server_message::Value,
     share_token,
     state::{self, ClientState, ServerState, SubscriptionHandle},
     state_monitor,
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{MonitorId, ShareToken};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::{
-    fmt,
-    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
-    str::FromStr,
-};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "args")]
 #[allow(clippy::large_enum_variant)]
@@ -29,7 +25,7 @@ pub enum Request {
         path: Utf8PathBuf,
         read_password: Option<String>,
         write_password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositoryOpen {
@@ -41,14 +37,14 @@ pub enum Request {
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
         old_password: Option<String>,
         new_password: Option<String>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),
@@ -84,11 +80,11 @@ pub enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
-    ShareTokenMode(DeserializeAsStr<ShareToken>),
-    ShareTokenInfoHash(DeserializeAsStr<ShareToken>),
-    ShareTokenSuggestedName(DeserializeAsStr<ShareToken>),
-    ShareTokenNormalize(DeserializeAsStr<ShareToken>),
-    ShareTokenEncode(DeserializeAsStr<ShareToken>),
+    ShareTokenMode(as_str::Wrapper<ShareToken>),
+    ShareTokenInfoHash(as_str::Wrapper<ShareToken>),
+    ShareTokenSuggestedName(as_str::Wrapper<ShareToken>),
+    ShareTokenNormalize(as_str::Wrapper<ShareToken>),
+    ShareTokenEncode(as_str::Wrapper<ShareToken>),
     ShareTokenDecode(ByteBuf),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
@@ -134,21 +130,21 @@ pub enum Request {
     FileClose(Handle<FileHolder>),
     NetworkSubscribe,
     NetworkBind {
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         quic_v4: Option<SocketAddrV4>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         quic_v6: Option<SocketAddrV6>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         tcp_v4: Option<SocketAddrV4>,
-        #[serde(deserialize_with = "deserialize_as_option_str")]
+        #[serde(with = "as_option_str")]
         tcp_v6: Option<SocketAddrV6>,
     },
     NetworkTcpListenerLocalAddrV4,
     NetworkTcpListenerLocalAddrV6,
     NetworkQuicListenerLocalAddrV4,
     NetworkQuicListenerLocalAddrV6,
-    NetworkAddUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
-    NetworkRemoveUserProvidedQuicPeer(#[serde(deserialize_with = "deserialize_as_str")] SocketAddr),
+    NetworkAddUserProvidedQuicPeer(#[serde(with = "as_str")] SocketAddr),
+    NetworkRemoveUserProvidedQuicPeer(#[serde(with = "as_str")] SocketAddr),
     NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
@@ -167,7 +163,7 @@ pub async fn dispatch(
     server_state: &ServerState,
     client_state: &ClientState,
     request: Request,
-) -> Result<Value> {
+) -> Result<Response> {
     // TODO: This sometimes creates huge log messages (mostly on FileWrite?)
     // tracing::debug!(?request);
 
@@ -405,60 +401,96 @@ pub async fn dispatch(
     Ok(response)
 }
 
-fn deserialize_as_str<'de, D, T>(de: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    let s = <&str>::deserialize(de)?;
-    let v = s.parse().map_err(serde::de::Error::custom)?;
-    Ok(v)
-}
+pub mod as_str {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::{fmt, str::FromStr};
 
-fn deserialize_as_option_str<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    let s = Option::<&str>::deserialize(de)?;
-    if let Some(s) = s {
-        Ok(Some(s.parse().map_err(serde::de::Error::custom)?))
-    } else {
-        Ok(None)
+    pub fn deserialize<'de, D, T>(d: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        let s = <&str>::deserialize(d)?;
+        let v = s.parse().map_err(serde::de::Error::custom)?;
+        Ok(v)
+    }
+
+    pub fn serialize<T, S>(value: &T, s: S) -> Result<S::Ok, S::Error>
+    where
+        T: fmt::Display,
+        S: Serializer,
+    {
+        value.to_string().serialize(s)
+    }
+
+    // HACK: sometimes `#[serde(deserialize_with = "as_str::deserialize")]` doesn't work for some
+    // reason, but this wrapper does.
+    #[derive(Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct Wrapper<T>
+    where
+        T: fmt::Display + FromStr,
+        T::Err: fmt::Display,
+    {
+        #[serde(with = "self")]
+        value: T,
+    }
+
+    impl<T> From<T> for Wrapper<T>
+    where
+        T: fmt::Display + FromStr,
+        T::Err: fmt::Display,
+    {
+        fn from(value: T) -> Self {
+            Self { value }
+        }
+    }
+
+    impl<T> Wrapper<T>
+    where
+        T: fmt::Display + FromStr,
+        T::Err: fmt::Display,
+    {
+        pub fn into_value(self) -> T {
+            self.value
+        }
+    }
+
+    impl<T> fmt::Debug for Wrapper<T>
+    where
+        T: fmt::Debug + fmt::Display + FromStr,
+        T::Err: fmt::Display,
+    {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fmt::Debug::fmt(&self.value, f)
+        }
     }
 }
 
-// HACK: sometimes `#[serde(deserialize_with = "deserialize_as_str")]` doesn't work for some
-// reason, but this wrapper does.
-#[derive(Deserialize)]
-#[serde(transparent)]
-pub struct DeserializeAsStr<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    #[serde(deserialize_with = "deserialize_as_str")]
-    value: T,
-}
+pub mod as_option_str {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::{fmt, str::FromStr};
 
-impl<T> DeserializeAsStr<T>
-where
-    T: FromStr,
-    T::Err: fmt::Display,
-{
-    pub fn into_value(self) -> T {
-        self.value
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        let s = Option::<&str>::deserialize(d)?;
+        if let Some(s) = s {
+            Ok(Some(s.parse().map_err(serde::de::Error::custom)?))
+        } else {
+            Ok(None)
+        }
     }
-}
 
-impl<T> fmt::Debug for DeserializeAsStr<T>
-where
-    T: fmt::Debug + FromStr,
-    T::Err: fmt::Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.value.fmt(f)
+    pub fn serialize<T, S>(value: &Option<T>, s: S) -> Result<S::Ok, S::Error>
+    where
+        T: fmt::Display,
+        S: Serializer,
+    {
+        value.as_ref().map(|value| value.to_string()).serialize(s)
     }
 }

@@ -4,8 +4,8 @@ use crate::{
         ENTRY_TYPE_FILE,
     },
     error::{Error, Result},
+    protocol::Notification,
     registry::Handle,
-    server_message::Notification,
     state::{ClientState, ServerState, SubscriptionHandle},
 };
 use camino::Utf8PathBuf;

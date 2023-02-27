@@ -72,6 +72,15 @@ impl FromStr for MonitorId {
     }
 }
 
+impl Serialize for MonitorId {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(s)
+    }
+}
+
 impl<'de> Deserialize<'de> for MonitorId {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
@@ -533,6 +542,15 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
             )?;
         }
         map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for StateMonitor {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        todo!()
     }
 }
 

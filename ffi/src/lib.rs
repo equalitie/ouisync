@@ -10,8 +10,10 @@ use crate::{
 };
 use ouisync_bridge::{
     logger::{self, Logger},
-    run_client,
-    socket::{self, memory::ClientSender},
+    transport::{
+        foreign::{ForeignClientSender, ForeignServer},
+        Server,
+    },
     Error, ErrorCode, FileHolder, Handle, Registry, Result, ServerState,
 };
 use ouisync_lib::StateMonitor;
@@ -98,20 +100,18 @@ pub unsafe extern "C" fn session_destroy(session: SessionHandle) {
 pub unsafe extern "C" fn session_channel_open(
     session: SessionHandle,
     port: Port<Vec<u8>>,
-) -> Handle<ClientSender> {
+) -> Handle<ForeignClientSender> {
     let session = session.get();
     let state = session.state.clone();
     let port_sender = session.port_sender;
 
-    let (server_stream, client_tx, mut client_rx) = socket::memory::new();
+    let (server, client_tx, mut client_rx) = ForeignServer::new();
 
-    session
-        .runtime
-        .spawn(async move { run_client(server_stream, &state).await });
+    session.runtime.spawn(server.run(state));
 
     session.runtime.spawn(async move {
         while let Some(payload) = client_rx.recv().await {
-            port_sender.send(port, payload);
+            port_sender.send(port, payload.into());
         }
     });
 
@@ -126,7 +126,7 @@ pub unsafe extern "C" fn session_channel_open(
 #[no_mangle]
 pub unsafe extern "C" fn session_channel_send(
     session: SessionHandle,
-    sender: Handle<ClientSender>,
+    sender: Handle<ForeignClientSender>,
     payload_ptr: *mut u8,
     payload_len: u64,
 ) {
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn session_channel_send(
 #[no_mangle]
 pub unsafe extern "C" fn session_channel_close(
     session: SessionHandle,
-    sender: Handle<ClientSender>,
+    sender: Handle<ForeignClientSender>,
 ) {
     session.get().senders.remove(sender);
 }
@@ -228,7 +228,7 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
 pub struct Session {
     pub(crate) runtime: Runtime,
     pub(crate) state: Arc<ServerState>,
-    senders: Registry<ClientSender>,
+    senders: Registry<ForeignClientSender>,
     pub(crate) port_sender: PortSender,
     _logger: Logger,
 }

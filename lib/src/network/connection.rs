@@ -1,6 +1,6 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
 use crate::collections::{hash_map::Entry, HashMap};
-use serde::{ser::SerializeSeq, Serialize, Serializer};
+use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     net::SocketAddr,
     sync::{
@@ -166,6 +166,15 @@ impl Serialize for PeerInfo {
         }
 
         seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PeerInfo {
+    fn deserialize<D>(_d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        todo!()
     }
 }
 
