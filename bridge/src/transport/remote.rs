@@ -1,7 +1,14 @@
 //! Client and Server than run on different devices.
 
-use super::{socket, Server};
-use crate::state::ServerState;
+use super::{
+    socket::{self, SocketClient},
+    Client, Server,
+};
+use crate::{
+    error::Result,
+    protocol::{Request, Response},
+    state::ServerState,
+};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
@@ -13,13 +20,16 @@ use std::{
     task::{ready, Context, Poll},
 };
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
 use tokio_tungstenite::{
-    tungstenite::{self, Message},
-    WebSocketStream,
+    tungstenite::{self, client::IntoClientRequest, Message},
+    MaybeTlsStream, WebSocketStream,
 };
+
+// TODO: Implement TLS
 
 pub struct RemoteServer {
     listener: TcpListener,
@@ -86,11 +96,35 @@ impl Server for RemoteServer {
     }
 }
 
-// TODO: implement client
+pub struct RemoteClient {
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>>,
+}
 
-struct Socket(WebSocketStream<TcpStream>);
+impl RemoteClient {
+    pub async fn connect(request: impl IntoClientRequest + Unpin) -> io::Result<Self> {
+        let (inner, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(into_io_error)?;
+        let inner = Socket(inner);
+        let inner = SocketClient::new(inner);
 
-impl futures_util::Stream for Socket {
+        Ok(Self { inner })
+    }
+}
+
+#[async_trait(?Send)]
+impl Client for RemoteClient {
+    async fn invoke(&self, request: Request) -> Result<Response> {
+        self.inner.invoke(request).await
+    }
+}
+
+struct Socket<T>(WebSocketStream<T>);
+
+impl<T> futures_util::Stream for Socket<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     type Item = io::Result<BytesMut>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -118,7 +152,10 @@ impl futures_util::Stream for Socket {
     }
 }
 
-impl futures_util::Sink<Bytes> for Socket {
+impl<T> futures_util::Sink<Bytes> for Socket<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -141,5 +178,8 @@ impl futures_util::Sink<Bytes> for Socket {
 }
 
 fn into_io_error(src: tungstenite::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, src)
+    match src {
+        tungstenite::Error::Io(error) => error,
+        _ => io::Error::new(io::ErrorKind::Other, src),
+    }
 }

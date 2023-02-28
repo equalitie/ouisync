@@ -1,17 +1,15 @@
 use ouisync_bridge::{
     protocol::{Request, Response},
     transport::{
-        // foreign::ForeignServer,
         local::{LocalClient, LocalServer},
         native::NativeClient,
-        // remote::RemoteServer,
-        Client,
-        Server,
+        remote::{RemoteClient, RemoteServer},
+        Client, Server,
     },
     Handle, ServerState,
 };
 use ouisync_lib::{AccessMode, AccessSecrets, StateMonitor};
-use std::{path::Path, sync::Arc};
+use std::{net::Ipv4Addr, path::Path, sync::Arc};
 use tempfile::TempDir;
 use tokio::task;
 
@@ -38,13 +36,24 @@ async fn local() {
     sanity_check(base_dir.path(), &local_client).await
 }
 
-// // let (_foreign_server, foreign_client_tx, foreign_client_rx) = ForeignServer::new();
+#[tokio::test]
+async fn remote() {
+    let (base_dir, server_state) = setup();
 
-// let remote_server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into())
-//     .await
-//     .unwrap();
-// let remote_addr = remote_server.local_addr();
-// // let remote_client = RemoteClient::connect(remote_addr).await.unwrap();
+    let remote_server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into())
+        .await
+        .unwrap();
+    let remote_addr = remote_server.local_addr();
+    let remote_addr = format!("ws://{remote_addr}");
+
+    task::spawn(remote_server.run(server_state));
+
+    let remote_client = RemoteClient::connect(remote_addr).await.unwrap();
+
+    sanity_check(base_dir.path(), &remote_client).await
+}
+
+// TODO: test foreign
 
 fn setup() -> (TempDir, Arc<ServerState>) {
     init_log();
@@ -104,7 +113,3 @@ fn init_log() {
         // error here most likely means the logger is already initialized. We can ignore that.
         .ok();
 }
-
-// struct FakeForeignClient {
-//     inner:
-// }
