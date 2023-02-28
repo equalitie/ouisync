@@ -14,12 +14,12 @@ use crate::{
     state::ServerState,
 };
 use async_trait::async_trait;
-use interprocess::local_socket::tokio::{LocalSocketStream, OwnedReadHalf, OwnedWriteHalf};
+use interprocess::local_socket::tokio::LocalSocketStream;
 use std::{io, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::{
-    codec::{length_delimited::LengthDelimitedCodec, Framed, FramedRead, FramedWrite},
-    compat::{Compat, FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt},
+    codec::{length_delimited::LengthDelimitedCodec, Framed},
+    compat::{Compat, FuturesAsyncReadCompatExt},
 };
 
 pub struct LocalServer {
@@ -55,18 +55,16 @@ impl Server for LocalServer {
 }
 
 pub struct LocalClient {
-    inner: SocketClient<Reader, Writer>,
+    inner: SocketClient<Socket>,
 }
 
 impl LocalClient {
     pub async fn connect<'a>(name: impl ToLocalSocketName<'a>) -> io::Result<Self> {
         let socket = LocalSocketStream::connect(name).await?;
-        let (reader, writer) = socket.into_split();
-        let reader = make_reader(reader);
-        let writer = make_writer(writer);
+        let socket = make_socket(socket);
 
         Ok(Self {
-            inner: SocketClient::new(reader, writer),
+            inner: SocketClient::new(socket),
         })
     }
 }
@@ -79,17 +77,7 @@ impl Client for LocalClient {
 }
 
 type Socket = Framed<Compat<LocalSocketStream>, LengthDelimitedCodec>;
-type Reader = FramedRead<Compat<OwnedReadHalf>, LengthDelimitedCodec>;
-type Writer = FramedWrite<Compat<OwnedWriteHalf>, LengthDelimitedCodec>;
 
 fn make_socket(inner: LocalSocketStream) -> Socket {
     Framed::new(inner.compat(), LengthDelimitedCodec::new())
-}
-
-fn make_reader(inner: OwnedReadHalf) -> Reader {
-    FramedRead::new(inner.compat(), LengthDelimitedCodec::new())
-}
-
-fn make_writer(inner: OwnedWriteHalf) -> Writer {
-    FramedWrite::new(inner.compat_write(), LengthDelimitedCodec::new())
 }

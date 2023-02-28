@@ -72,35 +72,39 @@ pub mod server_connection {
     }
 }
 
-pub struct SocketClient<R, W> {
+pub struct SocketClient<T> {
     request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response>>)>,
-    _reader: PhantomData<R>,
-    _writer: PhantomData<W>,
+    _socket: PhantomData<T>,
 }
 
-impl<R, W> SocketClient<R, W>
+impl<T> SocketClient<T>
 where
-    R: Stream<Item = io::Result<BytesMut>> + Unpin + Send + 'static,
-    W: Sink<Bytes, Error = io::Error> + Unpin + Send + 'static,
+    T: Stream<Item = io::Result<BytesMut>>
+        + Sink<Bytes, Error = io::Error>
+        + Unpin
+        + Send
+        + 'static,
 {
-    pub fn new(reader: R, writer: W) -> Self {
+    pub fn new(socket: T) -> Self {
         let (request_tx, request_rx) = mpsc::channel(1);
 
-        task::spawn(Worker::new(request_rx, reader, writer).run());
+        task::spawn(Worker::new(request_rx, socket).run());
 
         Self {
             request_tx,
-            _reader: PhantomData,
-            _writer: PhantomData,
+            _socket: PhantomData,
         }
     }
 }
 
 #[async_trait(?Send)]
-impl<R, W> Client for SocketClient<R, W>
+impl<T> Client for SocketClient<T>
 where
-    R: Stream<Item = io::Result<BytesMut>> + Unpin + Send + 'static,
-    W: Sink<Bytes, Error = io::Error> + Unpin + Send + 'static,
+    T: Stream<Item = io::Result<BytesMut>>
+        + Sink<Bytes, Error = io::Error>
+        + Unpin
+        + Send
+        + 'static,
 {
     async fn invoke(&self, request: Request) -> Result<Response> {
         let (response_tx, response_rx) = oneshot::channel();
@@ -117,30 +121,26 @@ where
     }
 }
 
-struct Worker<R, W> {
+struct Worker<T> {
     running: bool,
     request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
-    reader: R,
-    writer: W,
+    socket: T,
     pending_requests: HashMap<u64, oneshot::Sender<Result<Response>>>,
     next_message_id: u64,
 }
 
-impl<R, W> Worker<R, W>
+impl<T> Worker<T>
 where
-    R: Stream<Item = io::Result<BytesMut>> + Unpin + Send,
-    W: Sink<Bytes, Error = io::Error> + Unpin + Send,
+    T: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin + Send,
 {
     fn new(
         request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
-        reader: R,
-        writer: W,
+        socket: T,
     ) -> Self {
         Self {
             running: true,
             request_rx,
-            reader,
-            writer,
+            socket,
             pending_requests: HashMap::new(),
             next_message_id: 0,
         }
@@ -150,7 +150,7 @@ where
         while self.running {
             select! {
                 request = self.request_rx.recv() => self.handle_request(request).await,
-                response = receive(&mut self.reader) => self.handle_server_message(response).await,
+                response = receive(&mut self.socket) => self.handle_server_message(response).await,
             }
         }
     }
@@ -169,7 +169,7 @@ where
         self.next_message_id = self.next_message_id.wrapping_add(1);
         self.pending_requests.insert(message_id, response_tx);
 
-        if !send(&mut self.writer, message_id, request).await {
+        if !send(&mut self.socket, message_id, request).await {
             self.running = false;
         }
     }
