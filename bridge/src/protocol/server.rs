@@ -34,6 +34,7 @@ impl ServerMessage {
 }
 
 #[derive(Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Response {
     None,
     Bool(bool),
@@ -160,6 +161,7 @@ impl fmt::Debug for Response {
 }
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Notification {
     Repository,
     Network(NetworkEvent),
