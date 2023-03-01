@@ -34,6 +34,7 @@ pub enum Request {
     RepositoryCreateReopenToken(Handle<RepositoryHolder>),
     RepositoryReopen {
         path: Utf8PathBuf,
+        #[serde(with = "serde_bytes")]
         token: Vec<u8>,
     },
     RepositorySubscribe(Handle<RepositoryHolder>),
