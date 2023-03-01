@@ -5,7 +5,6 @@ use crate::{
 use ed25519_dalek as ext;
 use ed25519_dalek::Verifier;
 use rand::{rngs::OsRng, CryptoRng, Rng};
-use serde;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -20,14 +19,15 @@ use zeroize::Zeroize;
 pub struct PublicKey(ext::PublicKey);
 
 #[derive(Serialize, Deserialize)]
-#[serde(transparent)]
 #[repr(transparent)]
+#[serde(transparent)]
 pub struct SecretKey(ext::SecretKey);
 
 pub struct Keypair {
     pub secret: SecretKey,
     pub public: PublicKey,
 }
+
 #[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Signature(ext::Signature);

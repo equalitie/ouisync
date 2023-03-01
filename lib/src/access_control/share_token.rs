@@ -1,5 +1,6 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
+use bincode::Options;
 use std::{
     borrow::Cow,
     fmt,
@@ -8,7 +9,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub const PREFIX: &str = "https://ouisync.net/r";
-pub const VERSION: u64 = 0;
+pub const VERSION: u64 = 1;
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
@@ -88,7 +89,7 @@ impl FromStr for ShareToken {
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
         let input = decode_version(&input)?;
 
-        let (secrets, _) = AccessSecrets::decode(input)?;
+        let secrets: AccessSecrets = bincode::DefaultOptions::new().deserialize(input)?;
         let name = parse_name(params)?;
 
         Ok(Self::from(secrets).with_name(name))
@@ -124,7 +125,9 @@ impl fmt::Display for ShareToken {
 
         let mut buffer = Vec::new();
         encode_version(&mut buffer, VERSION);
-        self.secrets.encode(&mut buffer);
+        bincode::DefaultOptions::new()
+            .serialize_into(&mut buffer, &self.secrets)
+            .map_err(|_| fmt::Error)?;
 
         write!(
             f,

@@ -11,11 +11,12 @@ use crate::{
     Result,
 };
 use rand::{rngs::OsRng, CryptoRng, Rng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
 /// Secrets for access to a repository.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum AccessSecrets {
     Blind {
         id: RepositoryId,
@@ -66,57 +67,6 @@ impl AccessSecrets {
     pub fn id(&self) -> &RepositoryId {
         match self {
             Self::Blind { id } | Self::Read { id, .. } | Self::Write(WriteSecrets { id, .. }) => id,
-        }
-    }
-
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::Blind { id } => {
-                out.push(AccessMode::Blind as u8);
-                out.extend_from_slice(id.as_ref());
-            }
-            Self::Read { id, read_key } => {
-                out.push(AccessMode::Read as u8);
-                out.extend_from_slice(id.as_ref());
-                out.extend_from_slice(read_key.as_ref());
-            }
-            Self::Write(secrets) => {
-                out.push(AccessMode::Write as u8);
-                out.extend_from_slice(secrets.write_keys.secret.as_ref());
-            }
-        }
-    }
-
-    // Returns the decoded secrets and the remaining input.
-    pub(crate) fn decode(input: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (mode, input) = input.split_first().ok_or(DecodeError)?;
-        let mode = AccessMode::try_from(*mode)?;
-
-        match mode {
-            AccessMode::Blind => {
-                let (id, input) = try_split_at(input, RepositoryId::SIZE).ok_or(DecodeError)?;
-                let id = RepositoryId::try_from(id)?;
-
-                Ok((Self::Blind { id }, input))
-            }
-            AccessMode::Read => {
-                let (id, input) = try_split_at(input, RepositoryId::SIZE).ok_or(DecodeError)?;
-                let id = RepositoryId::try_from(id)?;
-
-                let (read_key, input) =
-                    try_split_at(input, cipher::SecretKey::SIZE).ok_or(DecodeError)?;
-                let read_key = cipher::SecretKey::try_from(read_key)?;
-
-                Ok((Self::Read { id, read_key }, input))
-            }
-            AccessMode::Write => {
-                let (write_key, input) =
-                    try_split_at(input, sign::SecretKey::SIZE).ok_or(DecodeError)?;
-                let write_key = sign::SecretKey::try_from(write_key)?;
-                let write_keys = sign::Keypair::from(write_key);
-
-                Ok((Self::Write(write_keys.into()), input))
-            }
         }
     }
 
@@ -218,6 +168,28 @@ impl From<sign::Keypair> for WriteSecrets {
     }
 }
 
+impl Serialize for WriteSecrets {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize only the write secret key because all the other keys can be derived from it
+        self.write_keys.secret.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for WriteSecrets {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let write_key = sign::SecretKey::deserialize(d)?;
+        let write_keys = sign::Keypair::from(write_key);
+
+        Ok(Self::from(write_keys))
+    }
+}
+
 /// Secret keys for read and optionaly write access.
 #[derive(Clone)]
 pub(crate) struct AccessKeys {
@@ -253,15 +225,6 @@ impl From<WriteSecrets> for AccessKeys {
 
 fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> cipher::SecretKey {
     cipher::SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
-}
-
-// Similar to `split_at` but returns `None` instead of panic when `index` is out of range.
-fn try_split_at(slice: &[u8], index: usize) -> Option<(&[u8], &[u8])> {
-    if index <= slice.len() {
-        Some(slice.split_at(index))
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Error)]
