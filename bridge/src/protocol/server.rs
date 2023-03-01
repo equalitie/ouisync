@@ -6,7 +6,6 @@ use crate::{
 };
 use ouisync_lib::{PeerInfo, Progress, StateMonitor};
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use std::{fmt, net::SocketAddr};
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -41,7 +40,7 @@ pub enum Response {
     U8(u8),
     U32(u32),
     U64(u64),
-    Bytes(ByteBuf),
+    Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
     String(String),
     Handle(u64),
     Directory(Directory),
@@ -95,7 +94,7 @@ impl From<u64> for Response {
 
 impl From<Vec<u8>> for Response {
     fn from(value: Vec<u8>) -> Self {
-        Self::Bytes(ByteBuf::from(value))
+        Self::Bytes(value)
     }
 }
 
@@ -191,6 +190,7 @@ mod tests {
             ServerMessage::Success(Response::U64(1)),
             ServerMessage::Success(Response::U64(2)),
             ServerMessage::Success(Response::U64(u64::MAX)),
+            ServerMessage::Success(Response::Bytes(b"hello world".to_vec())),
             ServerMessage::Success(Response::Handle(1)),
             ServerMessage::Success(Response::PeerInfo(vec![PeerInfo {
                 ip: [192, 168, 1, 204].into(),

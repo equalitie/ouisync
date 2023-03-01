@@ -13,7 +13,6 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_lib::{MonitorId, ShareToken};
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 #[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
@@ -79,12 +78,12 @@ pub enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
-    ShareTokenMode(as_str::Wrapper<ShareToken>),
-    ShareTokenInfoHash(as_str::Wrapper<ShareToken>),
-    ShareTokenSuggestedName(as_str::Wrapper<ShareToken>),
-    ShareTokenNormalize(as_str::Wrapper<ShareToken>),
-    ShareTokenEncode(as_str::Wrapper<ShareToken>),
-    ShareTokenDecode(ByteBuf),
+    ShareTokenMode(#[serde(with = "as_str")] ShareToken),
+    ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
+    ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
+    ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
+    ShareTokenEncode(#[serde(with = "as_str")] ShareToken),
+    ShareTokenDecode(#[serde(with = "serde_bytes")] Vec<u8>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -118,7 +117,8 @@ pub enum Request {
     FileWrite {
         file: Handle<FileHolder>,
         offset: u64,
-        data: ByteBuf,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
     },
     FileTruncate {
         file: Handle<FileHolder>,
@@ -272,14 +272,12 @@ pub async fn dispatch(
         } => repository::create_share_token(server_state, repository, password, access_mode, name)
             .await?
             .into(),
-        Request::ShareTokenMode(token) => share_token::mode(token.into_value()).into(),
-        Request::ShareTokenInfoHash(token) => share_token::info_hash(token.into_value()).into(),
-        Request::ShareTokenSuggestedName(token) => {
-            share_token::suggested_name(token.into_value()).into()
-        }
-        Request::ShareTokenNormalize(token) => token.into_value().to_string().into(),
-        Request::ShareTokenEncode(token) => share_token::encode(token.into_value()).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())
+        Request::ShareTokenMode(token) => share_token::mode(token).into(),
+        Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
+        Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
+        Request::ShareTokenNormalize(token) => token.to_string().into(),
+        Request::ShareTokenEncode(token) => share_token::encode(token).into(),
+        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
             .map(|token| token.to_string())
             .into(),
         Request::RepositoryAccessMode(repository) => {
@@ -320,9 +318,7 @@ pub async fn dispatch(
             file::read(server_state, file, offset, len).await?.into()
         }
         Request::FileWrite { file, offset, data } => {
-            file::write(server_state, file, offset, data.into_vec())
-                .await?
-                .into()
+            file::write(server_state, file, offset, data).await?.into()
         }
         Request::FileTruncate { file, len } => {
             file::truncate(server_state, file, len).await?.into()
@@ -420,49 +416,6 @@ pub mod as_str {
         S: Serializer,
     {
         value.to_string().serialize(s)
-    }
-
-    // HACK: sometimes `#[serde(deserialize_with = "as_str::deserialize")]` doesn't work for some
-    // reason, but this wrapper does.
-    #[derive(Eq, PartialEq, Serialize, Deserialize)]
-    #[serde(transparent)]
-    pub struct Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        #[serde(with = "self")]
-        value: T,
-    }
-
-    impl<T> From<T> for Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        fn from(value: T) -> Self {
-            Self { value }
-        }
-    }
-
-    impl<T> Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        pub fn into_value(self) -> T {
-            self.value
-        }
-    }
-
-    impl<T> fmt::Debug for Wrapper<T>
-    where
-        T: fmt::Debug + fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            fmt::Debug::fmt(&self.value, f)
-        }
     }
 }
 
