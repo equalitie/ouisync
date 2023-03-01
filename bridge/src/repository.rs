@@ -14,7 +14,7 @@ use ouisync_lib::{
     device_id,
     network::{self, Registration},
     path, Access, AccessMode, AccessSecrets, EntryType, Event, LocalSecret, Payload, Progress,
-    Repository, RepositoryDb, ShareToken,
+    ReopenToken, Repository, RepositoryDb, ShareToken,
 };
 use std::borrow::Cow;
 use tokio::sync::broadcast::error::RecvError;
@@ -75,10 +75,7 @@ pub(crate) async fn create(
         let repository = Repository::create(db, device_id, access).await?;
 
         let registration = state.network.handle().register(repository.store().clone());
-
-        // TODO: consider leaving the decision to enable DHT, PEX to the app.
-        registration.enable_dht();
-        registration.enable_pex();
+        init(&registration);
 
         let holder = RepositoryHolder {
             repository,
@@ -114,10 +111,7 @@ pub(crate) async fn open(
         .await?;
 
         let registration = state.network.handle().register(repository.store().clone());
-
-        // TODO: consider leaving the decision to enable DHT, PEX to the app.
-        registration.enable_dht();
-        registration.enable_pex();
+        init(&registration);
 
         let holder = RepositoryHolder {
             repository,
@@ -141,6 +135,41 @@ pub(crate) async fn close(state: &ServerState, handle: Handle<RepositoryHolder>)
     }
 
     Ok(())
+}
+
+pub(crate) fn create_reopen_token(
+    state: &ServerState,
+    handle: Handle<RepositoryHolder>,
+) -> Result<Vec<u8>> {
+    let holder = state.repositories.get(handle);
+    let token = holder.repository.reopen_token().encode();
+
+    Ok(token)
+}
+
+pub(crate) async fn reopen(
+    state: &ServerState,
+    store: Utf8PathBuf,
+    token: Vec<u8>,
+) -> Result<Handle<RepositoryHolder>> {
+    let token = ReopenToken::decode(&token)?;
+    let span = state.repo_span(&store);
+
+    async {
+        let repository = Repository::reopen(store.into_std_path_buf(), token).await?;
+
+        let registration = state.network.handle().register(repository.store().clone());
+        init(&registration);
+
+        let holder = RepositoryHolder {
+            repository,
+            registration,
+        };
+
+        Ok(state.repositories.insert(holder))
+    }
+    .instrument(span)
+    .await
 }
 
 /// If `share_token` is null, the function will try with the currently active access secrets in the
@@ -491,6 +520,12 @@ pub(crate) fn access_mode_to_num(mode: AccessMode) -> u8 {
         AccessMode::Read => ACCESS_MODE_READ,
         AccessMode::Write => ACCESS_MODE_WRITE,
     }
+}
+
+fn init(registration: &Registration) {
+    // TODO: consider leaving the decision to enable DHT, PEX to the app.
+    registration.enable_dht();
+    registration.enable_pex();
 }
 
 #[cfg(test)]

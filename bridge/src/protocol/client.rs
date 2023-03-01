@@ -31,6 +31,11 @@ pub enum Request {
         password: Option<String>,
     },
     RepositoryClose(Handle<RepositoryHolder>),
+    RepositoryCreateReopenToken(Handle<RepositoryHolder>),
+    RepositoryReopen {
+        path: Utf8PathBuf,
+        token: Vec<u8>,
+    },
     RepositorySubscribe(Handle<RepositoryHolder>),
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
@@ -182,6 +187,12 @@ pub async fn dispatch(
             repository::open(server_state, path, password).await?.into()
         }
         Request::RepositoryClose(handle) => repository::close(server_state, handle).await?.into(),
+        Request::RepositoryCreateReopenToken(handle) => {
+            repository::create_reopen_token(server_state, handle)?.into()
+        }
+        Request::RepositoryReopen { path, token } => {
+            repository::reopen(server_state, path, token).await?.into()
+        }
         Request::RepositorySubscribe(handle) => {
             repository::subscribe(server_state, client_state, handle).into()
         }

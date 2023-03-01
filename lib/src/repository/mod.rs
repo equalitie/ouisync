@@ -1,10 +1,11 @@
 mod id;
+mod reopen_token;
 #[cfg(test)]
 mod tests;
 mod worker;
 
 pub(crate) use self::id::LocalId;
-pub use self::id::RepositoryId;
+pub use self::{id::RepositoryId, reopen_token::ReopenToken};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -32,7 +33,6 @@ use crate::{
 };
 use camino::Utf8Path;
 use scoped_task::ScopedJoinHandle;
-use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
@@ -65,14 +65,6 @@ impl RepositoryDb {
     pub(crate) fn new(pool: db::Pool) -> Self {
         Self { pool }
     }
-}
-
-/// Token which can be obtained from an open repository and which can then be used to reopen the
-/// repository without having to provide the local secret.
-#[derive(Serialize, Deserialize)]
-pub struct ReopenToken {
-    secrets: AccessSecrets,
-    writer_id: sign::PublicKey,
 }
 
 pub struct Repository {
