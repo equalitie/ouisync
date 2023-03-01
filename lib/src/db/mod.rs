@@ -354,15 +354,7 @@ mod tests {
     }
 
     async fn database_commit_consistency_case(run_i: u32) {
-        use crate::{
-            crypto::{
-                sign::{Keypair, PublicKey},
-                Hashable,
-            },
-            index::{self, Index},
-            repository::RepositoryId,
-            version_vector::VersionVector,
-        };
+        use crate::{crypto::sign::Keypair, index::Index, repository::RepositoryId};
         use futures_util::TryStreamExt;
         use rand::prelude::*;
         use tokio::{select, sync::broadcast};
@@ -389,35 +381,32 @@ mod tests {
 
         {
             let mut tx = a_index.pool.begin_write().await.unwrap();
+            sqlx::query("CREATE TABLE a_table (id INTEGER PRIMARY KEY)")
+                .execute(&mut tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
 
-            let proof = index::Proof::new(
-                PublicKey::generate(&mut rng),
-                VersionVector::new(),
-                index::InnerNodeMap::default().hash(),
-                &write_keys,
-            );
+        {
+            let mut tx = b_index.pool.begin_write().await.unwrap();
+            sqlx::query("CREATE TABLE b_table (id INTEGER PRIMARY KEY)")
+                .execute(&mut tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
 
-            let summary = index::Summary::INCOMPLETE;
+        {
+            let mut tx = a_index.pool.begin_write().await.unwrap();
 
-            let _snapshot_id = sqlx::query(
-                "INSERT INTO snapshot_root_nodes (
-                     writer_id,
-                     versions,
-                     hash,
-                     signature,
-                     is_complete,
-                     block_presence
-                 )
-                 VALUES (?, ?, ?, ?, ?, ?)
-                 RETURNING snapshot_id",
+            let _id = sqlx::query(
+                "INSERT INTO a_table (id)
+                 VALUES (?)
+                 RETURNING id",
             )
-            .bind(&proof.writer_id)
-            .bind(&proof.version_vector)
-            .bind(&proof.hash)
-            .bind(&proof.signature)
-            .bind(summary.is_complete)
-            .bind(&summary.block_presence)
-            .map(|row| row.get::<u32, usize>(0))
+            .bind(&encode_u64(0))
+            .map(|row: sqlx::sqlite::SqliteRow| row.get::<u32, usize>(0))
             .fetch_one(&mut tx)
             .await
             .unwrap();
@@ -429,8 +418,7 @@ mod tests {
             _ = async {
                 loop {
                     let mut tx = b_index.pool.begin_write().await.unwrap();
-                    sqlx::query("DELETE FROM received_inner_nodes WHERE client_id = ?")
-                        .bind(encode_u64(0_u64))
+                    sqlx::query("DELETE FROM b_table")
                         .execute(&mut tx)
                         .await
                         .unwrap();
@@ -440,12 +428,7 @@ mod tests {
             _ = async {
                 let mut conn = a_index.pool.acquire().await.unwrap();
 
-                let vec: Vec<u32> = sqlx::query(
-                    "SELECT
-                         snapshot_id
-                     FROM
-                         snapshot_root_nodes",
-                )
+                let vec: Vec<u32> = sqlx::query("SELECT id FROM a_table")
                 .fetch(&mut *conn)
                 .map_ok(|row| row.get::<u32, usize>(0))
                 .try_collect()
