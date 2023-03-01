@@ -365,22 +365,16 @@ mod tests {
 
         let (_a_base_dir, a_index) = {
             let (base_dir, db) = create_temp().await.unwrap();
-            let repository_id = RepositoryId::from(write_keys.public);
-            let (event_tx, _) = broadcast::channel(1);
-            let index = Index::new(db, repository_id, event_tx);
-            (base_dir, index)
+            (base_dir, db)
         };
 
         let (_b_base_dir, b_index) = {
             let (base_dir, db) = create_temp().await.unwrap();
-            let repository_id = RepositoryId::from(write_keys.public);
-            let (event_tx, _) = broadcast::channel(1);
-            let index = Index::new(db, repository_id, event_tx);
-            (base_dir, index)
+            (base_dir, db)
         };
 
         {
-            let mut tx = a_index.pool.begin_write().await.unwrap();
+            let mut tx = a_index.begin_write().await.unwrap();
             sqlx::query("CREATE TABLE a_table (id INTEGER PRIMARY KEY)")
                 .execute(&mut tx)
                 .await
@@ -389,7 +383,7 @@ mod tests {
         }
 
         {
-            let mut tx = b_index.pool.begin_write().await.unwrap();
+            let mut tx = b_index.begin_write().await.unwrap();
             sqlx::query("CREATE TABLE b_table (id INTEGER PRIMARY KEY)")
                 .execute(&mut tx)
                 .await
@@ -398,7 +392,7 @@ mod tests {
         }
 
         {
-            let mut tx = a_index.pool.begin_write().await.unwrap();
+            let mut tx = a_index.begin_write().await.unwrap();
 
             let _id = sqlx::query(
                 "INSERT INTO a_table (id)
@@ -417,7 +411,7 @@ mod tests {
         select! {
             _ = async {
                 loop {
-                    let mut tx = b_index.pool.begin_write().await.unwrap();
+                    let mut tx = b_index.begin_write().await.unwrap();
                     sqlx::query("DELETE FROM b_table")
                         .execute(&mut tx)
                         .await
@@ -426,7 +420,7 @@ mod tests {
                 }
             } => {},
             _ = async {
-                let mut conn = a_index.pool.acquire().await.unwrap();
+                let mut conn = a_index.acquire().await.unwrap();
 
                 let vec: Vec<u32> = sqlx::query("SELECT id FROM a_table")
                 .fetch(&mut *conn)
@@ -439,7 +433,7 @@ mod tests {
             } => {},
         }
 
-        a_index.pool.close().await.unwrap();
-        b_index.pool.close().await.unwrap();
+        a_index.close().await.unwrap();
+        b_index.close().await.unwrap();
     }
 }
