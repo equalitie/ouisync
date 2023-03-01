@@ -171,6 +171,7 @@ pub enum Notification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ouisync_lib::network::{PeerSource, PeerState};
 
     #[test]
     fn serialize_deserialize() {
@@ -191,6 +192,12 @@ mod tests {
             ServerMessage::Success(Response::U64(2)),
             ServerMessage::Success(Response::U64(u64::MAX)),
             ServerMessage::Success(Response::Handle(1)),
+            ServerMessage::Success(Response::PeerInfo(vec![PeerInfo {
+                ip: [192, 168, 1, 204].into(),
+                port: 65535,
+                source: PeerSource::LocalDiscovery,
+                state: PeerState::Connecting,
+            }])),
         ];
 
         for orig in origs {

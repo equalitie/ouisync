@@ -1,8 +1,8 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
 use crate::collections::{hash_map::Entry, HashMap};
-use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
-    net::SocketAddr,
+    net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as SyncMutex,
@@ -21,23 +21,12 @@ use std::{
 //   https://github.com/tokio-rs/tokio/issues/3757
 use crate::sync::{uninitialized_watch, AwaitDrop, DropAwaitable};
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub enum PeerState {
     Known,
     Connecting,
     Handshaking,
     Active(PublicRuntimeId),
-}
-
-impl PeerState {
-    pub(super) fn name(&self) -> &'static str {
-        match self {
-            Self::Known => "Known",
-            Self::Connecting => "Connecting",
-            Self::Handshaking => "Handshaking",
-            Self::Active(_) => "Active",
-        }
-    }
 }
 
 /// Prevents establishing duplicate connections.
@@ -103,7 +92,8 @@ impl ConnectionDeduplicator {
             .unwrap()
             .iter()
             .map(|(key, peer)| PeerInfo {
-                addr: *key.addr.socket_addr(),
+                ip: key.addr.socket_addr().ip(),
+                port: key.addr.socket_addr().port(),
                 source: peer.source,
                 state: peer.state,
             })
@@ -136,45 +126,30 @@ pub(super) enum ReserveResult {
 }
 
 /// Information about a peer.
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct PeerInfo {
-    pub addr: SocketAddr,
+    #[serde(with = "as_str")]
+    pub ip: IpAddr,
+    pub port: u16,
     pub source: PeerSource,
     pub state: PeerState,
 }
 
-impl Serialize for PeerInfo {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+mod as_str {
+    use super::*;
+
+    pub fn serialize<S>(value: &IpAddr, s: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let runtime_id = match self.state {
-            PeerState::Known | PeerState::Connecting | PeerState::Handshaking => None,
-            PeerState::Active(runtime_id) => Some(runtime_id),
-        };
-
-        let len = runtime_id.map(|_| 5).unwrap_or(4);
-
-        let mut seq = s.serialize_seq(Some(len))?;
-        seq.serialize_element(&self.addr.ip().to_string())?;
-        seq.serialize_element(&self.addr.port())?;
-        seq.serialize_element(&self.source)?;
-        seq.serialize_element(self.state.name())?;
-
-        if let Some(runtime_id) = runtime_id {
-            seq.serialize_element(&hex::encode(runtime_id.as_ref()))?;
-        }
-
-        seq.end()
+        value.to_string().serialize(s)
     }
-}
 
-impl<'de> Deserialize<'de> for PeerInfo {
-    fn deserialize<D>(_d: D) -> Result<Self, D::Error>
+    pub fn deserialize<'de, D>(d: D) -> Result<IpAddr, D::Error>
     where
         D: Deserializer<'de>,
     {
-        todo!()
+        <&str>::deserialize(d)?.parse().map_err(D::Error::custom)
     }
 }
 

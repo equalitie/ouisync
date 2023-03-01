@@ -27,7 +27,6 @@ mod server;
 mod tests;
 mod upnp;
 
-pub use self::connection::PeerInfo;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     dht_discovery::DhtDiscovery,
@@ -36,11 +35,14 @@ use self::{
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
     peer_exchange::{PexController, PexDiscovery, PexPayload},
-    peer_source::PeerSource,
     protocol::{Version, MAGIC, VERSION},
     repository_stats::RepositoryStats,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     seen_peers::{SeenPeer, SeenPeers},
+};
+pub use self::{
+    connection::{PeerInfo, PeerState},
+    peer_source::PeerSource,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},

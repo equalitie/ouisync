@@ -555,6 +555,7 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     }
 }
 
+// TODO: Implement Deserialize for StateMonitor
 impl<'de> Deserialize<'de> for StateMonitor {
     fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
     where
