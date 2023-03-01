@@ -345,4 +345,118 @@ mod tests {
         assert_eq!(encode_u64(u64::MAX / 2 + 1), i64::MIN);
         assert_eq!(encode_u64(u64::MAX), -1);
     }
+
+    #[tokio::test]
+    async fn database_commit_consistency() {
+        for run_i in 0..1000 {
+            database_commit_consistency_case(run_i).await;
+        }
+    }
+
+    async fn database_commit_consistency_case(run_i: u32) {
+        use crate::{
+            crypto::{
+                sign::{Keypair, PublicKey},
+                Hashable,
+            },
+            index::{self, Index},
+            repository::RepositoryId,
+            version_vector::VersionVector,
+        };
+        use futures_util::TryStreamExt;
+        use rand::prelude::*;
+        use tokio::{select, sync::broadcast};
+
+        let mut rng = StdRng::seed_from_u64(0);
+
+        let write_keys = Keypair::generate(&mut rng);
+
+        let (_a_base_dir, a_index) = {
+            let (base_dir, db) = create_temp().await.unwrap();
+            let repository_id = RepositoryId::from(write_keys.public);
+            let (event_tx, _) = broadcast::channel(1);
+            let index = Index::new(db, repository_id, event_tx);
+            (base_dir, index)
+        };
+
+        let (_b_base_dir, b_index) = {
+            let (base_dir, db) = create_temp().await.unwrap();
+            let repository_id = RepositoryId::from(write_keys.public);
+            let (event_tx, _) = broadcast::channel(1);
+            let index = Index::new(db, repository_id, event_tx);
+            (base_dir, index)
+        };
+
+        {
+            let mut tx = a_index.pool.begin_write().await.unwrap();
+
+            let proof = index::Proof::new(
+                PublicKey::generate(&mut rng),
+                VersionVector::new(),
+                index::InnerNodeMap::default().hash(),
+                &write_keys,
+            );
+
+            let summary = index::Summary::INCOMPLETE;
+
+            let _snapshot_id = sqlx::query(
+                "INSERT INTO snapshot_root_nodes (
+                     writer_id,
+                     versions,
+                     hash,
+                     signature,
+                     is_complete,
+                     block_presence
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 RETURNING snapshot_id",
+            )
+            .bind(&proof.writer_id)
+            .bind(&proof.version_vector)
+            .bind(&proof.hash)
+            .bind(&proof.signature)
+            .bind(summary.is_complete)
+            .bind(&summary.block_presence)
+            .map(|row| row.get::<u32, usize>(0))
+            .fetch_one(&mut tx)
+            .await
+            .unwrap();
+
+            tx.commit().await.unwrap();
+        }
+
+        select! {
+            _ = async {
+                loop {
+                    let mut tx = b_index.pool.begin_write().await.unwrap();
+                    sqlx::query("DELETE FROM received_inner_nodes WHERE client_id = ?")
+                        .bind(encode_u64(0_u64))
+                        .execute(&mut tx)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+                }
+            } => {},
+            _ = async {
+                let mut conn = a_index.pool.acquire().await.unwrap();
+
+                let vec: Vec<u32> = sqlx::query(
+                    "SELECT
+                         snapshot_id
+                     FROM
+                         snapshot_root_nodes",
+                )
+                .fetch(&mut *conn)
+                .map_ok(|row| row.get::<u32, usize>(0))
+                .try_collect()
+                .await
+                .unwrap();
+
+                assert!(!vec.is_empty(), "Failed to retrieve root on {}-th iterations", run_i);
+            } => {},
+        }
+
+        a_index.pool.close().await.unwrap();
+        b_index.pool.close().await.unwrap();
+    }
 }
