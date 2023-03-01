@@ -31,6 +31,12 @@ pub enum Request {
         password: Option<String>,
     },
     RepositoryClose(Handle<RepositoryHolder>),
+    RepositoryCreateReopenToken(Handle<RepositoryHolder>),
+    RepositoryReopen {
+        path: Utf8PathBuf,
+        #[serde(with = "serde_bytes")]
+        token: Vec<u8>,
+    },
     RepositorySubscribe(Handle<RepositoryHolder>),
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
@@ -82,8 +88,6 @@ pub enum Request {
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
-    ShareTokenEncode(#[serde(with = "as_str")] ShareToken),
-    ShareTokenDecode(#[serde(with = "serde_bytes")] Vec<u8>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -184,6 +188,12 @@ pub async fn dispatch(
             repository::open(server_state, path, password).await?.into()
         }
         Request::RepositoryClose(handle) => repository::close(server_state, handle).await?.into(),
+        Request::RepositoryCreateReopenToken(handle) => {
+            repository::create_reopen_token(server_state, handle)?.into()
+        }
+        Request::RepositoryReopen { path, token } => {
+            repository::reopen(server_state, path, token).await?.into()
+        }
         Request::RepositorySubscribe(handle) => {
             repository::subscribe(server_state, client_state, handle).into()
         }
@@ -276,10 +286,6 @@ pub async fn dispatch(
         Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
         Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
         Request::ShareTokenNormalize(token) => token.to_string().into(),
-        Request::ShareTokenEncode(token) => share_token::encode(token).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
-            .map(|token| token.to_string())
-            .into(),
         Request::RepositoryAccessMode(repository) => {
             repository::access_mode(server_state, repository).into()
         }

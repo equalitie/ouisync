@@ -1,6 +1,6 @@
 // From experience, this lint is almost never useful. Disabling it globally.
 #![allow(clippy::large_enum_variant)]
-// This affects lots of parts of the code but it's just estetics so silencing it for now.
+// This affects lots of parts of the code but it's just aesthetic so silencing it for now.
 // We should consider enabling it again at some point.
 #![allow(clippy::uninlined_format_args)]
 
@@ -59,7 +59,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
-    repository::{Repository, RepositoryDb},
+    repository::{ReopenToken, Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };

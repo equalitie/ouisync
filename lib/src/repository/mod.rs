@@ -1,10 +1,11 @@
 mod id;
+mod reopen_token;
 #[cfg(test)]
 mod tests;
 mod worker;
 
 pub(crate) use self::id::LocalId;
-pub use self::id::RepositoryId;
+pub use self::{id::RepositoryId, reopen_token::ReopenToken};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -153,6 +154,12 @@ impl Repository {
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
         Self::new(pool, this_writer_id, access_secrets).await
+    }
+
+    /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
+    pub async fn reopen(store: impl AsRef<Path>, token: ReopenToken) -> Result<Self> {
+        let pool = db::open(store).await?;
+        Self::new(pool, token.writer_id, token.secrets).await
     }
 
     async fn new(
@@ -385,6 +392,16 @@ impl Repository {
         };
 
         metadata::get_access_secrets(&mut tx, Some(&local_key)).await
+    }
+
+    /// Obtain the reopen token for this repository. The token can then be used to reopen this
+    /// repository (using [`Self::reopen()`]) in the same access mode without having to provide the
+    /// local secret.
+    pub fn reopen_token(&self) -> ReopenToken {
+        ReopenToken {
+            secrets: self.secrets().clone(),
+            writer_id: self.shared.this_writer_id,
+        }
     }
 
     pub fn store(&self) -> &Store {

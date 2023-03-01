@@ -1,5 +1,6 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
+use bincode::Options;
 use std::{
     borrow::Cow,
     fmt,
@@ -8,7 +9,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub const PREFIX: &str = "https://ouisync.net/r";
-pub const VERSION: u64 = 0;
+pub const VERSION: u64 = 1;
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
@@ -55,20 +56,6 @@ impl ShareToken {
     pub fn access_mode(&self) -> AccessMode {
         self.secrets.access_mode()
     }
-
-    pub fn encode(&self, out: &mut Vec<u8>) {
-        encode_version(out, VERSION);
-        self.secrets.encode(out);
-        out.extend_from_slice(self.name.as_bytes());
-    }
-
-    pub fn decode(input: &[u8]) -> Result<Self, DecodeError> {
-        let input = decode_version(input)?;
-        let (secrets, input) = AccessSecrets::decode(input)?;
-        let name = str::from_utf8(input)?.to_owned();
-
-        Ok(Self { secrets, name })
-    }
 }
 
 impl From<AccessSecrets> for ShareToken {
@@ -102,7 +89,7 @@ impl FromStr for ShareToken {
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
         let input = decode_version(&input)?;
 
-        let (secrets, _) = AccessSecrets::decode(input)?;
+        let secrets: AccessSecrets = bincode::options().deserialize(input)?;
         let name = parse_name(params)?;
 
         Ok(Self::from(secrets).with_name(name))
@@ -138,7 +125,9 @@ impl fmt::Display for ShareToken {
 
         let mut buffer = Vec::new();
         encode_version(&mut buffer, VERSION);
-        self.secrets.encode(&mut buffer);
+        bincode::options()
+            .serialize_into(&mut buffer, &self.secrets)
+            .map_err(|_| fmt::Error)?;
 
         write!(
             f,
@@ -220,28 +209,6 @@ mod tests {
         assert_eq!(decoded.name, token.name);
         assert_matches!(decoded.secrets, AccessSecrets::Write(access) => {
             assert_eq!(access.id, token_id);
-        });
-    }
-
-    #[test]
-    fn encode_and_decode() {
-        let token_id = RepositoryId::random();
-        let token_read_key = cipher::SecretKey::random();
-        let token = ShareToken::from(AccessSecrets::Read {
-            id: token_id,
-            read_key: token_read_key.clone(),
-        })
-        .with_name("foo");
-
-        let mut buffer = vec![];
-        token.encode(&mut buffer);
-
-        let decoded = ShareToken::decode(&buffer).unwrap();
-
-        assert_eq!(decoded.name, token.name);
-        assert_matches!(decoded.secrets, AccessSecrets::Read { id, read_key } => {
-            assert_eq!(id, token_id);
-            assert_eq!(read_key.as_ref(), token_read_key.as_ref());
         });
     }
 }
