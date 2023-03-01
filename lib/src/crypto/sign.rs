@@ -19,6 +19,8 @@ use zeroize::Zeroize;
 #[repr(transparent)]
 pub struct PublicKey(ext::PublicKey);
 
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
 #[repr(transparent)]
 pub struct SecretKey(ext::SecretKey);
 
