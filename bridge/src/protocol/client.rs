@@ -79,11 +79,11 @@ pub enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
-    ShareTokenMode(as_str::Wrapper<ShareToken>),
-    ShareTokenInfoHash(as_str::Wrapper<ShareToken>),
-    ShareTokenSuggestedName(as_str::Wrapper<ShareToken>),
-    ShareTokenNormalize(as_str::Wrapper<ShareToken>),
-    ShareTokenEncode(as_str::Wrapper<ShareToken>),
+    ShareTokenMode(#[serde(with = "as_str")] ShareToken),
+    ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
+    ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
+    ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
+    ShareTokenEncode(#[serde(with = "as_str")] ShareToken),
     ShareTokenDecode(ByteBuf),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
@@ -272,13 +272,11 @@ pub async fn dispatch(
         } => repository::create_share_token(server_state, repository, password, access_mode, name)
             .await?
             .into(),
-        Request::ShareTokenMode(token) => share_token::mode(token.into_value()).into(),
-        Request::ShareTokenInfoHash(token) => share_token::info_hash(token.into_value()).into(),
-        Request::ShareTokenSuggestedName(token) => {
-            share_token::suggested_name(token.into_value()).into()
-        }
-        Request::ShareTokenNormalize(token) => token.into_value().to_string().into(),
-        Request::ShareTokenEncode(token) => share_token::encode(token.into_value()).into(),
+        Request::ShareTokenMode(token) => share_token::mode(token).into(),
+        Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
+        Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
+        Request::ShareTokenNormalize(token) => token.to_string().into(),
+        Request::ShareTokenEncode(token) => share_token::encode(token).into(),
         Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())
             .map(|token| token.to_string())
             .into(),
@@ -420,49 +418,6 @@ pub mod as_str {
         S: Serializer,
     {
         value.to_string().serialize(s)
-    }
-
-    // HACK: sometimes `#[serde(deserialize_with = "as_str::deserialize")]` doesn't work for some
-    // reason, but this wrapper does.
-    #[derive(Eq, PartialEq, Serialize, Deserialize)]
-    #[serde(transparent)]
-    pub struct Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        #[serde(with = "self")]
-        value: T,
-    }
-
-    impl<T> From<T> for Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        fn from(value: T) -> Self {
-            Self { value }
-        }
-    }
-
-    impl<T> Wrapper<T>
-    where
-        T: fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        pub fn into_value(self) -> T {
-            self.value
-        }
-    }
-
-    impl<T> fmt::Debug for Wrapper<T>
-    where
-        T: fmt::Debug + fmt::Display + FromStr,
-        T::Err: fmt::Display,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            fmt::Debug::fmt(&self.value, f)
-        }
     }
 }
 
