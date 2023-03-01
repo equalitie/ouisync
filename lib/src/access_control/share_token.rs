@@ -89,7 +89,7 @@ impl FromStr for ShareToken {
         let input = Zeroizing::new(base64::decode_config(input, base64::URL_SAFE_NO_PAD)?);
         let input = decode_version(&input)?;
 
-        let secrets: AccessSecrets = bincode::DefaultOptions::new().deserialize(input)?;
+        let secrets: AccessSecrets = bincode::options().deserialize(input)?;
         let name = parse_name(params)?;
 
         Ok(Self::from(secrets).with_name(name))
@@ -125,7 +125,7 @@ impl fmt::Display for ShareToken {
 
         let mut buffer = Vec::new();
         encode_version(&mut buffer, VERSION);
-        bincode::DefaultOptions::new()
+        bincode::options()
             .serialize_into(&mut buffer, &self.secrets)
             .map_err(|_| fmt::Error)?;
 

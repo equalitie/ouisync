@@ -1,5 +1,4 @@
 mod id;
-mod reopen;
 #[cfg(test)]
 mod tests;
 mod worker;
@@ -33,6 +32,7 @@ use crate::{
 };
 use camino::Utf8Path;
 use scoped_task::ScopedJoinHandle;
+use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
@@ -65,6 +65,14 @@ impl RepositoryDb {
     pub(crate) fn new(pool: db::Pool) -> Self {
         Self { pool }
     }
+}
+
+/// Token which can be obtained from an open repository and which can then be used to reopen the
+/// repository without having to provide the local secret.
+#[derive(Serialize, Deserialize)]
+pub struct ReopenToken {
+    secrets: AccessSecrets,
+    writer_id: sign::PublicKey,
 }
 
 pub struct Repository {
@@ -154,6 +162,12 @@ impl Repository {
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
         Self::new(pool, this_writer_id, access_secrets).await
+    }
+
+    /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
+    pub async fn reopen(store: impl AsRef<Path>, token: ReopenToken) -> Result<Self> {
+        let pool = db::open(store).await?;
+        Self::new(pool, token.writer_id, token.secrets).await
     }
 
     async fn new(
@@ -386,6 +400,16 @@ impl Repository {
         };
 
         metadata::get_access_secrets(&mut tx, Some(&local_key)).await
+    }
+
+    /// Obtain the reopen token for this repository. The token can then be used to reopen this
+    /// repository (using [`Self::reopen()`]) in the same access mode without having to provide the
+    /// local secret.
+    pub fn reopen_token(&self) -> ReopenToken {
+        ReopenToken {
+            secrets: self.secrets().clone(),
+            writer_id: self.shared.this_writer_id,
+        }
     }
 
     pub fn store(&self) -> &Store {
