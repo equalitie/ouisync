@@ -9,6 +9,7 @@ use chacha20::{
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use rand::{rngs::OsRng, CryptoRng, Rng};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, sync::Arc};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -27,7 +28,7 @@ pub(crate) const NONCE_SIZE: usize =
 /// means the key can be cheaply cloned without actually cloning the data. Finally, the data is
 /// scrambled (overwritten with zeros) when the key is dropped to make sure it does not stay in
 /// the memory past its lifetime.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct SecretKey(Arc<Zeroizing<[u8; Self::SIZE]>>);
 
 impl SecretKey {
@@ -142,6 +143,72 @@ impl fmt::Debug for SecretKey {
     }
 }
 
+impl Serialize for SecretKey {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_bytes::Bytes::new(self.as_ref()).serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretKey {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: &serde_bytes::Bytes = Deserialize::deserialize(d)?;
+
+        if bytes.len() != Self::SIZE {
+            return Err(D::Error::invalid_length(
+                bytes.len(),
+                &format!("{}", Self::SIZE).as_str(),
+            ));
+        }
+
+        let mut key = Self::zero();
+        key.as_mut().copy_from_slice(bytes);
+
+        Ok(key)
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("invalid secret key length")]
 pub struct SecretKeyLengthError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::{
+        arbitrary::{any, Arbitrary},
+        strategy::{Map, Strategy},
+    };
+    use test_strategy::proptest;
+
+    impl Arbitrary for SecretKey {
+        type Parameters = ();
+        type Strategy = Map<
+            <[u8; SecretKey::SIZE] as Arbitrary>::Strategy,
+            fn([u8; SecretKey::SIZE]) -> SecretKey,
+        >;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            fn make_key(bytes: [u8; SecretKey::SIZE]) -> SecretKey {
+                let mut key = SecretKey::zero();
+                key.as_mut().copy_from_slice(&bytes);
+                key
+            }
+
+            any::<[u8; SecretKey::SIZE]>().prop_map(make_key)
+        }
+    }
+
+    #[proptest]
+    fn serialize_deserialize(key: SecretKey) {
+        let encoded = bincode::serialize(&key).unwrap();
+        let decoded: SecretKey = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded.as_ref(), key.as_ref());
+    }
+}

@@ -15,7 +15,7 @@ use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
 
 /// Secrets for access to a repository.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub enum AccessSecrets {
     Blind {
         id: RepositoryId,
@@ -169,6 +169,14 @@ impl fmt::Debug for AccessSecrets {
     }
 }
 
+impl PartialEq for AccessSecrets {
+    fn eq(&self, other: &Self) -> bool {
+        self.access_mode() == other.access_mode() && self.id() == other.id()
+    }
+}
+
+impl Eq for AccessSecrets {}
+
 /// Secrets for write access.
 #[derive(Clone)]
 pub struct WriteSecrets {
@@ -192,8 +200,6 @@ impl WriteSecrets {
 impl PartialEq for WriteSecrets {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
-            && self.read_key == other.read_key
-            && self.write_keys.public == other.write_keys.public
     }
 }
 
