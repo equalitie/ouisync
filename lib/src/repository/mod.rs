@@ -1,4 +1,5 @@
 mod id;
+mod reopen;
 #[cfg(test)]
 mod tests;
 mod worker;

@@ -15,13 +15,3 @@ pub(crate) fn info_hash(token: ShareToken) -> String {
 pub(crate) fn suggested_name(token: ShareToken) -> String {
     token.suggested_name().into_owned()
 }
-
-pub(crate) fn encode(token: ShareToken) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    token.encode(&mut buffer);
-    buffer
-}
-
-pub(crate) fn decode(bytes: Vec<u8>) -> Option<ShareToken> {
-    ShareToken::decode(&bytes).ok()
-}

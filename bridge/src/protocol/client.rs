@@ -82,8 +82,6 @@ pub enum Request {
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
-    ShareTokenEncode(#[serde(with = "as_str")] ShareToken),
-    ShareTokenDecode(#[serde(with = "serde_bytes")] Vec<u8>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -276,10 +274,6 @@ pub async fn dispatch(
         Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
         Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
         Request::ShareTokenNormalize(token) => token.to_string().into(),
-        Request::ShareTokenEncode(token) => share_token::encode(token).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
-            .map(|token| token.to_string())
-            .into(),
         Request::RepositoryAccessMode(repository) => {
             repository::access_mode(server_state, repository).into()
         }
