@@ -13,7 +13,6 @@ use crate::{
 use camino::Utf8PathBuf;
 use ouisync_lib::{MonitorId, ShareToken};
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 #[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
@@ -84,7 +83,7 @@ pub enum Request {
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
     ShareTokenEncode(#[serde(with = "as_str")] ShareToken),
-    ShareTokenDecode(ByteBuf),
+    ShareTokenDecode(#[serde(with = "serde_bytes")] Vec<u8>),
     DirectoryCreate {
         repository: Handle<RepositoryHolder>,
         path: Utf8PathBuf,
@@ -118,7 +117,8 @@ pub enum Request {
     FileWrite {
         file: Handle<FileHolder>,
         offset: u64,
-        data: ByteBuf,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
     },
     FileTruncate {
         file: Handle<FileHolder>,
@@ -277,7 +277,7 @@ pub async fn dispatch(
         Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
         Request::ShareTokenNormalize(token) => token.to_string().into(),
         Request::ShareTokenEncode(token) => share_token::encode(token).into(),
-        Request::ShareTokenDecode(bytes) => share_token::decode(bytes.into_vec())
+        Request::ShareTokenDecode(bytes) => share_token::decode(bytes)
             .map(|token| token.to_string())
             .into(),
         Request::RepositoryAccessMode(repository) => {
@@ -318,9 +318,7 @@ pub async fn dispatch(
             file::read(server_state, file, offset, len).await?.into()
         }
         Request::FileWrite { file, offset, data } => {
-            file::write(server_state, file, offset, data.into_vec())
-                .await?
-                .into()
+            file::write(server_state, file, offset, data).await?.into()
         }
         Request::FileTruncate { file, len } => {
             file::truncate(server_state, file, len).await?.into()
