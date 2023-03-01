@@ -31,6 +31,7 @@ impl SecretRuntimeId {
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Hash, Clone, Copy, Deserialize, Serialize, Debug)]
+#[serde(transparent)]
 pub struct PublicRuntimeId {
     public: PublicKey,
 }

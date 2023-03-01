@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io;
 use thiserror::Error;
 
@@ -7,18 +7,20 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("library error")]
+    #[error("{0}")]
     Library(#[from] ouisync_lib::Error),
     #[error("failed to initialize logger")]
     InitializeLogger(#[source] io::Error),
     #[error("failed to initialize runtime")]
     InitializeRuntime(#[source] io::Error),
-    #[error("failed to bind listener")]
-    Bind(#[source] io::Error),
     #[error("request is malformed")]
     MalformedRequest(#[source] rmp_serde::decode::Error),
+    #[error("request failed")]
+    RequestFailed { code: ErrorCode, message: String },
     #[error("argument is not valid")]
     InvalidArgument,
+    #[error("connection lost")]
+    ConnectionLost,
 }
 
 impl Error {
@@ -45,16 +47,16 @@ impl Error {
                     | EntryIsDirectory | Writer(_) | RequestTimeout => ErrorCode::Other,
                 }
             }
-            Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Bind(_) => {
-                ErrorCode::Other
-            }
+            Self::InitializeLogger(_) | Self::InitializeRuntime(_) => ErrorCode::Other,
             Self::MalformedRequest(_) => ErrorCode::MalformedRequest,
+            Self::RequestFailed { code, .. } => *code,
             Self::InvalidArgument => ErrorCode::InvalidArgument,
+            Self::ConnectionLost => ErrorCode::ConnectionLost,
         }
     }
 }
 
-#[derive(Copy, Clone, Serialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 #[repr(u16)]
 #[serde(into = "u16")]
 pub enum ErrorCode {
@@ -84,6 +86,8 @@ pub enum ErrorCode {
     MalformedRequest = 12,
     /// Storage format version mismatch
     StorageVersionMismatch = 13,
+    /// Connection lost
+    ConnectionLost = 14,
     /// Unspecified error
     Other = 65535,
 }

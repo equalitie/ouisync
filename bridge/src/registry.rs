@@ -107,7 +107,14 @@ impl<T> Handle<T> {
         }
     }
 
-    pub(crate) fn id(&self) -> u64 {
+    pub fn from_id(id: u64) -> Self {
+        Self {
+            id,
+            _type: PhantomData,
+        }
+    }
+
+    pub fn id(&self) -> u64 {
         self.id
     }
 }
@@ -119,6 +126,14 @@ impl<T> Clone for Handle<T> {
 }
 
 impl<T> Copy for Handle<T> {}
+
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T> Eq for Handle<T> {}
 
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

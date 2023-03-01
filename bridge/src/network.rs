@@ -1,17 +1,18 @@
 use crate::{
     constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
-    server_message::Notification,
+    protocol::Notification,
     state::{ClientState, ServerState, SubscriptionHandle},
 };
 use ouisync_lib::{network::peer_addr::PeerAddr, PeerInfo};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use thiserror::Error;
 use tokio::select;
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
-#[serde(into = "u8")]
-pub(crate) enum NetworkEvent {
+#[serde(into = "u8", try_from = "u8")]
+pub enum NetworkEvent {
     ProtocolVersionMismatch = NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
     PeerSetChange = NETWORK_EVENT_PEER_SET_CHANGE,
 }
@@ -21,6 +22,22 @@ impl From<NetworkEvent> for u8 {
         event as u8
     }
 }
+
+impl TryFrom<u8> for NetworkEvent {
+    type Error = NetworkEventDecodeError;
+
+    fn try_from(input: u8) -> Result<Self, Self::Error> {
+        match input {
+            NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH => Ok(Self::ProtocolVersionMismatch),
+            NETWORK_EVENT_PEER_SET_CHANGE => Ok(Self::PeerSetChange),
+            _ => Err(NetworkEventDecodeError),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("failed to decode network event")]
+pub struct NetworkEventDecodeError;
 
 /// Binds the network to the specified addresses.
 /// Rebinds if already bound. If any of the addresses is null, that particular protocol/family

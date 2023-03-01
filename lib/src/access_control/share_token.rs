@@ -12,7 +12,7 @@ pub const VERSION: u64 = 0;
 
 /// Token to share a repository which can be encoded as a URL-formatted string and transmitted to
 /// other replicas.
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct ShareToken {
     secrets: AccessSecrets,
     name: String,

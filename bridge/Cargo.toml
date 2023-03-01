@@ -10,9 +10,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+bytes = "1.4.0"
 camino = { version = "1.0.9", features = ["serde1"] }
 futures-util = { workspace = true }
 hex = "0.4.3"
+interprocess = { version = "1.2.1", features = ["tokio_support"] }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rmp-serde = "1.1.0"
 scoped_task = { path = "../scoped_task" }
@@ -21,7 +24,7 @@ serde_bytes = "0.11.8"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["codec", "compat"] }
 tokio-tungstenite = "0.18.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -36,3 +39,6 @@ paranoid-android = "0.2.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.2"

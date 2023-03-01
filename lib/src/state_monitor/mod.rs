@@ -72,6 +72,15 @@ impl FromStr for MonitorId {
     }
 }
 
+impl Serialize for MonitorId {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(s)
+    }
+}
+
 impl<'de> Deserialize<'de> for MonitorId {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
@@ -312,6 +321,16 @@ impl Drop for StateMonitor {
     }
 }
 
+// FIXME: temporary code, remove
+impl PartialEq for StateMonitor {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+// FIXME: temporary code, remote
+impl Eq for StateMonitor {}
+
 impl StateMonitorShared {
     fn make_root() -> Arc<Self> {
         Arc::new(StateMonitorShared {
@@ -533,6 +552,16 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
             )?;
         }
         map.end()
+    }
+}
+
+// TODO: Implement Deserialize for StateMonitor
+impl<'de> Deserialize<'de> for StateMonitor {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        todo!()
     }
 }
 

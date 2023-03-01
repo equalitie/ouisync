@@ -5,14 +5,14 @@ use crate::{
     repository::{entry_type_to_num, RepositoryHolder},
 };
 use camino::Utf8PathBuf;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // Currently this is only a read-only snapshot of a directory.
-#[derive(Serialize)]
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Directory(Vec<DirEntry>);
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DirEntry {
     pub name: String,
     pub entry_type: u8,

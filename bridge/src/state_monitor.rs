@@ -1,6 +1,6 @@
 use crate::{
     error::Result,
-    server_message::Notification,
+    protocol::Notification,
     state::{ClientState, ServerState, SubscriptionHandle},
 };
 use ouisync_lib::{MonitorId, StateMonitor};
