@@ -105,8 +105,8 @@ fn fast_sequential_writes() {
         let count = 10;
 
         for i in 0..count {
-            let file = format!("file-{}.txt", i);
-            let content = format!("Content of {}", file);
+            let file = format!("file-{i}.txt");
+            let content = format!("Content of {file}");
             fs::write(a.root().join(file), &content).unwrap();
         }
 

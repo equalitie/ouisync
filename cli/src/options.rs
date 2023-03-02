@@ -1,16 +1,47 @@
-// TODO: remove this when we upgrade clap to v4.0
-#![allow(deprecated)]
+use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
+use clap::{Parser, Subcommand};
 
+#[derive(Parser, Debug)]
+#[command(name = APP_NAME, version, about)]
+pub(crate) struct Options {
+    /// Config directory
+    #[arg(short = 'C', long, default_value_t = default_config_dir(), value_name = "PATH")]
+    pub config_dir: PathBuf,
+
+    /// Host socket to connect to
+    #[arg(short = 'H', long, default_value_t, value_name = "ADDR")]
+    pub host: HostAddr,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum Command {
+    /// Start a server
+    Serve,
+    /// Create a new repository
+    Create,
+    /// Delete a repository
+    Delete,
+}
+
+/// Path to the config directory.
+fn default_config_dir() -> PathBuf {
+    dirs::config_dir()
+        .expect("config dir not defined")
+        .join(APP_NAME)
+        .into()
+}
+
+/*
 use crate::APP_NAME;
-use anyhow::{Context, Error, Result};
-use clap::Parser;
 use ouisync_lib::{
     crypto::{cipher::SecretKey, Password},
     AccessMode, LocalSecret, PeerAddr, ShareToken,
 };
 use std::{
     path::{Path, PathBuf},
-    str::FromStr,
 };
 use tokio::{
     fs::File,
@@ -121,17 +152,6 @@ impl Options {
         }
     }
 
-    /// Path to the config directory.
-    pub fn config_dir(&self) -> Result<PathBuf> {
-        if let Some(path) = &self.config_dir {
-            Ok(path.clone())
-        } else {
-            Ok(dirs::config_dir()
-                .context("failed to initialize default config directory")?
-                .join(APP_NAME))
-        }
-    }
-
     /// Path to the database of the repository with the specified name.
     pub fn repository_path(&self, name: &str) -> Result<PathBuf> {
         Ok(self
@@ -208,3 +228,4 @@ pub(crate) async fn read_share_tokens_from_file(path: &Path) -> Result<Vec<Share
 
     Ok(tokens)
 }
+*/

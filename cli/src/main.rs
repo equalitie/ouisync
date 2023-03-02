@@ -1,8 +1,77 @@
+mod host_addr;
 mod options;
+mod path;
 
-use self::options::{Named, Options};
-use anyhow::{format_err, Result};
+use self::options::{Command, Options};
+use anyhow::Result;
 use clap::Parser;
+use ouisync_bridge::{
+    logger,
+    transport::{local::LocalServer, Server},
+    ServerState,
+};
+use ouisync_lib::StateMonitor;
+use std::{io, sync::Arc};
+use tokio::select;
+
+pub(crate) const APP_NAME: &str = "ouisync";
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let options = Options::parse();
+
+    if let Command::Serve = options.command {
+        server(options).await
+    } else {
+        client(options).await
+    }
+}
+
+async fn server(options: Options) -> Result<()> {
+    let root_monitor = StateMonitor::make_root();
+    let _logger = logger::new(root_monitor.clone());
+
+    let state = ServerState::new(options.config_dir.into(), root_monitor);
+    let state = Arc::new(state);
+
+    let server = LocalServer::bind(host_addr::default_local())?;
+
+    select! {
+        _ = server.run(state) => (),
+        result = terminated() => result?,
+    }
+
+    Ok(())
+}
+
+async fn client(_options: Options) -> Result<()> {
+    todo!()
+}
+
+// Wait until the program is terminated.
+#[cfg(unix)]
+async fn terminated() -> io::Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    // Wait for SIGINT or SIGTERM
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    select! {
+        _ = interrupt.recv() => (),
+        _ = terminate.recv() => (),
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn terminated() -> io::Result<()> {
+    tokio::signal::ctrl_c().await
+}
+
+/*
+use self::options::{Named, Options};
 use ouisync_lib::{
     crypto::cipher::SecretKey,
     device_id::{self, DeviceId},
@@ -15,10 +84,7 @@ use std::{
     time::Duration,
 };
 use tokio::{fs::File, io::AsyncWriteExt, time};
-use tracing::metadata::LevelFilter;
-use tracing_subscriber::EnvFilter;
 
-pub(crate) const APP_NAME: &str = "ouisync";
 
 async fn secret_to_key(
     db: &RepositoryDb,
@@ -215,40 +281,5 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// Wait until the program is terminated.
-#[cfg(unix)]
-async fn terminated() -> io::Result<()> {
-    use tokio::{
-        select,
-        signal::unix::{signal, SignalKind},
-    };
 
-    // Wait for SIGINT or SIGTERM
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut terminate = signal(SignalKind::terminate())?;
-
-    select! {
-        _ = interrupt.recv() => (),
-        _ = terminate.recv() => (),
-    }
-
-    Ok(())
-}
-
-#[cfg(not(unix))]
-async fn terminated() -> io::Result<()> {
-    tokio::signal::ctrl_c().await
-}
-
-fn init_log() {
-    tracing_subscriber::fmt()
-        .pretty() // enable pretty log output (more readable but also more verbose)
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::OFF.into())
-                .from_env_lossy(),
-        )
-        .with_file(true)
-        .with_line_number(true)
-        .init();
-}
+*/

@@ -1,5 +1,4 @@
 use crate::{
-    error::Result,
     file::FileHolder,
     protocol::Notification,
     registry::{Handle, Registry},
@@ -23,7 +22,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(configs_path: PathBuf, root_monitor: StateMonitor) -> Result<Self> {
+    pub fn new(configs_path: PathBuf, root_monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(configs_path);
 
         // Create network
@@ -34,7 +33,7 @@ impl ServerState {
 
         let repos_span = tracing::info_span!("Repositories");
 
-        Ok(Self {
+        Self {
             root_monitor,
             repos_span,
             config,
@@ -42,7 +41,7 @@ impl ServerState {
             repositories: Registry::new(),
             files: Registry::new(),
             tasks: Registry::new(),
-        })
+        }
     }
 
     pub(crate) fn repo_span(&self, store: &Utf8Path) -> Span {

@@ -60,7 +60,7 @@ fn setup() -> (TempDir, Arc<ServerState>) {
 
     let base_dir = TempDir::new().unwrap();
     let root_monitor = StateMonitor::make_root();
-    let server_state = ServerState::new(base_dir.path().join("config"), root_monitor).unwrap();
+    let server_state = ServerState::new(base_dir.path().join("config"), root_monitor);
     let server_state = Arc::new(server_state);
 
     (base_dir, server_state)
