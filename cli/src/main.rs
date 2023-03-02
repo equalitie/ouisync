@@ -85,13 +85,12 @@ async fn client(options: Options) -> Result<()> {
             let write_password = get_or_read(write_password, "input write password").await?;
             let write_password = write_password.or(password);
 
-            let name = name
-                .or_else(|| {
-                    share_token
-                        .as_ref()
-                        .map(|token| token.suggested_name().into_owned())
-                })
-                .unwrap();
+            let name = match (name, &share_token) {
+                (Some(name), _) => name,
+                (None, Some(token)) => token.suggested_name().into_owned(),
+                (None, None) => unreachable!(),
+            };
+
             let path = repository_path(&options.data_dir, &name).try_into()?;
 
             client
@@ -111,7 +110,7 @@ async fn client(options: Options) -> Result<()> {
             mode,
             password,
         } => {
-            let password = get_or_read(password, "input passwords").await?;
+            let password = get_or_read(password, "input password").await?;
             let repository = client
                 .invoke(Request::RepositoryOpen {
                     path: repository_path(&options.data_dir, &name).try_into()?,
