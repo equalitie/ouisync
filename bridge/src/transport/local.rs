@@ -15,7 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use interprocess::local_socket::tokio::LocalSocketStream;
-use std::{io, sync::Arc};
+use std::{fs, io, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 use tokio_util::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
@@ -24,13 +24,23 @@ use tokio_util::{
 
 pub struct LocalServer {
     listener: LocalSocketListener,
+    path: Option<PathBuf>,
 }
 
 impl LocalServer {
-    pub fn bind<'a>(name: impl ToLocalSocketName<'a>) -> io::Result<Self> {
+    pub fn bind<'a>(name: impl ToLocalSocketName<'a> + Clone) -> io::Result<Self> {
+        let path = {
+            let name = name.clone().to_local_socket_name()?;
+            if name.is_path() {
+                Some(name.into_inner().into())
+            } else {
+                None
+            }
+        };
+
         let listener = LocalSocketListener::bind(name)?;
 
-        Ok(Self { listener })
+        Ok(Self { listener, path })
     }
 }
 
@@ -49,6 +59,16 @@ impl Server for LocalServer {
                     tracing::error!(?error, "failed to accept client");
                     break;
                 }
+            }
+        }
+    }
+}
+
+impl Drop for LocalServer {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            if let Err(error) = fs::remove_file(path) {
+                tracing::error!(?error, ?path, "failed to remove socket");
             }
         }
     }
