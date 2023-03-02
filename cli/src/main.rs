@@ -48,9 +48,10 @@ async fn server(options: Options) -> Result<()> {
     let state = Arc::new(state);
 
     let server = LocalServer::bind(host_addr::default_local())?;
-    task::spawn(server.run(state));
+    task::spawn(server.run(state.clone()));
 
     terminated().await?;
+    state.close().await;
 
     Ok(())
 }

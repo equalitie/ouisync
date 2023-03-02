@@ -44,6 +44,20 @@ impl ServerState {
         }
     }
 
+    pub async fn close(&self) {
+        for holder in self.files.remove_all() {
+            if let Err(error) = holder.file.lock().await.flush().await {
+                tracing::error!(?error, "failed to flush file");
+            }
+        }
+
+        for holder in self.repositories.remove_all() {
+            if let Err(error) = holder.repository.close().await {
+                tracing::error!(?error, "failed to close repository");
+            }
+        }
+    }
+
     pub(crate) fn repo_span(&self, store: &Utf8Path) -> Span {
         tracing::info_span!(parent: &self.repos_span, "repo", ?store)
     }

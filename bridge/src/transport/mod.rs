@@ -20,4 +20,5 @@ pub trait Server {
 #[async_trait(?Send)]
 pub trait Client {
     async fn invoke(&self, request: Request) -> Result<Response>;
+    async fn close(&self) {}
 }

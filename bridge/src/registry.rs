@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     fmt,
     marker::PhantomData,
+    mem,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
@@ -40,6 +41,26 @@ impl<T> Registry<T> {
                 None
             }
         }
+    }
+
+    pub fn remove_all(&self) -> Vec<T> {
+        let mut items = self.0.write().unwrap();
+
+        let candidates = mem::take(&mut *items);
+        let mut removed = Vec::with_capacity(candidates.len());
+
+        for (id, ptr) in candidates {
+            match Arc::try_unwrap(ptr) {
+                Ok(item) => {
+                    removed.push(item);
+                }
+                Err(ptr) => {
+                    items.insert(id, ptr);
+                }
+            }
+        }
+
+        removed
     }
 
     pub fn get(&self, handle: Handle<T>) -> Arc<T> {

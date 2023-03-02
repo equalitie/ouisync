@@ -35,4 +35,8 @@ impl Client for NativeClient {
     async fn invoke(&self, request: Request) -> Result<Response> {
         protocol::dispatch(&self.server_state, &self.client_state, request).await
     }
+
+    async fn close(&self) {
+        self.server_state.close().await;
+    }
 }
