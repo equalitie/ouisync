@@ -48,7 +48,7 @@ impl Bin {
             command.arg("--accept").arg(share_token);
         } else {
             command.arg("--create").arg(REPO_NAME);
-            command.arg("--share").arg(format!("{}:write", REPO_NAME));
+            command.arg("--share").arg(format!("{REPO_NAME}:write"));
         }
 
         command.arg("--print-port");
@@ -66,7 +66,7 @@ impl Bin {
 
         for peer in peers {
             command.arg("--peers");
-            command.arg(format!("tcp/{}", peer));
+            command.arg(format!("tcp/{peer}"));
         }
 
         // Disable log output unless explicitly enabled.
@@ -177,7 +177,7 @@ where
     thread::spawn(move || loop {
         line.clear();
         if reader.read_line(&mut line).unwrap() > 0 {
-            write!(&mut writer, "[{}] {}", id, line).unwrap();
+            write!(&mut writer, "[{id}] {line}").unwrap();
         } else {
             break;
         }
@@ -189,7 +189,7 @@ fn wait_for_share_token(
     stdout: &mut BufReader<ChildStdout>,
     id: &Id,
 ) -> String {
-    let suffix = format!("?name={}", REPO_NAME);
+    let suffix = format!("?name={REPO_NAME}");
     if let Some(line) = wait_for_line(stdout, "https://ouisync.net/r", &suffix, id) {
         line
     } else {
@@ -223,7 +223,7 @@ fn wait_for_line<R: BufRead>(
 
             return Some(line);
         } else {
-            println!("[{}] {}", id, line)
+            println!("[{id}] {line}")
         }
     }
 
@@ -231,13 +231,13 @@ fn wait_for_line<R: BufRead>(
 }
 
 fn fail(process: &mut Child, id: &Id, message: &str) -> ! {
-    println!("[{}] {}", id, message);
-    println!("[{}] Waiting for process to finish", id);
+    println!("[{id}] {message}");
+    println!("[{id}] Waiting for process to finish");
 
     let exit_status = process.wait().unwrap();
 
-    println!("[{}] Process finished with {}", id, exit_status);
-    println!("[{}] stderr:", id);
+    println!("[{id}] Process finished with {exit_status}");
+    println!("[{id}] stderr:");
 
     let stderr = process.stderr.take().unwrap();
 
@@ -245,7 +245,7 @@ fn fail(process: &mut Child, id: &Id, message: &str) -> ! {
         println!("[{}]     {}", id, line.unwrap());
     }
 
-    panic!("[{}] Failed to run ouisync executable", id);
+    panic!("[{id}] Failed to run ouisync executable");
 }
 
 /// Runs the given closure a couple of times until it succeeds (returns `Ok`) with a short delay
