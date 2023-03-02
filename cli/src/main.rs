@@ -19,13 +19,16 @@ use ouisync_bridge::{
     },
     ServerState,
 };
-use ouisync_lib::StateMonitor;
+use ouisync_lib::{ShareToken, StateMonitor};
 use std::{
     io,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::task;
+use tokio::{
+    io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader},
+    task,
+};
 
 pub(crate) const APP_NAME: &str = "ouisync";
 
@@ -68,6 +71,20 @@ async fn client(options: Options) -> Result<()> {
             read_password,
             write_password,
         } => {
+            let share_token = get_or_read(share_token, "input share token").await?;
+            let share_token = share_token
+                .as_deref()
+                .map(str::parse::<ShareToken>)
+                .transpose()?;
+
+            let password = get_or_read(password, "input password").await?;
+
+            let read_password = get_or_read(read_password, "input read password").await?;
+            let read_password = read_password.or_else(|| password.as_ref().cloned());
+
+            let write_password = get_or_read(write_password, "input write password").await?;
+            let write_password = write_password.or(password);
+
             let name = name
                 .or_else(|| {
                     share_token
@@ -75,10 +92,7 @@ async fn client(options: Options) -> Result<()> {
                         .map(|token| token.suggested_name().into_owned())
                 })
                 .unwrap();
-
             let path = repository_path(&options.data_dir, &name).try_into()?;
-            let read_password = read_password.or_else(|| password.as_ref().cloned());
-            let write_password = write_password.or(password);
 
             client
                 .invoke(Request::RepositoryCreate {
@@ -97,6 +111,7 @@ async fn client(options: Options) -> Result<()> {
             mode,
             password,
         } => {
+            let password = get_or_read(password, "input passwords").await?;
             let repository = client
                 .invoke(Request::RepositoryOpen {
                     path: repository_path(&options.data_dir, &name).try_into()?,
@@ -145,7 +160,32 @@ async fn connect(addr: HostAddr, config_dir: &Path) -> io::Result<Box<dyn Client
     }
 }
 
-pub fn repository_path(data_dir: &Path, name: &str) -> PathBuf {
+/// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
+// TODO: support invisible input for passwords, etc.
+async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<String>> {
+    if value
+        .as_ref()
+        .map(|value| value.trim() == "-")
+        .unwrap_or(false)
+    {
+        let mut stdout = stdout();
+        let mut stdin = BufReader::new(stdin());
+
+        // Read from stdin
+        stdout.write_all(prompt.as_bytes()).await?;
+        stdout.write_all(b": ").await?;
+        stdout.flush().await?;
+
+        let mut value = String::new();
+        stdin.read_line(&mut value).await?;
+
+        Ok(Some(value).filter(|s| !s.is_empty()))
+    } else {
+        Ok(value)
+    }
+}
+
+fn repository_path(data_dir: &Path, name: &str) -> PathBuf {
     data_dir
         .join("repositories")
         .join(name)
@@ -210,21 +250,6 @@ async fn secret_to_key(
     Ok(Some(key))
 }
 
-async fn create_repository(
-    name: &str,
-    device_id: DeviceId,
-    secrets: AccessSecrets,
-    options: &Options,
-) -> Result<Repository> {
-    let db = RepositoryDb::create(options.repository_path(name.as_ref())?).await?;
-    let local_key = secret_to_key(&db, options.secret_for_repo(name)?).await?;
-    // TODO: In CLI we currently support only a single (optional) user secret for writing and
-    // reading, but the code allows for having them distinct.
-    let access = Access::new(local_key.clone(), local_key, secrets);
-    let repo = Repository::create(db, device_id, access).await?;
-    Ok(repo)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let options = Options::parse();
@@ -242,74 +267,6 @@ async fn main() -> Result<()> {
 
     // Create repositories
     let mut repos = HashMap::new();
-
-    for name in &options.create {
-        let repo =
-            create_repository(name, device_id, AccessSecrets::random_write(), &options).await?;
-
-        repos.insert(name.clone(), repo);
-    }
-
-    // Print share tokens
-    let mut share_file = if let Some(path) = &options.share_file {
-        Some(File::create(path).await?)
-    } else {
-        None
-    };
-
-    for Named { name, value } in &options.share {
-        let secrets = if let Some(repo) = repos.get(name) {
-            repo.secrets().with_mode(*value)
-        } else {
-            Repository::open(
-                options.repository_path(name)?,
-                device_id,
-                options.secret_for_repo(name)?,
-            )
-            .await?
-            .secrets()
-            .with_mode(*value)
-        };
-
-        let token = ShareToken::from(secrets).with_name(name);
-
-        if let Some(file) = &mut share_file {
-            file.write_all(token.to_string().as_bytes()).await?;
-            file.write_all(b"\n").await?;
-        } else {
-            println!("{}", token);
-        }
-    }
-
-    if let Some(mut file) = share_file {
-        file.flush().await?;
-    }
-
-    // Accept share tokens
-    let accept_file_tokens = if let Some(path) = &options.accept_file {
-        options::read_share_tokens_from_file(path).await?
-    } else {
-        vec![]
-    };
-
-    for token in options.accept.iter().chain(&accept_file_tokens) {
-        let name = token.suggested_name();
-
-        if let Entry::Vacant(entry) = repos.entry(name.as_ref().to_owned()) {
-            let repo =
-                create_repository(name.as_ref(), device_id, token.secrets().clone(), &options)
-                    .await?;
-
-            entry.insert(repo);
-
-            tracing::info!("share token accepted: {}", token);
-        } else {
-            return Err(format_err!(
-                "can't accept share token for repository {:?} - already exists",
-                name
-            ));
-        }
-    }
 
     // Start the network
     let network = Network::new(config);
@@ -378,12 +335,6 @@ async fn main() -> Result<()> {
     if options.print_device_id {
         println!("Device ID is {}", device_id);
     }
-
-    terminated().await?;
-
-    time::timeout(Duration::from_secs(1), network.handle().shutdown())
-        .await
-        .unwrap_or(());
 
     Ok(())
 }

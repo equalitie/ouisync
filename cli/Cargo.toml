@@ -21,7 +21,7 @@ ouisync-vfs = { path = "../vfs" }
 anyhow = "1.0.57"
 clap = { version = "4.1.8", features = ["derive"] }
 dirs = "4.0.0"
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "io-std"] }
 
 [dev-dependencies]
 backoff = "0.4.0"

@@ -1,6 +1,6 @@
 use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
 use clap::{Parser, Subcommand};
-use ouisync_lib::{AccessMode, ShareToken};
+use ouisync_lib::AccessMode;
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
@@ -34,7 +34,7 @@ pub(crate) enum Command {
 
         /// Share token
         #[arg(short, long)]
-        share_token: Option<ShareToken>,
+        share_token: Option<String>,
 
         /// Local read and write password
         #[arg(short = 'P', long, conflicts_with_all = ["read_password", "write_password"])]
@@ -142,23 +142,6 @@ pub(crate) struct Options {
     #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
 
-
-    /// Print the share tokens to a file instead of standard output (one token per line)
-    #[clap(long, value_name = "PATH")]
-    pub share_file: Option<PathBuf>,
-
-    /// Accept a share token. Can be specified multiple times to accept multiple tokens.
-    #[clap(long, value_name = "TOKEN")]
-    pub accept: Vec<ShareToken>,
-
-    /// Accept share tokens by reading them from a file, one token per line.
-    #[clap(long, value_name = "PATH")]
-    pub accept_file: Option<PathBuf>,
-
-    /// Prints the path to the data and config directories and exits.
-    #[clap(long)]
-    pub print_dirs: bool,
-
     /// Prints the listening port to the stdout when the replica becomes ready.
     /// Note this flag is unstable and experimental.
     #[clap(long)]
@@ -224,18 +207,4 @@ where
     }
 }
 
-pub(crate) async fn read_share_tokens_from_file(path: &Path) -> Result<Vec<ShareToken>> {
-    let file = File::open(path).await?;
-    let mut reader = BufReader::new(file);
-    let mut buffer = String::new();
-    let mut tokens = Vec::new();
-
-    while reader.read_line(&mut buffer).await? > 0 {
-        let token: ShareToken = buffer.parse()?;
-        tokens.push(token);
-        buffer.clear();
-    }
-
-    Ok(tokens)
-}
 */

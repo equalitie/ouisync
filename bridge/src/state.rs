@@ -7,8 +7,8 @@ use crate::{
 use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
 use scoped_task::ScopedJoinHandle;
-use std::path::PathBuf;
-use tokio::sync::mpsc;
+use std::{path::PathBuf, time::Duration};
+use tokio::{sync::mpsc, time};
 use tracing::Span;
 
 pub struct ServerState {
@@ -56,6 +56,10 @@ impl ServerState {
                 tracing::error!(?error, "failed to close repository");
             }
         }
+
+        time::timeout(Duration::from_secs(1), self.network.handle().shutdown())
+            .await
+            .unwrap_or(());
     }
 
     pub(crate) fn repo_span(&self, store: &Utf8Path) -> Span {
