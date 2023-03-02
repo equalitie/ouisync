@@ -2,17 +2,30 @@ mod host_addr;
 mod options;
 mod path;
 
-use self::options::{Command, Options};
+use self::{
+    host_addr::HostAddr,
+    options::{Command, Options},
+};
 use anyhow::Result;
 use clap::Parser;
 use ouisync_bridge::{
     logger,
-    transport::{local::LocalServer, Server},
+    protocol::Request,
+    transport::{
+        local::{LocalClient, LocalServer},
+        native::NativeClient,
+        remote::RemoteClient,
+        Client, Server,
+    },
     ServerState,
 };
 use ouisync_lib::StateMonitor;
-use std::{io, sync::Arc};
-use tokio::select;
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::task;
 
 pub(crate) const APP_NAME: &str = "ouisync";
 
@@ -35,23 +48,88 @@ async fn server(options: Options) -> Result<()> {
     let state = Arc::new(state);
 
     let server = LocalServer::bind(host_addr::default_local())?;
+    task::spawn(server.run(state));
 
-    select! {
-        _ = server.run(state) => (),
-        result = terminated() => result?,
-    }
+    terminated().await?;
 
     Ok(())
 }
 
-async fn client(_options: Options) -> Result<()> {
-    todo!()
+async fn client(options: Options) -> Result<()> {
+    let client = connect(options.host, &options.config_dir).await?;
+
+    match options.command {
+        Command::Serve => unreachable!(), // handled already in `main`
+        Command::Create {
+            name,
+            share_token,
+            password,
+            read_password,
+            write_password,
+        } => {
+            let name = name
+                .or_else(|| {
+                    share_token
+                        .as_ref()
+                        .map(|token| token.suggested_name().into_owned())
+                })
+                .unwrap();
+
+            let path = repository_path(&options.data_dir, &name);
+            let path = path.try_into()?;
+
+            let read_password = read_password.or_else(|| password.as_ref().cloned());
+            let write_password = write_password.or(password);
+
+            client
+                .invoke(Request::RepositoryCreate {
+                    path,
+                    read_password,
+                    write_password,
+                    share_token,
+                })
+                .await?;
+
+            println!("repository created");
+        }
+    }
+
+    client.close().await;
+
+    Ok(())
+}
+
+async fn connect(addr: HostAddr, config_dir: &Path) -> io::Result<Box<dyn Client>> {
+    match addr {
+        HostAddr::Local(addr) => match LocalClient::connect(addr).await {
+            Ok(client) => Ok(Box::new(client)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let root_monitor = StateMonitor::make_root();
+                let state = ServerState::new(config_dir.into(), root_monitor);
+                let state = Arc::new(state);
+
+                Ok(Box::new(NativeClient::new(state)))
+            }
+            Err(error) => Err(error),
+        },
+        HostAddr::Remote(addr) => Ok(Box::new(RemoteClient::connect(addr).await?)),
+    }
+}
+
+pub fn repository_path(data_dir: &Path, name: &str) -> PathBuf {
+    data_dir
+        .join("repositories")
+        .join(name)
+        .with_extension("db")
 }
 
 // Wait until the program is terminated.
 #[cfg(unix)]
 async fn terminated() -> io::Result<()> {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::{
+        select,
+        signal::unix::{signal, SignalKind},
+    };
 
     // Wait for SIGINT or SIGTERM
     let mut interrupt = signal(SignalKind::interrupt())?;

@@ -1,12 +1,17 @@
 use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
 use clap::{Parser, Subcommand};
+use ouisync_lib::ShareToken;
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
 pub(crate) struct Options {
     /// Config directory
-    #[arg(short = 'C', long, default_value_t = default_config_dir(), value_name = "PATH")]
+    #[arg(long, default_value_t = default_config_dir(), value_name = "PATH")]
     pub config_dir: PathBuf,
+
+    /// Data directory
+    #[arg(long, default_value_t = default_data_dir(), value_name = "PATH")]
+    pub data_dir: PathBuf,
 
     /// Host socket to connect to
     #[arg(short = 'H', long, default_value_t, value_name = "ADDR")]
@@ -17,19 +22,46 @@ pub(crate) struct Options {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     /// Start a server
     Serve,
     /// Create a new repository
-    Create,
-    /// Delete a repository
-    Delete,
+    #[command(visible_alias = "c")]
+    Create {
+        /// Name of the repository
+        #[arg(short, long, required_unless_present = "share_token")]
+        name: Option<String>,
+
+        /// Share token
+        #[arg(short, long)]
+        share_token: Option<ShareToken>,
+
+        /// Local read and write password
+        #[arg(short = 'P', long, conflicts_with_all = ["read_password", "write_password"])]
+        password: Option<String>,
+
+        /// Local read password
+        #[arg(long)]
+        read_password: Option<String>,
+
+        /// Local write password
+        #[arg(long)]
+        write_password: Option<String>,
+    },
 }
 
 /// Path to the config directory.
 fn default_config_dir() -> PathBuf {
     dirs::config_dir()
         .expect("config dir not defined")
+        .join(APP_NAME)
+        .into()
+}
+
+fn default_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .expect("data dir not defined")
         .join(APP_NAME)
         .into()
 }
@@ -51,14 +83,6 @@ use tokio::{
 /// Command line options.
 #[derive(Parser, Debug)]
 pub(crate) struct Options {
-    /// Path to the data directory. Use the --print-dirs flag to see the default.
-    #[clap(long, value_name = "PATH")]
-    pub data_dir: Option<PathBuf>,
-
-    /// Path to the config directory. Use the --print-dirs flag to see the default.
-    #[clap(long, value_name = "PATH")]
-    pub config_dir: Option<PathBuf>,
-
     /// Addresses to bind to. The expected format is {tcp,quic}/IP:PORT. Note that there may be at
     /// most one of each (protoco x IP-version) combinations. If more are specified, only the first
     /// one is used.
@@ -85,20 +109,10 @@ pub(crate) struct Options {
     #[clap(long)]
     pub peers: Vec<PeerAddr>,
 
-    /// Create new repository with the specified name. Can be specified multiple times to create
-    /// multiple repositories.
-    #[clap(short, long, value_name = "NAME")]
-    pub create: Vec<String>,
-
     /// Mount the named repository at the specified path. Can be specified multiple times to mount
     /// multiple repositories.
     #[clap(short, long, value_name = "NAME:PATH")]
     pub mount: Vec<Named<PathBuf>>,
-
-    /// Password per repository.
-    // TODO: Zeroize
-    #[clap(long, value_name = "NAME:PASSWD")]
-    pub password: Vec<Named<String>>,
 
     /// Pre-hashed 32 byte long (64 hexadecimal characters) local secret per repository. This is
     /// mainly intended for testing as password derivation is intentionally slow and some of the
@@ -141,26 +155,6 @@ pub(crate) struct Options {
 }
 
 impl Options {
-    /// Path to the data directory.
-    pub fn data_dir(&self) -> Result<PathBuf> {
-        if let Some(path) = &self.data_dir {
-            Ok(path.clone())
-        } else {
-            Ok(dirs::data_dir()
-                .context("failed to initialize default data directory")?
-                .join(APP_NAME))
-        }
-    }
-
-    /// Path to the database of the repository with the specified name.
-    pub fn repository_path(&self, name: &str) -> Result<PathBuf> {
-        Ok(self
-            .data_dir()?
-            .join("repositories")
-            .join(name)
-            .with_extension("db"))
-    }
-
     pub fn secret_for_repo(&self, repo_name: &str) -> Result<Option<LocalSecret>> {
         let key = self
             .key

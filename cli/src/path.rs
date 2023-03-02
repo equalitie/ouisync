@@ -1,4 +1,9 @@
-use std::{ffi::OsString, fmt, path};
+use std::{
+    ffi::OsString,
+    fmt,
+    ops::Deref,
+    path::{self, Path},
+};
 
 /// Wrapper for `PathBuf` that implements `Display`
 #[derive(Clone)]
@@ -19,6 +24,14 @@ impl From<PathBuf> for path::PathBuf {
 impl From<OsString> for PathBuf {
     fn from(os: OsString) -> Self {
         Self(os.into())
+    }
+}
+
+impl Deref for PathBuf {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
     }
 }
 
