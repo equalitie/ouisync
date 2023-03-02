@@ -354,27 +354,14 @@ mod tests {
     }
 
     async fn database_commit_consistency_case(run_i: u32) {
-        use crate::{crypto::sign::Keypair, index::Index, repository::RepositoryId};
         use futures_util::TryStreamExt;
-        use rand::prelude::*;
-        use tokio::{select, sync::broadcast};
+        use tokio::select;
 
-        let mut rng = StdRng::seed_from_u64(0);
-
-        let write_keys = Keypair::generate(&mut rng);
-
-        let (_a_base_dir, a_index) = {
-            let (base_dir, db) = create_temp().await.unwrap();
-            (base_dir, db)
-        };
-
-        let (_b_base_dir, b_index) = {
-            let (base_dir, db) = create_temp().await.unwrap();
-            (base_dir, db)
-        };
+        let (_a_base_dir, a_pool) = create_temp().await.unwrap();
+        let (_b_base_dir, b_pool) = create_temp().await.unwrap();
 
         {
-            let mut tx = a_index.begin_write().await.unwrap();
+            let mut tx = a_pool.begin_write().await.unwrap();
             sqlx::query("CREATE TABLE a_table (id INTEGER PRIMARY KEY)")
                 .execute(&mut tx)
                 .await
@@ -383,7 +370,7 @@ mod tests {
         }
 
         {
-            let mut tx = b_index.begin_write().await.unwrap();
+            let mut tx = b_pool.begin_write().await.unwrap();
             sqlx::query("CREATE TABLE b_table (id INTEGER PRIMARY KEY)")
                 .execute(&mut tx)
                 .await
@@ -391,19 +378,23 @@ mod tests {
             tx.commit().await.unwrap();
         }
 
-        {
-            let mut tx = a_index.begin_write().await.unwrap();
+        let highest_id = 200;
 
-            let _id = sqlx::query(
-                "INSERT INTO a_table (id)
-                 VALUES (?)
-                 RETURNING id",
-            )
-            .bind(&encode_u64(0))
-            .map(|row: sqlx::sqlite::SqliteRow| row.get::<u32, usize>(0))
-            .fetch_one(&mut tx)
-            .await
-            .unwrap();
+        {
+            let mut tx = a_pool.begin_write().await.unwrap();
+
+            for i in 0..(highest_id + 1) {
+                let _id = sqlx::query(
+                    "INSERT INTO a_table (id)
+                     VALUES (?)
+                     RETURNING id",
+                )
+                .bind(&encode_u64(i))
+                .map(|row: sqlx::sqlite::SqliteRow| row.get::<u32, usize>(0))
+                .fetch_one(&mut tx)
+                .await
+                .unwrap();
+            }
 
             tx.commit().await.unwrap();
         }
@@ -411,7 +402,7 @@ mod tests {
         select! {
             _ = async {
                 loop {
-                    let mut tx = b_index.begin_write().await.unwrap();
+                    let mut tx = b_pool.begin_write().await.unwrap();
                     sqlx::query("DELETE FROM b_table")
                         .execute(&mut tx)
                         .await
@@ -420,20 +411,21 @@ mod tests {
                 }
             } => {},
             _ = async {
-                let mut conn = a_index.acquire().await.unwrap();
+                let mut conn = a_pool.acquire().await.unwrap();
 
-                let vec: Vec<u32> = sqlx::query("SELECT id FROM a_table")
-                .fetch(&mut *conn)
-                .map_ok(|row| row.get::<u32, usize>(0))
-                .try_collect()
-                .await
-                .unwrap();
+                let vec: Vec<u32> = sqlx::query("SELECT id FROM a_table WHERE id = ?")
+                    .bind(&encode_u64(highest_id))
+                    .fetch(&mut *conn)
+                    .map_ok(|row| row.get::<u32, usize>(0))
+                    .try_collect()
+                    .await
+                    .unwrap();
 
                 assert!(!vec.is_empty(), "Failed to retrieve root on {}-th iterations", run_i);
             } => {},
         }
 
-        a_index.close().await.unwrap();
-        b_index.close().await.unwrap();
+        a_pool.close().await.unwrap();
+        b_pool.close().await.unwrap();
     }
 }
