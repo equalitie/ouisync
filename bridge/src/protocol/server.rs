@@ -7,6 +7,7 @@ use crate::{
 use ouisync_lib::{PeerInfo, Progress, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr};
+use thiserror::Error;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +105,17 @@ impl From<String> for Response {
     }
 }
 
+impl TryFrom<Response> for String {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::String(value) => Ok(value),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl From<StateMonitor> for Response {
     fn from(value: StateMonitor) -> Self {
         Self::StateMonitor(value)
@@ -119,6 +131,17 @@ impl From<Directory> for Response {
 impl<T> From<Handle<T>> for Response {
     fn from(value: Handle<T>) -> Self {
         Self::Handle(value.id())
+    }
+}
+
+impl<T> TryFrom<Response> for Handle<T> {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Handle(value) => Ok(Self::from_id(value)),
+            _ => Err(UnexpectedResponse),
+        }
     }
 }
 
@@ -158,6 +181,10 @@ impl fmt::Debug for Response {
         }
     }
 }
+
+#[derive(Error, Debug)]
+#[error("unexpected response")]
+pub struct UnexpectedResponse;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

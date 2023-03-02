@@ -1,6 +1,6 @@
 use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
 use clap::{Parser, Subcommand};
-use ouisync_lib::ShareToken;
+use ouisync_lib::{AccessMode, ShareToken};
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
@@ -54,6 +54,20 @@ pub(crate) enum Command {
         /// Name of the repository to delete
         #[arg(short, long)]
         name: String,
+    },
+    /// Print share token for a repository
+    Share {
+        /// Name of the repository to share
+        #[arg(short, long)]
+        name: String,
+
+        /// Access mode of the token ("blind", "read" or "write")
+        #[arg(short, long, default_value_t = AccessMode::Write, value_name = "MODE")]
+        mode: AccessMode,
+
+        /// Local password
+        #[arg(short = 'P', long)]
+        password: Option<String>,
     },
 }
 
@@ -128,10 +142,6 @@ pub(crate) struct Options {
     #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
 
-    /// Print share token for the named repository with the specified access mode ("blind", "read"
-    /// or "write"). Can be specified multiple times to share multiple repositories.
-    #[clap(long, value_name = "NAME:ACCESS_MODE")]
-    pub share: Vec<Named<AccessMode>>,
 
     /// Print the share tokens to a file instead of standard output (one token per line)
     #[clap(long, value_name = "PATH")]

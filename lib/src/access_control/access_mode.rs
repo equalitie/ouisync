@@ -1,9 +1,11 @@
 use super::DecodeError;
-use std::str::FromStr;
+use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 use thiserror::Error;
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
+#[serde(into = "u8", try_from = "u8")]
 pub enum AccessMode {
     Blind = 0,
     Read = 1,
@@ -32,6 +34,22 @@ impl FromStr for AccessMode {
             Some('r' | 'R') => Ok(AccessMode::Read),
             Some('w' | 'W') => Ok(AccessMode::Write),
             _ => Err(AccessModeParseError),
+        }
+    }
+}
+
+impl From<AccessMode> for u8 {
+    fn from(mode: AccessMode) -> Self {
+        mode as u8
+    }
+}
+
+impl fmt::Display for AccessMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Blind => write!(f, "blind"),
+            Self::Read => write!(f, "read"),
+            Self::Write => write!(f, "write"),
         }
     }
 }

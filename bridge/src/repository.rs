@@ -1,9 +1,6 @@
 use crate::{
-    constants::{
-        ACCESS_MODE_BLIND, ACCESS_MODE_READ, ACCESS_MODE_WRITE, ENTRY_TYPE_DIRECTORY,
-        ENTRY_TYPE_FILE,
-    },
-    error::{Error, Result},
+    constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
+    error::Result,
     protocol::Notification,
     registry::Handle,
     state::{ClientState, ServerState, SubscriptionHandle},
@@ -448,11 +445,10 @@ pub(crate) async fn create_share_token(
     state: &ServerState,
     handle: Handle<RepositoryHolder>,
     password: Option<String>,
-    access_mode: u8,
+    access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String> {
     let holder = state.repositories.get(handle);
-    let access_mode = access_mode_from_num(access_mode)?;
     let password = password.as_deref().map(Password::new);
 
     let access_secrets = if let Some(password) = password {
@@ -477,8 +473,12 @@ pub(crate) async fn create_share_token(
 }
 
 pub(crate) fn access_mode(state: &ServerState, handle: Handle<RepositoryHolder>) -> u8 {
-    let holder = state.repositories.get(handle);
-    access_mode_to_num(holder.repository.access_mode())
+    state
+        .repositories
+        .get(handle)
+        .repository
+        .access_mode()
+        .into()
 }
 
 /// Returns the syncing progress.
@@ -501,27 +501,6 @@ pub(super) fn entry_type_to_num(entry_type: EntryType) -> u8 {
     }
 }
 
-fn access_mode_from_num(num: u8) -> Result<AccessMode, Error> {
-    // Note: we could've used `AccessMode::try_from` instead but then we would need a separate
-    // check (ideally a compile-time one) that the `ACCESS_MODE_*` constants match the
-    // corresponding `AccessMode` variants.
-
-    match num {
-        ACCESS_MODE_BLIND => Ok(AccessMode::Blind),
-        ACCESS_MODE_READ => Ok(AccessMode::Read),
-        ACCESS_MODE_WRITE => Ok(AccessMode::Write),
-        _ => Err(Error::InvalidArgument),
-    }
-}
-
-pub(crate) fn access_mode_to_num(mode: AccessMode) -> u8 {
-    match mode {
-        AccessMode::Blind => ACCESS_MODE_BLIND,
-        AccessMode::Read => ACCESS_MODE_READ,
-        AccessMode::Write => ACCESS_MODE_WRITE,
-    }
-}
-
 fn init(registration: &Registration) {
     // TODO: consider leaving the decision to enable DHT, PEX to the app.
     registration.enable_dht();
@@ -531,14 +510,17 @@ fn init(registration: &Registration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{ACCESS_MODE_BLIND, ACCESS_MODE_READ, ACCESS_MODE_WRITE};
 
     #[test]
     fn access_mode_constants() {
-        for mode in [AccessMode::Blind, AccessMode::Read, AccessMode::Write] {
-            assert_eq!(
-                access_mode_from_num(access_mode_to_num(mode)).unwrap(),
-                mode
-            );
+        for (mode, num) in [
+            (AccessMode::Blind, ACCESS_MODE_BLIND),
+            (AccessMode::Read, ACCESS_MODE_READ),
+            (AccessMode::Write, ACCESS_MODE_WRITE),
+        ] {
+            assert_eq!(u8::from(mode), num);
+            assert_eq!(AccessMode::try_from(num).unwrap(), mode);
         }
     }
 }

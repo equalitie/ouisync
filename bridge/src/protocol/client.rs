@@ -11,7 +11,7 @@ use crate::{
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{MonitorId, ShareToken};
+use ouisync_lib::{AccessMode, MonitorId, ShareToken};
 use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -79,7 +79,7 @@ pub enum Request {
     RepositoryCreateShareToken {
         repository: Handle<RepositoryHolder>,
         password: Option<String>,
-        access_mode: u8,
+        access_mode: AccessMode,
         name: Option<String>,
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),

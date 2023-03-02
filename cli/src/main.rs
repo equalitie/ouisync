@@ -76,9 +76,7 @@ async fn client(options: Options) -> Result<()> {
                 })
                 .unwrap();
 
-            let path = repository_path(&options.data_dir, &name);
-            let path = path.try_into()?;
-
+            let path = repository_path(&options.data_dir, &name).try_into()?;
             let read_password = read_password.or_else(|| password.as_ref().cloned());
             let write_password = write_password.or(password);
 
@@ -94,6 +92,33 @@ async fn client(options: Options) -> Result<()> {
             println!("repository created");
         }
         Command::Delete { .. } => todo!(),
+        Command::Share {
+            name,
+            mode,
+            password,
+        } => {
+            let repository = client
+                .invoke(Request::RepositoryOpen {
+                    path: repository_path(&options.data_dir, &name).try_into()?,
+                    password: None,
+                    // TODO: scope: Scope::Client,
+                })
+                .await?
+                .try_into()
+                .unwrap();
+            let token: String = client
+                .invoke(Request::RepositoryCreateShareToken {
+                    repository,
+                    password,
+                    access_mode: mode,
+                    name: Some(name),
+                })
+                .await?
+                .try_into()
+                .unwrap();
+
+            println!("{token}");
+        }
     }
 
     client.close().await;
