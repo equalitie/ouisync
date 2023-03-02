@@ -93,6 +93,7 @@ async fn client(options: Options) -> Result<()> {
 
             println!("repository created");
         }
+        Command::Delete { .. } => todo!(),
     }
 
     client.close().await;
@@ -104,14 +105,16 @@ async fn connect(addr: HostAddr, config_dir: &Path) -> io::Result<Box<dyn Client
     match addr {
         HostAddr::Local(addr) => match LocalClient::connect(addr).await {
             Ok(client) => Ok(Box::new(client)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let root_monitor = StateMonitor::make_root();
-                let state = ServerState::new(config_dir.into(), root_monitor);
-                let state = Arc::new(state);
+            Err(error) => match error.kind() {
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                    let root_monitor = StateMonitor::make_root();
+                    let state = ServerState::new(config_dir.into(), root_monitor);
+                    let state = Arc::new(state);
 
-                Ok(Box::new(NativeClient::new(state)))
-            }
-            Err(error) => Err(error),
+                    Ok(Box::new(NativeClient::new(state)))
+                }
+                _ => Err(error),
+            },
         },
         HostAddr::Remote(addr) => Ok(Box::new(RemoteClient::connect(addr).await?)),
     }

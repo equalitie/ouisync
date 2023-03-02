@@ -27,7 +27,6 @@ pub(crate) enum Command {
     /// Start a server
     Serve,
     /// Create a new repository
-    #[command(visible_alias = "c")]
     Create {
         /// Name of the repository
         #[arg(short, long, required_unless_present = "share_token")]
@@ -48,6 +47,13 @@ pub(crate) enum Command {
         /// Local write password
         #[arg(long)]
         write_password: Option<String>,
+    },
+    /// Delete a repository
+    #[command(visible_alias = "rm")]
+    Delete {
+        /// Name of the repository to delete
+        #[arg(short, long)]
+        name: String,
     },
 }
 
