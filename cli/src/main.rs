@@ -76,20 +76,6 @@ async fn main() -> Result<()> {
     let network = Network::new(config);
     let network_handle = network.handle();
 
-    network_handle.bind(&options.bind).await;
-
-    if !options.disable_upnp {
-        network.enable_port_forwarding();
-    }
-
-    if !options.disable_local_discovery {
-        network.enable_local_discovery();
-    }
-
-    for peer in &options.peers {
-        network.add_user_provided_peer(peer);
-    }
-
     // Mount repositories
     let mut repo_guards = Vec::new();
     for Named { name, value } in &options.mount {

@@ -174,6 +174,17 @@ impl From<Vec<PeerInfo>> for Response {
     }
 }
 
+impl TryFrom<Response> for Vec<PeerInfo> {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::PeerInfo(value) => Ok(value),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

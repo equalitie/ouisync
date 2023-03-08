@@ -8,7 +8,7 @@ use ouisync_bridge::{
     transport::{local::LocalClient, native::NativeClient, remote::RemoteClient, Client},
     ServerState,
 };
-use ouisync_lib::{PeerAddr, ShareToken, StateMonitor};
+use ouisync_lib::{PeerAddr, PeerInfo, ShareToken, StateMonitor};
 use std::{io, net::SocketAddr, path::Path, path::PathBuf, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -150,6 +150,20 @@ pub(crate) async fn run(options: Options) -> Result<()> {
                 client
                     .invoke(Request::NetworkRemoveUserProvidedPeer(addr))
                     .await?;
+            }
+        }
+        Command::ListPeers => {
+            let peers: Vec<PeerInfo> = client
+                .invoke(Request::NetworkKnownPeers)
+                .await?
+                .try_into()
+                .unwrap();
+
+            for peer in peers {
+                println!(
+                    "{}:{} ({:?}, {:?})",
+                    peer.ip, peer.port, peer.source, peer.state
+                );
             }
         }
     }
