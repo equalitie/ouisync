@@ -1,5 +1,5 @@
 use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
-use clap::{Parser, Subcommand};
+use clap::{builder::BoolishValueParser, Parser, Subcommand};
 use ouisync_lib::{AccessMode, PeerAddr};
 
 #[derive(Parser, Debug)]
@@ -76,6 +76,13 @@ pub(crate) enum Command {
         /// If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port.
         /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
         addrs: Vec<PeerAddr>,
+    },
+    #[command(visible_alias = "lpd")]
+    /// Enable or disable local peer discovery
+    LocalDiscovery {
+        /// Whether to enable or disable local peer discovery. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
     },
 }
 

@@ -110,6 +110,20 @@ pub(crate) async fn run(options: Options) -> Result<()> {
                 })
                 .await?;
         }
+        Command::LocalDiscovery { enabled } => {
+            if let Some(enabled) = enabled {
+                client
+                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
+                    .await?
+                    .try_into()
+                    .unwrap();
+                println!("{value}");
+            }
+        }
     }
 
     client.close().await;

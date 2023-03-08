@@ -75,6 +75,17 @@ impl From<bool> for Response {
     }
 }
 
+impl TryFrom<Response> for bool {
+    type Error = UnexpectedResponse;
+
+    fn try_from(response: Response) -> Result<Self, Self::Error> {
+        match response {
+            Response::Bool(value) => Ok(value),
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
 impl From<u8> for Response {
     fn from(value: u8) -> Self {
         Self::U8(value)
