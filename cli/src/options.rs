@@ -69,8 +69,14 @@ pub(crate) enum Command {
         #[arg(short = 'P', long)]
         password: Option<String>,
     },
-    /// Bind to the specified endpoints
-    Bind { addrs: Vec<PeerAddr> },
+    /// Bind to the specified addresses
+    Bind {
+        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
+        /// a IPv4 or IPv6 address and PORT is a port number.
+        /// If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port.
+        /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
+        addrs: Vec<PeerAddr>,
+    },
 }
 
 /// Path to the config directory.

@@ -8,8 +8,8 @@ use ouisync_bridge::{
     transport::{local::LocalClient, native::NativeClient, remote::RemoteClient, Client},
     ServerState,
 };
-use ouisync_lib::{ShareToken, StateMonitor};
-use std::{io, path::Path, path::PathBuf, sync::Arc};
+use ouisync_lib::{PeerAddr, ShareToken, StateMonitor};
+use std::{io, net::SocketAddr, path::Path, path::PathBuf, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub(crate) async fn run(options: Options) -> Result<()> {
@@ -87,7 +87,28 @@ pub(crate) async fn run(options: Options) -> Result<()> {
             println!("{token}");
         }
         Command::Bind { addrs } => {
-            println!("{addrs:?}");
+            let mut quic_v4 = None;
+            let mut quic_v6 = None;
+            let mut tcp_v4 = None;
+            let mut tcp_v6 = None;
+
+            for addr in addrs {
+                match addr {
+                    PeerAddr::Quic(SocketAddr::V4(addr)) => quic_v4 = Some(addr),
+                    PeerAddr::Quic(SocketAddr::V6(addr)) => quic_v6 = Some(addr),
+                    PeerAddr::Tcp(SocketAddr::V4(addr)) => tcp_v4 = Some(addr),
+                    PeerAddr::Tcp(SocketAddr::V6(addr)) => tcp_v6 = Some(addr),
+                }
+            }
+
+            client
+                .invoke(Request::NetworkBind {
+                    quic_v4,
+                    quic_v6,
+                    tcp_v4,
+                    tcp_v6,
+                })
+                .await?;
         }
     }
 
