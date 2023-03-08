@@ -1,6 +1,6 @@
 use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
 use clap::{Parser, Subcommand};
-use ouisync_lib::AccessMode;
+use ouisync_lib::{AccessMode, PeerAddr};
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
@@ -69,6 +69,8 @@ pub(crate) enum Command {
         #[arg(short = 'P', long)]
         password: Option<String>,
     },
+    /// Bind to the specified endpoints
+    Bind { addrs: Vec<PeerAddr> },
 }
 
 /// Path to the config directory.

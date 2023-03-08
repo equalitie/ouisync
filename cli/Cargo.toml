@@ -15,6 +15,7 @@ name = "ouisync"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
