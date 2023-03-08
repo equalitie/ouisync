@@ -28,5 +28,5 @@ turmoil = { git = "https://github.com/tokio-rs/turmoil" }
 debug = 1
 
 [patch.crates-io]
-# Contains latest sqlite which seems to fix some bugs that were affecting us
-sqlx = { git = "https://github.com/madadam/sqlx.git", branch = "bump-libsqlite3-sys" }
+# Contains a fix to a race condition in `sqlx`'s `flume` dependency.
+sqlx = { git = "https://github.com/inetic/sqlx.git", branch = "flume-race-fix" }
