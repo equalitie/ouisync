@@ -80,7 +80,14 @@ pub(crate) enum Command {
     #[command(visible_alias = "lpd")]
     /// Enable or disable local peer discovery
     LocalDiscovery {
-        /// Whether to enable or disable local peer discovery. If omitted, prints the current state.
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
+    },
+    /// Enable or disable port forwarding
+    #[command(visible_alias = "upnp")]
+    PortForwarding {
+        /// Whether to enable or disable. If omitted, prints the current state.
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
     },

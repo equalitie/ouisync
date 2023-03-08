@@ -124,6 +124,20 @@ pub(crate) async fn run(options: Options) -> Result<()> {
                 println!("{value}");
             }
         }
+        Command::PortForwarding { enabled } => {
+            if let Some(enabled) = enabled {
+                client
+                    .invoke(Request::NetworkSetPortForwardingEnabled(enabled))
+                    .await?;
+            } else {
+                let value: bool = client
+                    .invoke(Request::NetworkIsPortForwardingEnabled)
+                    .await?
+                    .try_into()
+                    .unwrap();
+                println!("{value}");
+            }
+        }
     }
 
     client.close().await;
