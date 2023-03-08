@@ -244,6 +244,7 @@ async fn setup() -> (TempDir, MountGuard) {
     .instrument(span)
     .await
     .unwrap();
+    let repo = Arc::new(repo);
 
     let mount_dir = base_dir.path().join("mnt");
     fs::create_dir(&mount_dir).await.unwrap();

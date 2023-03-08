@@ -27,6 +27,7 @@ use std::{
     os::raw::c_int,
     panic::{self, AssertUnwindSafe},
     path::Path,
+    sync::Arc,
     time::SystemTime,
 };
 use tokio::time::Duration;
@@ -43,7 +44,7 @@ const FS_NAME: &str = "ouisync";
 /// thread and immediatelly returns. The returned `MountGuard` unmouts the repository on drop.
 pub fn mount(
     runtime_handle: tokio::runtime::Handle,
-    repository: Repository,
+    repository: Arc<Repository>,
     mount_point: impl AsRef<Path>,
 ) -> Result<MountGuard, io::Error> {
     let session = fuser::spawn_mount2(
@@ -120,7 +121,7 @@ struct VirtualFilesystem {
 }
 
 impl VirtualFilesystem {
-    fn new(runtime_handle: tokio::runtime::Handle, repository: Repository) -> Self {
+    fn new(runtime_handle: tokio::runtime::Handle, repository: Arc<Repository>) -> Self {
         Self {
             rt: runtime_handle,
             inner: Inner {
@@ -427,7 +428,7 @@ impl fuser::Filesystem for VirtualFilesystem {
 }
 
 struct Inner {
-    repository: Repository,
+    repository: Arc<Repository>,
     inodes: InodeMap,
     entries: EntryMap,
 }

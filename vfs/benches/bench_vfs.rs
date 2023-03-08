@@ -35,6 +35,7 @@ mod utils {
     use std::{
         fs::File,
         io::{self, Read},
+        sync::Arc,
     };
 
     pub async fn setup() -> (StdRng, TempDir, MountGuard) {
@@ -55,6 +56,7 @@ mod utils {
         )
         .await
         .unwrap();
+        let repo = Arc::new(repo);
 
         let mount_guard = ouisync_vfs::mount(Handle::current(), repo, mount_dir).unwrap();
 
