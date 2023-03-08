@@ -131,23 +131,20 @@ pub(crate) fn quic_listener_local_addr_v6(state: &ServerState) -> Option<SocketA
     state.network.quic_listener_local_addr_v6()
 }
 
-/// Add a QUIC endpoint to which which OuiSync shall attempt to connect. Upon failure or success
-/// but then disconnection, the endpoint be retried until the below
-/// `network_remove_user_provided_quic_peer` function with the same endpoint is called.
-pub(crate) fn add_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
-    state.network.add_user_provided_peer(&PeerAddr::Quic(addr));
+/// Add an endpoint to which which OuiSync shall attempt to connect. Upon failure or success
+/// but then disconnection, the endpoint be retried until the `remove_user_provided_peer` function
+/// with the same endpoint is called.
+pub(crate) fn add_user_provided_peer(state: &ServerState, addr: PeerAddr) {
+    state.network.add_user_provided_peer(&addr);
 }
 
-/// Remove a QUIC endpoint from the list of user provided QUIC peers (added by the above
-/// `network_add_user_provided_quic_peer` function). Note that users added by other discovery
-/// mechanisms are not affected by this function. Also, removing a peer will not cause
-/// disconnection if the connection has already been established. But if the peers disconnected due
-/// to other reasons, the connection to this `addr` shall not be reattempted after the call to this
-/// function.
-pub(crate) fn remove_user_provided_quic_peer(state: &ServerState, addr: SocketAddr) {
-    state
-        .network
-        .remove_user_provided_peer(&PeerAddr::Quic(addr));
+/// Remove an endpoint from the list of user provided peers (added by the `add_user_provided_peer`
+/// function). Note that users added by other discovery mechanisms are not affected by this
+/// function. Also, removing a peer will not cause disconnection if the connection has already been
+/// established. But if the peers disconnected due to other reasons, the connection to this `addr`
+/// shall not be reattempted after the call to this function.
+pub(crate) fn remove_user_provided_peer(state: &ServerState, addr: PeerAddr) {
+    state.network.remove_user_provided_peer(&addr);
 }
 
 /// Return the list of known peers.

@@ -77,8 +77,8 @@ pub(crate) enum Command {
         /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
         addrs: Vec<PeerAddr>,
     },
-    #[command(visible_alias = "lpd")]
-    /// Enable or disable local peer discovery
+    #[command(visible_alias = "lsd")]
+    /// Enable or disable local discovery
     LocalDiscovery {
         /// Whether to enable or disable. If omitted, prints the current state.
         #[arg(value_parser = BoolishValueParser::new())]
@@ -90,6 +90,22 @@ pub(crate) enum Command {
         /// Whether to enable or disable. If omitted, prints the current state.
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
+    },
+    /// Manually add peers.
+    #[command(alias = "add-peer")]
+    AddPeers {
+        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
+        /// a IPv4 or IPv6 address and PORT is a port number.
+        #[arg(required = true)]
+        addrs: Vec<PeerAddr>,
+    },
+    /// Remove manually added peers.
+    #[command(aliases = ["remove-peer", "rm-peer", "rm-peers"])]
+    RemovePeers {
+        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
+        /// a IPv4 or IPv6 address and PORT is a port number.
+        #[arg(required = true)]
+        addrs: Vec<PeerAddr>,
     },
 }
 

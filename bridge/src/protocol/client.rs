@@ -11,9 +11,9 @@ use crate::{
     state_monitor,
 };
 use camino::Utf8PathBuf;
-use ouisync_lib::{AccessMode, MonitorId, ShareToken};
+use ouisync_lib::{AccessMode, MonitorId, PeerAddr, ShareToken};
 use serde::{Deserialize, Serialize};
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{SocketAddrV4, SocketAddrV6};
 
 #[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,8 +146,8 @@ pub enum Request {
     NetworkTcpListenerLocalAddrV6,
     NetworkQuicListenerLocalAddrV4,
     NetworkQuicListenerLocalAddrV6,
-    NetworkAddUserProvidedQuicPeer(#[serde(with = "as_str")] SocketAddr),
-    NetworkRemoveUserProvidedQuicPeer(#[serde(with = "as_str")] SocketAddr),
+    NetworkAddUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
+    NetworkRemoveUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
     NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
@@ -354,12 +354,12 @@ pub async fn dispatch(
         Request::NetworkQuicListenerLocalAddrV6 => {
             network::quic_listener_local_addr_v6(server_state).into()
         }
-        Request::NetworkAddUserProvidedQuicPeer(addr) => {
-            network::add_user_provided_quic_peer(server_state, addr);
+        Request::NetworkAddUserProvidedPeer(addr) => {
+            network::add_user_provided_peer(server_state, addr);
             ().into()
         }
-        Request::NetworkRemoveUserProvidedQuicPeer(addr) => {
-            network::remove_user_provided_quic_peer(server_state, addr);
+        Request::NetworkRemoveUserProvidedPeer(addr) => {
+            network::remove_user_provided_peer(server_state, addr);
             ().into()
         }
         Request::NetworkKnownPeers => network::known_peers(server_state).into(),

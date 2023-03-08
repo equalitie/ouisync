@@ -138,6 +138,20 @@ pub(crate) async fn run(options: Options) -> Result<()> {
                 println!("{value}");
             }
         }
+        Command::AddPeers { addrs } => {
+            for addr in addrs {
+                client
+                    .invoke(Request::NetworkAddUserProvidedPeer(addr))
+                    .await?;
+            }
+        }
+        Command::RemovePeers { addrs } => {
+            for addr in addrs {
+                client
+                    .invoke(Request::NetworkRemoveUserProvidedPeer(addr))
+                    .await?;
+            }
+        }
     }
 
     client.close().await;
