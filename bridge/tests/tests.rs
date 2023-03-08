@@ -4,7 +4,7 @@ use ouisync_bridge::{
         local::{LocalClient, LocalServer},
         native::NativeClient,
         remote::{RemoteClient, RemoteServer},
-        Client, Server,
+        Client, DefaultHandler,
     },
     Handle, ServerState,
 };
@@ -27,7 +27,7 @@ async fn local() {
     let local_socket_path = base_dir.path().join("socket");
 
     let local_server = LocalServer::bind(local_socket_path.as_path()).unwrap();
-    task::spawn(local_server.run(server_state));
+    task::spawn(local_server.run(DefaultHandler::new(server_state)));
 
     let local_client = LocalClient::connect(local_socket_path.as_path())
         .await
@@ -46,7 +46,7 @@ async fn remote() {
     let remote_addr = remote_server.local_addr();
     let remote_addr = format!("ws://{remote_addr}");
 
-    task::spawn(remote_server.run(server_state));
+    task::spawn(remote_server.run(DefaultHandler::new(server_state)));
 
     let remote_client = RemoteClient::connect(remote_addr).await.unwrap();
 

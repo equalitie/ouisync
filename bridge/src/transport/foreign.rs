@@ -1,15 +1,12 @@
 //! Client and Server than run in the same process but the Client is written in a different
 //! language than the Server.
 
-use super::{socket, Server};
-use crate::state::ServerState;
-use async_trait::async_trait;
+use super::{socket, Handler};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     io,
     pin::Pin,
-    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::sync::mpsc;
@@ -27,12 +24,9 @@ impl ForeignServer {
 
         (server, client_tx, client_rx)
     }
-}
 
-#[async_trait]
-impl Server for ForeignServer {
-    async fn run(self, state: Arc<ServerState>) {
-        socket::server_connection::run(self.socket, state).await
+    pub async fn run(self, handler: impl Handler) {
+        socket::server_connection::run(self.socket, handler).await
     }
 }
 

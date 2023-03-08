@@ -2,12 +2,11 @@
 
 use super::{
     socket::{self, SocketClient},
-    Client, Server,
+    Client, Handler,
 };
 use crate::{
     error::Result,
     protocol::{Request, Response},
-    state::ServerState,
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -16,7 +15,6 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::{
@@ -60,11 +58,8 @@ impl RemoteServer {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
-}
 
-#[async_trait]
-impl Server for RemoteServer {
-    async fn run(self, state: Arc<ServerState>) {
+    pub async fn run(self, handler: impl Handler) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -85,7 +80,7 @@ impl Server for RemoteServer {
                     tracing::debug!("client accepted at {:?}", addr);
 
                     let socket = Socket(socket);
-                    connections.spawn(socket::server_connection::run(socket, state.clone()));
+                    connections.spawn(socket::server_connection::run(socket, handler.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");

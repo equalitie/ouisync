@@ -15,7 +15,7 @@ use ouisync_bridge::{
         local::{LocalClient, LocalServer},
         native::NativeClient,
         remote::RemoteClient,
-        Client, Server,
+        Client, DefaultHandler,
     },
     ServerState,
 };
@@ -51,7 +51,7 @@ async fn server(options: Options) -> Result<()> {
     let state = Arc::new(state);
 
     let server = LocalServer::bind(host_addr::default_local())?;
-    task::spawn(server.run(state.clone()));
+    task::spawn(server.run(DefaultHandler::new(state.clone())));
 
     terminated().await?;
     state.close().await;

@@ -6,16 +6,15 @@ pub use interprocess::local_socket::{
 
 use super::{
     socket::{self, SocketClient},
-    Client, Server,
+    Client, Handler,
 };
 use crate::{
     error::Result,
     protocol::{Request, Response},
-    state::ServerState,
 };
 use async_trait::async_trait;
 use interprocess::local_socket::tokio::LocalSocketStream;
-use std::{fs, io, path::PathBuf, sync::Arc};
+use std::{fs, io, path::PathBuf};
 use tokio::task::JoinSet;
 use tokio_util::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
@@ -42,18 +41,15 @@ impl LocalServer {
 
         Ok(Self { listener, path })
     }
-}
 
-#[async_trait]
-impl Server for LocalServer {
-    async fn run(self, state: Arc<ServerState>) {
+    pub async fn run(self, handler: impl Handler) {
         let mut connections = JoinSet::new();
 
         loop {
             match self.listener.accept().await {
                 Ok(socket) => {
                     let socket = make_socket(socket);
-                    connections.spawn(socket::server_connection::run(socket, state.clone()));
+                    connections.spawn(socket::server_connection::run(socket, handler.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");

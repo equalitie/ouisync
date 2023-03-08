@@ -12,7 +12,7 @@ use ouisync_bridge::{
     logger::{self, Logger},
     transport::{
         foreign::{ForeignClientSender, ForeignServer},
-        Server,
+        DefaultHandler,
     },
     Error, ErrorCode, FileHolder, Handle, Registry, Result, ServerState,
 };
@@ -107,7 +107,9 @@ pub unsafe extern "C" fn session_channel_open(
 
     let (server, client_tx, mut client_rx) = ForeignServer::new();
 
-    session.runtime.spawn(server.run(state));
+    session
+        .runtime
+        .spawn(server.run(DefaultHandler::new(state)));
 
     session.runtime.spawn(async move {
         while let Some(payload) = client_rx.recv().await {
@@ -247,7 +249,7 @@ impl Session {
             .map_err(Error::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let state = Arc::new(ServerState::new(configs_path, root_monitor)?);
+        let state = Arc::new(ServerState::new(configs_path, root_monitor));
         let session = Session {
             runtime,
             state,

@@ -1,17 +1,17 @@
 //! Low-level Client and Server than wrap Stream/Sink of bytes. Used to implement some higher-level
 //! clients/servers
 
-use super::Client;
+use super::{Client, Handler};
 use crate::{
     error::{Error, ErrorCode, Result},
-    protocol::{self, Request, Response, ServerMessage},
-    state::{ClientState, ServerState},
+    protocol::{Request, Response, ServerMessage},
+    state::ClientState,
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, io, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, io, marker::PhantomData};
 use tokio::{
     select,
     sync::{mpsc, oneshot},
@@ -21,9 +21,10 @@ use tokio::{
 pub mod server_connection {
     use super::*;
 
-    pub async fn run<T>(mut socket: T, server_state: Arc<ServerState>)
+    pub async fn run<S, H>(mut socket: S, handler: H)
     where
-        T: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin,
+        S: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin,
+        H: Handler,
     {
         let (notification_tx, mut notification_rx) = mpsc::channel(1);
         let client_state = ClientState { notification_tx };
@@ -37,7 +38,23 @@ pub mod server_connection {
                         break;
                     };
 
-                    request_handlers.push(handle_request(&server_state, &client_state, id, result));
+                    let handler = &handler;
+                    let client_state = &client_state;
+
+                    let task = async move {
+                        let result = match result {
+                            Ok(request) => handler.handle(client_state, request).await,
+                            Err(error) => Err(error),
+                        };
+
+                        if let Err(error) = &result {
+                            tracing::error!(?error, "failed to handle request");
+                        }
+
+                        (id, result)
+                    };
+
+                    request_handlers.push(task);
                 }
                 notification = notification_rx.recv() => {
                     // unwrap is OK because the sender exists at this point.
@@ -51,24 +68,6 @@ pub mod server_connection {
                 }
             }
         }
-    }
-
-    async fn handle_request(
-        server_state: &ServerState,
-        client_state: &ClientState,
-        request_id: u64,
-        request: Result<Request>,
-    ) -> (u64, Result<Response>) {
-        let result = match request {
-            Ok(request) => protocol::dispatch(server_state, client_state, request).await,
-            Err(error) => Err(error),
-        };
-
-        if let Err(error) = &result {
-            tracing::error!(?error, "failed to handle request");
-        }
-
-        (request_id, result)
     }
 }
 
