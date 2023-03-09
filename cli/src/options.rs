@@ -133,6 +133,24 @@ pub(crate) enum Request {
     },
     /// List all known peers
     ListPeers,
+    /// Enable or disable DHT
+    Dht {
+        #[arg(short = 'n', long)]
+        repository_name: String,
+
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
+    },
+    /// Enable or disable Peer Exchange (PEX)
+    Pex {
+        #[arg(short = 'n', long)]
+        repository_name: String,
+
+        /// Whether to enable or disable. If omitted, prints the current state.
+        #[arg(value_parser = BoolishValueParser::new())]
+        enabled: Option<bool>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -230,14 +248,6 @@ use tokio::{
 /// Command line options.
 #[derive(Parser, Debug)]
 pub(crate) struct Options {
-    /// Disable DHT
-    #[clap(long)]
-    pub disable_dht: bool,
-
-    /// Disable Peer Exchange
-    #[clap(long)]
-    pub disable_pex: bool,
-
     /// Pre-hashed 32 byte long (64 hexadecimal characters) local secret per repository. This is
     /// mainly intended for testing as password derivation is intentionally slow and some of the
     /// tests may timeout if the `password` argument is used instead. For all other use cases,

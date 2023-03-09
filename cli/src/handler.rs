@@ -21,7 +21,7 @@ pub(crate) struct State {
     store_dir: Utf8PathBuf,
     mount_dir: Utf8PathBuf,
     network: Network,
-    repositories: DashMap<Utf8PathBuf, RepositoryHolder>,
+    repositories: DashMap<String, RepositoryHolder>,
 }
 
 impl State {
@@ -144,7 +144,7 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 let store_path = self.state.store_path(&name);
 
-                if self.state.repositories.contains_key(&store_path) {
+                if self.state.repositories.contains_key(&name) {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
 
@@ -159,18 +159,18 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await?;
                 let holder = RepositoryHolder::new(holder);
 
-                self.state.repositories.insert(store_path, holder);
+                self.state.repositories.insert(name, holder);
 
                 Ok(().into())
             }
             Request::Delete { name } => {
-                let store_path = self.state.store_path(&name);
-
-                if let Some((_, holder)) = self.state.repositories.remove(&store_path) {
+                if let Some((_, holder)) = self.state.repositories.remove(&name) {
                     if let Err(error) = holder.base.repository.close().await {
                         tracing::error!(?error, "failed to close repository");
                     }
                 }
+
+                let store_path = self.state.store_path(&name);
 
                 // Try to delete all three files even if any of them fail, then return the first
                 // error (if any)
@@ -191,11 +191,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                 mode,
                 password,
             } => {
-                let store_path = self.state.store_path(&name);
                 let repository = self
                     .state
                     .repositories
-                    .get(&store_path)
+                    .get(&name)
                     .map(|r| r.value().base.repository.clone())
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
@@ -204,14 +203,13 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .map(Into::into)
             }
             Request::Mount { name, path } => {
-                let store_path = self.state.store_path(&name);
-                let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
-
                 let mut holder = self
                     .state
                     .repositories
-                    .get_mut(&store_path)
+                    .get_mut(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
 
                 holder.mount_guard = Some(ouisync_vfs::mount(
                     runtime::Handle::current(),
@@ -222,9 +220,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 Ok(().into())
             }
             Request::Unmount { name } => {
-                let store_path = self.state.store_path(&name);
-
-                if let Some(mut holder) = self.state.repositories.get_mut(&store_path) {
+                if let Some(mut holder) = self.state.repositories.get_mut(&name) {
                     holder.mount_guard.take();
                 }
 
@@ -280,6 +276,40 @@ impl ouisync_bridge::transport::Handler for Handler {
                 Ok(().into())
             }
             Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
+            Request::Dht {
+                repository_name,
+                enabled,
+            } => {
+                let holder = self
+                    .state
+                    .repositories
+                    .get(&repository_name)
+                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                if let Some(enabled) = enabled {
+                    repository::set_dht_enabled(&holder.base.registration, enabled);
+                    Ok(().into())
+                } else {
+                    Ok(holder.base.registration.is_dht_enabled().into())
+                }
+            }
+            Request::Pex {
+                repository_name,
+                enabled,
+            } => {
+                let holder = self
+                    .state
+                    .repositories
+                    .get(&repository_name)
+                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                if let Some(enabled) = enabled {
+                    repository::set_pex_enabled(&holder.base.registration, enabled);
+                    Ok(().into())
+                } else {
+                    Ok(holder.base.registration.is_pex_enabled().into())
+                }
+            }
         }
     }
 }

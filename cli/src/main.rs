@@ -77,36 +77,6 @@ async fn main() -> Result<()> {
     let network = Network::new(config);
     let network_handle = network.handle();
 
-    // Mount repositories
-    let mut repo_guards = Vec::new();
-    for Named { name, value } in &options.mount {
-        let repo = if let Some(repo) = repos.remove(name) {
-            repo
-        } else {
-            Repository::open(
-                options.repository_path(name)?,
-                device_id,
-                options.secret_for_repo(name)?,
-            )
-            .await?
-        };
-
-        let registration = network_handle.register(repo.store().clone());
-
-        if !options.disable_dht {
-            registration.enable_dht();
-        }
-
-        if !options.disable_pex {
-            registration.enable_pex();
-        }
-
-        let mount_guard =
-            ouisync_vfs::mount(tokio::runtime::Handle::current(), repo, value.clone())?;
-
-        repo_guards.push((mount_guard, registration));
-    }
-
     if options.print_port {
         if let Some(addr) = network.tcp_listener_local_addr_v4() {
             // Be carefull when changing this output as it is used by tests.
