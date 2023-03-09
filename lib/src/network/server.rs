@@ -1,10 +1,10 @@
-use super::message::{Content, Request, Response};
+use super::message::{Content, Request, Response, ResponseDisambiguator};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{Index, InnerNode, LeafNode, MultiBlockPresence, RootNode},
+    index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
 use tokio::{
@@ -63,11 +63,8 @@ impl<'a> Responder<'a> {
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
-            Request::ChildNodes {
-                parent_node_hash,
-                trigger_block_presence,
-            } => {
-                self.handle_child_nodes(parent_node_hash, trigger_block_presence)
+            Request::ChildNodes(parent_node_hash, disambiguator) => {
+                self.handle_child_nodes(parent_node_hash, disambiguator)
                     .await
             }
             Request::Block(id) => self.handle_block(id).await,
@@ -107,7 +104,7 @@ impl<'a> Responder<'a> {
     async fn handle_child_nodes(
         &mut self,
         parent_hash: Hash,
-        trigger_block_presence: MultiBlockPresence,
+        disambiguator: ResponseDisambiguator,
     ) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
 
@@ -121,29 +118,20 @@ impl<'a> Responder<'a> {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
                 self.tx
-                    .send(Response::InnerNodes {
-                        nodes: inner_nodes,
-                        trigger_block_presence,
-                    })
+                    .send(Response::InnerNodes(inner_nodes, disambiguator))
                     .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
                 self.tx
-                    .send(Response::LeafNodes {
-                        nodes: leaf_nodes,
-                        trigger_block_presence,
-                    })
+                    .send(Response::LeafNodes(leaf_nodes, disambiguator))
                     .await;
             }
         } else {
             tracing::warn!("child nodes not found");
             self.tx
-                .send(Response::ChildNodesError(
-                    parent_hash,
-                    trigger_block_presence,
-                ))
+                .send(Response::ChildNodesError(parent_hash, disambiguator))
                 .await;
         }
 

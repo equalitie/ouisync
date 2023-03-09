@@ -15,12 +15,21 @@ pub(crate) enum Request {
     RootNode(PublicKey),
     /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
     /// `InnerNodes` or `LeafNodes` response.
-    ChildNodes {
-        parent_node_hash: Hash,
-        trigger_block_presence: MultiBlockPresence,
-    },
+    ChildNodes(Hash, ResponseDisambiguator),
     /// Request block with the given id.
     Block(BlockId),
+}
+
+/// ResponseDisambiguator is used to uniquelly assign a response to a request.
+/// What we want to avoid is that an outdated response clears out a newer pending request.
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+#[serde(transparent)]
+pub(crate) struct ResponseDisambiguator(MultiBlockPresence);
+
+impl ResponseDisambiguator {
+    pub fn new(multi_block_presence: MultiBlockPresence) -> Self {
+        Self(multi_block_presence)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,17 +44,11 @@ pub(crate) enum Response {
     /// Send that a RootNode request failed
     RootNodeError(PublicKey),
     /// Send inner nodes.
-    InnerNodes {
-        nodes: InnerNodeMap,
-        trigger_block_presence: MultiBlockPresence,
-    },
+    InnerNodes(InnerNodeMap, ResponseDisambiguator),
     /// Send leaf nodes.
-    LeafNodes {
-        nodes: LeafNodeSet,
-        trigger_block_presence: MultiBlockPresence,
-    },
+    LeafNodes(LeafNodeSet, ResponseDisambiguator),
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash, MultiBlockPresence),
+    ChildNodesError(Hash, ResponseDisambiguator),
     /// Send a requested block.
     Block {
         content: Box<[u8]>,
@@ -67,26 +70,20 @@ impl fmt::Debug for Response {
             Self::RootNodeError(branch_id) => {
                 f.debug_tuple("RootNodeError").field(branch_id).finish()
             }
-            Self::InnerNodes {
-                nodes,
-                trigger_block_presence,
-            } => f
-                .debug_struct("InnerNodes")
-                .field("nodes", nodes)
-                .field("trigger_block_presence", trigger_block_presence)
+            Self::InnerNodes(nodes, disambiguator) => f
+                .debug_tuple("InnerNodes")
+                .field(nodes)
+                .field(disambiguator)
                 .finish(),
-            Self::LeafNodes {
-                nodes,
-                trigger_block_presence,
-            } => f
-                .debug_struct("LeafNodes")
-                .field("nodes", nodes)
-                .field("trigger_block_presence", trigger_block_presence)
+            Self::LeafNodes(nodes, disambiguator) => f
+                .debug_tuple("LeafNodes")
+                .field(nodes)
+                .field(disambiguator)
                 .finish(),
-            Self::ChildNodesError(hash, trigger_block_presence) => f
+            Self::ChildNodesError(hash, disambiguator) => f
                 .debug_tuple("ChildNodesError")
                 .field(hash)
-                .field(trigger_block_presence)
+                .field(disambiguator)
                 .finish(),
             Self::Block { content, .. } => f
                 .debug_struct("Block")
