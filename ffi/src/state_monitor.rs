@@ -1,9 +1,5 @@
-use crate::{
-    error::Result,
-    protocol::Notification,
-    state::{State, SubscriptionHandle},
-    transport::NotificationSender,
-};
+use crate::state::{State, SubscriptionHandle};
+use ouisync_bridge::{error::Result, protocol::Notification, transport::NotificationSender};
 use ouisync_lib::{MonitorId, StateMonitor};
 use std::time::Duration;
 use tokio::time;

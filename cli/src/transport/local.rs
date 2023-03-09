@@ -10,11 +10,8 @@ use interprocess::local_socket::{
     ToLocalSocketName,
 };
 use ouisync_bridge::{
-    transport::{
-        socket::{self, SocketClient},
-        Client,
-    },
-    Result,
+    error::Result,
+    transport::{socket_server_connection, Client, SocketClient},
 };
 use std::{fs, io, path::PathBuf};
 use tokio::task::JoinSet;
@@ -51,7 +48,7 @@ impl LocalServer {
             match self.listener.accept().await {
                 Ok(socket) => {
                     let socket = make_socket(socket);
-                    connections.spawn(socket::server_connection::run(socket, handler.clone()));
+                    connections.spawn(socket_server_connection::run(socket, handler.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");

@@ -8,8 +8,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
+    error::Result,
     transport::{Client, Handler as _, NotificationSender},
-    Result,
 };
 use tokio::sync::mpsc;
 

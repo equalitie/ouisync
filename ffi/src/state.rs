@@ -1,18 +1,17 @@
 use crate::{
     file::FileHolder,
     registry::{Handle, Registry},
-    repository::RepositoryHolder,
 };
+use ouisync_bridge::repository::RepositoryHolder;
 use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
 use scoped_task::ScopedJoinHandle;
-use std::{path::PathBuf, time::Duration};
-use tokio::time;
+use std::path::PathBuf;
 use tracing::Span;
 
-pub struct State {
-    pub(crate) root_monitor: StateMonitor,
-    pub(crate) repos_span: Span,
-    pub(crate) config: ConfigStore,
+pub(crate) struct State {
+    pub root_monitor: StateMonitor,
+    pub repos_span: Span,
+    pub config: ConfigStore,
     pub network: Network,
     pub repositories: Registry<RepositoryHolder>,
     pub files: Registry<FileHolder>,
@@ -42,28 +41,10 @@ impl State {
         }
     }
 
-    pub async fn close(&self) {
-        for holder in self.files.remove_all() {
-            if let Err(error) = holder.file.lock().await.flush().await {
-                tracing::error!(?error, "failed to flush file");
-            }
-        }
-
-        for holder in self.repositories.remove_all() {
-            if let Err(error) = holder.repository.close().await {
-                tracing::error!(?error, "failed to close repository");
-            }
-        }
-
-        time::timeout(Duration::from_secs(1), self.network.handle().shutdown())
-            .await
-            .unwrap_or(());
+    /// Cancel a notification subscription.
+    pub fn unsubscribe(&self, handle: SubscriptionHandle) {
+        self.tasks.remove(handle);
     }
 }
 
 pub(crate) type SubscriptionHandle = Handle<ScopedJoinHandle<()>>;
-
-/// Cancel a notification subscription.
-pub(crate) fn unsubscribe(state: &State, handle: SubscriptionHandle) {
-    state.tasks.remove(handle);
-}

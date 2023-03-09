@@ -8,11 +8,8 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use ouisync_bridge::{
-    transport::{
-        socket::{self, SocketClient},
-        Client,
-    },
-    Result,
+    error::Result,
+    transport::{socket_server_connection, Client, SocketClient},
 };
 use std::{
     io,
@@ -83,7 +80,7 @@ impl RemoteServer {
                     tracing::debug!("client accepted at {:?}", addr);
 
                     let socket = Socket(socket);
-                    connections.spawn(socket::server_connection::run(socket, handler.clone()));
+                    connections.spawn(socket_server_connection::run(socket, handler.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");

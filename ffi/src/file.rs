@@ -1,16 +1,15 @@
-use crate::{
-    error::{Error, Result},
-    registry::Handle,
-    repository::RepositoryHolder,
-    state::State,
-};
+use crate::{registry::Handle, state::State};
 use camino::Utf8PathBuf;
+use ouisync_bridge::{
+    error::{Error, Result},
+    repository::RepositoryHolder,
+};
 use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, File};
 use std::{convert::TryInto, io::SeekFrom};
 
 pub struct FileHolder {
-    pub file: AsyncMutex<File>,
-    pub local_branch: Option<Branch>,
+    pub(crate) file: AsyncMutex<File>,
+    pub(crate) local_branch: Option<Branch>,
 }
 
 pub(crate) async fn open(

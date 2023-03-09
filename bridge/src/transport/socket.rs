@@ -1,4 +1,4 @@
-//! Low-level Client and Server than wrap Stream/Sink of bytes. Used to implement some higher-level
+//! Low-level Client and Server tha wraps Stream/Sink of bytes. Used to implement some higher-level
 //! clients/servers
 
 use super::{Client, Handler};

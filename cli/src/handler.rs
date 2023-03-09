@@ -6,11 +6,15 @@ use async_trait::async_trait;
 use camino::Utf8PathBuf;
 use dashmap::DashMap;
 use futures_util::future;
-use ouisync_bridge::{network, repository, transport::NotificationSender, Error, Result};
+use ouisync_bridge::{
+    error::{Error, Result},
+    network, repository,
+    transport::NotificationSender,
+};
 use ouisync_lib::{network::Network, ConfigStore, PeerAddr, ShareToken};
 use ouisync_vfs::MountGuard;
-use std::{net::SocketAddr, sync::Arc};
-use tokio::{fs, runtime};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+use tokio::{fs, runtime, time};
 
 pub(crate) struct State {
     config: ConfigStore,
@@ -39,7 +43,27 @@ impl State {
     }
 
     pub async fn close(&self) {
-        todo!()
+        let mut repositories = Vec::with_capacity(self.repositories.len());
+
+        self.repositories.retain(|path, holder| {
+            repositories.push((path.clone(), holder.base.repository.clone()));
+            false
+        });
+
+        future::join_all(
+            repositories
+                .into_iter()
+                .map(|(path, repository)| async move {
+                    if let Err(error) = repository.close().await {
+                        tracing::error!(?error, ?path, "failed to close repository");
+                    }
+                }),
+        )
+        .await;
+
+        time::timeout(Duration::from_secs(1), self.network.handle().shutdown())
+            .await
+            .ok();
     }
 
     fn store_path(&self, name: &str) -> Utf8PathBuf {
@@ -54,12 +78,12 @@ impl State {
 }
 
 struct RepositoryHolder {
-    base: ouisync_bridge::RepositoryHolder,
+    base: ouisync_bridge::repository::RepositoryHolder,
     mount_guard: Option<MountGuard>,
 }
 
 impl RepositoryHolder {
-    fn new(base: ouisync_bridge::RepositoryHolder) -> Self {
+    fn new(base: ouisync_bridge::repository::RepositoryHolder) -> Self {
         Self {
             base,
             mount_guard: None,

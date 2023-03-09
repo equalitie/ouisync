@@ -13,9 +13,21 @@ version.workspace = true
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+camino = { workspace = true, features = ["serde1"] }
+futures-util = { workspace = true }
+hex = "0.4.3"
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 scoped_task = { path = "../scoped_task" }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+rmp-serde = { workspace = true }

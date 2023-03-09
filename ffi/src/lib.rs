@@ -3,18 +3,30 @@
 #[macro_use]
 mod utils;
 mod dart;
+mod directory;
+mod file;
+mod handler;
+mod network;
+mod protocol;
+mod registry;
+mod repository;
+mod share_token;
+mod state;
+mod state_monitor;
+mod transport;
 
 use crate::{
     dart::{DartCObject, PostDartCObjectFn},
+    file::FileHolder,
+    handler::Handler,
+    registry::{Handle, Registry},
+    state::State,
+    transport::{ForeignClientSender, ForeignServer},
     utils::{Port, UniqueHandle},
 };
 use ouisync_bridge::{
+    error::{Error, ErrorCode, Result},
     logger::{self, Logger},
-    transport::{
-        foreign::{ForeignClientSender, ForeignServer},
-        DefaultHandler,
-    },
-    Error, ErrorCode, FileHolder, Handle, Registry, Result, State,
 };
 use ouisync_lib::StateMonitor;
 use std::{
@@ -107,9 +119,7 @@ pub unsafe extern "C" fn session_channel_open(
 
     let (server, client_tx, mut client_rx) = ForeignServer::new();
 
-    session
-        .runtime
-        .spawn(server.run(DefaultHandler::new(state)));
+    session.runtime.spawn(server.run(Handler::new(state)));
 
     session.runtime.spawn(async move {
         while let Some(payload) = client_rx.recv().await {
