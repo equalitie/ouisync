@@ -34,6 +34,10 @@ pub(crate) async fn run(options: Options) -> Result<()> {
                 write_password,
             }
         }
+        Request::Open { name, password } => {
+            let password = get_or_read(password, "input password").await?;
+            Request::Open { name, password }
+        }
         Request::Share {
             name,
             mode,

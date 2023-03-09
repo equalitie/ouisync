@@ -1,23 +1,33 @@
 use crate::{
     handler::{Handler, State},
-    host_addr,
+    host_addr::HostAddr,
     options::Options,
     transport::local::LocalServer,
 };
+use anyhow::{format_err, Result};
 use ouisync_bridge::logger;
 use ouisync_lib::StateMonitor;
 use std::{io, sync::Arc};
 use tokio::task;
 
-pub(crate) async fn run(options: Options) -> anyhow::Result<()> {
+pub(crate) async fn run(options: Options) -> Result<()> {
     let root_monitor = StateMonitor::make_root();
     let _logger = logger::new(root_monitor.clone());
 
     let state = State::new(&options.dirs);
     let state = Arc::new(state);
 
-    let server = LocalServer::bind(host_addr::default_local())?;
+    let addr = match options.host {
+        HostAddr::Local(addr) => addr,
+        HostAddr::Remote(_) => {
+            return Err(format_err!("remote api endpoints not supported yet"));
+        }
+    };
+
+    let server = LocalServer::bind(addr.clone())?;
     let handle = task::spawn(server.run(Handler::new(state.clone())));
+
+    tracing::info!("API server listening on {}", addr);
 
     terminated().await?;
 

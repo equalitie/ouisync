@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use camino::Utf8PathBuf;
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use futures_util::future;
 use ouisync_bridge::{
     error::{Error, Result},
@@ -133,20 +133,19 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .transpose()
                     .map_err(|_| Error::InvalidArgument)?;
 
-                let read_password = read_password.or_else(|| password.as_ref().cloned());
-                let write_password = write_password.or(password);
-
                 let name = match (name, &share_token) {
                     (Some(name), _) => name,
                     (None, Some(token)) => token.suggested_name().into_owned(),
                     (None, None) => unreachable!(),
                 };
 
-                let store_path = self.state.store_path(&name);
-
                 if self.state.repositories.contains_key(&name) {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
+
+                let store_path = self.state.store_path(&name);
+                let read_password = read_password.or_else(|| password.as_ref().cloned());
+                let write_password = write_password.or(password);
 
                 let holder = repository::create(
                     store_path.clone(),
@@ -185,6 +184,38 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .map(Err)
                 .unwrap_or(Ok(().into()))
                 .map_err(Error::Io)
+            }
+            Request::Open { name, password } => {
+                if self.state.repositories.contains_key(&name) {
+                    Err(ouisync_lib::Error::EntryExists)?;
+                }
+
+                let store_path = self.state.store_path(&name);
+
+                let holder = repository::open(
+                    store_path,
+                    password,
+                    &self.state.config,
+                    &self.state.network,
+                )
+                .await?;
+                let holder = RepositoryHolder::new(holder);
+
+                match self.state.repositories.entry(name) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(holder);
+                        Ok(().into())
+                    }
+                    Entry::Occupied(_) => Err(ouisync_lib::Error::EntryExists.into()),
+                }
+            }
+            Request::Close { name } => {
+                self.state
+                    .repositories
+                    .remove(&name)
+                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                Ok(().into())
             }
             Request::Share {
                 name,

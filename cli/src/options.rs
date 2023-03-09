@@ -68,6 +68,20 @@ pub(crate) enum Request {
         #[arg(short, long)]
         name: String,
     },
+    /// Open a repository
+    Open {
+        #[arg(short, long)]
+        name: String,
+
+        /// Local password
+        #[arg(short = 'P', long)]
+        password: Option<String>,
+    },
+    /// Close a repository
+    Close {
+        #[arg(short, long)]
+        name: String,
+    },
     /// Print share token for a repository
     Share {
         /// Name of the repository to share

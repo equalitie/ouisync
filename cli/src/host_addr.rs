@@ -1,6 +1,5 @@
 use crate::APP_NAME;
-use anyhow::{format_err, Error};
-use std::{fmt, path::PathBuf, str::FromStr};
+use std::{convert::Infallible, fmt, path::PathBuf, str::FromStr};
 
 #[derive(Clone, Debug)]
 pub enum HostAddr {
@@ -9,20 +8,16 @@ pub enum HostAddr {
 }
 
 impl FromStr for HostAddr {
-    type Err = Error;
+    type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
 
-        if s.starts_with('/') || s.starts_with("\\\\") || s.starts_with('@') {
-            return Ok(Self::Local(s.to_owned()));
-        }
-
         if s.starts_with("ws://") || s.starts_with("wss://") {
-            return Ok(Self::Remote(s.to_owned()));
+            Ok(Self::Remote(s.to_owned()))
+        } else {
+            Ok(Self::Local(s.to_owned()))
         }
-
-        Err(format_err!("invalid host socket").context(s.to_owned()))
     }
 }
 
