@@ -3,7 +3,7 @@ use crate::{
     block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
-    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, Summary, UntrustedProof},
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,10 @@ pub(crate) enum Request {
     RootNode(PublicKey),
     /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
     /// `InnerNodes` or `LeafNodes` response.
-    ChildNodes(Hash),
+    ChildNodes {
+        parent_node_hash: Hash,
+        trigger_block_presence: MultiBlockPresence,
+    },
     /// Request block with the given id.
     Block(BlockId),
 }
@@ -32,11 +35,17 @@ pub(crate) enum Response {
     /// Send that a RootNode request failed
     RootNodeError(PublicKey),
     /// Send inner nodes.
-    InnerNodes(InnerNodeMap),
+    InnerNodes {
+        nodes: InnerNodeMap,
+        trigger_block_presence: MultiBlockPresence,
+    },
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet),
+    LeafNodes {
+        nodes: LeafNodeSet,
+        trigger_block_presence: MultiBlockPresence,
+    },
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash),
+    ChildNodesError(Hash, MultiBlockPresence),
     /// Send a requested block.
     Block {
         content: Box<[u8]>,
@@ -58,9 +67,27 @@ impl fmt::Debug for Response {
             Self::RootNodeError(branch_id) => {
                 f.debug_tuple("RootNodeError").field(branch_id).finish()
             }
-            Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
-            Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
-            Self::ChildNodesError(hash) => f.debug_tuple("ChildNodesError").field(hash).finish(),
+            Self::InnerNodes {
+                nodes,
+                trigger_block_presence,
+            } => f
+                .debug_struct("InnerNodes")
+                .field("nodes", nodes)
+                .field("trigger_block_presence", trigger_block_presence)
+                .finish(),
+            Self::LeafNodes {
+                nodes,
+                trigger_block_presence,
+            } => f
+                .debug_struct("LeafNodes")
+                .field("nodes", nodes)
+                .field("trigger_block_presence", trigger_block_presence)
+                .finish(),
+            Self::ChildNodesError(hash, trigger_block_presence) => f
+                .debug_tuple("ChildNodesError")
+                .field(hash)
+                .field(trigger_block_presence)
+                .finish(),
             Self::Block { content, .. } => f
                 .debug_struct("Block")
                 .field("content", &format_args!("{:6x}", Hex(content)))

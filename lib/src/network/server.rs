@@ -4,7 +4,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{Index, InnerNode, LeafNode, RootNode},
+    index::{Index, InnerNode, LeafNode, MultiBlockPresence, RootNode},
 };
 use futures_util::TryStreamExt;
 use tokio::{
@@ -63,7 +63,13 @@ impl<'a> Responder<'a> {
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
-            Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
+            Request::ChildNodes {
+                parent_node_hash,
+                trigger_block_presence,
+            } => {
+                self.handle_child_nodes(parent_node_hash, trigger_block_presence)
+                    .await
+            }
             Request::Block(id) => self.handle_block(id).await,
         }
     }
@@ -98,7 +104,11 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self), err(Debug))]
-    async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
+    async fn handle_child_nodes(
+        &mut self,
+        parent_hash: Hash,
+        trigger_block_presence: MultiBlockPresence,
+    ) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
 
         // At most one of these will be non-empty.
@@ -110,16 +120,31 @@ impl<'a> Responder<'a> {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.tx.send(Response::InnerNodes(inner_nodes)).await;
+                self.tx
+                    .send(Response::InnerNodes {
+                        nodes: inner_nodes,
+                        trigger_block_presence,
+                    })
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.tx.send(Response::LeafNodes(leaf_nodes)).await;
+                self.tx
+                    .send(Response::LeafNodes {
+                        nodes: leaf_nodes,
+                        trigger_block_presence,
+                    })
+                    .await;
             }
         } else {
             tracing::warn!("child nodes not found");
-            self.tx.send(Response::ChildNodesError(parent_hash)).await;
+            self.tx
+                .send(Response::ChildNodesError(
+                    parent_hash,
+                    trigger_block_presence,
+                ))
+                .await;
         }
 
         Ok(())

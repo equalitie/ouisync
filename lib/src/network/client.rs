@@ -7,7 +7,10 @@ use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::{Error, Result},
-    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    index::{
+        InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, Summary,
+        UntrustedProof,
+    },
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;
@@ -122,7 +125,7 @@ impl Client {
                     Failure::Block(block_id) => {
                         self.block_tracker.cancel(&block_id);
                     }
-                    Failure::RootNode(_) | Failure::ChildNodes(_) => (),
+                    Failure::RootNode(_) | Failure::ChildNodes { .. } => (),
                 }
             }
         }
@@ -137,8 +140,8 @@ impl Client {
     async fn handle_response(&mut self, response: Success) -> Result<()> {
         let result = match response {
             Success::RootNode { proof, summary } => self.handle_root_node(proof, summary).await,
-            Success::InnerNodes(nodes) => self.handle_inner_nodes(nodes).await,
-            Success::LeafNodes(nodes) => self.handle_leaf_nodes(nodes).await,
+            Success::InnerNodes { nodes, .. } => self.handle_inner_nodes(nodes).await,
+            Success::LeafNodes { nodes, .. } => self.handle_leaf_nodes(nodes).await,
             Success::Block { data, nonce } => self.handle_block(data, nonce).await,
         };
 
@@ -168,7 +171,10 @@ impl Client {
 
         if updated {
             tracing::trace!("received updated root node");
-            self.send_request(Request::ChildNodes(hash));
+            self.send_request(Request::ChildNodes {
+                parent_node_hash: hash,
+                trigger_block_presence: summary.block_presence,
+            });
         } else {
             tracing::trace!("received outdated root node");
         }
@@ -195,8 +201,11 @@ impl Client {
             updated_nodes
         );
 
-        for hash in updated_nodes {
-            self.send_request(Request::ChildNodes(hash));
+        for node in updated_nodes {
+            self.send_request(Request::ChildNodes {
+                parent_node_hash: node.hash,
+                trigger_block_presence: node.summary.block_presence,
+            });
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
@@ -336,11 +345,28 @@ impl ProcessedResponse {
     fn to_request(&self) -> Request {
         match self {
             Self::Success(Success::RootNode { proof, .. }) => Request::RootNode(proof.writer_id),
-            Self::Success(Success::InnerNodes(nodes)) => Request::ChildNodes(nodes.hash()),
-            Self::Success(Success::LeafNodes(nodes)) => Request::ChildNodes(nodes.hash()),
+            Self::Success(Success::InnerNodes {
+                nodes,
+                trigger_block_presence,
+            }) => Request::ChildNodes {
+                parent_node_hash: nodes.hash(),
+                trigger_block_presence: trigger_block_presence.clone(),
+            },
+            Self::Success(Success::LeafNodes {
+                nodes,
+                trigger_block_presence,
+            }) => Request::ChildNodes {
+                parent_node_hash: nodes.hash(),
+                trigger_block_presence: trigger_block_presence.clone(),
+            },
             Self::Success(Success::Block { data, .. }) => Request::Block(data.id),
             Self::Failure(Failure::RootNode(branch_id)) => Request::RootNode(*branch_id),
-            Self::Failure(Failure::ChildNodes(hash)) => Request::ChildNodes(*hash),
+            Self::Failure(Failure::ChildNodes(hash, trigger_block_presence)) => {
+                Request::ChildNodes {
+                    parent_node_hash: *hash,
+                    trigger_block_presence: trigger_block_presence.clone(),
+                }
+            }
             Self::Failure(Failure::Block(block_id)) => Request::Block(*block_id),
         }
     }
@@ -352,14 +378,28 @@ impl From<Response> for ProcessedResponse {
             Response::RootNode { proof, summary } => {
                 Self::Success(Success::RootNode { proof, summary })
             }
-            Response::InnerNodes(nodes) => Self::Success(Success::InnerNodes(nodes.into())),
-            Response::LeafNodes(nodes) => Self::Success(Success::LeafNodes(nodes.into())),
+            Response::InnerNodes {
+                nodes,
+                trigger_block_presence,
+            } => Self::Success(Success::InnerNodes {
+                nodes: nodes.into(),
+                trigger_block_presence,
+            }),
+            Response::LeafNodes {
+                nodes,
+                trigger_block_presence,
+            } => Self::Success(Success::LeafNodes {
+                nodes: nodes.into(),
+                trigger_block_presence,
+            }),
             Response::Block { content, nonce } => Self::Success(Success::Block {
                 data: content.into(),
                 nonce,
             }),
             Response::RootNodeError(branch_id) => Self::Failure(Failure::RootNode(branch_id)),
-            Response::ChildNodesError(hash) => Self::Failure(Failure::ChildNodes(hash)),
+            Response::ChildNodesError(hash, trigger_block_presence) => {
+                Self::Failure(Failure::ChildNodes(hash, trigger_block_presence))
+            }
             Response::BlockError(block_id) => Self::Failure(Failure::Block(block_id)),
         }
     }
@@ -370,8 +410,14 @@ enum Success {
         proof: UntrustedProof,
         summary: Summary,
     },
-    InnerNodes(CacheHash<InnerNodeMap>),
-    LeafNodes(CacheHash<LeafNodeSet>),
+    InnerNodes {
+        nodes: CacheHash<InnerNodeMap>,
+        trigger_block_presence: MultiBlockPresence,
+    },
+    LeafNodes {
+        nodes: CacheHash<LeafNodeSet>,
+        trigger_block_presence: MultiBlockPresence,
+    },
     Block {
         data: BlockData,
         nonce: BlockNonce,
@@ -381,6 +427,6 @@ enum Success {
 #[derive(Debug)]
 enum Failure {
     RootNode(PublicKey),
-    ChildNodes(Hash),
+    ChildNodes(Hash, MultiBlockPresence),
     Block(BlockId),
 }
