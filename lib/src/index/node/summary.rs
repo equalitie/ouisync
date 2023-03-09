@@ -137,7 +137,7 @@ impl fmt::Debug for SingleBlockPresence {
 }
 
 /// Summary information about the presence of multiple blocks belonging to a subtree.
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub(crate) enum MultiBlockPresence {
     /// All blocks missing
     None,

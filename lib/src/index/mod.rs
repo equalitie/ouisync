@@ -9,8 +9,8 @@ mod tests;
 pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
-        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode,
-        SingleBlockPresence, Summary,
+        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        MultiBlockPresence, RootNode, SingleBlockPresence, Summary,
     },
     proof::UntrustedProof,
     receive_filter::ReceiveFilter,
@@ -163,7 +163,7 @@ impl Index {
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &mut ReceiveFilter,
-    ) -> Result<(Vec<Hash>, Vec<PublicKey>), ReceiveError> {
+    ) -> Result<(Vec<InnerNode>, Vec<PublicKey>), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
@@ -218,7 +218,7 @@ impl Index {
         tx: &mut db::WriteTransaction,
         remote_nodes: &InnerNodeMap,
         receive_filter: &mut ReceiveFilter,
-    ) -> Result<Vec<Hash>> {
+    ) -> Result<Vec<InnerNode>> {
         let mut output = Vec::with_capacity(remote_nodes.len());
 
         for (_, remote_node) in remote_nodes {
@@ -240,7 +240,7 @@ impl Index {
             };
 
             if insert {
-                output.push(remote_node.hash);
+                output.push(remote_node.clone());
             }
         }
 

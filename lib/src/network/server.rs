@@ -1,4 +1,4 @@
-use super::message::{Content, Request, Response};
+use super::message::{Content, Request, Response, ResponseDisambiguator};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
@@ -63,7 +63,10 @@ impl<'a> Responder<'a> {
     async fn handle_request(&mut self, request: Request) -> Result<()> {
         match request {
             Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
-            Request::ChildNodes(parent_hash) => self.handle_child_nodes(parent_hash).await,
+            Request::ChildNodes(parent_node_hash, disambiguator) => {
+                self.handle_child_nodes(parent_node_hash, disambiguator)
+                    .await
+            }
             Request::Block(id) => self.handle_block(id).await,
         }
     }
@@ -98,7 +101,11 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self), err(Debug))]
-    async fn handle_child_nodes(&mut self, parent_hash: Hash) -> Result<()> {
+    async fn handle_child_nodes(
+        &mut self,
+        parent_hash: Hash,
+        disambiguator: ResponseDisambiguator,
+    ) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
 
         // At most one of these will be non-empty.
@@ -110,16 +117,22 @@ impl<'a> Responder<'a> {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.tx.send(Response::InnerNodes(inner_nodes)).await;
+                self.tx
+                    .send(Response::InnerNodes(inner_nodes, disambiguator))
+                    .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
-                self.tx.send(Response::LeafNodes(leaf_nodes)).await;
+                self.tx
+                    .send(Response::LeafNodes(leaf_nodes, disambiguator))
+                    .await;
             }
         } else {
             tracing::warn!("child nodes not found");
-            self.tx.send(Response::ChildNodesError(parent_hash)).await;
+            self.tx
+                .send(Response::ChildNodesError(parent_hash, disambiguator))
+                .await;
         }
 
         Ok(())

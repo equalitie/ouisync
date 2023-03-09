@@ -3,7 +3,7 @@ use crate::{
     block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
-    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, Summary, UntrustedProof},
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
@@ -15,9 +15,21 @@ pub(crate) enum Request {
     RootNode(PublicKey),
     /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
     /// `InnerNodes` or `LeafNodes` response.
-    ChildNodes(Hash),
+    ChildNodes(Hash, ResponseDisambiguator),
     /// Request block with the given id.
     Block(BlockId),
+}
+
+/// ResponseDisambiguator is used to uniquelly assign a response to a request.
+/// What we want to avoid is that an outdated response clears out a newer pending request.
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
+#[serde(transparent)]
+pub(crate) struct ResponseDisambiguator(MultiBlockPresence);
+
+impl ResponseDisambiguator {
+    pub fn new(multi_block_presence: MultiBlockPresence) -> Self {
+        Self(multi_block_presence)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,11 +44,11 @@ pub(crate) enum Response {
     /// Send that a RootNode request failed
     RootNodeError(PublicKey),
     /// Send inner nodes.
-    InnerNodes(InnerNodeMap),
+    InnerNodes(InnerNodeMap, ResponseDisambiguator),
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet),
+    LeafNodes(LeafNodeSet, ResponseDisambiguator),
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash),
+    ChildNodesError(Hash, ResponseDisambiguator),
     /// Send a requested block.
     Block {
         content: Box<[u8]>,
@@ -58,9 +70,21 @@ impl fmt::Debug for Response {
             Self::RootNodeError(branch_id) => {
                 f.debug_tuple("RootNodeError").field(branch_id).finish()
             }
-            Self::InnerNodes(nodes) => f.debug_tuple("InnerNodes").field(nodes).finish(),
-            Self::LeafNodes(nodes) => f.debug_tuple("LeafNodes").field(nodes).finish(),
-            Self::ChildNodesError(hash) => f.debug_tuple("ChildNodesError").field(hash).finish(),
+            Self::InnerNodes(nodes, disambiguator) => f
+                .debug_tuple("InnerNodes")
+                .field(nodes)
+                .field(disambiguator)
+                .finish(),
+            Self::LeafNodes(nodes, disambiguator) => f
+                .debug_tuple("LeafNodes")
+                .field(nodes)
+                .field(disambiguator)
+                .finish(),
+            Self::ChildNodesError(hash, disambiguator) => f
+                .debug_tuple("ChildNodesError")
+                .field(hash)
+                .field(disambiguator)
+                .finish(),
             Self::Block { content, .. } => f
                 .debug_struct("Block")
                 .field("content", &format_args!("{:6x}", Hex(content)))
