@@ -3,22 +3,23 @@ use crate::{
     error::Result,
     protocol::Notification,
     registry::Handle,
-    state::{ClientState, ServerState, SubscriptionHandle},
+    state::{State, SubscriptionHandle},
+    transport::NotificationSender,
 };
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_lib::{
     crypto::Password,
     device_id,
-    network::{self, Registration},
-    path, Access, AccessMode, AccessSecrets, EntryType, Event, LocalSecret, Payload, Progress,
-    ReopenToken, Repository, RepositoryDb, ShareToken,
+    network::{self, Network, Registration},
+    path, Access, AccessMode, AccessSecrets, ConfigStore, EntryType, Event, LocalSecret, Payload,
+    Progress, ReopenToken, Repository, RepositoryDb, ShareToken,
 };
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 pub struct RepositoryHolder {
-    pub(super) repository: Repository,
+    pub repository: Arc<Repository>,
     registration: Registration,
 }
 
@@ -33,13 +34,14 @@ pub struct RepositoryHolder {
 /// any                  |  None                  |  write         |  read (only!) with password
 /// None                 |  any                   |  write         |  read without password, require password for writing
 /// any                  |  any                   |  write         |  read with password, write with (same or different) password
-pub(crate) async fn create(
-    state: &ServerState,
+pub async fn create(
     store: Utf8PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
     share_token: Option<ShareToken>,
-) -> Result<Handle<RepositoryHolder>> {
+    config: &ConfigStore,
+    network: &Network,
+) -> Result<RepositoryHolder> {
     let local_read_password = local_read_password.as_deref().map(Password::new);
     let local_write_password = local_write_password.as_deref().map(Password::new);
 
@@ -49,10 +51,10 @@ pub(crate) async fn create(
         AccessSecrets::random_write()
     };
 
-    let span = state.repo_span(&store);
+    let span = repo_span(&store);
 
     async {
-        let device_id = device_id::get_or_create(&state.config).await?;
+        let device_id = device_id::get_or_create(config).await?;
 
         let db = RepositoryDb::create(store.into_std_path_buf()).await?;
 
@@ -70,32 +72,29 @@ pub(crate) async fn create(
 
         let access = Access::new(local_read_key, local_write_key, access_secrets);
         let repository = Repository::create(db, device_id, access).await?;
+        let repository = Arc::new(repository);
 
-        let registration = state.network.handle().register(repository.store().clone());
+        let registration = network.handle().register(repository.store().clone());
         init(&registration);
 
-        let holder = RepositoryHolder {
+        Ok(RepositoryHolder {
             repository,
             registration,
-        };
-
-        let handle = state.repositories.insert(holder);
-
-        Ok(handle)
+        })
     }
     .instrument(span)
     .await
 }
 
 /// Opens an existing repository.
-pub(crate) async fn open(
-    state: &ServerState,
+pub async fn open(
+    state: &State,
     store: Utf8PathBuf,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
     let local_password = local_password.as_deref().map(Password::new);
 
-    let span = state.repo_span(&store);
+    let span = repo_span(&store);
 
     async {
         let device_id = device_id::get_or_create(&state.config).await?;
@@ -106,6 +105,7 @@ pub(crate) async fn open(
             local_password.map(LocalSecret::Password),
         )
         .await?;
+        let repository = Arc::new(repository);
 
         let registration = state.network.handle().register(repository.store().clone());
         init(&registration);
@@ -124,7 +124,7 @@ pub(crate) async fn open(
 }
 
 /// Closes a repository.
-pub(crate) async fn close(state: &ServerState, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
     let holder = state.repositories.remove(handle);
 
     if let Some(holder) = holder {
@@ -135,7 +135,7 @@ pub(crate) async fn close(state: &ServerState, handle: Handle<RepositoryHolder>)
 }
 
 pub(crate) fn create_reopen_token(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<Vec<u8>> {
     let holder = state.repositories.get(handle);
@@ -145,15 +145,16 @@ pub(crate) fn create_reopen_token(
 }
 
 pub(crate) async fn reopen(
-    state: &ServerState,
+    state: &State,
     store: Utf8PathBuf,
     token: Vec<u8>,
 ) -> Result<Handle<RepositoryHolder>> {
     let token = ReopenToken::decode(&token)?;
-    let span = state.repo_span(&store);
+    let span = repo_span(&store);
 
     async {
         let repository = Repository::reopen(store.into_std_path_buf(), token).await?;
+        let repository = Arc::new(repository);
 
         let registration = state.network.handle().register(repository.store().clone());
         init(&registration);
@@ -180,7 +181,7 @@ pub(crate) async fn reopen(
 /// To remove the read (and write) permission use the `repository_remove_read_access`
 /// function.
 pub(crate) async fn set_read_access(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
     local_read_password: Option<String>,
     share_token: Option<ShareToken>,
@@ -220,7 +221,7 @@ pub(crate) async fn set_read_access(
 /// repository (files and directories) and thus reduces traffic and CPU usage when calculating
 /// causal relationships.
 pub(crate) async fn set_read_and_write_access(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
     local_old_rw_password: Option<String>,
     local_new_rw_password: Option<String>,
@@ -255,10 +256,7 @@ pub(crate) async fn set_read_and_write_access(
 
 /// Note that after removing read key the user may still read the repository if they previously had
 /// write key set up.
-pub(crate) async fn remove_read_key(
-    state: &ServerState,
-    handle: Handle<RepositoryHolder>,
-) -> Result<()> {
+pub(crate) async fn remove_read_key(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
     state
         .repositories
         .get(handle)
@@ -270,7 +268,7 @@ pub(crate) async fn remove_read_key(
 
 /// Note that removing the write key will leave read key intact.
 pub(crate) async fn remove_write_key(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<()> {
     state
@@ -284,7 +282,7 @@ pub(crate) async fn remove_write_key(
 
 /// Returns true if the repository requires a local password to be opened for reading.
 pub(crate) async fn requires_local_password_for_reading(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
     Ok(state
@@ -297,7 +295,7 @@ pub(crate) async fn requires_local_password_for_reading(
 
 /// Returns true if the repository requires a local password to be opened for writing.
 pub(crate) async fn requires_local_password_for_writing(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<bool> {
     Ok(state
@@ -311,7 +309,7 @@ pub(crate) async fn requires_local_password_for_writing(
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
 /// unique, non-secret identifier of the repository.
 /// User is responsible for deallocating the returned string.
-pub(crate) fn info_hash(state: &ServerState, handle: Handle<RepositoryHolder>) -> String {
+pub(crate) fn info_hash(state: &State, handle: Handle<RepositoryHolder>) -> String {
     let holder = state.repositories.get(handle);
     let info_hash = network::repository_info_hash(holder.repository.secrets().id());
 
@@ -321,7 +319,7 @@ pub(crate) fn info_hash(state: &ServerState, handle: Handle<RepositoryHolder>) -
 /// Returns an ID that is randomly generated once per repository. Can be used to store local user
 /// data per repository (e.g. passwords behind biometric storage).
 pub(crate) async fn database_id(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<Vec<u8>> {
     let holder = state.repositories.get(handle);
@@ -331,7 +329,7 @@ pub(crate) async fn database_id(
 /// Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
 /// exist.
 pub(crate) async fn entry_type(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Option<u8>> {
@@ -346,7 +344,7 @@ pub(crate) async fn entry_type(
 
 /// Move/rename entry from src to dst.
 pub(crate) async fn move_entry(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
     src: Utf8PathBuf,
     dst: Utf8PathBuf,
@@ -365,16 +363,16 @@ pub(crate) async fn move_entry(
 
 /// Subscribe to change notifications from the repository.
 pub(crate) fn subscribe(
-    server_state: &ServerState,
-    client_state: &ClientState,
+    state: &State,
+    notification_tx: &NotificationSender,
     repository_handle: Handle<RepositoryHolder>,
 ) -> SubscriptionHandle {
-    let holder = server_state.repositories.get(repository_handle);
+    let holder = state.repositories.get(repository_handle);
 
     let mut notification_rx = holder.repository.subscribe();
-    let notification_tx = client_state.notification_tx.clone();
+    let notification_tx = notification_tx.clone();
 
-    let entry = server_state.tasks.vacant_entry();
+    let entry = state.tasks.vacant_entry();
     let subscription_id = entry.handle().id();
 
     let subscription_task = scoped_task::spawn(async move {
@@ -403,15 +401,11 @@ pub(crate) fn subscribe(
     entry.insert(subscription_task)
 }
 
-pub(crate) fn is_dht_enabled(state: &ServerState, handle: Handle<RepositoryHolder>) -> bool {
+pub(crate) fn is_dht_enabled(state: &State, handle: Handle<RepositoryHolder>) -> bool {
     state.repositories.get(handle).registration.is_dht_enabled()
 }
 
-pub(crate) fn set_dht_enabled(
-    state: &ServerState,
-    handle: Handle<RepositoryHolder>,
-    enabled: bool,
-) {
+pub(crate) fn set_dht_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
     let reg = &state.repositories.get(handle).registration;
 
     if enabled {
@@ -421,15 +415,11 @@ pub(crate) fn set_dht_enabled(
     }
 }
 
-pub(crate) fn is_pex_enabled(state: &ServerState, handle: Handle<RepositoryHolder>) -> bool {
+pub(crate) fn is_pex_enabled(state: &State, handle: Handle<RepositoryHolder>) -> bool {
     state.repositories.get(handle).registration.is_pex_enabled()
 }
 
-pub(crate) fn set_pex_enabled(
-    state: &ServerState,
-    handle: Handle<RepositoryHolder>,
-    enabled: bool,
-) {
+pub(crate) fn set_pex_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
     let reg = &state.repositories.get(handle).registration;
 
     if enabled {
@@ -441,25 +431,22 @@ pub(crate) fn set_pex_enabled(
 
 /// The `password` parameter is optional, if `None` the current access level of the opened
 /// repository is used. If provided, the highest access level that the password can unlock is used.
-pub(crate) async fn create_share_token(
-    state: &ServerState,
-    handle: Handle<RepositoryHolder>,
+pub async fn create_share_token(
+    repository: &Repository,
     password: Option<String>,
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String> {
-    let holder = state.repositories.get(handle);
     let password = password.as_deref().map(Password::new);
 
     let access_secrets = if let Some(password) = password {
         Cow::Owned(
-            holder
-                .repository
+            repository
                 .unlock_secrets(LocalSecret::Password(password))
                 .await?,
         )
     } else {
-        Cow::Borrowed(holder.repository.secrets())
+        Cow::Borrowed(repository.secrets())
     };
 
     let share_token = ShareToken::from(access_secrets.with_mode(access_mode));
@@ -472,7 +459,7 @@ pub(crate) async fn create_share_token(
     Ok(share_token.to_string())
 }
 
-pub(crate) fn access_mode(state: &ServerState, handle: Handle<RepositoryHolder>) -> u8 {
+pub(crate) fn access_mode(state: &State, handle: Handle<RepositoryHolder>) -> u8 {
     state
         .repositories
         .get(handle)
@@ -483,7 +470,7 @@ pub(crate) fn access_mode(state: &ServerState, handle: Handle<RepositoryHolder>)
 
 /// Returns the syncing progress.
 pub(crate) async fn sync_progress(
-    state: &ServerState,
+    state: &State,
     handle: Handle<RepositoryHolder>,
 ) -> Result<Progress> {
     Ok(state
@@ -505,6 +492,10 @@ fn init(registration: &Registration) {
     // TODO: consider leaving the decision to enable DHT, PEX to the app.
     registration.enable_dht();
     registration.enable_pex();
+}
+
+fn repo_span(store: &Utf8Path) -> Span {
+    tracing::info_span!("repo", ?store)
 }
 
 #[cfg(test)]

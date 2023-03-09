@@ -11,14 +11,14 @@ use thiserror::Error;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ServerMessage {
-    Success(Response),
+pub(crate) enum ServerMessage<T> {
+    Success(T),
     Failure { code: ErrorCode, message: String },
     Notification(Notification),
 }
 
-impl ServerMessage {
-    pub fn response(result: Result<Response>) -> Self {
+impl<T> ServerMessage<T> {
+    pub fn response(result: Result<T>) -> Self {
         match result {
             Ok(response) => Self::Success(response),
             Err(error) => Self::Failure {
@@ -251,7 +251,7 @@ mod tests {
 
         for orig in origs {
             let encoded = rmp_serde::to_vec(&orig).unwrap();
-            let decoded: ServerMessage = rmp_serde::from_slice(&encoded).unwrap();
+            let decoded: ServerMessage<Response> = rmp_serde::from_slice(&encoded).unwrap();
             assert_eq!(decoded, orig);
         }
     }

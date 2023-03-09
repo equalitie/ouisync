@@ -1,29 +1,42 @@
-use crate::{host_addr::HostAddr, path::PathBuf, APP_NAME};
-use clap::{builder::BoolishValueParser, Parser, Subcommand};
-use ouisync_lib::{AccessMode, PeerAddr};
+use crate::{host_addr::HostAddr, APP_NAME};
+use camino::Utf8PathBuf;
+use clap::{builder::BoolishValueParser, Args, Parser, Subcommand};
+use ouisync_lib::{AccessMode, PeerAddr, PeerInfo};
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
 pub(crate) struct Options {
-    /// Config directory
-    #[arg(long, default_value_t = default_config_dir(), value_name = "PATH")]
-    pub config_dir: PathBuf,
-
-    /// Data directory
-    #[arg(long, default_value_t = default_data_dir(), value_name = "PATH")]
-    pub data_dir: PathBuf,
+    #[command(flatten)]
+    pub dirs: Dirs,
 
     /// Host socket to connect to
     #[arg(short = 'H', long, default_value_t, value_name = "ADDR")]
     pub host: HostAddr,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub request: Request,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Args, Debug)]
+pub(crate) struct Dirs {
+    /// Config directory
+    #[arg(long, default_value_t = default_config_dir(), value_name = "PATH")]
+    pub config_dir: Utf8PathBuf,
+
+    /// Repositories storage directory
+    #[arg(long, default_value_t = default_data_dir(), value_name = "PATH")]
+    pub store_dir: Utf8PathBuf,
+
+    /// Mount directory
+    #[arg(long, default_value_t = default_mount_dir(), value_name = "PATH")]
+    pub mount_dir: Utf8PathBuf,
+}
+
+#[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum Command {
+pub(crate) enum Request {
     /// Start a server
     Serve,
     /// Create a new repository
@@ -69,6 +82,20 @@ pub(crate) enum Command {
         #[arg(short = 'P', long)]
         password: Option<String>,
     },
+    /// Mount repository
+    Mount {
+        #[arg(short, long)]
+        name: String,
+
+        #[arg(short, long)]
+        path: Option<Utf8PathBuf>,
+    },
+    /// Unmount repository
+    #[command(alias = "umount")]
+    Unmount {
+        #[arg(short, long)]
+        name: String,
+    },
     /// Bind to the specified addresses
     Bind {
         /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
@@ -108,19 +135,82 @@ pub(crate) enum Command {
     ListPeers,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) enum Response {
+    None,
+    Bool(bool),
+    String(String),
+    PeerInfo(Vec<PeerInfo>),
+}
+
+impl From<()> for Response {
+    fn from(_: ()) -> Self {
+        Self::None
+    }
+}
+
+impl From<bool> for Response {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<String> for Response {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<Vec<PeerInfo>> for Response {
+    fn from(value: Vec<PeerInfo>) -> Self {
+        Self::PeerInfo(value)
+    }
+}
+
+impl fmt::Display for Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => write!(f, "OK"),
+            Self::Bool(value) => write!(f, "{value}"),
+            Self::String(value) => write!(f, "{value}"),
+            Self::PeerInfo(value) => {
+                for peer in value {
+                    writeln!(
+                        f,
+                        "{}:{} ({:?}, {:?})",
+                        peer.ip, peer.port, peer.source, peer.state
+                    )?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Path to the config directory.
-fn default_config_dir() -> PathBuf {
+fn default_config_dir() -> Utf8PathBuf {
     dirs::config_dir()
         .expect("config dir not defined")
         .join(APP_NAME)
-        .into()
+        .try_into()
+        .expect("invalid utf8 path")
 }
 
-fn default_data_dir() -> PathBuf {
+fn default_data_dir() -> Utf8PathBuf {
     dirs::data_dir()
         .expect("data dir not defined")
         .join(APP_NAME)
-        .into()
+        .try_into()
+        .expect("invalid utf8 path")
+}
+
+fn default_mount_dir() -> Utf8PathBuf {
+    dirs::home_dir()
+        .expect("home dir not defined")
+        .join(APP_NAME)
+        .try_into()
+        .expect("invalid utf8 path")
 }
 
 /*
@@ -140,20 +230,6 @@ use tokio::{
 /// Command line options.
 #[derive(Parser, Debug)]
 pub(crate) struct Options {
-    /// Addresses to bind to. The expected format is {tcp,quic}/IP:PORT. Note that there may be at
-    /// most one of each (protoco x IP-version) combinations. If more are specified, only the first
-    /// one is used.
-    #[clap(long, default_values = &["quic/0.0.0.0:0", "quic/[::]:0"], value_name = "proto/ip:port")]
-    pub bind: Vec<PeerAddr>,
-
-    /// Disable UPnP
-    #[clap(long)]
-    pub disable_upnp: bool,
-
-    /// Disable local discovery
-    #[clap(short, long)]
-    pub disable_local_discovery: bool,
-
     /// Disable DHT
     #[clap(long)]
     pub disable_dht: bool,
@@ -161,15 +237,6 @@ pub(crate) struct Options {
     /// Disable Peer Exchange
     #[clap(long)]
     pub disable_pex: bool,
-
-    /// Explicit list of {tcp,quic}/IP:PORT addresses of peers to connect to
-    #[clap(long)]
-    pub peers: Vec<PeerAddr>,
-
-    /// Mount the named repository at the specified path. Can be specified multiple times to mount
-    /// multiple repositories.
-    #[clap(short, long, value_name = "NAME:PATH")]
-    pub mount: Vec<Named<PathBuf>>,
 
     /// Pre-hashed 32 byte long (64 hexadecimal characters) local secret per repository. This is
     /// mainly intended for testing as password derivation is intentionally slow and some of the

@@ -1,43 +1,61 @@
 pub mod foreign;
-pub mod local;
-pub mod native;
-pub mod remote;
 pub mod socket;
 
 use std::sync::Arc;
 
 use crate::{
     error::Result,
-    protocol::{self, Request, Response},
-    state::{ClientState, ServerState},
+    protocol::{self, Notification, Request, Response},
+    state::State,
 };
 use async_trait::async_trait;
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::sync::mpsc;
 
 #[async_trait(?Send)]
 pub trait Client {
-    async fn invoke(&self, request: Request) -> Result<Response>;
+    type Request;
+    type Response;
+
+    async fn invoke(&self, request: Self::Request) -> Result<Self::Response>;
     async fn close(&self) {}
 }
 
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {
-    async fn handle(&self, client_state: &ClientState, request: Request) -> Result<Response>;
+    type Request: DeserializeOwned + Send;
+    type Response: Serialize + Send;
+
+    async fn handle(
+        &self,
+        request: Self::Request,
+        notification_tx: &NotificationSender,
+    ) -> Result<Self::Response>;
 }
+
+pub type NotificationSender = mpsc::Sender<(u64, Notification)>;
 
 #[derive(Clone)]
 pub struct DefaultHandler {
-    server_state: Arc<ServerState>,
+    state: Arc<State>,
 }
 
 impl DefaultHandler {
-    pub fn new(server_state: Arc<ServerState>) -> Self {
-        Self { server_state }
+    pub fn new(state: Arc<State>) -> Self {
+        Self { state }
     }
 }
 
 #[async_trait]
 impl Handler for DefaultHandler {
-    async fn handle(&self, client_state: &ClientState, request: Request) -> Result<Response> {
-        protocol::dispatch(&self.server_state, client_state, request).await
+    type Request = Request;
+    type Response = Response;
+
+    async fn handle(
+        &self,
+        request: Self::Request,
+        notification_tx: &NotificationSender,
+    ) -> Result<Self::Response> {
+        protocol::dispatch(request, notification_tx, &self.state).await
     }
 }

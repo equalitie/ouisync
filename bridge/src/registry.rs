@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt,
+    hash::{Hash, Hasher},
     marker::PhantomData,
     mem,
     sync::{
@@ -155,6 +156,12 @@ impl<T> PartialEq for Handle<T> {
 }
 
 impl<T> Eq for Handle<T> {}
+
+impl<T> Hash for Handle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
 
 impl<T> fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

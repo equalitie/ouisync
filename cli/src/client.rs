@@ -1,23 +1,20 @@
 use crate::{
+    handler::{Handler, State},
     host_addr::HostAddr,
-    options::{Command, Options},
+    options::{Dirs, Options, Request, Response},
+    transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
 };
 use anyhow::Result;
-use ouisync_bridge::{
-    protocol::Request,
-    transport::{local::LocalClient, native::NativeClient, remote::RemoteClient, Client},
-    ServerState,
-};
-use ouisync_lib::{PeerAddr, PeerInfo, ShareToken, StateMonitor};
-use std::{io, net::SocketAddr, path::Path, path::PathBuf, sync::Arc};
+use ouisync_bridge::transport::Client;
+use std::{io, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub(crate) async fn run(options: Options) -> Result<()> {
-    let client = connect(options.host, &options.config_dir).await?;
+    let client = connect(options.host, &options.dirs).await?;
 
-    match options.command {
-        Command::Serve => unreachable!(), // handled already in `main`
-        Command::Create {
+    let request = options.request;
+    let request = match request {
+        Request::Create {
             name,
             share_token,
             password,
@@ -25,165 +22,55 @@ pub(crate) async fn run(options: Options) -> Result<()> {
             write_password,
         } => {
             let share_token = get_or_read(share_token, "input share token").await?;
-            let share_token = share_token
-                .as_deref()
-                .map(str::parse::<ShareToken>)
-                .transpose()?;
-
             let password = get_or_read(password, "input password").await?;
-
             let read_password = get_or_read(read_password, "input read password").await?;
-            let read_password = read_password.or_else(|| password.as_ref().cloned());
-
             let write_password = get_or_read(write_password, "input write password").await?;
-            let write_password = write_password.or(password);
 
-            let name = match (name, &share_token) {
-                (Some(name), _) => name,
-                (None, Some(token)) => token.suggested_name().into_owned(),
-                (None, None) => unreachable!(),
-            };
-
-            let path = repository_path(&options.data_dir, &name).try_into()?;
-
-            client
-                .invoke(Request::RepositoryCreate {
-                    path,
-                    read_password,
-                    write_password,
-                    share_token,
-                })
-                .await?;
-
-            println!("repository created");
+            Request::Create {
+                name,
+                share_token,
+                password,
+                read_password,
+                write_password,
+            }
         }
-        Command::Delete { .. } => todo!(),
-        Command::Share {
+        Request::Share {
             name,
             mode,
             password,
         } => {
             let password = get_or_read(password, "input password").await?;
-            let repository = client
-                .invoke(Request::RepositoryOpen {
-                    path: repository_path(&options.data_dir, &name).try_into()?,
-                    password: None,
-                    // TODO: scope: Scope::Client,
-                })
-                .await?
-                .try_into()
-                .unwrap();
-            let token: String = client
-                .invoke(Request::RepositoryCreateShareToken {
-                    repository,
-                    password,
-                    access_mode: mode,
-                    name: Some(name),
-                })
-                .await?
-                .try_into()
-                .unwrap();
+            Request::Share {
+                name,
+                mode,
+                password,
+            }
+        }
+        _ => request,
+    };
 
-            println!("{token}");
-        }
-        Command::Bind { addrs } => {
-            let mut quic_v4 = None;
-            let mut quic_v6 = None;
-            let mut tcp_v4 = None;
-            let mut tcp_v6 = None;
-
-            for addr in addrs {
-                match addr {
-                    PeerAddr::Quic(SocketAddr::V4(addr)) => quic_v4 = Some(addr),
-                    PeerAddr::Quic(SocketAddr::V6(addr)) => quic_v6 = Some(addr),
-                    PeerAddr::Tcp(SocketAddr::V4(addr)) => tcp_v4 = Some(addr),
-                    PeerAddr::Tcp(SocketAddr::V6(addr)) => tcp_v6 = Some(addr),
-                }
-            }
-
-            client
-                .invoke(Request::NetworkBind {
-                    quic_v4,
-                    quic_v6,
-                    tcp_v4,
-                    tcp_v6,
-                })
-                .await?;
-        }
-        Command::LocalDiscovery { enabled } => {
-            if let Some(enabled) = enabled {
-                client
-                    .invoke(Request::NetworkSetLocalDiscoveryEnabled(enabled))
-                    .await?;
-            } else {
-                let value: bool = client
-                    .invoke(Request::NetworkIsLocalDiscoveryEnabled)
-                    .await?
-                    .try_into()
-                    .unwrap();
-                println!("{value}");
-            }
-        }
-        Command::PortForwarding { enabled } => {
-            if let Some(enabled) = enabled {
-                client
-                    .invoke(Request::NetworkSetPortForwardingEnabled(enabled))
-                    .await?;
-            } else {
-                let value: bool = client
-                    .invoke(Request::NetworkIsPortForwardingEnabled)
-                    .await?
-                    .try_into()
-                    .unwrap();
-                println!("{value}");
-            }
-        }
-        Command::AddPeers { addrs } => {
-            for addr in addrs {
-                client
-                    .invoke(Request::NetworkAddUserProvidedPeer(addr))
-                    .await?;
-            }
-        }
-        Command::RemovePeers { addrs } => {
-            for addr in addrs {
-                client
-                    .invoke(Request::NetworkRemoveUserProvidedPeer(addr))
-                    .await?;
-            }
-        }
-        Command::ListPeers => {
-            let peers: Vec<PeerInfo> = client
-                .invoke(Request::NetworkKnownPeers)
-                .await?
-                .try_into()
-                .unwrap();
-
-            for peer in peers {
-                println!(
-                    "{}:{} ({:?}, {:?})",
-                    peer.ip, peer.port, peer.source, peer.state
-                );
-            }
-        }
-    }
+    let response = client.invoke(request).await?;
+    println!("{response}");
 
     client.close().await;
 
     Ok(())
 }
 
-async fn connect(addr: HostAddr, config_dir: &Path) -> io::Result<Box<dyn Client>> {
+async fn connect(
+    addr: HostAddr,
+    dirs: &Dirs,
+) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
     match addr {
         HostAddr::Local(addr) => match LocalClient::connect(addr).await {
             Ok(client) => Ok(Box::new(client)),
             Err(error) => match error.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let root_monitor = StateMonitor::make_root();
-                    let state = ServerState::new(config_dir.into(), root_monitor);
+                    let state = State::new(dirs);
                     let state = Arc::new(state);
+                    let handler = Handler::new(state);
 
-                    Ok(Box::new(NativeClient::new(state)))
+                    Ok(Box::new(NativeClient::new(handler)))
                 }
                 _ => Err(error),
             },
@@ -215,11 +102,4 @@ async fn get_or_read(value: Option<String>, prompt: &str) -> Result<Option<Strin
     } else {
         Ok(value)
     }
-}
-
-fn repository_path(data_dir: &Path, name: &str) -> PathBuf {
-    data_dir
-        .join("repositories")
-        .join(name)
-        .with_extension("db")
 }

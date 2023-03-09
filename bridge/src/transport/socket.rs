@@ -4,8 +4,7 @@
 use super::{Client, Handler};
 use crate::{
     error::{Error, ErrorCode, Result},
-    protocol::{Request, Response, ServerMessage},
-    state::ClientState,
+    protocol::ServerMessage,
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -27,8 +26,6 @@ pub mod server_connection {
         H: Handler,
     {
         let (notification_tx, mut notification_rx) = mpsc::channel(1);
-        let client_state = ClientState { notification_tx };
-
         let mut request_handlers = FuturesUnordered::new();
 
         loop {
@@ -39,11 +36,11 @@ pub mod server_connection {
                     };
 
                     let handler = &handler;
-                    let client_state = &client_state;
+                    let notification_tx = &notification_tx;
 
                     let task = async move {
                         let result = match result {
-                            Ok(request) => handler.handle(client_state, request).await,
+                            Ok(request) => handler.handle(request, notification_tx).await,
                             Err(error) => Err(error),
                         };
 
@@ -59,7 +56,7 @@ pub mod server_connection {
                 notification = notification_rx.recv() => {
                     // unwrap is OK because the sender exists at this point.
                     let (id, notification) = notification.unwrap();
-                    let message = ServerMessage::notification(notification);
+                    let message = ServerMessage::<H::Response>::notification(notification);
                     send(&mut socket, id, message).await;
                 }
                 Some((id, result)) = request_handlers.next() => {
@@ -71,20 +68,22 @@ pub mod server_connection {
     }
 }
 
-pub struct SocketClient<T> {
+pub struct SocketClient<Socket, Request, Response> {
     request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response>>)>,
-    _socket: PhantomData<T>,
+    _socket: PhantomData<Socket>,
 }
 
-impl<T> SocketClient<T>
+impl<Socket, Request, Response> SocketClient<Socket, Request, Response>
 where
-    T: Stream<Item = io::Result<BytesMut>>
+    Socket: Stream<Item = io::Result<BytesMut>>
         + Sink<Bytes, Error = io::Error>
         + Unpin
         + Send
         + 'static,
+    Request: Serialize + Send + 'static,
+    Response: DeserializeOwned + Send + 'static,
 {
-    pub fn new(socket: T) -> Self {
+    pub fn new(socket: Socket) -> Self {
         let (request_tx, request_rx) = mpsc::channel(1);
 
         task::spawn(Worker::new(request_rx, socket).run());
@@ -97,15 +96,20 @@ where
 }
 
 #[async_trait(?Send)]
-impl<T> Client for SocketClient<T>
+impl<Socket, Request, Response> Client for SocketClient<Socket, Request, Response>
 where
-    T: Stream<Item = io::Result<BytesMut>>
+    Socket: Stream<Item = io::Result<BytesMut>>
         + Sink<Bytes, Error = io::Error>
         + Unpin
         + Send
         + 'static,
+    Request: Serialize + Send,
+    Response: DeserializeOwned,
 {
-    async fn invoke(&self, request: Request) -> Result<Response> {
+    type Request = Request;
+    type Response = Response;
+
+    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
@@ -120,21 +124,23 @@ where
     }
 }
 
-struct Worker<T> {
+struct Worker<Socket, Request, Response> {
     running: bool,
     request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
-    socket: T,
+    socket: Socket,
     pending_requests: HashMap<u64, oneshot::Sender<Result<Response>>>,
     next_message_id: u64,
 }
 
-impl<T> Worker<T>
+impl<Socket, Request, Response> Worker<Socket, Request, Response>
 where
-    T: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin + Send,
+    Socket: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin + Send,
+    Request: Serialize,
+    Response: DeserializeOwned,
 {
     fn new(
         request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
-        socket: T,
+        socket: Socket,
     ) -> Self {
         Self {
             running: true,
@@ -173,7 +179,10 @@ where
         }
     }
 
-    async fn handle_server_message(&mut self, message: Option<(u64, Result<ServerMessage>)>) {
+    async fn handle_server_message(
+        &mut self,
+        message: Option<(u64, Result<ServerMessage<Response>>)>,
+    ) {
         let Some((message_id, message)) = message else {
             self.running = false;
             return;

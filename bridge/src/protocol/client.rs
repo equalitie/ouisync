@@ -7,13 +7,15 @@ use crate::{
     registry::Handle,
     repository::{self, RepositoryHolder},
     share_token,
-    state::{self, ClientState, ServerState, SubscriptionHandle},
+    state::{self, State, SubscriptionHandle},
     state_monitor,
+    transport::NotificationSender,
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{AccessMode, MonitorId, PeerAddr, ShareToken};
 use serde::{Deserialize, Serialize};
 use std::net::{SocketAddrV4, SocketAddrV6};
+use tracing::Instrument;
 
 #[derive(Eq, PartialEq, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,6 +86,14 @@ pub enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
+    RepositoryMount {
+        repository: Handle<RepositoryHolder>,
+        path: Utf8PathBuf,
+    },
+    RepositoryUnmount(Handle<RepositoryHolder>),
+    RepositoryFind {
+        path: Utf8PathBuf,
+    },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
@@ -163,9 +173,9 @@ pub enum Request {
 }
 
 pub async fn dispatch(
-    server_state: &ServerState,
-    client_state: &ClientState,
     request: Request,
+    notification_tx: &NotificationSender,
+    state: &State,
 ) -> Result<Response> {
     // tracing::debug!(?request);
 
@@ -175,33 +185,37 @@ pub async fn dispatch(
             read_password,
             write_password,
             share_token,
-        } => repository::create(
-            server_state,
-            path,
-            read_password,
-            write_password,
-            share_token,
-        )
-        .await?
-        .into(),
-        Request::RepositoryOpen { path, password } => {
-            repository::open(server_state, path, password).await?.into()
+        } => {
+            let holder = repository::create(
+                path,
+                read_password,
+                write_password,
+                share_token,
+                &state.config,
+                &state.network,
+            )
+            .instrument(state.repos_span.clone())
+            .await?;
+            state.repositories.insert(holder).into()
         }
-        Request::RepositoryClose(handle) => repository::close(server_state, handle).await?.into(),
+        Request::RepositoryOpen { path, password } => {
+            repository::open(state, path, password).await?.into()
+        }
+        Request::RepositoryClose(handle) => repository::close(state, handle).await?.into(),
         Request::RepositoryCreateReopenToken(handle) => {
-            repository::create_reopen_token(server_state, handle)?.into()
+            repository::create_reopen_token(state, handle)?.into()
         }
         Request::RepositoryReopen { path, token } => {
-            repository::reopen(server_state, path, token).await?.into()
+            repository::reopen(state, path, token).await?.into()
         }
         Request::RepositorySubscribe(handle) => {
-            repository::subscribe(server_state, client_state, handle).into()
+            repository::subscribe(state, notification_tx, handle).into()
         }
         Request::RepositorySetReadAccess {
             repository,
             password,
             share_token,
-        } => repository::set_read_access(server_state, repository, password, share_token)
+        } => repository::set_read_access(state, repository, password, share_token)
             .await?
             .into(),
         Request::RepositorySetReadAndWriteAccess {
@@ -210,7 +224,7 @@ pub async fn dispatch(
             new_password,
             share_token,
         } => repository::set_read_and_write_access(
-            server_state,
+            state,
             repository,
             old_password,
             new_password,
@@ -219,31 +233,27 @@ pub async fn dispatch(
         .await?
         .into(),
         Request::RepositoryRemoveReadKey(handle) => {
-            repository::remove_read_key(server_state, handle)
-                .await?
-                .into()
+            repository::remove_read_key(state, handle).await?.into()
         }
         Request::RepositoryRemoveWriteKey(handle) => {
-            repository::remove_write_key(server_state, handle)
-                .await?
-                .into()
+            repository::remove_write_key(state, handle).await?.into()
         }
         Request::RepositoryRequiresLocalPasswordForReading(handle) => {
-            repository::requires_local_password_for_reading(server_state, handle)
+            repository::requires_local_password_for_reading(state, handle)
                 .await?
                 .into()
         }
         Request::RepositoryRequiresLocalPasswordForWriting(handle) => {
-            repository::requires_local_password_for_writing(server_state, handle)
+            repository::requires_local_password_for_writing(state, handle)
                 .await?
                 .into()
         }
-        Request::RepositoryInfoHash(handle) => repository::info_hash(server_state, handle).into(),
+        Request::RepositoryInfoHash(handle) => repository::info_hash(state, handle).into(),
         Request::RepositoryDatabaseId(handle) => {
-            repository::database_id(server_state, handle).await?.into()
+            repository::database_id(state, handle).await?.into()
         }
         Request::RepositoryEntryType { repository, path } => {
-            repository::entry_type(server_state, repository, path)
+            repository::entry_type(state, repository, path)
                 .await?
                 .into()
         }
@@ -251,27 +261,27 @@ pub async fn dispatch(
             repository,
             src,
             dst,
-        } => repository::move_entry(server_state, repository, src, dst)
+        } => repository::move_entry(state, repository, src, dst)
             .await?
             .into(),
         Request::RepositoryIsDhtEnabled(repository) => {
-            repository::is_dht_enabled(server_state, repository).into()
+            repository::is_dht_enabled(state, repository).into()
         }
         Request::RepositorySetDhtEnabled {
             repository,
             enabled,
         } => {
-            repository::set_dht_enabled(server_state, repository, enabled);
+            repository::set_dht_enabled(state, repository, enabled);
             ().into()
         }
         Request::RepositoryIsPexEnabled(repository) => {
-            repository::is_pex_enabled(server_state, repository).into()
+            repository::is_pex_enabled(state, repository).into()
         }
         Request::RepositorySetPexEnabled {
             repository,
             enabled,
         } => {
-            repository::set_pex_enabled(server_state, repository, enabled);
+            repository::set_pex_enabled(state, repository, enabled);
             ().into()
         }
         Request::RepositoryCreateShareToken {
@@ -279,123 +289,114 @@ pub async fn dispatch(
             password,
             access_mode,
             name,
-        } => repository::create_share_token(server_state, repository, password, access_mode, name)
-            .await?
-            .into(),
+        } => {
+            let holder = state.repositories.get(repository);
+            repository::create_share_token(&holder.repository, password, access_mode, name)
+                .await?
+                .into()
+        }
         Request::ShareTokenMode(token) => share_token::mode(token).into(),
         Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
         Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),
         Request::ShareTokenNormalize(token) => token.to_string().into(),
         Request::RepositoryAccessMode(repository) => {
-            repository::access_mode(server_state, repository).into()
+            repository::access_mode(state, repository).into()
         }
         Request::RepositorySyncProgress(repository) => {
-            repository::sync_progress(server_state, repository)
-                .await?
-                .into()
+            repository::sync_progress(state, repository).await?.into()
         }
         Request::DirectoryCreate { repository, path } => {
-            directory::create(server_state, repository, path)
-                .await?
-                .into()
+            directory::create(state, repository, path).await?.into()
         }
         Request::DirectoryOpen { repository, path } => {
-            directory::open(server_state, repository, path)
-                .await?
-                .into()
+            directory::open(state, repository, path).await?.into()
         }
         Request::DirectoryRemove {
             repository,
             path,
             recursive,
-        } => directory::remove(server_state, repository, path, recursive)
+        } => directory::remove(state, repository, path, recursive)
             .await?
             .into(),
-        Request::FileOpen { repository, path } => {
-            file::open(server_state, repository, path).await?.into()
-        }
+        Request::FileOpen { repository, path } => file::open(state, repository, path).await?.into(),
         Request::FileCreate { repository, path } => {
-            file::create(server_state, repository, path).await?.into()
+            file::create(state, repository, path).await?.into()
         }
         Request::FileRemove { repository, path } => {
-            file::remove(server_state, repository, path).await?.into()
+            file::remove(state, repository, path).await?.into()
         }
         Request::FileRead { file, offset, len } => {
-            file::read(server_state, file, offset, len).await?.into()
+            file::read(state, file, offset, len).await?.into()
         }
         Request::FileWrite { file, offset, data } => {
-            file::write(server_state, file, offset, data).await?.into()
+            file::write(state, file, offset, data).await?.into()
         }
-        Request::FileTruncate { file, len } => {
-            file::truncate(server_state, file, len).await?.into()
-        }
-        Request::FileLen(file) => file::len(server_state, file).await.into(),
-        Request::FileFlush(file) => file::flush(server_state, file).await?.into(),
-        Request::FileClose(file) => file::close(server_state, file).await?.into(),
-        Request::NetworkSubscribe => network::subscribe(server_state, client_state).into(),
+        Request::FileTruncate { file, len } => file::truncate(state, file, len).await?.into(),
+        Request::FileLen(file) => file::len(state, file).await.into(),
+        Request::FileFlush(file) => file::flush(state, file).await?.into(),
+        Request::FileClose(file) => file::close(state, file).await?.into(),
+        Request::NetworkSubscribe => network::subscribe(state, notification_tx).into(),
         Request::NetworkBind {
             quic_v4,
             quic_v6,
             tcp_v4,
             tcp_v6,
         } => {
-            network::bind(server_state, quic_v4, quic_v6, tcp_v4, tcp_v6).await;
+            network::bind(&state.network, quic_v4, quic_v6, tcp_v4, tcp_v6).await;
             ().into()
         }
-        Request::NetworkTcpListenerLocalAddrV4 => {
-            network::tcp_listener_local_addr_v4(server_state).into()
-        }
-        Request::NetworkTcpListenerLocalAddrV6 => {
-            network::tcp_listener_local_addr_v6(server_state).into()
-        }
+        Request::NetworkTcpListenerLocalAddrV4 => network::tcp_listener_local_addr_v4(state).into(),
+        Request::NetworkTcpListenerLocalAddrV6 => network::tcp_listener_local_addr_v6(state).into(),
         Request::NetworkQuicListenerLocalAddrV4 => {
-            network::quic_listener_local_addr_v4(server_state).into()
+            network::quic_listener_local_addr_v4(state).into()
         }
         Request::NetworkQuicListenerLocalAddrV6 => {
-            network::quic_listener_local_addr_v6(server_state).into()
+            network::quic_listener_local_addr_v6(state).into()
         }
         Request::NetworkAddUserProvidedPeer(addr) => {
-            network::add_user_provided_peer(server_state, addr);
+            state.network.add_user_provided_peer(&addr);
             ().into()
         }
         Request::NetworkRemoveUserProvidedPeer(addr) => {
-            network::remove_user_provided_peer(server_state, addr);
+            state.network.remove_user_provided_peer(&addr);
             ().into()
         }
-        Request::NetworkKnownPeers => network::known_peers(server_state).into(),
-        Request::NetworkThisRuntimeId => network::this_runtime_id(server_state).into(),
-        Request::NetworkCurrentProtocolVersion => {
-            network::current_protocol_version(server_state).into()
-        }
+        Request::NetworkKnownPeers => state.network.collect_peer_info().into(),
+        Request::NetworkThisRuntimeId => network::this_runtime_id(state).into(),
+        Request::NetworkCurrentProtocolVersion => network::current_protocol_version(state).into(),
         Request::NetworkHighestSeenProtocolVersion => {
-            network::highest_seen_protocol_version(server_state).into()
+            network::highest_seen_protocol_version(state).into()
         }
         Request::NetworkIsPortForwardingEnabled => {
-            network::is_port_forwarding_enabled(server_state).into()
+            state.network.is_port_forwarding_enabled().into()
         }
         Request::NetworkSetPortForwardingEnabled(enabled) => {
-            network::set_port_forwarding_enabled(server_state, enabled);
+            network::set_port_forwarding_enabled(&state.network, enabled);
             ().into()
         }
         Request::NetworkIsLocalDiscoveryEnabled => {
-            network::is_local_discovery_enabled(server_state).into()
+            state.network.is_local_discovery_enabled().into()
         }
         Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
-            network::set_local_discovery_enabled(server_state, enabled);
+            network::set_local_discovery_enabled(&state.network, enabled);
             ().into()
         }
         Request::NetworkShutdown => {
-            network::shutdown(server_state).await;
+            network::shutdown(state).await;
             ().into()
         }
-        Request::StateMonitorGet(path) => state_monitor::get(server_state, path)?.into(),
+        Request::StateMonitorGet(path) => state_monitor::get(state, path)?.into(),
         Request::StateMonitorSubscribe(path) => {
-            state_monitor::subscribe(server_state, client_state, path)?.into()
+            state_monitor::subscribe(state, notification_tx, path)?.into()
         }
         Request::Unsubscribe(handle) => {
-            state::unsubscribe(server_state, handle);
+            state::unsubscribe(state, handle);
             ().into()
         }
+        // These should be implemented by the upper layer
+        Request::RepositoryMount { .. }
+        | Request::RepositoryUnmount(_)
+        | Request::RepositoryFind { .. } => Err(ouisync_lib::Error::OperationNotSupported)?,
     };
 
     Ok(response)

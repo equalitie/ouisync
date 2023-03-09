@@ -14,7 +14,7 @@ use ouisync_bridge::{
         foreign::{ForeignClientSender, ForeignServer},
         DefaultHandler,
     },
-    Error, ErrorCode, FileHolder, Handle, Registry, Result, ServerState,
+    Error, ErrorCode, FileHolder, Handle, Registry, Result, State,
 };
 use ouisync_lib::StateMonitor;
 use std::{
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
 
 pub struct Session {
     pub(crate) runtime: Runtime,
-    pub(crate) state: Arc<ServerState>,
+    pub(crate) state: Arc<State>,
     senders: Registry<ForeignClientSender>,
     pub(crate) port_sender: PortSender,
     _logger: Logger,
@@ -249,7 +249,7 @@ impl Session {
             .map_err(Error::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let state = Arc::new(ServerState::new(configs_path, root_monitor));
+        let state = Arc::new(State::new(configs_path, root_monitor));
         let session = Session {
             runtime,
             state,

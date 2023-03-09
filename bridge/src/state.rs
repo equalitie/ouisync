@@ -1,17 +1,15 @@
 use crate::{
     file::FileHolder,
-    protocol::Notification,
     registry::{Handle, Registry},
     repository::RepositoryHolder,
 };
-use camino::Utf8Path;
 use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::{path::PathBuf, time::Duration};
-use tokio::{sync::mpsc, time};
+use tokio::time;
 use tracing::Span;
 
-pub struct ServerState {
+pub struct State {
     pub(crate) root_monitor: StateMonitor,
     pub(crate) repos_span: Span,
     pub(crate) config: ConfigStore,
@@ -21,7 +19,7 @@ pub struct ServerState {
     pub tasks: Registry<ScopedJoinHandle<()>>,
 }
 
-impl ServerState {
+impl State {
     pub fn new(configs_path: PathBuf, root_monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(configs_path);
 
@@ -61,19 +59,11 @@ impl ServerState {
             .await
             .unwrap_or(());
     }
-
-    pub(crate) fn repo_span(&self, store: &Utf8Path) -> Span {
-        tracing::info_span!(parent: &self.repos_span, "repo", ?store)
-    }
-}
-
-pub struct ClientState {
-    pub(crate) notification_tx: mpsc::Sender<(u64, Notification)>,
 }
 
 pub(crate) type SubscriptionHandle = Handle<ScopedJoinHandle<()>>;
 
 /// Cancel a notification subscription.
-pub(crate) fn unsubscribe(state: &ServerState, handle: SubscriptionHandle) {
+pub(crate) fn unsubscribe(state: &State, handle: SubscriptionHandle) {
     state.tasks.remove(handle);
 }

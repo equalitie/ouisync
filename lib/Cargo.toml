@@ -22,7 +22,7 @@ base64 = "0.13.0"
 bincode = "1.3"
 blake3 = { version = "1.3.0", features = ["traits-preview"] }
 btdht = { workspace = true }
-camino = "1.0.5"
+camino = { workspace = true }
 chacha20 = "0.9.0"
 chrono = "0.4.19"
 ed25519-dalek = { version = "1", features = ["serde"] }

@@ -1,4 +1,4 @@
-use crate::state::ServerState;
+use crate::state::State;
 use crate::{
     error::Result,
     registry::Handle,
@@ -19,7 +19,7 @@ pub(crate) struct DirEntry {
 }
 
 pub(crate) async fn create(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<()> {
@@ -33,7 +33,7 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn open(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Directory> {
@@ -54,7 +54,7 @@ pub(crate) async fn open(
 /// Removes the directory at the given path from the repository. If `recursive` is true it removes
 /// also the contents, otherwise the directory must be empty.
 pub(crate) async fn remove(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
     recursive: bool,

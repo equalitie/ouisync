@@ -17,10 +17,14 @@ pub enum Error {
     MalformedRequest(#[source] rmp_serde::decode::Error),
     #[error("request failed")]
     RequestFailed { code: ErrorCode, message: String },
+    #[error("request is forbidden")]
+    ForbiddenRequest,
     #[error("argument is not valid")]
     InvalidArgument,
     #[error("connection lost")]
     ConnectionLost,
+    #[error("input/output error")]
+    Io(#[from] io::Error),
 }
 
 impl Error {
@@ -47,11 +51,14 @@ impl Error {
                     | EntryIsDirectory | Writer(_) | RequestTimeout => ErrorCode::Other,
                 }
             }
-            Self::InitializeLogger(_) | Self::InitializeRuntime(_) => ErrorCode::Other,
+            Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Io(_) => {
+                ErrorCode::Other
+            }
             Self::MalformedRequest(_) => ErrorCode::MalformedRequest,
             Self::RequestFailed { code, .. } => *code,
             Self::InvalidArgument => ErrorCode::InvalidArgument,
             Self::ConnectionLost => ErrorCode::ConnectionLost,
+            Self::ForbiddenRequest => ErrorCode::ForbiddenRequest,
         }
     }
 }
@@ -88,6 +95,8 @@ pub enum ErrorCode {
     StorageVersionMismatch = 13,
     /// Connection lost
     ConnectionLost = 14,
+    /// Request is forbidden
+    ForbiddenRequest = 15,
     /// Unspecified error
     Other = 65535,
 }

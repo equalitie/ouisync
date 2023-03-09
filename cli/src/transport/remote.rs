@@ -1,16 +1,19 @@
 //! Client and Server than run on different devices.
 
-use super::{
-    socket::{self, SocketClient},
-    Client, Handler,
-};
 use crate::{
-    error::Result,
-    protocol::{Request, Response},
+    handler::Handler,
+    options::{Request, Response},
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
+use ouisync_bridge::{
+    transport::{
+        socket::{self, SocketClient},
+        Client,
+    },
+    Result,
+};
 use std::{
     io,
     net::SocketAddr,
@@ -29,7 +32,7 @@ use tokio_tungstenite::{
 
 // TODO: Implement TLS
 
-pub struct RemoteServer {
+pub(crate) struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
 }
@@ -59,7 +62,7 @@ impl RemoteServer {
         self.local_addr
     }
 
-    pub async fn run(self, handler: impl Handler) {
+    pub async fn run(self, handler: Handler) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -91,8 +94,8 @@ impl RemoteServer {
     }
 }
 
-pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>>,
+pub(crate) struct RemoteClient {
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
 impl RemoteClient {
@@ -109,7 +112,10 @@ impl RemoteClient {
 
 #[async_trait(?Send)]
 impl Client for RemoteClient {
-    async fn invoke(&self, request: Request) -> Result<Response> {
+    type Request = Request;
+    type Response = Response;
+
+    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
         self.inner.invoke(request).await
     }
 }
