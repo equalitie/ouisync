@@ -276,6 +276,35 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 Ok(().into())
             }
+            Request::ListPorts => {
+                let ports: Vec<_> = self
+                    .state
+                    .network
+                    .quic_listener_local_addr_v4()
+                    .map(|addr| format!("{} (quic, IPv4)", addr.port()))
+                    .into_iter()
+                    .chain(
+                        self.state
+                            .network
+                            .quic_listener_local_addr_v6()
+                            .map(|addr| format!("{} (quic, IPv6)", addr.port())),
+                    )
+                    .chain(
+                        self.state
+                            .network
+                            .tcp_listener_local_addr_v4()
+                            .map(|addr| format!("{} (tcp, IPv4)", addr.port())),
+                    )
+                    .chain(
+                        self.state
+                            .network
+                            .tcp_listener_local_addr_v6()
+                            .map(|addr| format!("{} (tcp, IPv6)", addr.port())),
+                    )
+                    .collect();
+
+                Ok(ports.into())
+            }
             Request::LocalDiscovery { enabled } => {
                 if let Some(enabled) = enabled {
                     self.state.network.set_local_discovery_enabled(enabled);

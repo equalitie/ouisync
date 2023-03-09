@@ -77,22 +77,6 @@ async fn main() -> Result<()> {
     let network = Network::new(config);
     let network_handle = network.handle();
 
-    if options.print_port {
-        if let Some(addr) = network.tcp_listener_local_addr_v4() {
-            // Be carefull when changing this output as it is used by tests.
-            println!("Listening on TCP IPv4 port {}", addr.port());
-        }
-        if let Some(addr) = network.tcp_listener_local_addr_v6() {
-            println!("Listening on TCP IPv6 port {}", addr.port());
-        }
-        if let Some(addr) = network.quic_listener_local_addr_v4() {
-            println!("Listening on QUIC/UDP IPv4 port {}", addr.port());
-        }
-        if let Some(addr) = network.quic_listener_local_addr_v6() {
-            println!("Listening on QUIC/UDP IPv6 port {}", addr.port());
-        }
-    }
-
     if options.print_device_id {
         println!("Device ID is {}", device_id);
     }

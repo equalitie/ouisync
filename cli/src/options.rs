@@ -118,6 +118,8 @@ pub(crate) enum Request {
         /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
         addrs: Vec<PeerAddr>,
     },
+    /// List protocol ports we are listening on
+    ListPorts,
     /// Enable or disable local discovery
     LocalDiscovery {
         /// Whether to enable or disable. If omitted, prints the current state.
@@ -172,6 +174,7 @@ pub(crate) enum Response {
     None,
     Bool(bool),
     String(String),
+    Strings(Vec<String>),
     PeerInfo(Vec<PeerInfo>),
 }
 
@@ -193,6 +196,12 @@ impl From<String> for Response {
     }
 }
 
+impl From<Vec<String>> for Response {
+    fn from(value: Vec<String>) -> Self {
+        Self::Strings(value)
+    }
+}
+
 impl From<Vec<PeerInfo>> for Response {
     fn from(value: Vec<PeerInfo>) -> Self {
         Self::PeerInfo(value)
@@ -205,6 +214,13 @@ impl fmt::Display for Response {
             Self::None => write!(f, "OK"),
             Self::Bool(value) => write!(f, "{value}"),
             Self::String(value) => write!(f, "{value}"),
+            Self::Strings(value) => {
+                for item in value {
+                    writeln!(f, "{item}")?;
+                }
+
+                Ok(())
+            }
             Self::PeerInfo(value) => {
                 for peer in value {
                     writeln!(
@@ -269,11 +285,6 @@ pub(crate) struct Options {
     // TODO: Zeroize
     #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
-
-    /// Prints the listening port to the stdout when the replica becomes ready.
-    /// Note this flag is unstable and experimental.
-    #[clap(long)]
-    pub print_port: bool,
 
     /// Prints the device id to the stdout when the replica becomes ready.
     /// Note this flag is unstable and experimental.
