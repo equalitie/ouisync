@@ -4,7 +4,7 @@
 use crate::handler::Handler;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use ouisync_bridge::transport::server_connection;
+use ouisync_bridge::transport::socket_server_connection;
 use std::{
     io,
     pin::Pin,
@@ -27,7 +27,7 @@ impl ForeignServer {
     }
 
     pub async fn run(self, handler: Handler) {
-        server_connection::run(self.socket, handler).await
+        socket_server_connection::run(self.socket, handler).await
     }
 }
 

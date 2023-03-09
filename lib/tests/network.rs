@@ -181,7 +181,7 @@ fn local_discovery() {
                 .bind(&[proto.wrap((Ipv4Addr::LOCALHOST, src_port))])
                 .await;
 
-            network.enable_local_discovery();
+            network.set_local_discovery_enabled(true);
 
             // Note we compare only the ports because we bind to `LOCALHOST` (127.0.0.1) but local
             // discovery produces the actual LAN addresses which we don't know in advance (or

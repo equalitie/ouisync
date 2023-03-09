@@ -158,34 +158,35 @@ impl Network {
         self.inner.gateway.quic_listener_local_addr_v6()
     }
 
-    pub fn enable_port_forwarding(&self) {
-        self.inner.enable_port_forwarding()
-    }
+    pub fn set_port_forwarding_enabled(&self, enabled: bool) {
+        let mut state = self.inner.port_forwarder_state.lock().unwrap();
 
-    pub fn disable_port_forwarding(&self) {
-        self.inner.disable_port_forwarding()
-    }
-
-    pub fn is_port_forwarding_enabled(&self) -> bool {
-        self.inner.is_port_forwarding_enabled()
-    }
-
-    pub fn enable_local_discovery(&self) {
-        let mut state = self.inner.local_discovery_state.lock().unwrap();
-
-        if let Some(handle) = self.inner.spawn_local_discovery() {
-            state.enable(handle.into());
+        if enabled {
+            state.enable(PortMappings::new(
+                &self.inner.port_forwarder,
+                &self.inner.gateway,
+            ));
         } else {
-            state.disable(DisableReason::Implicit);
+            state.disable(DisableReason::Explicit);
         }
     }
 
-    pub fn disable_local_discovery(&self) {
-        self.inner
-            .local_discovery_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Explicit);
+    pub fn is_port_forwarding_enabled(&self) -> bool {
+        self.inner.port_forwarder_state.lock().unwrap().is_enabled()
+    }
+
+    pub fn set_local_discovery_enabled(&self, enabled: bool) {
+        let mut state = self.inner.local_discovery_state.lock().unwrap();
+
+        if enabled {
+            if let Some(handle) = self.inner.spawn_local_discovery() {
+                state.enable(handle.into());
+            } else {
+                state.disable(DisableReason::Implicit);
+            }
+        } else {
+            state.disable(DisableReason::Explicit);
+        }
     }
 
     pub fn is_local_discovery_enabled(&self) -> bool {
@@ -497,24 +498,6 @@ impl Inner {
         };
 
         shutdown_brokers(&mut message_brokers).await;
-    }
-
-    fn enable_port_forwarding(&self) {
-        self.port_forwarder_state
-            .lock()
-            .unwrap()
-            .enable(PortMappings::new(&self.port_forwarder, &self.gateway));
-    }
-
-    fn disable_port_forwarding(&self) {
-        self.port_forwarder_state
-            .lock()
-            .unwrap()
-            .disable(DisableReason::Explicit);
-    }
-
-    fn is_port_forwarding_enabled(&self) -> bool {
-        self.port_forwarder_state.lock().unwrap().is_enabled()
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {

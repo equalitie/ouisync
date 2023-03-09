@@ -25,21 +25,3 @@ pub async fn bind(
 
     network.handle().bind(&addrs).await;
 }
-
-/// Enables/disabled port forwarding (UPnP)
-pub fn set_port_forwarding_enabled(network: &Network, enabled: bool) {
-    if enabled {
-        network.enable_port_forwarding()
-    } else {
-        network.disable_port_forwarding()
-    }
-}
-
-/// Enables/disabled local discovery
-pub fn set_local_discovery_enabled(network: &Network, enabled: bool) {
-    if enabled {
-        network.enable_local_discovery()
-    } else {
-        network.disable_local_discovery()
-    }
-}

@@ -251,7 +251,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::LocalDiscovery { enabled } => {
                 if let Some(enabled) = enabled {
-                    network::set_local_discovery_enabled(&self.state.network, enabled);
+                    self.state.network.set_local_discovery_enabled(enabled);
                     Ok(().into())
                 } else {
                     Ok(self.state.network.is_local_discovery_enabled().into())
@@ -259,7 +259,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::PortForwarding { enabled } => {
                 if let Some(enabled) = enabled {
-                    network::set_port_forwarding_enabled(&self.state.network, enabled);
+                    self.state.network.set_port_forwarding_enabled(enabled);
                     Ok(().into())
                 } else {
                     Ok(self.state.network.is_port_forwarding_enabled().into())
