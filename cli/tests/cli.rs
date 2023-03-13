@@ -197,10 +197,12 @@ fn relay() {
     let a = Bin::start();
     a.add_peer(r_port);
     a.create(Some(&share_token));
+    a.mount();
 
     let b = Bin::start();
     b.add_peer(r_port);
     b.create(Some(&share_token));
+    b.mount();
 
     let file_name = "test.dat";
     let size = 2 * 1024 * 1024;

@@ -250,7 +250,7 @@ impl Session {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = logger::new(root_monitor.clone())?;
+        let logger = logger::new(Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()

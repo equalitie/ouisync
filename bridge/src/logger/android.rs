@@ -33,7 +33,7 @@ pub struct Logger {
 }
 
 impl Logger {
-    pub(crate) fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
+    pub(crate) fn new(trace_monitor: Option<StateMonitor>) -> Result<Self, io::Error> {
         // This should be set up before `setup_logger` is called, otherwise we won't see
         // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
         let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;
@@ -188,7 +188,7 @@ fn print_cstr(priority: LogPriority, message: &CStr) {
     }
 }
 
-fn setup_logger(trace_monitor: StateMonitor) {
+fn setup_logger(trace_monitor: Option<StateMonitor>) {
     use paranoid_android::{AndroidLogMakeWriter, Buffer};
     use tracing_subscriber::{
         filter::{LevelFilter, Targets},
@@ -198,7 +198,7 @@ fn setup_logger(trace_monitor: StateMonitor) {
         Layer,
     };
 
-    TRACING_LAYER.set_monitor(Some(trace_monitor));
+    TRACING_LAYER.set_monitor(trace_monitor);
 
     tracing_subscriber::registry()
         .with(

@@ -21,6 +21,7 @@ pub struct Bin {
     process: Child,
 }
 
+const COMMAND: &str = env!("CARGO_BIN_EXE_ouisync");
 const MOUNT_DIR: &str = "mnt";
 const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
@@ -35,7 +36,7 @@ impl Bin {
 
         fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
+        let mut command = Command::new(COMMAND);
         command
             .arg("--store-dir")
             .arg(base_dir.path().join("store"));
@@ -160,7 +161,7 @@ impl Bin {
     }
 
     fn client_command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
+        let mut command = Command::new(COMMAND);
         command
             .arg("--host")
             .arg(self.base_dir.path().join(API_SOCKET));
