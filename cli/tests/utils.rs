@@ -46,11 +46,6 @@ impl Bin {
         command.arg("--host").arg(&socket_path);
         command.arg("serve");
 
-        // Disable log output unless explicitly enabled.
-        if env::var("RUST_LOG").is_err() {
-            command.env("RUST_LOG", "off");
-        }
-
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 

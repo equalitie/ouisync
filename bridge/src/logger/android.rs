@@ -218,8 +218,6 @@ fn setup_logger(trace_monitor: StateMonitor) {
                 .with_line_number(true)
                 .with_filter(
                     Targets::new()
-                        // show logs from ouisync-ffi
-                        .with_target(env!("CARGO_PKG_NAME"), LevelFilter::DEBUG)
                         // show logs from ouisync
                         .with_target("ouisync", LevelFilter::DEBUG)
                         // show DHT routing table stats

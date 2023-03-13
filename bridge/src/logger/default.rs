@@ -17,8 +17,13 @@ impl Logger {
 
         tracing_subscriber::registry()
             .with(
-                tracing_layer
-                    .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
+                tracing_layer.with_filter(
+                    Targets::new()
+                        .with_target("ouisync", LevelFilter::TRACE)
+                        // Disable traces from other ouisync_* crates (they can still be enabled
+                        // in the next layer via RUST_LOG)
+                        .with_target("ouisync_", LevelFilter::OFF),
+                ),
             )
             .with(
                 fmt::layer()
