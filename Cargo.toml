@@ -15,6 +15,7 @@ btdht = { git = "https://github.com/equalitie/btdht.git", rev = "5287b4a2bc507cd
 bytes = "1.4.0"
 camino = "1.0.9"
 futures-util = { version = "0.3.21", default-features = false }
+num_enum = { version = "0.5.11", default-features = false }
 rmp-serde = "1.1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_bytes = "0.11.8"

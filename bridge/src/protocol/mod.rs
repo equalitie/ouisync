@@ -1,9 +1,9 @@
 use crate::{
     constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
-    error::{ErrorCode, Result},
+    error::{Error, ErrorCode, Result},
 };
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,7 +19,10 @@ impl<T> ServerMessage<T> {
             Ok(response) => Self::Success(response),
             Err(error) => Self::Failure {
                 code: error.to_error_code(),
-                message: error.to_string(),
+                message: match error {
+                    Error::Io(inner) => inner.to_string(),
+                    _ => error.to_string(),
+                },
             },
         }
     }
@@ -37,7 +40,9 @@ pub enum Notification {
     StateMonitor,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize, TryFromPrimitive, IntoPrimitive,
+)]
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum NetworkEvent {
@@ -45,24 +50,36 @@ pub enum NetworkEvent {
     PeerSetChange = NETWORK_EVENT_PEER_SET_CHANGE,
 }
 
-impl From<NetworkEvent> for u8 {
-    fn from(event: NetworkEvent) -> Self {
-        event as u8
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use std::io;
 
-impl TryFrom<u8> for NetworkEvent {
-    type Error = NetworkEventDecodeError;
+    #[test]
+    fn server_message_serialize_deserialize() {
+        #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+        enum TestResponse {
+            None,
+            Bool(bool),
+        }
 
-    fn try_from(input: u8) -> Result<Self, Self::Error> {
-        match input {
-            NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH => Ok(Self::ProtocolVersionMismatch),
-            NETWORK_EVENT_PEER_SET_CHANGE => Ok(Self::PeerSetChange),
-            _ => Err(NetworkEventDecodeError),
+        let origs = [
+            ServerMessage::response(Ok(TestResponse::None)),
+            ServerMessage::response(Ok(TestResponse::Bool(true))),
+            ServerMessage::response(Ok(TestResponse::Bool(false))),
+            ServerMessage::response(Err(Error::ForbiddenRequest)),
+            ServerMessage::response(Err(Error::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "something went wrong",
+            )))),
+        ];
+
+        for orig in origs {
+            let encoded = rmp_serde::to_vec(&orig).unwrap();
+            println!("{encoded:?}");
+            let decoded: ServerMessage<TestResponse> = rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, orig);
         }
     }
 }
-
-#[derive(Error, Debug)]
-#[error("failed to decode network event")]
-pub struct NetworkEventDecodeError;

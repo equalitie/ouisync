@@ -1,3 +1,4 @@
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::io;
 use thiserror::Error;
@@ -15,7 +16,7 @@ pub enum Error {
     InitializeRuntime(#[source] io::Error),
     #[error("request is malformed")]
     MalformedRequest(#[source] rmp_serde::decode::Error),
-    #[error("request failed")]
+    #[error("request failed: {message}")]
     RequestFailed { code: ErrorCode, message: String },
     #[error("request is forbidden")]
     ForbiddenRequest,
@@ -63,9 +64,11 @@ impl Error {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug, IntoPrimitive, TryFromPrimitive,
+)]
 #[repr(u16)]
-#[serde(into = "u16")]
+#[serde(into = "u16", try_from = "u16")]
 pub enum ErrorCode {
     /// No error
     Ok = 0,
@@ -101,8 +104,35 @@ pub enum ErrorCode {
     Other = 65535,
 }
 
-impl From<ErrorCode> for u16 {
-    fn from(error_code: ErrorCode) -> u16 {
-        error_code as u16
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_code_serialize_deserialize() {
+        let origs = [
+            ErrorCode::Ok,
+            ErrorCode::Db,
+            ErrorCode::PermissionDenied,
+            ErrorCode::MalformedData,
+            ErrorCode::EntryExists,
+            ErrorCode::EntryNotFound,
+            ErrorCode::AmbiguousEntry,
+            ErrorCode::DirectoryNotEmpty,
+            ErrorCode::OperationNotSupported,
+            ErrorCode::DeviceIdConfig,
+            ErrorCode::InvalidArgument,
+            ErrorCode::MalformedRequest,
+            ErrorCode::StorageVersionMismatch,
+            ErrorCode::ConnectionLost,
+            ErrorCode::ForbiddenRequest,
+            ErrorCode::Other,
+        ];
+
+        for orig in origs {
+            let encoded = rmp_serde::to_vec(&orig).unwrap();
+            let decoded: ErrorCode = rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, orig);
+        }
     }
 }

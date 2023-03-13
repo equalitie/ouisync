@@ -7,18 +7,13 @@ use std::{
     collections::HashSet,
     fs::{self, File},
     io::{self, Read, Write},
-    net::Ipv4Addr,
     path::{Path, PathBuf},
     thread,
 };
 
 #[test]
 fn transfer_single_small_file() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
+    let (a, b) = setup();
 
     let file_name = "foo.txt";
     let orig_content = "hello";
@@ -33,11 +28,7 @@ fn transfer_single_small_file() {
 
 #[test]
 fn transfer_single_large_file() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
+    let (a, b) = setup();
 
     let file_name = "test.dat";
     let size = 4 * 1024 * 1024;
@@ -61,11 +52,7 @@ fn transfer_single_large_file() {
 
 #[test]
 fn sequential_write_to_the_same_file() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
+    let (a, b) = setup();
 
     let file_name = "bar.txt";
     let content_a = "hello from A";
@@ -96,12 +83,7 @@ fn fast_sequential_writes() {
     // perfomed more than one write operation (mkdir, echo foo > bar,...) quickly one after another
     // (e.g. "$ mkdir a; mkdir b").
     for _ in 0..5 {
-        let a = Bin::start([], None);
-        let b = Bin::start(
-            [(Ipv4Addr::LOCALHOST, a.port()).into()],
-            Some(a.share_token()),
-        );
-
+        let (a, b) = setup();
         let count = 10;
 
         for i in 0..count {
@@ -125,12 +107,7 @@ fn concurrent_read_and_write_large_file() {
 }
 
 fn concurrent_read_and_write_file(size: usize) {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
-
+    let (a, b) = setup();
     let file_name = "test.txt";
 
     let a_handle = thread::spawn(move || {
@@ -164,11 +141,7 @@ fn concurrent_read_and_write_file(size: usize) {
 // notification channel.
 #[test]
 fn concurrent_read_and_delete_file() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
+    let (a, b) = setup();
 
     let file_name = "test.txt";
     let size = 4 * 1024 * 1024;
@@ -214,15 +187,20 @@ fn relay() {
     // Then create a file by A and let it be received by B which requires the file to pass through
     // R first.
 
-    let r = Bin::start([], None); // "relay" node
-    let a = Bin::start(
-        [(Ipv4Addr::LOCALHOST, r.port()).into()],
-        Some(r.share_token()),
-    );
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, r.port()).into()],
-        Some(r.share_token()),
-    );
+    // "relay" node
+    let r = Bin::start();
+    r.bind();
+    let r_port = r.get_port();
+    r.create(None);
+    let share_token = r.share();
+
+    let a = Bin::start();
+    a.add_peer(r_port);
+    a.create(Some(&share_token));
+
+    let b = Bin::start();
+    b.add_peer(r_port);
+    b.create(Some(&share_token));
 
     let file_name = "test.dat";
     let size = 2 * 1024 * 1024;
@@ -246,11 +224,7 @@ fn relay() {
 
 #[test]
 fn concurrent_update() {
-    let a = Bin::start([], None);
-    let b = Bin::start(
-        [(Ipv4Addr::LOCALHOST, a.port()).into()],
-        Some(a.share_token()),
-    );
+    let (a, b) = setup();
 
     let file_name = "test.txt";
     let mut rng = rand::thread_rng();
@@ -361,4 +335,20 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
     }
 
     Ok(())
+}
+
+fn setup() -> (Bin, Bin) {
+    let a = Bin::start();
+    a.bind();
+    let a_port = a.get_port();
+    a.create(None);
+    a.mount();
+    let share_token = a.share();
+
+    let b = Bin::start();
+    b.add_peer(a_port);
+    b.create(Some(&share_token));
+    b.mount();
+
+    (a, b)
 }

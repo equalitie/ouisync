@@ -233,26 +233,46 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await
                     .map(Into::into)
             }
-            Request::Mount { name, path } => {
-                let mut holder = self
-                    .state
-                    .repositories
-                    .get_mut(&name)
-                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+            Request::Mount { name, path, all: _ } => {
+                if let Some(name) = name {
+                    let mut holder = self
+                        .state
+                        .repositories
+                        .get_mut(&name)
+                        .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
+                    let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
+                    holder.mount_guard = Some(ouisync_vfs::mount(
+                        runtime::Handle::current(),
+                        holder.base.repository.clone(),
+                        mount_path,
+                    )?);
+                } else {
+                    for mut entry in self.state.repositories.iter_mut() {
+                        if entry.mount_guard.is_some() {
+                            continue;
+                        }
 
-                holder.mount_guard = Some(ouisync_vfs::mount(
-                    runtime::Handle::current(),
-                    holder.base.repository.clone(),
-                    mount_path,
-                )?);
+                        let mount_path = self.state.mount_path(entry.key());
+                        entry.mount_guard = Some(ouisync_vfs::mount(
+                            runtime::Handle::current(),
+                            entry.base.repository.clone(),
+                            mount_path,
+                        )?);
+                    }
+                }
 
                 Ok(().into())
             }
-            Request::Unmount { name } => {
-                if let Some(mut holder) = self.state.repositories.get_mut(&name) {
-                    holder.mount_guard.take();
+            Request::Unmount { name, all: _ } => {
+                if let Some(name) = name {
+                    if let Some(mut holder) = self.state.repositories.get_mut(&name) {
+                        holder.mount_guard.take();
+                    }
+                } else {
+                    for mut entry in self.state.repositories.iter_mut() {
+                        entry.mount_guard.take();
+                    }
                 }
 
                 Ok(().into())
@@ -281,25 +301,25 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .state
                     .network
                     .quic_listener_local_addr_v4()
-                    .map(|addr| format!("{} (quic, IPv4)", addr.port()))
+                    .map(|addr| format!("QUIC, IPv4: {}", addr.port()))
                     .into_iter()
                     .chain(
                         self.state
                             .network
                             .quic_listener_local_addr_v6()
-                            .map(|addr| format!("{} (quic, IPv6)", addr.port())),
+                            .map(|addr| format!("QUIC, IPv6: {}", addr.port())),
                     )
                     .chain(
                         self.state
                             .network
                             .tcp_listener_local_addr_v4()
-                            .map(|addr| format!("{} (tcp, IPv4)", addr.port())),
+                            .map(|addr| format!("TCP, IPv4: {}", addr.port())),
                     )
                     .chain(
                         self.state
                             .network
                             .tcp_listener_local_addr_v6()
-                            .map(|addr| format!("{} (tcp, IPv6)", addr.port())),
+                            .map(|addr| format!("TCP, IPv6: {}", addr.port())),
                     )
                     .collect();
 

@@ -98,17 +98,25 @@ pub(crate) enum Request {
     },
     /// Mount repository
     Mount {
-        #[arg(short, long)]
-        name: String,
+        #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
+        name: Option<String>,
 
+        /// Mount all open and currently unmounted repositories
         #[arg(short, long)]
+        all: bool,
+
+        #[arg(short, long, conflicts_with = "all")]
         path: Option<Utf8PathBuf>,
     },
     /// Unmount repository
     #[command(alias = "umount")]
     Unmount {
+        #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
+        name: Option<String>,
+
+        /// Unmount all currently mounted repositories
         #[arg(short, long)]
-        name: String,
+        all: bool,
     },
     /// Bind to the specified addresses
     Bind {
@@ -285,11 +293,6 @@ pub(crate) struct Options {
     // TODO: Zeroize
     #[clap(long, value_name = "NAME:KEY")]
     pub key: Vec<Named<String>>,
-
-    /// Prints the device id to the stdout when the replica becomes ready.
-    /// Note this flag is unstable and experimental.
-    #[clap(long)]
-    pub print_device_id: bool,
 }
 
 impl Options {

@@ -1,14 +1,14 @@
 use anyhow::{format_err, Error};
 use backoff::{self, ExponentialBackoffBuilder};
-use ouisync_lib::crypto::cipher::SecretKey;
 use rand::Rng;
 use std::{
     cell::Cell,
     env, fmt, fs,
     io::{self, BufRead, BufReader, Read, Write},
-    net::SocketAddr,
-    path::PathBuf,
-    process::{Child, ChildStdout, Command, Stdio},
+    net::Ipv4Addr,
+    path::{Path, PathBuf},
+    process::{Child, Command, Output, Stdio},
+    str::{self, FromStr},
     thread,
     time::Duration,
 };
@@ -18,56 +18,33 @@ use tempfile::TempDir;
 pub struct Bin {
     id: Id,
     base_dir: TempDir,
-    port: u16,
-    share_token: String,
     process: Child,
 }
 
-const REPO_NAME: &str = "test";
 const MOUNT_DIR: &str = "mnt";
+const API_SOCKET: &str = "api.sock";
+const DEFAULT_REPO: &str = "test";
 
 impl Bin {
-    pub fn start(peers: impl IntoIterator<Item = SocketAddr>, share_token: Option<&str>) -> Self {
+    /// Start ouisync as server
+    pub fn start() -> Self {
         let id = Id::new();
         let base_dir = TempDir::new().unwrap();
-
+        let socket_path = base_dir.path().join(API_SOCKET);
         let mount_dir = base_dir.path().join(MOUNT_DIR);
-        fs::create_dir(&mount_dir).unwrap();
+
+        fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
-        command.arg("--data-dir").arg(base_dir.path().join("data"));
+        command
+            .arg("--store-dir")
+            .arg(base_dir.path().join("store"));
         command
             .arg("--config-dir")
             .arg(base_dir.path().join("config"));
-        command.arg("--bind").arg("tcp/127.0.0.1:0");
-        command
-            .arg("--mount")
-            .arg(format!("{}:{}", REPO_NAME, mount_dir.display()));
-
-        if let Some(share_token) = share_token {
-            command.arg("--accept").arg(share_token);
-        } else {
-            command.arg("--create").arg(REPO_NAME);
-            command.arg("--share").arg(format!("{REPO_NAME}:write"));
-        }
-
-        command.arg("--print-port");
-        command.arg("--disable-upnp");
-        command.arg("--disable-dht");
-        command.arg("--disable-pex");
-        command.arg("--disable-local-discovery");
-
-        let master_key = SecretKey::random();
-        command.arg("--key").arg(format!(
-            "{}:{}",
-            REPO_NAME,
-            hex::encode(master_key.as_ref())
-        ));
-
-        for peer in peers {
-            command.arg("--peers");
-            command.arg(format!("tcp/{peer}"));
-        }
+        command.arg("--mount-dir").arg(&mount_dir);
+        command.arg("--host").arg(&socket_path);
+        command.arg("serve");
 
         // Disable log output unless explicitly enabled.
         if env::var("RUST_LOG").is_err() {
@@ -79,48 +56,120 @@ impl Bin {
 
         let mut process = command.spawn().unwrap();
 
-        let mut stdout = BufReader::new(process.stdout.take().unwrap());
-
-        let share_token = if let Some(share_token) = share_token {
-            share_token.to_owned()
-        } else {
-            wait_for_share_token(&mut process, &mut stdout, &id)
-        };
-
-        let port = wait_for_ready_message(&mut process, &mut stdout, &id);
-
+        let stdout = BufReader::new(process.stdout.take().unwrap());
         copy_lines_prefixed(stdout, io::stdout(), &id);
 
         let stderr = BufReader::new(process.stderr.take().unwrap());
         copy_lines_prefixed(stderr, io::stderr(), &id);
 
+        wait_for_file_exists(&socket_path);
+
         Self {
             id,
             base_dir,
-            port,
-            share_token,
             process,
         }
     }
 
     pub fn root(&self) -> PathBuf {
-        self.base_dir.path().join(MOUNT_DIR)
+        self.base_dir.path().join(MOUNT_DIR).join(DEFAULT_REPO)
     }
 
-    pub fn port(&self) -> u16 {
-        self.port
+    #[track_caller]
+    pub fn bind(&self) {
+        expect_output(
+            &self.id,
+            "OK",
+            self.client_command()
+                .arg("bind")
+                .arg(format!("tcp/{}:0", Ipv4Addr::LOCALHOST))
+                .output()
+                .unwrap(),
+        )
     }
 
-    pub fn share_token(&self) -> &str {
-        &self.share_token
+    #[track_caller]
+    pub fn get_port(&self) -> u16 {
+        parse_prefixed_line(
+            &self.id,
+            "TCP, IPv4:",
+            self.client_command().arg("list-ports").output().unwrap(),
+        )
     }
 
+    #[track_caller]
+    pub fn add_peer(&self, peer_port: u16) {
+        expect_output(
+            &self.id,
+            "OK",
+            self.client_command()
+                .arg("add-peers")
+                .arg(&format!("tcp/{}:{peer_port}", Ipv4Addr::LOCALHOST))
+                .output()
+                .unwrap(),
+        )
+    }
+
+    /// Create a repository
+    #[track_caller]
+    pub fn create(&self, share_token: Option<&str>) {
+        let mut command = self.client_command();
+        command.arg("create");
+
+        if let Some(share_token) = share_token {
+            command.arg("--share-token").arg(share_token);
+        } else {
+            command.arg("--name").arg(DEFAULT_REPO);
+        }
+
+        expect_output(&self.id, "OK", command.output().unwrap());
+    }
+
+    /// Create a share token for the repository
+    #[track_caller]
+    pub fn share(&self) -> String {
+        parse_prefixed_line(
+            &self.id,
+            "",
+            self.client_command()
+                .arg("share")
+                .arg("--name")
+                .arg(DEFAULT_REPO)
+                .arg("--mode")
+                .arg("write")
+                .output()
+                .unwrap(),
+        )
+    }
+
+    #[track_caller]
+    pub fn mount(&self) {
+        expect_output(
+            &self.id,
+            "OK",
+            self.client_command()
+                .arg("mount")
+                .arg("--all")
+                .output()
+                .unwrap(),
+        )
+    }
+
+    #[track_caller]
     fn kill(&mut self) {
         terminate(&self.process);
         let exit_status = self.process.wait().unwrap();
         if !exit_status.success() {
             panic!("[{}] Process finished with {}", self.id, exit_status);
         }
+    }
+
+    fn client_command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ouisync"));
+        command
+            .arg("--host")
+            .arg(self.base_dir.path().join(API_SOCKET));
+        command
     }
 }
 
@@ -164,6 +213,23 @@ impl fmt::Display for Id {
     }
 }
 
+fn wait_for_file_exists(path: &Path) {
+    // poor man's inotify :)
+    loop {
+        match path.try_exists() {
+            Ok(true) => break,
+            Ok(false) => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => panic!(
+                "Failed to check existence of file '{}': {:?}",
+                path.display(),
+                error
+            ),
+        }
+    }
+}
+
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to
 // `writer`.
 fn copy_lines_prefixed<R, W>(mut reader: R, mut writer: W, id: &Id)
@@ -184,66 +250,63 @@ where
     });
 }
 
-fn wait_for_share_token(
-    process: &mut Child,
-    stdout: &mut BufReader<ChildStdout>,
-    id: &Id,
-) -> String {
-    let suffix = format!("?name={REPO_NAME}");
-    if let Some(line) = wait_for_line(stdout, "https://ouisync.net/r", &suffix, id) {
-        line
-    } else {
-        fail(process, id, "Failed to read share token");
+#[track_caller]
+fn parse_prefixed_line<T>(id: &Id, prefix: &str, output: Output) -> T
+where
+    T: FromStr,
+    T::Err: fmt::Debug,
+{
+    if !output.status.success() {
+        fail(id, output);
+    }
+
+    let line = find_prefixed_line(id, prefix, &output.stdout);
+    let line = line[prefix.len()..].trim();
+
+    line.parse().unwrap()
+}
+
+#[track_caller]
+fn expect_output(id: &Id, expected: &str, output: Output) {
+    if !output.status.success() {
+        fail(id, output);
+    }
+
+    assert_eq!(str::from_utf8(&output.stdout).map(str::trim), Ok(expected));
+}
+
+#[track_caller]
+fn print_output(id: &Id, output: &[u8]) {
+    let lines = str::from_utf8(output).unwrap().lines();
+
+    for line in lines {
+        println!("[{id}]     {line}");
     }
 }
 
-fn wait_for_ready_message(
-    process: &mut Child,
-    stdout: &mut BufReader<ChildStdout>,
-    id: &Id,
-) -> u16 {
-    const PREFIX: &str = "Listening on TCP IPv4 port ";
-    if let Some(line) = wait_for_line(stdout, PREFIX, "", id) {
-        line[PREFIX.len()..].parse().unwrap()
-    } else {
-        fail(process, id, "Failed to read listening port");
-    }
-}
+#[track_caller]
+fn find_prefixed_line<'a>(id: &'_ Id, prefix: &'_ str, output: &'a [u8]) -> &'a str {
+    let lines = str::from_utf8(output).unwrap().lines();
 
-fn wait_for_line<R: BufRead>(
-    reader: &mut R,
-    prefix: &str,
-    suffix: &str,
-    id: &Id,
-) -> Option<String> {
-    for mut line in reader.lines().filter_map(|line| line.ok()) {
-        if line.starts_with(prefix) && line.ends_with(suffix) {
-            let len = line.trim_end().len();
-            line.truncate(len);
-
-            return Some(line);
+    for line in lines {
+        if line.starts_with(prefix) {
+            return line;
         } else {
-            println!("[{id}] {line}")
+            println!("[{id}] {line}");
         }
     }
 
-    None
+    panic!("Output does not contain line prefixed with '{prefix}'");
 }
 
-fn fail(process: &mut Child, id: &Id, message: &str) -> ! {
-    println!("[{id}] {message}");
-    println!("[{id}] Waiting for process to finish");
+fn fail(id: &Id, output: Output) -> ! {
+    println!("[{id}] Process finished with {}", output.status);
 
-    let exit_status = process.wait().unwrap();
+    println!("[{id}] stdout:");
+    print_output(id, &output.stdout);
 
-    println!("[{id}] Process finished with {exit_status}");
     println!("[{id}] stderr:");
-
-    let stderr = process.stderr.take().unwrap();
-
-    for line in BufReader::new(stderr).lines() {
-        println!("[{}]     {}", id, line.unwrap());
-    }
+    print_output(id, &output.stderr);
 
     panic!("[{id}] Failed to run ouisync executable");
 }
