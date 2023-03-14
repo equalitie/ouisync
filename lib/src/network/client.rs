@@ -196,6 +196,9 @@ impl Client {
             updated_nodes.len(),
             total,
             updated_nodes
+                .iter()
+                .map(|node| &node.hash)
+                .collect::<Vec<_>>()
         );
 
         for node in updated_nodes {

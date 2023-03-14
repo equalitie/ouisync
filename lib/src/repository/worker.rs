@@ -585,6 +585,12 @@ mod scan {
             remove_blocks(&mut tx, &batch).await?;
 
             tx.commit().await?;
+
+            // If we modified the local branch (by removing nodes from it), we need to notify, to
+            // let other replicas know about the change.
+            if let Some((local_branch, _)) = &local_branch_and_write_keys {
+                local_branch.data().notify();
+            }
         }
 
         if total_count > 0 {
