@@ -67,7 +67,6 @@ pub async fn create(
         let repository = Arc::new(repository);
 
         let registration = network.handle().register(repository.store().clone());
-        init(&registration);
 
         Ok(RepositoryHolder {
             repository,
@@ -101,7 +100,6 @@ pub async fn open(
         let repository = Arc::new(repository);
 
         let registration = network.handle().register(repository.store().clone());
-        init(&registration);
 
         Ok(RepositoryHolder {
             repository,
@@ -125,7 +123,6 @@ pub async fn reopen(
         let repository = Arc::new(repository);
 
         let registration = network.handle().register(repository.store().clone());
-        init(&registration);
 
         Ok(RepositoryHolder {
             repository,
@@ -256,12 +253,6 @@ pub async fn create_share_token(
     };
 
     Ok(share_token.to_string())
-}
-
-fn init(registration: &Registration) {
-    // TODO: consider leaving the decision to enable DHT, PEX to the app.
-    registration.enable_dht();
-    registration.enable_pex();
 }
 
 fn repo_span(store: &Utf8Path) -> Span {
