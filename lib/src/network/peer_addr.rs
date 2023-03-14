@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    fmt,
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
@@ -79,6 +80,15 @@ impl FromStr for PeerAddr {
             Ok(PeerAddr::Quic(addr))
         } else {
             Err(format!("Unrecognized protocol {:?} in {:?}", proto, s))
+        }
+    }
+}
+
+impl fmt::Display for PeerAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(addr) => write!(f, "tcp/{}", addr),
+            Self::Quic(addr) => write!(f, "quic/{}", addr),
         }
     }
 }

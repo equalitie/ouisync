@@ -3,18 +3,30 @@
 #[macro_use]
 mod utils;
 mod dart;
+mod directory;
+mod file;
+mod handler;
+mod network;
+mod protocol;
+mod registry;
+mod repository;
+mod share_token;
+mod state;
+mod state_monitor;
+mod transport;
 
 use crate::{
     dart::{DartCObject, PostDartCObjectFn},
+    file::FileHolder,
+    handler::Handler,
+    registry::{Handle, Registry},
+    state::State,
+    transport::{ForeignClientSender, ForeignServer},
     utils::{Port, UniqueHandle},
 };
 use ouisync_bridge::{
+    error::{Error, ErrorCode, Result},
     logger::{self, Logger},
-    transport::{
-        foreign::{ForeignClientSender, ForeignServer},
-        Server,
-    },
-    Error, ErrorCode, FileHolder, Handle, Registry, Result, ServerState,
 };
 use ouisync_lib::StateMonitor;
 use std::{
@@ -107,7 +119,7 @@ pub unsafe extern "C" fn session_channel_open(
 
     let (server, client_tx, mut client_rx) = ForeignServer::new();
 
-    session.runtime.spawn(server.run(state));
+    session.runtime.spawn(server.run(Handler::new(state)));
 
     session.runtime.spawn(async move {
         while let Some(payload) = client_rx.recv().await {
@@ -227,7 +239,7 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
 
 pub struct Session {
     pub(crate) runtime: Runtime,
-    pub(crate) state: Arc<ServerState>,
+    pub(crate) state: Arc<State>,
     senders: Registry<ForeignClientSender>,
     pub(crate) port_sender: PortSender,
     _logger: Logger,
@@ -238,7 +250,7 @@ impl Session {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = logger::new(root_monitor.clone())?;
+        let logger = logger::new(Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()
@@ -247,7 +259,7 @@ impl Session {
             .map_err(Error::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
-        let state = Arc::new(ServerState::new(configs_path, root_monitor)?);
+        let state = Arc::new(State::new(configs_path, root_monitor));
         let session = Session {
             runtime,
             state,

@@ -1,20 +1,19 @@
-use crate::{
-    error::{Error, Result},
-    registry::Handle,
-    repository::RepositoryHolder,
-    state::ServerState,
-};
+use crate::{registry::Handle, state::State};
 use camino::Utf8PathBuf;
+use ouisync_bridge::{
+    error::{Error, Result},
+    repository::RepositoryHolder,
+};
 use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, File};
 use std::{convert::TryInto, io::SeekFrom};
 
 pub struct FileHolder {
-    pub file: AsyncMutex<File>,
-    pub local_branch: Option<Branch>,
+    pub(crate) file: AsyncMutex<File>,
+    pub(crate) local_branch: Option<Branch>,
 }
 
 pub(crate) async fn open(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
@@ -32,7 +31,7 @@ pub(crate) async fn open(
 }
 
 pub(crate) async fn create(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
@@ -51,7 +50,7 @@ pub(crate) async fn create(
 
 /// Remove (delete) the file at the given path from the repository.
 pub(crate) async fn remove(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<()> {
@@ -64,7 +63,7 @@ pub(crate) async fn remove(
     Ok(())
 }
 
-pub(crate) async fn close(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
+pub(crate) async fn close(state: &State, handle: Handle<FileHolder>) -> Result<()> {
     if let Some(holder) = state.files.remove(handle) {
         holder.file.lock().await.flush().await?
     }
@@ -72,7 +71,7 @@ pub(crate) async fn close(state: &ServerState, handle: Handle<FileHolder>) -> Re
     Ok(())
 }
 
-pub(crate) async fn flush(state: &ServerState, handle: Handle<FileHolder>) -> Result<()> {
+pub(crate) async fn flush(state: &State, handle: Handle<FileHolder>) -> Result<()> {
     state.files.get(handle).file.lock().await.flush().await?;
     Ok(())
 }
@@ -80,7 +79,7 @@ pub(crate) async fn flush(state: &ServerState, handle: Handle<FileHolder>) -> Re
 /// Read at most `len` bytes from the file and returns them. The returned buffer can be shorter
 /// than `len` and empty in case of EOF.
 pub(crate) async fn read(
-    state: &ServerState,
+    state: &State,
     handle: Handle<FileHolder>,
     offset: u64,
     len: u64,
@@ -101,7 +100,7 @@ pub(crate) async fn read(
 
 /// Write `len` bytes from `buffer` into the file.
 pub(crate) async fn write(
-    state: &ServerState,
+    state: &State,
     handle: Handle<FileHolder>,
     offset: u64,
     buffer: Vec<u8>,
@@ -123,11 +122,7 @@ pub(crate) async fn write(
 }
 
 /// Truncate the file to `len` bytes.
-pub(crate) async fn truncate(
-    state: &ServerState,
-    handle: Handle<FileHolder>,
-    len: u64,
-) -> Result<()> {
+pub(crate) async fn truncate(state: &State, handle: Handle<FileHolder>, len: u64) -> Result<()> {
     let holder = state.files.get(handle);
 
     let mut file = holder.file.lock().await;
@@ -145,6 +140,6 @@ pub(crate) async fn truncate(
 }
 
 /// Retrieve the size of the file in bytes.
-pub(crate) async fn len(state: &ServerState, handle: Handle<FileHolder>) -> u64 {
+pub(crate) async fn len(state: &State, handle: Handle<FileHolder>) -> u64 {
     state.files.get(handle).file.lock().await.len()
 }

@@ -11,15 +11,21 @@ use tracing_subscriber::{
 pub struct Logger;
 
 impl Logger {
-    pub(crate) fn new(trace_monitor: StateMonitor) -> Result<Self, io::Error> {
-        let tracing_layer = TracingLayer::new();
-        tracing_layer.set_monitor(Some(trace_monitor));
+    pub(crate) fn new(state_monitor: Option<StateMonitor>) -> Result<Self, io::Error> {
+        let tracing_layer = state_monitor.map(|state_monitor| {
+            let tracing_layer = TracingLayer::new();
+            tracing_layer.set_monitor(Some(state_monitor));
+            tracing_layer.with_filter(
+                Targets::new()
+                    .with_target("ouisync", LevelFilter::TRACE)
+                    // Disable traces from other ouisync_* crates (they can still be enabled
+                    // in the next layer via RUST_LOG)
+                    .with_target("ouisync_", LevelFilter::OFF),
+            )
+        });
 
         tracing_subscriber::registry()
-            .with(
-                tracing_layer
-                    .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
-            )
+            .with(tracing_layer)
             .with(
                 fmt::layer()
                     .pretty()

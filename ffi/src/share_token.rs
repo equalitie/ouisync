@@ -1,9 +1,8 @@
-use crate::repository::access_mode_to_num;
 use ouisync_lib::{network, ShareToken};
 
 /// Returns the access mode of the given share token.
 pub(crate) fn mode(token: ShareToken) -> u8 {
-    access_mode_to_num(token.access_mode())
+    token.access_mode().into()
 }
 
 /// Returns the info-hash of the repository corresponding to the share token formatted as hex

@@ -346,7 +346,7 @@ impl ProcessedResponse {
                 Request::ChildNodes(nodes.hash(), *disambiguator)
             }
             Self::Success(Success::LeafNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), disambiguator.clone())
+                Request::ChildNodes(nodes.hash(), *disambiguator)
             }
             Self::Success(Success::Block { data, .. }) => Request::Block(data.id),
             Self::Failure(Failure::RootNode(branch_id)) => Request::RootNode(*branch_id),

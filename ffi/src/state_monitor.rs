@@ -1,14 +1,11 @@
-use crate::{
-    error::Result,
-    protocol::Notification,
-    state::{ClientState, ServerState, SubscriptionHandle},
-};
+use crate::state::{State, SubscriptionHandle};
+use ouisync_bridge::{error::Result, protocol::Notification, transport::NotificationSender};
 use ouisync_lib::{MonitorId, StateMonitor};
 use std::time::Duration;
 use tokio::time;
 
 /// Retrieve a state monitor corresponding to the `path`.
-pub(crate) fn get(state: &ServerState, path: Vec<MonitorId>) -> Result<StateMonitor> {
+pub(crate) fn get(state: &State, path: Vec<MonitorId>) -> Result<StateMonitor> {
     Ok(state
         .root_monitor
         .locate(path)
@@ -17,19 +14,19 @@ pub(crate) fn get(state: &ServerState, path: Vec<MonitorId>) -> Result<StateMoni
 
 /// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
 pub(crate) fn subscribe(
-    server_state: &ServerState,
-    client_state: &ClientState,
+    state: &State,
+    notification_tx: &NotificationSender,
     path: Vec<MonitorId>,
 ) -> Result<SubscriptionHandle> {
-    let monitor = server_state
+    let monitor = state
         .root_monitor
         .locate(path)
         .ok_or(ouisync_lib::Error::EntryNotFound)?;
     let mut rx = monitor.subscribe();
 
-    let notification_tx = client_state.notification_tx.clone();
+    let notification_tx = notification_tx.clone();
 
-    let entry = server_state.tasks.vacant_entry();
+    let entry = state.tasks.vacant_entry();
     let subscription_id = entry.handle().id();
 
     let handle = scoped_task::spawn(async move {

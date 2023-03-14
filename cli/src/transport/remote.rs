@@ -1,22 +1,20 @@
 //! Client and Server than run on different devices.
 
-use super::{
-    socket::{self, SocketClient},
-    Client, Server,
-};
 use crate::{
-    error::Result,
-    protocol::{Request, Response},
-    state::ServerState,
+    handler::Handler,
+    options::{Request, Response},
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
+use ouisync_bridge::{
+    error::Result,
+    transport::{socket_server_connection, Client, SocketClient},
+};
 use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::{
@@ -31,7 +29,7 @@ use tokio_tungstenite::{
 
 // TODO: Implement TLS
 
-pub struct RemoteServer {
+pub(crate) struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
 }
@@ -60,11 +58,8 @@ impl RemoteServer {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
-}
 
-#[async_trait]
-impl Server for RemoteServer {
-    async fn run(self, state: Arc<ServerState>) {
+    pub async fn run(self, handler: Handler) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -85,7 +80,7 @@ impl Server for RemoteServer {
                     tracing::debug!("client accepted at {:?}", addr);
 
                     let socket = Socket(socket);
-                    connections.spawn(socket::server_connection::run(socket, state.clone()));
+                    connections.spawn(socket_server_connection::run(socket, handler.clone()));
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
@@ -96,8 +91,8 @@ impl Server for RemoteServer {
     }
 }
 
-pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>>,
+pub(crate) struct RemoteClient {
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
 impl RemoteClient {
@@ -114,7 +109,10 @@ impl RemoteClient {
 
 #[async_trait(?Send)]
 impl Client for RemoteClient {
-    async fn invoke(&self, request: Request) -> Result<Response> {
+    type Request = Request;
+    type Response = Response;
+
+    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
         self.inner.invoke(request).await
     }
 }

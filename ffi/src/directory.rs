@@ -1,16 +1,12 @@
-use crate::state::ServerState;
-use crate::{
-    error::Result,
-    registry::Handle,
-    repository::{entry_type_to_num, RepositoryHolder},
-};
+use crate::{registry::Handle, repository, state::State};
 use camino::Utf8PathBuf;
+use ouisync_bridge::{error::Result, repository::RepositoryHolder};
 use serde::{Deserialize, Serialize};
 
 // Currently this is only a read-only snapshot of a directory.
 #[derive(Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Directory(Vec<DirEntry>);
+pub(crate) struct Directory(Vec<DirEntry>);
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DirEntry {
@@ -19,7 +15,7 @@ pub(crate) struct DirEntry {
 }
 
 pub(crate) async fn create(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<()> {
@@ -33,7 +29,7 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn open(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Directory> {
@@ -44,7 +40,7 @@ pub(crate) async fn open(
         .entries()
         .map(|entry| DirEntry {
             name: entry.unique_name().into_owned(),
-            entry_type: entry_type_to_num(entry.entry_type()),
+            entry_type: repository::entry_type_to_num(entry.entry_type()),
         })
         .collect();
 
@@ -54,7 +50,7 @@ pub(crate) async fn open(
 /// Removes the directory at the given path from the repository. If `recursive` is true it removes
 /// also the contents, otherwise the directory must be empty.
 pub(crate) async fn remove(
-    state: &ServerState,
+    state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
     recursive: bool,

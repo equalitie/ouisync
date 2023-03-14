@@ -1,23 +1,31 @@
-pub mod foreign;
-pub mod local;
-pub mod native;
-pub mod remote;
-pub mod socket;
+mod socket;
 
-use crate::{
-    error::Result,
-    protocol::{Request, Response},
-    state::ServerState,
-};
+pub use self::socket::{server_connection as socket_server_connection, SocketClient};
+
+use crate::{error::Result, protocol::Notification};
 use async_trait::async_trait;
-use std::sync::Arc;
-
-#[async_trait]
-pub trait Server {
-    async fn run(self, state: Arc<ServerState>);
-}
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::sync::mpsc;
 
 #[async_trait(?Send)]
 pub trait Client {
-    async fn invoke(&self, request: Request) -> Result<Response>;
+    type Request;
+    type Response;
+
+    async fn invoke(&self, request: Self::Request) -> Result<Self::Response>;
+    async fn close(&self) {}
 }
+
+#[async_trait]
+pub trait Handler: Clone + Send + Sync + 'static {
+    type Request: DeserializeOwned + Send;
+    type Response: Serialize + Send;
+
+    async fn handle(
+        &self,
+        request: Self::Request,
+        notification_tx: &NotificationSender,
+    ) -> Result<Self::Response>;
+}
+
+pub type NotificationSender = mpsc::Sender<(u64, Notification)>;

@@ -3,7 +3,7 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use ouisync_bridge::ErrorCode;
+use ouisync_bridge::error::ErrorCode;
 use std::{ffi::CString, mem, os::raw::c_char};
 
 #[repr(C)]

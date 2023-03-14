@@ -22,7 +22,7 @@ base64 = "0.13.0"
 bincode = "1.3"
 blake3 = { version = "1.3.0", features = ["traits-preview"] }
 btdht = { workspace = true }
-camino = "1.0.5"
+camino = { workspace = true }
 chacha20 = "0.9.0"
 chrono = "0.4.19"
 ed25519-dalek = { version = "1", features = ["serde"] }
@@ -33,6 +33,7 @@ hex = "0.4.3"
 net = { package = "ouisync-net", path = "../net" }
 noise-protocol = "0.1.3"
 noise-rust-crypto = { version = "0.5.0", default-features = false, features = ["use-x25519", "use-chacha20poly1305", "use-blake2"] }
+num_enum = { workspace = true }
 once_cell = "1.12.0"
 rand = { package = "ouisync-rand", path = "../rand" }
 ref-cast = "1.0.14"

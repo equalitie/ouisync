@@ -1,22 +1,20 @@
 //! Client and Server than run in the same process but the Client is written in a different
 //! language than the Server.
 
-use super::{socket, Server};
-use crate::state::ServerState;
-use async_trait::async_trait;
+use crate::handler::Handler;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
+use ouisync_bridge::transport::socket_server_connection;
 use std::{
     io,
     pin::Pin,
-    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::PollSender;
 
-pub struct ForeignServer {
+pub(crate) struct ForeignServer {
     socket: MemorySocket,
 }
 
@@ -27,24 +25,21 @@ impl ForeignServer {
 
         (server, client_tx, client_rx)
     }
-}
 
-#[async_trait]
-impl Server for ForeignServer {
-    async fn run(self, state: Arc<ServerState>) {
-        socket::server_connection::run(self.socket, state).await
+    pub async fn run(self, handler: Handler) {
+        socket_server_connection::run(self.socket, handler).await
     }
-}
-
-pub struct MemorySocket {
-    tx: PollSender<Bytes>,
-    rx: UnboundedReceiverStream<BytesMut>,
 }
 
 // Note: we don't directly implement the `Client` trait. Instead these two types needs to be passed
 // across the FFI boundary in some way and the client logic implemented there.
-pub type ForeignClientSender = mpsc::UnboundedSender<BytesMut>;
-pub type ForeignClientReceiver = mpsc::Receiver<Bytes>;
+pub(crate) type ForeignClientSender = mpsc::UnboundedSender<BytesMut>;
+pub(crate) type ForeignClientReceiver = mpsc::Receiver<Bytes>;
+
+struct MemorySocket {
+    tx: PollSender<Bytes>,
+    rx: UnboundedReceiverStream<BytesMut>,
+}
 
 impl MemorySocket {
     fn new() -> (Self, ForeignClientSender, ForeignClientReceiver) {
