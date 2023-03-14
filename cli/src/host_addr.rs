@@ -53,8 +53,10 @@ pub(crate) fn default_local() -> String {
 
 #[cfg(target_os = "linux")]
 fn socket_dir() -> PathBuf {
-    // FIXME: this panics when running as root. We should fall back to /run.
-    dirs::runtime_dir().expect("runtime dir not defined")
+    // FIXME: when running as root, we should use `/run`
+    dirs::runtime_dir()
+        .or_else(dirs::cache_dir)
+        .expect("neither runtime dir nor cache dir defined")
 }
 
 // TODO: macos
