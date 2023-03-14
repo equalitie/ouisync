@@ -240,7 +240,7 @@ impl Index {
             };
 
             if insert {
-                output.push(remote_node.clone());
+                output.push(*remote_node);
             }
         }
 
