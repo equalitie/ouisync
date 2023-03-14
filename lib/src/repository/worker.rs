@@ -345,6 +345,7 @@ mod scan {
     use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
+    use tracing::Instrument;
 
     #[derive(Copy, Clone, Debug)]
     enum Mode {
@@ -601,10 +602,12 @@ mod scan {
     ) -> Result<()> {
         for block_id in block_ids {
             let locators: Vec<_> = LeafNode::load_locators(tx, block_id).try_collect().await?;
+            let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {
                 match snapshot
                     .remove_block(tx, &locator, Some(block_id), write_keys)
+                    .instrument(span.clone())
                     .await
                 {
                     Ok(()) | Err(Error::EntryNotFound) => (),

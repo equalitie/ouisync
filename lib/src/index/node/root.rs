@@ -386,6 +386,17 @@ impl RootNode {
         Ok(())
     }
 
+    /// Does this node exist in the db?
+    pub async fn exists(&self, conn: &mut db::Connection) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE snapshot_id = ?")
+                .bind(self.snapshot_id)
+                .fetch_optional(conn)
+                .await?
+                .is_some(),
+        )
+    }
+
     pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
         let mut roots = sqlx::query(
             "SELECT

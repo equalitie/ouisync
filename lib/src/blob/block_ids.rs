@@ -36,7 +36,7 @@ impl BlockIds {
             Err(error) => return Err(error),
         };
 
-        tracing::trace!(?upper_bound);
+        tracing::trace!(?upper_bound, ?blob_id);
 
         Ok(Self {
             branch,
@@ -61,7 +61,22 @@ impl BlockIds {
                 self.locator = self.locator.next();
                 Ok(Some(block_id))
             }
-            Err(Error::EntryNotFound) => Ok(None),
+            Err(error @ Error::EntryNotFound) => {
+                // There are two reasons why `EntryNotFound` can be returned here:
+                //
+                //     1. we reached  the end of the blob, or
+                //     2. the snapshot has been deleted in the meantime.
+                //
+                // Only in the first case can we return `Ok(None)`. In the second case we must
+                // propagate the error otherwise we might end up incorrectly marking some blocks
+                // as unreachable when in reality they might still be reachable just through a
+                // different (newer) snapshot.
+                if self.upper_bound.is_none() && self.snapshot.exists(&mut tx).await? {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
             Err(error) => Err(error),
         }
     }

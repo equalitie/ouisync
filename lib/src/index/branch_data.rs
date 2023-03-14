@@ -218,6 +218,11 @@ impl SnapshotData {
         &self.root_node.proof.version_vector
     }
 
+    /// Does this snapshot exist in the db?
+    pub async fn exists(&self, conn: &mut db::Connection) -> Result<bool> {
+        self.root_node.exists(conn).await
+    }
+
     /// Inserts a new block into the index.
     ///
     /// # Cancel safety
