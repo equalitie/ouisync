@@ -53,10 +53,10 @@ impl Bin {
         let mut process = command.spawn().unwrap();
 
         let stdout = BufReader::new(process.stdout.take().unwrap());
-        copy_lines_prefixed(stdout, io::stdout(), &id);
+        copy_lines_prefixed(stdout, OutputStream::Stdout, &id);
 
         let stderr = BufReader::new(process.stderr.take().unwrap());
-        copy_lines_prefixed(stderr, io::stderr(), &id);
+        copy_lines_prefixed(stderr, OutputStream::Stderr, &id);
 
         wait_for_file_exists(&socket_path);
 
@@ -226,12 +226,16 @@ fn wait_for_file_exists(path: &Path) {
     }
 }
 
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
 // Spawns a thread that reads lines from `reader`, prefixes them with `id` and then writes them to
 // `writer`.
-fn copy_lines_prefixed<R, W>(mut reader: R, mut writer: W, id: &Id)
+fn copy_lines_prefixed<R>(mut reader: R, output: OutputStream, id: &Id)
 where
     R: BufRead + Send + 'static,
-    W: Write + Send + 'static,
 {
     let id = id.clone();
     let mut line = String::new();
@@ -239,7 +243,10 @@ where
     thread::spawn(move || loop {
         line.clear();
         if reader.read_line(&mut line).unwrap() > 0 {
-            write!(&mut writer, "[{id}] {line}").unwrap();
+            match output {
+                OutputStream::Stdout => print!("[{id}] {line}"),
+                OutputStream::Stderr => eprint!("[{id}] {line}"),
+            }
         } else {
             break;
         }
