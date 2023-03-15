@@ -45,7 +45,6 @@ impl BranchData {
         SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
-    #[instrument(skip_all, err(Debug))]
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
