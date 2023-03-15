@@ -449,6 +449,7 @@ async fn read_access_different_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
+    init_log();
     let (_base_dir, repo) = setup().await;
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
@@ -866,4 +867,20 @@ fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
     rand::thread_rng().fill(&mut buffer[..]);
     buffer
+}
+
+#[allow(unused)]
+fn init_log() {
+    use tracing::metadata::LevelFilter;
+
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::OFF.into())
+                .from_env_lossy(),
+        )
+        .with_test_writer()
+        .try_init()
+        .ok();
 }
