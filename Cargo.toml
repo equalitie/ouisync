@@ -1,5 +1,5 @@
 [workspace]
-members = ["bindgen", "bridge", "cli", "ffi", "lib", "net", "rand", "scoped_task", "util", "vfs"]
+members = ["bindgen", "bridge", "cli", "ffi", "lib", "net", "rand", "scoped_task", "utils/btdht", "vfs"]
 
 [workspace.package]
 version = "0.5.1"
