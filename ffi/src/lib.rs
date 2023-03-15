@@ -16,14 +16,15 @@ mod state_monitor;
 mod transport;
 
 use crate::{
-    dart::{DartCObject, PostDartCObjectFn},
+    dart::{Port, PortSender},
     file::FileHolder,
     handler::Handler,
-    registry::{Handle, Registry},
+    registry::Handle,
     state::State,
-    transport::{ForeignClientSender, ForeignServer},
-    utils::{Port, UniqueHandle},
+    transport::{ClientSender, Server},
+    utils::UniqueHandle,
 };
+use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result},
     logger::{self, Logger},
@@ -79,17 +80,25 @@ impl From<Result<Session>> for SessionCreateResult {
 pub unsafe extern "C" fn session_create(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
+    server_tx_port: Port<Bytes>,
 ) -> SessionCreateResult {
-    let port_sender = PortSender {
-        post_c_object_fn: mem::transmute(post_c_object_fn),
-    };
+    let port_sender = PortSender::new(mem::transmute(post_c_object_fn));
 
     let configs_path = match utils::ptr_to_str(configs_path) {
         Ok(configs_path) => PathBuf::from(configs_path),
         Err(error) => return Err(error).into(),
     };
 
-    Session::create(port_sender, configs_path).into()
+    let (server, client_tx) = Server::new(port_sender, server_tx_port);
+    let result = Session::create(configs_path, port_sender, client_tx);
+
+    if let Ok(session) = &result {
+        session
+            .runtime
+            .spawn(server.run(Handler::new(session.state.clone())));
+    }
+
+    result.into()
 }
 
 /// Destroys the ouisync session.
@@ -102,34 +111,6 @@ pub unsafe extern "C" fn session_destroy(session: SessionHandle) {
     session.release();
 }
 
-/// Create in-memory interface channel for when the client and the server are both in the same
-/// process.
-///
-/// # Safety
-///
-/// `session` must be a valid session handle. `port` must be a valid dart native port.
-#[no_mangle]
-pub unsafe extern "C" fn session_channel_open(
-    session: SessionHandle,
-    port: Port<Vec<u8>>,
-) -> Handle<ForeignClientSender> {
-    let session = session.get();
-    let state = session.state.clone();
-    let port_sender = session.port_sender;
-
-    let (server, client_tx, mut client_rx) = ForeignServer::new();
-
-    session.runtime.spawn(server.run(Handler::new(state)));
-
-    session.runtime.spawn(async move {
-        while let Some(payload) = client_rx.recv().await {
-            port_sender.send(port, payload.into());
-        }
-    });
-
-    session.senders.insert(client_tx)
-}
-
 /// # Safety
 ///
 /// `session` must be a valid session handle, `sender` must be a valid client sender handle,
@@ -138,25 +119,13 @@ pub unsafe extern "C" fn session_channel_open(
 #[no_mangle]
 pub unsafe extern "C" fn session_channel_send(
     session: SessionHandle,
-    sender: Handle<ForeignClientSender>,
     payload_ptr: *mut u8,
     payload_len: u64,
 ) {
     let payload = slice::from_raw_parts(payload_ptr, payload_len as usize);
     let payload = payload.into();
 
-    session.get().senders.get(sender).send(payload).ok();
-}
-
-/// # Safety
-///
-/// `session` must be a valid session handle and `sender` must be a valid client sender handle.
-#[no_mangle]
-pub unsafe extern "C" fn session_channel_close(
-    session: SessionHandle,
-    sender: Handle<ForeignClientSender>,
-) {
-    session.get().senders.remove(sender);
+    session.get().client_sender.send(payload).ok();
 }
 
 /// Shutdowns the network and closes the session. This is equivalent to doing it in two steps
@@ -240,13 +209,17 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
 pub struct Session {
     pub(crate) runtime: Runtime,
     pub(crate) state: Arc<State>,
-    senders: Registry<ForeignClientSender>,
+    client_sender: ClientSender,
     pub(crate) port_sender: PortSender,
     _logger: Logger,
 }
 
 impl Session {
-    pub(crate) fn create(port_sender: PortSender, configs_path: PathBuf) -> Result<Self> {
+    pub(crate) fn create(
+        configs_path: PathBuf,
+        port_sender: PortSender,
+        client_sender: ClientSender,
+    ) -> Result<Self> {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
@@ -263,7 +236,7 @@ impl Session {
         let session = Session {
             runtime,
             state,
-            senders: Registry::new(),
+            client_sender,
             port_sender,
             _logger: logger,
         };
@@ -273,37 +246,3 @@ impl Session {
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
-
-// Utility for sending values to dart.
-#[derive(Copy, Clone)]
-struct PortSender {
-    post_c_object_fn: PostDartCObjectFn,
-}
-
-impl PortSender {
-    unsafe fn send<T>(&self, port: Port<T>, value: T)
-    where
-        T: Into<DartCObject>,
-    {
-        (self.post_c_object_fn)(port.into(), &mut value.into());
-    }
-
-    unsafe fn send_result<T>(&self, port: Port<Result<T>>, value: Result<T>)
-    where
-        T: Into<DartCObject>,
-    {
-        let port = port.into();
-
-        match value {
-            Ok(value) => {
-                (self.post_c_object_fn)(port, &mut ErrorCode::Ok.into());
-                (self.post_c_object_fn)(port, &mut value.into());
-            }
-            Err(error) => {
-                tracing::error!("ffi error: {:?}", error);
-                (self.post_c_object_fn)(port, &mut error.to_error_code().into());
-                (self.post_c_object_fn)(port, &mut error.to_string().into());
-            }
-        }
-    }
-}

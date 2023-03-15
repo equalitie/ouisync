@@ -3,8 +3,9 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use ouisync_bridge::error::ErrorCode;
-use std::{ffi::CString, mem, os::raw::c_char};
+use bytes::Bytes;
+use ouisync_bridge::error::{ErrorCode, Result};
+use std::{ffi::CString, marker::PhantomData, mem, os::raw::c_char};
 
 #[repr(C)]
 pub(crate) struct DartCObject {
@@ -112,6 +113,12 @@ impl From<Vec<u8>> for DartCObject {
     }
 }
 
+impl From<Bytes> for DartCObject {
+    fn from(value: Bytes) -> Self {
+        Self::from(Vec::from(value))
+    }
+}
+
 impl Drop for DartCObject {
     fn drop(&mut self) {
         match self.type_ {
@@ -205,5 +212,77 @@ pub(crate) enum DartTypedDataType {
     // Invalid = 13,
 }
 
-pub(crate) type Port = i64;
-pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
+pub(crate) type RawPort = i64;
+pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(RawPort, *mut DartCObject) -> bool;
+
+/// Type-safe wrapper over native dart SendPort.
+#[repr(transparent)]
+pub struct Port<T>(RawPort, PhantomData<T>);
+
+impl<T> From<Port<T>> for RawPort {
+    fn from(typed: Port<T>) -> Self {
+        typed.0
+    }
+}
+
+// `Port` is `Send`, `Copy` and `Clone` regardless of whether `T` is because it doesn't
+// actually contain `T`:
+
+unsafe impl<T> Send for Port<T> {}
+
+impl<T> Clone for Port<T> {
+    fn clone(&self) -> Self {
+        Self(self.0, PhantomData)
+    }
+}
+
+impl<T> Copy for Port<T> {}
+
+/// Utility for sending values to dart.
+#[derive(Copy, Clone)]
+pub(crate) struct PortSender {
+    post_c_object_fn: PostDartCObjectFn,
+}
+
+impl PortSender {
+    /// # Safety
+    ///
+    /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
+    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn) -> Self {
+        Self { post_c_object_fn }
+    }
+
+    pub fn send<T>(&self, port: Port<T>, value: T)
+    where
+        T: Into<DartCObject>,
+    {
+        self.send_raw(port.into(), &mut value.into())
+    }
+
+    pub fn send_result<T>(&self, port: Port<Result<T>>, value: Result<T>)
+    where
+        T: Into<DartCObject>,
+    {
+        let port = port.into();
+
+        match value {
+            Ok(value) => {
+                self.send_raw(port, &mut ErrorCode::Ok.into());
+                self.send_raw(port, &mut value.into());
+            }
+            Err(error) => {
+                tracing::error!("ffi error: {:?}", error);
+                self.send_raw(port, &mut error.to_error_code().into());
+                self.send_raw(port, &mut error.to_string().into());
+            }
+        }
+    }
+
+    fn send_raw(&self, port: RawPort, value: &mut DartCObject) {
+        // Safety: `self` must ben created via `PortSender::new` and its safety instructions must
+        // be followed and `self.post_c_object_fn` can't be modified afterwards.
+        unsafe {
+            (self.post_c_object_fn)(port, value);
+        }
+    }
+}
