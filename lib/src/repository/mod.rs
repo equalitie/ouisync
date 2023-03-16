@@ -618,8 +618,15 @@ impl Repository {
 
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
+        // NOTE: create the pin before loading the branches to prevent them from being pruned after
+        // being loaded but before being pinned.
+        let pin = self.shared.branch_shared.branch_pinner.pin().await;
+
         let local_branch = self.local_branch()?;
+
         let branches = self.shared.load_branches().await?;
+        let branches = branches.into_iter().map(|branch| branch.pin(pin.clone()));
+
         let mut dirs = Vec::with_capacity(branches.len());
 
         for branch in branches {
