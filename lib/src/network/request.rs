@@ -1,4 +1,7 @@
-use super::{message::Request, repository_stats::RepositoryStats};
+use super::{
+    message::Request,
+    repository_stats::{self, RepositoryStats},
+};
 use crate::{
     collections::{hash_map::Entry, HashMap},
     sync::uninitialized_watch,
@@ -36,7 +39,8 @@ impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
         let map = Arc::new(Mutex::new(HashMap::<Request, RequestData>::default()));
 
-        let (expiration_tracker, to_tracker_tx, from_tracker_rx) = run_tracker(map.clone());
+        let (expiration_tracker, to_tracker_tx, from_tracker_rx) =
+            run_tracker(stats.clone(), map.clone());
 
         Self {
             stats,
@@ -83,22 +87,12 @@ impl PendingRequests {
     }
 
     fn request_added(&self, request: &Request) {
-        match request {
-            Request::RootNode(_) | Request::ChildNodes { .. } => {
-                self.stats.write().index_requests_inflight += 1
-            }
-            Request::Block(_) => self.stats.write().block_requests_inflight += 1,
-        }
+        stats_request_added(&mut self.stats.write(), request);
         self.notify_tracker_task();
     }
 
     fn request_removed(&self, request: &Request) {
-        match request {
-            Request::RootNode(_) | Request::ChildNodes { .. } => {
-                self.stats.write().index_requests_inflight -= 1
-            }
-            Request::Block(_) => self.stats.write().block_requests_inflight -= 1,
-        }
+        stats_request_removed(&mut self.stats.write(), request);
         self.notify_tracker_task();
     }
 
@@ -107,7 +101,22 @@ impl PendingRequests {
     }
 }
 
+fn stats_request_added(stats: &mut repository_stats::Writer, request: &Request) {
+    match request {
+        Request::RootNode(_) | Request::ChildNodes { .. } => stats.index_requests_inflight += 1,
+        Request::Block(_) => stats.block_requests_inflight += 1,
+    }
+}
+
+fn stats_request_removed(stats: &mut repository_stats::Writer, request: &Request) {
+    match request {
+        Request::RootNode(_) | Request::ChildNodes { .. } => stats.index_requests_inflight -= 1,
+        Request::Block(_) => stats.block_requests_inflight -= 1,
+    }
+}
+
 fn run_tracker(
+    stats: Arc<RepositoryStats>,
     request_map: Arc<Mutex<HashMap<Request, RequestData>>>,
 ) -> (
     ScopedJoinHandle<()>,
@@ -136,9 +145,14 @@ fn run_tracker(
                     }
                     _ = time::sleep_until(timestamp + REQUEST_TIMEOUT) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if request_map.lock().unwrap().remove(&request).is_some()
-                            && from_tracker_tx.send(()).is_err() {
-                            break;
+                        if request_map.lock().unwrap().remove(&request).is_some() {
+                            let mut stats_writer = stats.write();
+                            stats_request_removed(&mut stats_writer, &request);
+                            stats_writer.request_timeouts += 1;
+
+                            if from_tracker_tx.send(()).is_err() {
+                                break;
+                            }
                         }
                     }
                 };

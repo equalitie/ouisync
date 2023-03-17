@@ -1,20 +1,19 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use tracing::Span;
 
 pub(super) struct RepositoryStats {
-    values: Mutex<Values>,
+    values: Arc<Mutex<Values>>,
     span: Span,
 }
 
 impl RepositoryStats {
     pub fn new(span: Span) -> Self {
-        Self {
-            values: Mutex::new(Values::default()),
-            span,
-        }
+        let values = Arc::new(Mutex::new(Values::default()));
+
+        Self { values, span }
     }
 
     pub fn write(&self) -> Writer {
@@ -65,6 +64,10 @@ impl<'a> Drop for Writer<'a> {
             state_monitor!(parent: self.span, total_requests_cummulative = self.new.total_requests_cummulative);
         }
 
+        if self.new.request_timeouts != old.request_timeouts {
+            state_monitor!(parent: self.span, request_timeouts = self.new.request_timeouts);
+        }
+
         *old = self.new;
     }
 }
@@ -76,4 +79,5 @@ pub(super) struct Values {
     pub index_requests_inflight: u64,
     pub block_requests_inflight: u64,
     pub total_requests_cummulative: u64,
+    pub request_timeouts: u64,
 }
