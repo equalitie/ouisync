@@ -7,6 +7,7 @@ mod migrations;
 
 pub use id::DatabaseId;
 
+use crate::network::repository_stats::RepositoryStats;
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
@@ -19,6 +20,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
+    time::Instant,
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -27,6 +29,7 @@ use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
+use tracing::Span;
 
 pub(crate) use self::connection::Connection;
 
@@ -38,6 +41,7 @@ pub(crate) struct Pool {
     // Pool with a single writable connection.
     write: SqlitePool,
     shared_tx: Arc<AsyncMutex<Option<WriteTransaction>>>,
+    stats: Arc<RepositoryStats>,
 }
 
 impl Pool {
@@ -66,17 +70,28 @@ impl Pool {
             reads,
             write,
             shared_tx: Arc::new(AsyncMutex::new(None)),
+            stats: Arc::new(RepositoryStats::new(Span::current())),
         })
     }
 
     /// Acquire a read-only database connection.
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
-        self.reads.acquire().await.map(PoolConnection)
+        let start = Instant::now();
+        let tx = self.reads.acquire().await.map(PoolConnection)?;
+        self.stats
+            .write()
+            .note_db_acquire_duration(Instant::now() - start);
+        Ok(tx)
     }
 
     /// Begin a read-only transaction. See [`ReadTransaction`] for more details.
     pub async fn begin_read(&self) -> Result<ReadTransaction, sqlx::Error> {
-        Ok(ReadTransaction(self.reads.begin().await?))
+        let start = Instant::now();
+        let tx = self.reads.begin().await?;
+        self.stats
+            .write()
+            .note_db_read_begin_duration(Instant::now() - start);
+        Ok(ReadTransaction(tx))
     }
 
     /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
@@ -89,13 +104,21 @@ impl Pool {
     /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
     /// automatically committed before the regular write transaction is created.
     pub async fn begin_write(&self) -> Result<WriteTransaction, sqlx::Error> {
+        let start = Instant::now();
+
         let mut shared_tx = self.shared_tx.lock().await;
 
         if let Some(tx) = shared_tx.take() {
             tx.commit().await?;
         }
 
-        Ok(WriteTransaction(ReadTransaction(self.write.begin().await?)))
+        let tx = self.write.begin().await?;
+
+        self.stats
+            .write()
+            .note_db_write_begin_duration(Instant::now() - start);
+
+        Ok(WriteTransaction(ReadTransaction(tx)))
     }
 
     /// Begin a shared write transaction. Unlike regular write transaction, a shared write
@@ -126,6 +149,10 @@ impl Pool {
         self.reads.close().await;
 
         Ok(())
+    }
+
+    pub(crate) fn stats(&self) -> &Arc<RepositoryStats> {
+        &self.stats
     }
 }
 

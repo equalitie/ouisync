@@ -18,7 +18,7 @@ mod peer_exchange;
 mod peer_source;
 mod protocol;
 mod raw;
-mod repository_stats;
+pub mod repository_stats;
 mod request;
 mod runtime_id;
 mod seen_peers;
@@ -36,7 +36,6 @@ use self::{
     peer_addr::{PeerAddr, PeerPort},
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     protocol::{Version, MAGIC, VERSION},
-    repository_stats::RepositoryStats,
     runtime_id::{PublicRuntimeId, SecretRuntimeId},
     seen_peers::{SeenPeer, SeenPeers},
 };
@@ -380,7 +379,6 @@ struct RegistrationHolder {
     store: Store,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
-    stats: Arc<RepositoryStats>,
 }
 
 struct Inner {
@@ -412,10 +410,10 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, store: Store, pex: &PexController, stats: Arc<RepositoryStats>) {
+    fn create_link(&mut self, store: Store, pex: &PexController) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(store.clone(), pex, stats.clone())
+                broker.create_link(store.clone(), pex)
             }
         }
     }
@@ -746,7 +744,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.store.clone(), &holder.pex, holder.stats.clone());
+                        broker.create_link(holder.store.clone(), &holder.pex);
                     }
 
                     entry.insert(broker);

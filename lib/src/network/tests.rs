@@ -578,7 +578,6 @@ fn create_client(store: Store) -> ClientData {
         send_tx,
         recv_rx,
         Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
-        Arc::new(RepositoryStats::new(Span::none())),
     );
 
     (client, send_rx, recv_tx)
