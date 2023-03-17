@@ -65,7 +65,7 @@ impl PendingRequests {
 
     pub fn remove(&self, request: &Request) -> Option<OwnedSemaphorePermit> {
         if let Some(data) = self.map.lock().unwrap().remove(request) {
-            self.request_removed(request);
+            self.request_removed(request, Some(data.timestamp));
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
             Some(data.permit.client_permit)
@@ -89,8 +89,8 @@ impl PendingRequests {
         self.notify_tracker_task();
     }
 
-    fn request_removed(&self, request: &Request) {
-        stats_request_removed(&mut self.stats.write(), request);
+    fn request_removed(&self, request: &Request, timestamp: Option<Instant>) {
+        stats_request_removed(&mut self.stats.write(), request, timestamp);
         self.notify_tracker_task();
     }
 
@@ -106,10 +106,17 @@ fn stats_request_added(stats: &mut repository_stats::Writer, request: &Request) 
     }
 }
 
-fn stats_request_removed(stats: &mut repository_stats::Writer, request: &Request) {
+fn stats_request_removed(
+    stats: &mut repository_stats::Writer,
+    request: &Request,
+    timestamp: Option<Instant>,
+) {
     match request {
         Request::RootNode(_) | Request::ChildNodes { .. } => stats.index_requests_inflight -= 1,
         Request::Block(_) => stats.block_requests_inflight -= 1,
+    }
+    if let Some(timestamp) = timestamp {
+        stats.note_request_inflight_duration(Instant::now() - timestamp);
     }
 }
 
@@ -145,7 +152,7 @@ fn run_tracker(
                         // Check it hasn't been removed in a meanwhile for cancel safety.
                         if request_map.lock().unwrap().remove(&request).is_some() {
                             let mut stats_writer = stats.write();
-                            stats_request_removed(&mut stats_writer, &request);
+                            stats_request_removed(&mut stats_writer, &request, None);
                             stats_writer.request_timeouts += 1;
 
                             if from_tracker_tx.send(()).is_err() {
@@ -173,7 +180,7 @@ fn run_tracker(
 impl Drop for PendingRequests {
     fn drop(&mut self) {
         for request in self.map.lock().unwrap().keys() {
-            self.request_removed(request);
+            self.request_removed(request, None);
         }
     }
 }

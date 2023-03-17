@@ -8,6 +8,8 @@ use tracing::Span;
 pub(crate) struct RepositoryStats {
     values: Arc<Mutex<Values>>,
     span: Span,
+    request_queue_durations: Span,
+    request_inflight_durations: Span,
     db_acquire: Span,
     db_read_begin: Span,
     db_write_begin: Span,
@@ -17,6 +19,10 @@ impl RepositoryStats {
     pub fn new(span: Span) -> Self {
         let values = Arc::new(Mutex::new(Values::default()));
 
+        let request_queue_durations =
+            tracing::info_span!(parent: span.clone(), "request_queue_durations");
+        let request_inflight_durations =
+            tracing::info_span!(parent: span.clone(), "request_inflight_durations");
         let db_acquire = tracing::info_span!(parent: span.clone(), "db_acquire");
         let db_read_begin = tracing::info_span!(parent: span.clone(), "db_read_begin");
         let db_write_begin = tracing::info_span!(parent: span.clone(), "db_write_begin");
@@ -24,6 +30,8 @@ impl RepositoryStats {
         Self {
             values,
             span,
+            request_queue_durations,
+            request_inflight_durations,
             db_acquire,
             db_read_begin,
             db_write_begin,
@@ -38,6 +46,8 @@ impl RepositoryStats {
             old,
             new,
             span: &self.span,
+            request_queue_durations: &self.request_queue_durations,
+            request_inflight_durations: &self.request_inflight_durations,
             db_acquire: &self.db_acquire,
             db_read_begin: &self.db_read_begin,
             db_write_begin: &self.db_write_begin,
@@ -49,6 +59,8 @@ pub(crate) struct Writer<'a> {
     old: &'a Mutex<Values>,
     new: Values,
     span: &'a Span,
+    request_queue_durations: &'a Span,
+    request_inflight_durations: &'a Span,
     db_acquire: &'a Span,
     db_read_begin: &'a Span,
     db_write_begin: &'a Span,
@@ -106,6 +118,16 @@ impl<'a> Drop for Writer<'a> {
                 .write_to_span(&self.db_write_begin);
         }
 
+        if self.new.request_queue_durations != old.request_queue_durations {
+            self.new
+                .request_queue_durations
+                .write_to_span(&self.request_queue_durations);
+        }
+
+        if self.new.request_inflight_durations != old.request_inflight_durations {
+            self.new
+                .request_inflight_durations
+                .write_to_span(&self.request_inflight_durations);
         }
 
         *old = self.new;
@@ -167,6 +189,8 @@ pub(crate) struct Values {
     pub total_requests_cummulative: u64,
     pub request_timeouts: u64,
 
+    request_queue_durations: DurationRanges,
+    request_inflight_durations: DurationRanges,
     db_acquire_durations: DurationRanges,
     db_read_begin_durations: DurationRanges,
     db_write_begin_durations: DurationRanges,
@@ -183,5 +207,13 @@ impl Values {
 
     pub(crate) fn note_db_write_begin_duration(&mut self, duration: Duration) {
         self.db_write_begin_durations.note_duration(duration);
+    }
+
+    pub(crate) fn note_request_queue_duration(&mut self, duration: Duration) {
+        self.request_queue_durations.note_duration(duration);
+    }
+
+    pub(crate) fn note_request_inflight_duration(&mut self, duration: Duration) {
+        self.request_inflight_durations.note_duration(duration);
     }
 }
