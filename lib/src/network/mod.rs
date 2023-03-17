@@ -523,7 +523,7 @@ impl Inner {
                 ),
             )
         } else {
-            tracing::trace!("Not enabling local discovery because there is no IPv4 listener");
+            tracing::error!("Not enabling local discovery because there is no IPv4 listener");
             None
         }
     }
