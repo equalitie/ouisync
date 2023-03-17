@@ -1,6 +1,5 @@
 use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
-    repository_stats::RepositoryStats,
     request::{CompoundPermit, PendingRequests},
 };
 use crate::{
@@ -8,6 +7,7 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    repository_stats::RepositoryStats,
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;

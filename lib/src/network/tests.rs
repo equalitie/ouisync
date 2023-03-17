@@ -1,7 +1,6 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
-    repository_stats::RepositoryStats,
     request::MAX_PENDING_REQUESTS,
     server::Server,
 };
@@ -32,7 +31,7 @@ use tokio::{
     },
     time::{self, Duration},
 };
-use tracing::{Instrument, Span};
+use tracing::Instrument;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 

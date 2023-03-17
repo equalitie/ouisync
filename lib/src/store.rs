@@ -6,9 +6,9 @@ use crate::{
     error::{Error, Result},
     event::{Event, Payload},
     index::{self, Index},
-    network::repository_stats::RepositoryStats,
     progress::Progress,
     repository::LocalId,
+    repository_stats::RepositoryStats,
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;

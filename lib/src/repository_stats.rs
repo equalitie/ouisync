@@ -8,13 +8,26 @@ use tracing::Span;
 pub(crate) struct RepositoryStats {
     values: Arc<Mutex<Values>>,
     span: Span,
+    db_acquire: Span,
+    db_read_begin: Span,
+    db_write_begin: Span,
 }
 
 impl RepositoryStats {
     pub fn new(span: Span) -> Self {
         let values = Arc::new(Mutex::new(Values::default()));
 
-        Self { values, span }
+        let db_acquire = tracing::info_span!(parent: span.clone(), "db_acquire");
+        let db_read_begin = tracing::info_span!(parent: span.clone(), "db_read_begin");
+        let db_write_begin = tracing::info_span!(parent: span.clone(), "db_write_begin");
+
+        Self {
+            values,
+            span,
+            db_acquire,
+            db_read_begin,
+            db_write_begin,
+        }
     }
 
     pub fn write(&self) -> Writer {
@@ -25,6 +38,9 @@ impl RepositoryStats {
             old,
             new,
             span: &self.span,
+            db_acquire: &self.db_acquire,
+            db_read_begin: &self.db_read_begin,
+            db_write_begin: &self.db_write_begin,
         }
     }
 }
@@ -33,6 +49,9 @@ pub(crate) struct Writer<'a> {
     old: &'a Mutex<Values>,
     new: Values,
     span: &'a Span,
+    db_acquire: &'a Span,
+    db_read_begin: &'a Span,
+    db_write_begin: &'a Span,
 }
 
 impl<'a> Deref for Writer<'a> {
@@ -70,36 +89,23 @@ impl<'a> Drop for Writer<'a> {
         }
 
         if self.new.db_acquire_durations != old.db_acquire_durations {
-            let ds = self.new.db_acquire_durations;
-            state_monitor!(parent: self.span, db_acquire_0_below_200ms = ds.below_200ms);
-            state_monitor!(parent: self.span, db_acquire_1_from_200ms_to_500ms = ds.from_200ms_to_500ms);
-            state_monitor!(parent: self.span, db_acquire_2_from_500ms_to_1s = ds.from_500ms_to_1s);
-            state_monitor!(parent: self.span, db_acquire_3_from_1s_to_3s = ds.from_1s_to_3s);
-            state_monitor!(parent: self.span, db_acquire_4_from_3s_to_10s = ds.from_3s_to_10s);
-            state_monitor!(parent: self.span, db_acquire_5_from_10s_to_30s = ds.from_10s_to_30s);
-            state_monitor!(parent: self.span, db_acquire_6_more_than_30s = ds.more_than_30s);
+            self.new
+                .db_acquire_durations
+                .write_to_span(&self.db_acquire);
         }
 
         if self.new.db_read_begin_durations != old.db_read_begin_durations {
-            let ds = self.new.db_read_begin_durations;
-            state_monitor!(parent: self.span, db_read_begin_0_below_200ms = ds.below_200ms);
-            state_monitor!(parent: self.span, db_read_begin_1_from_200ms_to_500ms = ds.from_200ms_to_500ms);
-            state_monitor!(parent: self.span, db_read_begin_2_from_500ms_to_1s = ds.from_500ms_to_1s);
-            state_monitor!(parent: self.span, db_read_begin_3_from_1s_to_3s = ds.from_1s_to_3s);
-            state_monitor!(parent: self.span, db_read_begin_4_from_3s_to_10s = ds.from_3s_to_10s);
-            state_monitor!(parent: self.span, db_read_begin_5_from_10s_to_30s = ds.from_10s_to_30s);
-            state_monitor!(parent: self.span, db_read_begin_6_more_than_30s = ds.more_than_30s);
+            self.new
+                .db_read_begin_durations
+                .write_to_span(&self.db_read_begin);
         }
 
         if self.new.db_write_begin_durations != old.db_write_begin_durations {
-            let ds = self.new.db_write_begin_durations;
-            state_monitor!(parent: self.span, db_write_begin_0_below_200ms = ds.below_200ms);
-            state_monitor!(parent: self.span, db_write_begin_1_from_200ms_to_500ms = ds.from_200ms_to_500ms);
-            state_monitor!(parent: self.span, db_write_begin_2_from_500ms_to_1s = ds.from_500ms_to_1s);
-            state_monitor!(parent: self.span, db_write_begin_3_from_1s_to_3s = ds.from_1s_to_3s);
-            state_monitor!(parent: self.span, db_write_begin_4_from_3s_to_10s = ds.from_3s_to_10s);
-            state_monitor!(parent: self.span, db_write_begin_5_from_10s_to_30s = ds.from_10s_to_30s);
-            state_monitor!(parent: self.span, db_write_begin_6_more_than_30s = ds.more_than_30s);
+            self.new
+                .db_write_begin_durations
+                .write_to_span(&self.db_write_begin);
+        }
+
         }
 
         *old = self.new;
@@ -136,6 +142,19 @@ impl DurationRanges {
         } else {
             self.more_than_30s += 1;
         }
+    }
+
+    fn write_to_span(&self, span: &Span) {
+        state_monitor!(
+            parent: span,
+            n0_below_200ms = self.below_200ms,
+            n1_from_200ms_to_500ms = self.from_200ms_to_500ms,
+            n2_from_500ms_to_1s = self.from_500ms_to_1s,
+            n3_from_1s_to_3s = self.from_1s_to_3s,
+            n4_from_3s_to_10s = self.from_3s_to_10s,
+            n5_from_10s_to_30s = self.from_10s_to_30s,
+            n6_more_than_30s = self.more_than_30s
+        );
     }
 }
 

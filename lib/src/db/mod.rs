@@ -7,7 +7,7 @@ mod migrations;
 
 pub use id::DatabaseId;
 
-use crate::network::repository_stats::RepositoryStats;
+use crate::repository_stats::RepositoryStats;
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{

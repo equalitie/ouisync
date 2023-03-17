@@ -1,9 +1,7 @@
-use super::{
-    message::Request,
-    repository_stats::{self, RepositoryStats},
-};
+use super::message::Request;
 use crate::{
     collections::{hash_map::Entry, HashMap},
+    repository_stats::{self, RepositoryStats},
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;

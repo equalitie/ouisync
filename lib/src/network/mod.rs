@@ -18,7 +18,6 @@ mod peer_exchange;
 mod peer_source;
 mod protocol;
 mod raw;
-pub mod repository_stats;
 mod request;
 mod runtime_id;
 mod seen_peers;
@@ -260,17 +259,14 @@ impl Handle {
             self.inner.pex_discovery_tx.clone(),
         );
 
-        let stats = Arc::new(RepositoryStats::new(Span::current()));
-
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(store.clone(), &pex, stats.clone());
+        network_state.create_link(store.clone(), &pex);
 
         let key = network_state.registry.insert(RegistrationHolder {
             store,
             dht: None,
             pex,
-            stats,
         });
 
         Registration {
