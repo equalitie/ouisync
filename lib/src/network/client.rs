@@ -1,6 +1,5 @@
 use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
-    repository_stats::RepositoryStats,
     request::{CompoundPermit, PendingRequests},
 };
 use crate::{
@@ -8,10 +7,11 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    repository_stats::RepositoryStats,
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;
-use std::{collections::VecDeque, future, sync::Arc};
+use std::{collections::VecDeque, future, sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -28,7 +28,7 @@ pub(super) struct Client {
     store: Store,
     rx: mpsc::Receiver<Response>,
     pending_requests: Arc<PendingRequests>,
-    request_tx: mpsc::UnboundedSender<Request>,
+    request_tx: mpsc::UnboundedSender<(Request, Instant)>,
     recv_queue: VecDeque<(Success, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
@@ -41,17 +41,20 @@ impl Client {
         tx: mpsc::Sender<Content>,
         rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
-        stats: Arc<RepositoryStats>,
     ) -> Self {
         let pool = store.db().clone();
         let block_tracker = store.block_tracker.client();
 
-        let pending_requests = Arc::new(PendingRequests::new(stats.clone()));
+        let pending_requests = Arc::new(PendingRequests::new(store.stats().clone()));
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
-        let (request_sender, request_tx) =
-            start_sender(tx, pending_requests.clone(), peer_request_limiter, stats);
+        let (request_sender, request_tx) = start_sender(
+            tx,
+            pending_requests.clone(),
+            peer_request_limiter,
+            store.stats().clone(),
+        );
 
         Self {
             store,
@@ -71,7 +74,7 @@ impl Client {
         loop {
             select! {
                 block_id = self.block_tracker.accept() => {
-                    self.send_request(Request::Block(block_id));
+                    self.enqueue_request(Request::Block(block_id));
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -91,9 +94,9 @@ impl Client {
         Ok(())
     }
 
-    fn send_request(&mut self, request: Request) {
+    fn enqueue_request(&mut self, request: Request) {
         // Unwrap OK because the sending task never returns.
-        self.request_tx.send(request).unwrap();
+        self.request_tx.send((request, Instant::now())).unwrap();
     }
 
     fn enqueue_response(&mut self, response: Response) -> Result<()> {
@@ -168,7 +171,7 @@ impl Client {
 
         if updated {
             tracing::trace!("received updated root node");
-            self.send_request(Request::ChildNodes(
+            self.enqueue_request(Request::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(summary.block_presence),
             ));
@@ -202,7 +205,7 @@ impl Client {
         );
 
         for node in updated_nodes {
-            self.send_request(Request::ChildNodes(
+            self.enqueue_request(Request::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
             ));
@@ -211,7 +214,7 @@ impl Client {
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.send_request(Request::RootNode(branch_id));
+            self.enqueue_request(Request::RootNode(branch_id));
         }
 
         Ok(())
@@ -261,7 +264,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.send_request(Request::RootNode(branch_id));
+            self.enqueue_request(Request::RootNode(branch_id));
         }
 
         Ok(())
@@ -287,7 +290,10 @@ fn start_sender(
     pending_requests: Arc<PendingRequests>,
     peer_request_limiter: Arc<Semaphore>,
     stats: Arc<RepositoryStats>,
-) -> (ScopedJoinHandle<()>, mpsc::UnboundedSender<Request>) {
+) -> (
+    ScopedJoinHandle<()>,
+    mpsc::UnboundedSender<(Request, Instant)>,
+) {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
 
     let handle = scoped_task::spawn({
@@ -295,8 +301,8 @@ fn start_sender(
             let client_request_limiter = Arc::new(Semaphore::new(MAX_QUEUED_RESPONSES));
 
             loop {
-                let request = match request_rx.recv().await {
-                    Some(request) => request,
+                let (request, time_created) = match request_rx.recv().await {
+                    Some((request, time_created)) => (request, time_created),
                     None => break,
                 };
 
@@ -317,6 +323,10 @@ fn start_sender(
                     _peer_permit: peer_permit,
                     client_permit,
                 };
+
+                stats
+                    .write()
+                    .note_request_queue_duration(Instant::now() - time_created);
 
                 if !pending_requests.insert(request, send_permit) {
                     // The same request is already in-flight.

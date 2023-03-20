@@ -8,10 +8,11 @@ use crate::{
     index::{self, Index},
     progress::Progress,
     repository::LocalId,
+    repository_stats::RepositoryStats,
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use tokio::task;
 
 #[derive(Clone)]
@@ -25,6 +26,10 @@ pub struct Store {
 impl Store {
     pub(crate) fn db(&self) -> &db::Pool {
         &self.index.pool
+    }
+
+    pub(crate) fn stats(&self) -> &Arc<RepositoryStats> {
+        self.index.pool.stats()
     }
 
     pub(crate) async fn count_blocks(&self) -> Result<usize> {
