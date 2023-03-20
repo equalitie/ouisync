@@ -204,7 +204,7 @@ fn setup_logger(trace_monitor: Option<StateMonitor>) {
         .with(
             TRACING_LAYER
                 .clone()
-                .with_filter(Targets::new().with_target("ouisync::", LevelFilter::TRACE)),
+                .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
         )
         .with(
             fmt::layer()

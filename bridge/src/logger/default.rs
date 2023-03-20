@@ -22,10 +22,10 @@ impl Logger {
             .with(
                 tracing_layer.with_filter(
                     Targets::new()
-                        // only events from the ouisync lib crate
+                        // only events from the ouisync crates
                         // NOTE: We can further restrict this to just "ouisync::state_monitor" but
                         // for now we want also regular log events to be sent to the state monitor.
-                        .with_target("ouisync::", LevelFilter::TRACE),
+                        .with_target("ouisync", LevelFilter::TRACE),
                 ),
             )
             .with(
