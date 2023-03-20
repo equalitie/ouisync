@@ -449,6 +449,7 @@ async fn read_access_different_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
+    init_log();
     let (_base_dir, repo) = setup().await;
 
     create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;

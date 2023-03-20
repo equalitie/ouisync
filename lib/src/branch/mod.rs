@@ -1,6 +1,11 @@
+pub(crate) mod pin;
+
+use self::pin::{
+    blob::{BlobPin, BlobPinner},
+    branch::{BranchPin, BranchPinner},
+};
 use crate::{
     access_control::AccessKeys,
-    blob::{BlobPin, BlobPinSet},
     blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
@@ -28,6 +33,7 @@ pub struct Branch {
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
+    _pin: Option<BranchPin>,
 }
 
 impl Branch {
@@ -42,6 +48,7 @@ impl Branch {
             branch_data,
             keys,
             shared,
+            _pin: None,
         }
     }
 
@@ -138,16 +145,19 @@ impl Branch {
         self.shared.file_cache.contains(self.id(), blob_id)
     }
 
-    pub(crate) fn is_any_file_open(&self) -> bool {
-        self.shared.file_cache.contains_any(self.id())
-    }
-
     pub(crate) fn pin_blob(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_pins.acquire(blob_id)
+        self.shared.blob_pinner.pin(blob_id)
     }
 
     pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
         &self.shared.uncommitted_block_counter
+    }
+
+    pub(crate) fn pin(self, pin: BranchPin) -> Self {
+        Self {
+            _pin: Some(pin),
+            ..self
+        }
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -161,20 +171,16 @@ impl Branch {
 
     #[cfg(test)]
     pub(crate) fn reopen(self, keys: AccessKeys) -> Self {
-        Self {
-            pool: self.pool,
-            branch_data: self.branch_data,
-            keys,
-            shared: self.shared,
-        }
+        Self { keys, ..self }
     }
 }
 
 /// State shared among all branches.
 #[derive(Clone)]
 pub(crate) struct BranchShared {
+    pub branch_pinner: BranchPinner,
+    pub blob_pinner: BlobPinner,
     pub file_cache: Arc<FileCache>,
-    pub blob_pins: Arc<BlobPinSet>,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
 }
@@ -182,8 +188,9 @@ pub(crate) struct BranchShared {
 impl BranchShared {
     pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
         Self {
+            branch_pinner: BranchPinner::new(),
+            blob_pinner: BlobPinner::new(),
             file_cache: Arc::new(FileCache::new(event_tx)),
-            blob_pins: Arc::new(BlobPinSet::new()),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
         }
     }

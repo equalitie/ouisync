@@ -293,27 +293,21 @@ mod prune {
                 continue;
             }
 
-            match shared.inflate(snapshot.to_branch_data()) {
-                Ok(branch) => {
-                    // Don't remove branches that are in use. We get notified when they stop being
-                    // used so we can try again.
-                    if branch.is_any_file_open() {
-                        tracing::trace!(id = ?branch.id(), "not removing outdated branch - in use");
-                        continue;
-                    }
-                }
-                Err(Error::PermissionDenied) => {
-                    // This means we don't have read access. In that case no blobs can be open
-                    // anyway so it's safe to ignore this.
-                }
-                Err(error) => return Err(error),
-            }
-
-            tracing::trace!(
-                id = ?snapshot.branch_id(),
-                vv = ?snapshot.version_vector(),
-                "removing outdated branch"
-            );
+            let _guard = if let Some(guard) = shared
+                .branch_shared
+                .branch_pinner
+                .prune(*snapshot.branch_id())
+            {
+                tracing::trace!(
+                    id = ?snapshot.branch_id(),
+                    vv = ?snapshot.version_vector(),
+                    "removing outdated branch"
+                );
+                guard
+            } else {
+                tracing::trace!(id = ?snapshot.branch_id(), "not removing outdated branch - in use");
+                continue;
+            };
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
@@ -528,7 +522,7 @@ mod scan {
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
-        let blob_ids = shared.branch_shared.blob_pins.all();
+        let blob_ids = shared.branch_shared.blob_pinner.all();
         if blob_ids.is_empty() {
             return Ok(());
         }

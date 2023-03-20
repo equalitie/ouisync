@@ -587,9 +587,21 @@ impl Repository {
     // Returns the branch corresponding to the given id.
     // Currently test only.
     #[cfg(test)]
-    pub(crate) fn get_branch(&self, remote_id: PublicKey) -> Result<Branch> {
-        self.shared
-            .inflate(self.shared.store.index.get_branch(remote_id))
+    pub(crate) fn get_branch(&self, id: PublicKey) -> Result<Branch> {
+        let pin = match self.shared.branch_shared.branch_pinner.pin(id) {
+            Some(pin) => pin,
+            None => {
+                tracing::warn!(?id, "branch is being pruned");
+                return Err(Error::EntryNotFound);
+            }
+        };
+
+        let branch = self
+            .shared
+            .inflate(self.shared.store.index.get_branch(id))?;
+        let branch = branch.pin(pin);
+
+        Ok(branch)
     }
 
     /// Subscribe to event notifications.
@@ -619,8 +631,24 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-        let branches = self.shared.load_branches().await?;
-        let mut dirs = Vec::with_capacity(branches.len());
+
+        let branches = {
+            let _load_guard = self.shared.branch_shared.branch_pinner.load();
+
+            self.shared
+                .load_branches()
+                .await?
+                .into_iter()
+                .filter_map(|branch| {
+                    self.shared
+                        .branch_shared
+                        .branch_pinner
+                        .pin(*branch.id())
+                        .map(|pin| branch.pin(pin))
+                })
+        };
+
+        let mut dirs = Vec::new();
 
         for branch in branches {
             let dir = match branch.open_root(MissingBlockStrategy::Fallback).await {

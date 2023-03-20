@@ -53,13 +53,4 @@ impl FileCache {
             .map(|slot| slot.strong_count() > 0)
             .unwrap_or(false)
     }
-
-    pub fn contains_any(&self, branch_id: &PublicKey) -> bool {
-        self.slots
-            .lock()
-            .unwrap()
-            .get(branch_id)
-            .map(|branch| branch.values().any(|slot| slot.strong_count() > 0))
-            .unwrap_or(false)
-    }
 }
