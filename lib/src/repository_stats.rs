@@ -1,6 +1,6 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 use tracing::Span;
@@ -39,12 +39,12 @@ impl RepositoryStats {
     }
 
     pub fn write(&self) -> Writer {
-        let new = *self.values.lock().unwrap();
-        let old = &self.values;
+        let lock = self.values.lock().unwrap();
+        let old = *lock;
 
         Writer {
+            lock,
             old,
-            new,
             span: &self.span,
             request_queue_durations: &self.request_queue_durations,
             request_inflight_durations: &self.request_inflight_durations,
@@ -56,8 +56,8 @@ impl RepositoryStats {
 }
 
 pub(crate) struct Writer<'a> {
-    old: &'a Mutex<Values>,
-    new: Values,
+    lock: MutexGuard<'a, Values>,
+    old: Values,
     span: &'a Span,
     request_queue_durations: &'a Span,
     request_inflight_durations: &'a Span,
@@ -70,67 +70,63 @@ impl<'a> Deref for Writer<'a> {
     type Target = Values;
 
     fn deref(&self) -> &Self::Target {
-        &self.new
+        &*self.lock
     }
 }
 
 impl<'a> DerefMut for Writer<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.new
+        &mut *self.lock
     }
 }
 
 impl<'a> Drop for Writer<'a> {
     fn drop(&mut self) {
-        let mut old = self.old.lock().unwrap();
-
-        if self.new.index_requests_inflight != old.index_requests_inflight {
-            state_monitor!(parent: self.span, index_requests_inflight = self.new.index_requests_inflight);
+        if self.lock.index_requests_inflight != self.old.index_requests_inflight {
+            state_monitor!(parent: self.span, index_requests_inflight = self.lock.index_requests_inflight);
         }
 
-        if self.new.block_requests_inflight != old.block_requests_inflight {
-            state_monitor!(parent: self.span, block_requests_inflight = self.new.block_requests_inflight);
+        if self.lock.block_requests_inflight != self.old.block_requests_inflight {
+            state_monitor!(parent: self.span, block_requests_inflight = self.lock.block_requests_inflight);
         }
 
-        if self.new.total_requests_cummulative != old.total_requests_cummulative {
-            state_monitor!(parent: self.span, total_requests_cummulative = self.new.total_requests_cummulative);
+        if self.lock.total_requests_cummulative != self.old.total_requests_cummulative {
+            state_monitor!(parent: self.span, total_requests_cummulative = self.lock.total_requests_cummulative);
         }
 
-        if self.new.request_timeouts != old.request_timeouts {
-            state_monitor!(parent: self.span, request_timeouts = self.new.request_timeouts);
+        if self.lock.request_timeouts != self.old.request_timeouts {
+            state_monitor!(parent: self.span, request_timeouts = self.lock.request_timeouts);
         }
 
-        if self.new.db_acquire_durations != old.db_acquire_durations {
-            self.new
+        if self.lock.db_acquire_durations != self.old.db_acquire_durations {
+            self.lock
                 .db_acquire_durations
                 .write_to_span(&self.db_acquire);
         }
 
-        if self.new.db_read_begin_durations != old.db_read_begin_durations {
-            self.new
+        if self.lock.db_read_begin_durations != self.old.db_read_begin_durations {
+            self.lock
                 .db_read_begin_durations
                 .write_to_span(&self.db_read_begin);
         }
 
-        if self.new.db_write_begin_durations != old.db_write_begin_durations {
-            self.new
+        if self.lock.db_write_begin_durations != self.old.db_write_begin_durations {
+            self.lock
                 .db_write_begin_durations
                 .write_to_span(&self.db_write_begin);
         }
 
-        if self.new.request_queue_durations != old.request_queue_durations {
-            self.new
+        if self.lock.request_queue_durations != self.old.request_queue_durations {
+            self.lock
                 .request_queue_durations
                 .write_to_span(&self.request_queue_durations);
         }
 
-        if self.new.request_inflight_durations != old.request_inflight_durations {
-            self.new
+        if self.lock.request_inflight_durations != self.old.request_inflight_durations {
+            self.lock
                 .request_inflight_durations
                 .write_to_span(&self.request_inflight_durations);
         }
-
-        *old = self.new;
     }
 }
 
