@@ -30,6 +30,8 @@ elif [ "$1" = "--help" -o "$1" = "-h" ]; then
     exit -1
 fi
 
+trap "pkill -P $$" EXIT
+
 rm -rf "/tmp/$temp_dir_prefix-*"
 
 echo "$(date_tag) Compiling the test"
@@ -68,17 +70,6 @@ while [ -z "$aborted_process" ]; do
         fi
     done
     sleep 0.5
-done
-
-echo "$(date_tag) Killing rest of the jobs:"
-
-for i in $(seq $n); do
-    pid=${pids[${i}]}
-    if [ $i -ne $aborted_process ]; then
-        echo "  killing job:$i with pid:$pid"
-        pkill -P $pid 2>/dev/null 1>&2 & # || true
-        rm $dir/test-$i.log
-    fi
 done
 
 new_log_name=/tmp/ouisync-log-$(date +"%Y-%m-%d--%H-%M-%S").txt

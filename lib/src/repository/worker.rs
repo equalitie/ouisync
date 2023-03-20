@@ -293,7 +293,11 @@ mod prune {
                 continue;
             }
 
-            let _guard = if let Some(guard) = shared.branch_shared.branch_pinner.try_prune() {
+            let _guard = if let Some(guard) = shared
+                .branch_shared
+                .branch_pinner
+                .prune(*snapshot.branch_id())
+            {
                 tracing::trace!(
                     id = ?snapshot.branch_id(),
                     vv = ?snapshot.version_vector(),
