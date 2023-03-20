@@ -86,7 +86,6 @@ impl<T> VacantEntry<'_, T> {
 #[serde(transparent)]
 pub struct Handle<T: 'static> {
     id: u64,
-    #[serde()]
     _type: PhantomData<&'static T>,
 }
 
