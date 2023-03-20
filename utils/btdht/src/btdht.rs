@@ -85,20 +85,20 @@ async fn main() -> io::Result<()> {
 }
 
 async fn lookup(prefix: &str, dht: &MainlineDht, token: &ShareToken) {
-    println!("{} Bootstrapping...", prefix);
+    println!("{prefix} Bootstrapping...");
     if dht.bootstrapped(None).await {
         let mut seen_peers = HashSet::new();
         let info_hash = network::repository_info_hash(token.id());
 
-        println!("{} Searching for peers...", prefix);
+        println!("{prefix} Searching for peers...");
         let mut peers = dht.search(info_hash, false);
 
         while let Some(peer) = peers.next().await {
             if seen_peers.insert(peer) {
-                println!("  {:?}", peer);
+                println!("  {peer:?}");
             }
         }
     } else {
-        println!("{} Bootstrap failed", prefix)
+        println!("{prefix} Bootstrap failed")
     }
 }

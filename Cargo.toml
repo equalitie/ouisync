@@ -11,10 +11,10 @@ rust-version = "1.65.0"
 
 [workspace.dependencies]
 async-trait = "0.1.64"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "5287b4a2bc507cde87903bc30ca2f1c548a31e18" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "19fcedfaea5831523298f4417fa6d53aa8d0055b" }
 bytes = "1.4.0"
 camino = "1.0.9"
-futures-util = { version = "0.3.21", default-features = false }
+futures-util = { version = "0.3.27", default-features = false }
 num_enum = { version = "0.5.11", default-features = false }
 rmp-serde = "1.1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
