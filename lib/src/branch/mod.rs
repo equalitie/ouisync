@@ -1,8 +1,9 @@
-mod pin;
+pub(crate) mod pin;
 
-pub(crate) use self::pin::{BlobPin, BlobPinner};
-
-use self::pin::{BranchPin, BranchPinner};
+use self::pin::{
+    blob::{BlobPin, BlobPinner},
+    branch::{BranchPin, BranchPinner},
+};
 use crate::{
     access_control::AccessKeys,
     blob_id::BlobId,
