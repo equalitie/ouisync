@@ -254,6 +254,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                         }
 
                         let mount_path = self.state.mount_path(entry.key());
+                        fs::create_dir_all(&mount_path).await?;
+
                         entry.mount_guard = Some(ouisync_vfs::mount(
                             runtime::Handle::current(),
                             entry.base.repository.clone(),
