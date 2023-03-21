@@ -1,64 +1,50 @@
-//! Innternal state of Blob
+//! File write locks
+//!
+//! For simplicity, concurrent writes to the same file are currently not allowed but this should
+//! change in the future. See also https://github.com/equalitie/ouisync/issues/96
 
-use crate::event::{Event, Payload};
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-};
-use tokio::sync::broadcast;
+use crate::{blob_id::BlobId, collections::HashSet};
+use std::sync::{Arc, Mutex};
 
-/// Lock that indicates that a file is currently being open. When this lock exists, certain
-/// operations on the file (e.g. forking over it) are prohibited. This lock is already created in
-/// acquired state and is released by dropping it.
-pub(crate) struct OpenLock {
-    event_tx: broadcast::Sender<Event>,
-    write_lock: AtomicBool,
+/// Lock that permits write access to a file.
+pub(crate) struct FileWriteLock {
+    shared: Arc<Mutex<HashSet<BlobId>>>,
+    blob_id: BlobId,
 }
 
-impl OpenLock {
-    pub(super) fn new(event_tx: broadcast::Sender<Event>) -> Arc<Self> {
-        Arc::new(Self {
-            event_tx,
-            write_lock: AtomicBool::new(false),
-        })
-    }
-}
-
-impl Drop for OpenLock {
+impl Drop for FileWriteLock {
     fn drop(&mut self) {
-        self.event_tx
-            .send(Event::new(Payload::FileClosed))
-            .unwrap_or(0);
+        let mut shared = self.shared.lock().unwrap();
+
+        if !shared.remove(&self.blob_id) {
+            unreachable!()
+        }
     }
 }
 
-/// Lock that protects a file from being written to concurrently. This lock is created in released
-/// state and must be explicitly acquired by calling `acquired`. Once acquired, it's only released
-/// when the contained `OpenLock` is also released, that is, when all instances of the file are
-/// dropped.
-pub(super) struct WriteLock {
-    open_lock: Arc<OpenLock>,
-    acquired: bool,
+#[derive(Clone)]
+pub(crate) struct FileWriteLocker {
+    shared: Arc<Mutex<HashSet<BlobId>>>,
 }
 
-impl WriteLock {
-    pub fn new(open_lock: Arc<OpenLock>) -> Self {
+impl FileWriteLocker {
+    pub fn new() -> Self {
         Self {
-            open_lock,
-            acquired: false,
+            shared: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
-    pub fn acquire(&mut self) -> bool {
-        if self.acquired {
-            return true;
-        }
+    /// Acquire write lock for a file with the given id. Returns `None` if already acquired.
+    pub fn lock(&self, blob_id: BlobId) -> Option<FileWriteLock> {
+        let mut shared = self.shared.lock().unwrap();
 
-        if !self.open_lock.write_lock.fetch_or(true, Ordering::Relaxed) {
-            self.acquired = true;
-            return true;
+        if shared.insert(blob_id) {
+            Some(FileWriteLock {
+                shared: self.shared.clone(),
+                blob_id,
+            })
+        } else {
+            None
         }
-
-        false
     }
 }

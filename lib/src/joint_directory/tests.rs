@@ -114,6 +114,7 @@ async fn conflict_forked_files() {
     file1.fork(branches[1].clone()).await.unwrap();
     file1.write(b"two").await.unwrap();
     file1.flush().await.unwrap();
+    drop(file1);
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file(&root0, "file.txt").await;

@@ -1,8 +1,7 @@
-mod cache;
 mod lock;
 
-use self::lock::WriteLock;
-pub(crate) use self::{cache::FileCache, lock::OpenLock};
+pub(crate) use self::lock::{FileWriteLock, FileWriteLocker};
+
 use crate::{
     blob::Blob,
     block::BLOCK_SIZE,
@@ -25,7 +24,7 @@ const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    write_lock: WriteLock,
+    write_lock: Option<FileWriteLock>,
 }
 
 impl File {
@@ -36,23 +35,20 @@ impl File {
         parent: ParentContext,
     ) -> Result<Self> {
         let mut tx = branch.db().begin_read().await?;
-        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
 
         Ok(Self {
             blob: Blob::open(&mut tx, branch, locator).await?,
             parent,
-            write_lock,
+            write_lock: None,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
-        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
-
         Self {
             blob: Blob::create(branch, locator),
             parent,
-            write_lock,
+            write_lock: None,
         }
     }
 
@@ -181,8 +177,7 @@ impl File {
 
         self.blob = new_blob;
         self.parent = new_parent;
-        self.write_lock =
-            WriteLock::new(dst_branch.acquire_open_lock(*self.blob.locator().blob_id()));
+        self.write_lock = None;
 
         Ok(())
     }
@@ -200,10 +195,15 @@ impl File {
     }
 
     fn acquire_write_lock(&mut self) -> Result<()> {
-        self.write_lock
-            .acquire()
-            .then_some(())
-            .ok_or(Error::ConcurrentWriteNotSupported)
+        if self.write_lock.is_none() {
+            self.write_lock = Some(
+                self.branch()
+                    .lock_file_for_write(*self.blob.locator().blob_id())
+                    .ok_or(Error::ConcurrentWriteNotSupported)?,
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -228,10 +228,10 @@ mod tests {
         let (_base_dir, [branch0, branch1]) = setup().await;
 
         // Create a file owned by branch 0
-        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
-
+        let mut file0 = branch0.ensure_file_exists("dog.jpg".into()).await.unwrap();
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
+        drop(file0);
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0
