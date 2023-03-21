@@ -1,10 +1,14 @@
 mod block_ids;
 mod open_block;
+mod pin;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
+pub(crate) use self::{
+    block_ids::BlockIds,
+    pin::{BlobPin, BlobPinner},
+};
 use crate::{
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -33,6 +37,7 @@ pub(crate) struct Blob {
     current_block: OpenBlock,
     len: u64,
     len_dirty: bool,
+    _pin: BlobPin,
 }
 
 impl Blob {
@@ -55,6 +60,8 @@ impl Blob {
     ) -> Result<Self> {
         assert_eq!(branch.id(), snapshot.branch_id());
 
+        let pin = branch.pin_blob(*head_locator.blob_id());
+
         let mut current_block =
             OpenBlock::open_head(tx, snapshot, branch.keys().read(), head_locator).await?;
         let len = current_block.content.read_u64();
@@ -65,11 +72,13 @@ impl Blob {
             current_block,
             len,
             len_dirty: false,
+            _pin: pin,
         })
     }
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
+        let pin = branch.pin_blob(*head_locator.blob_id());
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
@@ -78,6 +87,7 @@ impl Blob {
             current_block,
             len: 0,
             len_dirty: false,
+            _pin: pin,
         }
     }
 

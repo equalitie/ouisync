@@ -1,237 +1,149 @@
-//! Pinning (not to confuse with `std::pin::Pin`) is a mechanism to protect certain objects from
-//! being garbage collected. Normally the garbage collector only collects objects it considers
-//! unneeded (outdated, unreachable, etc...) but there are cases where some objects would normally
-//! be considered as such, but we still don't want to gc them for various reasons.
+//! Prevents outdated branch from being pruned if any files and/or directories from that branch are
+//! currently being accessed.
+use crate::{
+    collections::{hash_map::Entry, HashMap},
+    crypto::sign::PublicKey,
+};
+use std::sync::{Arc, Mutex};
 
-/// Blob pin prevents blob from being gc-ed before it is inserted into its destination directory.
-pub(crate) mod blob {
-    use crate::{
-        blob_id::BlobId,
-        collections::{hash_map::Entry, HashMap},
-        crypto::sign::PublicKey,
-    };
-    use std::sync::{Arc, Mutex};
+#[derive(Clone)]
+pub(crate) struct BranchPinner {
+    shared: Arc<Mutex<Shared>>,
+}
 
-    pub(crate) struct BlobPin {
-        shared: Arc<Mutex<Shared>>,
-        branch_id: PublicKey,
-        blob_id: BlobId,
+struct Shared {
+    loads: usize,
+    branches: HashMap<PublicKey, State>,
+}
+
+enum State {
+    Pinned(usize),
+    Pruned,
+}
+
+impl BranchPinner {
+    pub fn new() -> Self {
+        Self {
+            shared: Arc::new(Mutex::new(Shared {
+                loads: 0,
+                branches: HashMap::new(),
+            })),
+        }
     }
 
-    impl Drop for BlobPin {
-        fn drop(&mut self) {
-            let mut shared = self.shared.lock().unwrap();
+    /// Pin the branch to prevent it from being pruned. If this returns `Some` then any
+    /// subsequent call to `prune` for the same branch id returns `None`. Returns `None` if
+    /// the branch has already been marked for pruning.
+    pub fn pin(&self, id: PublicKey) -> Option<BranchPin> {
+        let mut shared = self.shared.lock().unwrap();
 
-            match shared.entry(self.branch_id) {
-                Entry::Occupied(mut branch_entry) => {
-                    match branch_entry.get_mut().entry(self.blob_id) {
-                        Entry::Occupied(mut blob_entry) => {
-                            *blob_entry.get_mut() -= 1;
+        match shared.branches.entry(id).or_insert(State::Pinned(0)) {
+            State::Pruned => None,
+            State::Pinned(count) => {
+                *count += 1;
 
-                            if *blob_entry.get() == 0 {
-                                blob_entry.remove();
-                            }
-                        }
-                        Entry::Vacant(_) => unreachable!(),
-                    }
-
-                    if branch_entry.get().is_empty() {
-                        branch_entry.remove();
-                    }
-                }
-                Entry::Vacant(_) => unreachable!(),
+                Some(BranchPin {
+                    shared: self.shared.clone(),
+                    id,
+                })
             }
         }
     }
 
-    #[derive(Clone)]
-    pub(crate) struct BlobPinner {
-        shared: Arc<Mutex<Shared>>,
+    /// Acquire the load guard. Do this before loading branches from the db to prevent any branch
+    /// from being pruned after being loaded but before being pinned.
+    pub fn load(&self) -> LoadGuard {
+        self.shared.lock().unwrap().loads += 1;
+
+        LoadGuard {
+            shared: self.shared.clone(),
+        }
     }
 
-    type Shared = HashMap<PublicKey, HashMap<BlobId, usize>>;
+    /// Mark the given branch as being pruned. If this returns `Some` then any subsequent call
+    /// to `pin` for the same branch id returns `None` until the `PruneGuard` goes out of
+    /// scope. Returns `None` if the given branch has already been pinned or if a load guard
+    /// has been acquired.
+    pub fn prune(&self, id: PublicKey) -> Option<PruneGuard> {
+        let mut shared = self.shared.lock().unwrap();
 
-    impl BlobPinner {
-        pub fn new() -> Self {
-            Self {
-                shared: Arc::new(Mutex::new(HashMap::new())),
-            }
+        if shared.loads > 0 {
+            return None;
         }
 
-        /// Creates pin for the blob with the given id. The pin is released when dropped.
-        pub fn pin(&self, branch_id: PublicKey, blob_id: BlobId) -> BlobPin {
-            let mut shared = self.shared.lock().unwrap();
-
-            let blobs = shared.entry(branch_id).or_default();
-            *blobs.entry(blob_id).or_insert(0) += 1;
-
-            BlobPin {
+        match shared.branches.entry(id).or_insert(State::Pruned) {
+            State::Pruned => Some(PruneGuard {
                 shared: self.shared.clone(),
-                branch_id,
-                blob_id,
-            }
-        }
-
-        /// Returns the ids of all currently pinned blobs grouped by their branch id.
-        pub fn all(&self) -> Vec<(PublicKey, Vec<BlobId>)> {
-            self.shared
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(branch_id, blobs)| (*branch_id, blobs.keys().copied().collect()))
-                .collect()
+                id,
+            }),
+            State::Pinned(_) => None,
         }
     }
 }
 
-/// Branch pin prevents outdated branch from being pruned if any files and/or directories from that
-/// branch are currently being accessed.
-pub(crate) mod branch {
-    use crate::{
-        collections::{hash_map::Entry, HashMap},
-        crypto::sign::PublicKey,
-    };
-    use std::sync::{Arc, Mutex};
+pub(crate) struct BranchPin {
+    shared: Arc<Mutex<Shared>>,
+    id: PublicKey,
+}
 
-    #[derive(Clone)]
-    pub(crate) struct BranchPinner {
-        shared: Arc<Mutex<Shared>>,
-    }
+impl Clone for BranchPin {
+    fn clone(&self) -> Self {
+        let mut shared = self.shared.lock().unwrap();
 
-    struct Shared {
-        loads: usize,
-        branches: HashMap<PublicKey, State>,
-    }
-
-    enum State {
-        Pinned(usize),
-        Pruned,
-    }
-
-    impl BranchPinner {
-        pub fn new() -> Self {
-            Self {
-                shared: Arc::new(Mutex::new(Shared {
-                    loads: 0,
-                    branches: HashMap::new(),
-                })),
+        match shared.branches.get_mut(&self.id) {
+            Some(State::Pinned(count)) => {
+                *count += 1;
             }
+            Some(State::Pruned) | None => unreachable!(),
         }
 
-        /// Pin the branch to prevent it from being pruned. If this returns `Some` then any
-        /// subsequent call to `prune` for the same branch id returns `None`. Returns `None` if
-        /// the branch has already been marked for pruning.
-        pub fn pin(&self, id: PublicKey) -> Option<BranchPin> {
-            let mut shared = self.shared.lock().unwrap();
-
-            match shared.branches.entry(id).or_insert(State::Pinned(0)) {
-                State::Pruned => None,
-                State::Pinned(count) => {
-                    *count += 1;
-
-                    Some(BranchPin {
-                        shared: self.shared.clone(),
-                        id,
-                    })
-                }
-            }
-        }
-
-        /// Acquire the load guard. Do this before loading branches from the db to prevent any branch
-        /// from being pruned after being loaded but before being pinned.
-        pub fn load(&self) -> LoadGuard {
-            self.shared.lock().unwrap().loads += 1;
-
-            LoadGuard {
-                shared: self.shared.clone(),
-            }
-        }
-
-        /// Mark the given branch as being pruned. If this returns `Some` then any subsequent call
-        /// to `pin` for the same branch id returns `None` until the `PruneGuard` goes out of
-        /// scope. Returns `None` if the given branch has already been pinned or if a load guard
-        /// has been acquired.
-        pub fn prune(&self, id: PublicKey) -> Option<PruneGuard> {
-            let mut shared = self.shared.lock().unwrap();
-
-            if shared.loads > 0 {
-                return None;
-            }
-
-            match shared.branches.entry(id).or_insert(State::Pruned) {
-                State::Pruned => Some(PruneGuard {
-                    shared: self.shared.clone(),
-                    id,
-                }),
-                State::Pinned(_) => None,
-            }
+        Self {
+            shared: self.shared.clone(),
+            id: self.id,
         }
     }
+}
 
-    pub(crate) struct BranchPin {
-        shared: Arc<Mutex<Shared>>,
-        id: PublicKey,
-    }
+impl Drop for BranchPin {
+    fn drop(&mut self) {
+        let mut shared = self.shared.lock().unwrap();
 
-    impl Clone for BranchPin {
-        fn clone(&self) -> Self {
-            let mut shared = self.shared.lock().unwrap();
-
-            match shared.branches.get_mut(&self.id) {
-                Some(State::Pinned(count)) => {
-                    *count += 1;
-                }
-                Some(State::Pruned) | None => unreachable!(),
-            }
-
-            Self {
-                shared: self.shared.clone(),
-                id: self.id,
-            }
-        }
-    }
-
-    impl Drop for BranchPin {
-        fn drop(&mut self) {
-            let mut shared = self.shared.lock().unwrap();
-
-            let Entry::Occupied(mut entry) = shared.branches.entry(self.id) else {
+        let Entry::Occupied(mut entry) = shared.branches.entry(self.id) else {
                 unreachable!()
             };
 
-            let State::Pinned(count) = entry.get_mut() else {
+        let State::Pinned(count) = entry.get_mut() else {
                 unreachable!()
             };
 
-            *count -= 1;
+        *count -= 1;
 
-            if *count == 0 {
-                entry.remove();
-            }
+        if *count == 0 {
+            entry.remove();
         }
     }
+}
 
-    pub(crate) struct LoadGuard {
-        shared: Arc<Mutex<Shared>>,
+pub(crate) struct LoadGuard {
+    shared: Arc<Mutex<Shared>>,
+}
+
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        self.shared.lock().unwrap().loads -= 1;
     }
+}
 
-    impl Drop for LoadGuard {
-        fn drop(&mut self) {
-            self.shared.lock().unwrap().loads -= 1;
-        }
-    }
+pub(crate) struct PruneGuard {
+    shared: Arc<Mutex<Shared>>,
+    id: PublicKey,
+}
 
-    pub(crate) struct PruneGuard {
-        shared: Arc<Mutex<Shared>>,
-        id: PublicKey,
-    }
-
-    impl Drop for PruneGuard {
-        fn drop(&mut self) {
-            match self.shared.lock().unwrap().branches.remove(&self.id) {
-                Some(State::Pruned) => (),
-                Some(State::Pinned(_)) | None => unreachable!(),
-            }
+impl Drop for PruneGuard {
+    fn drop(&mut self) {
+        match self.shared.lock().unwrap().branches.remove(&self.id) {
+            Some(State::Pruned) => (),
+            Some(State::Pinned(_)) | None => unreachable!(),
         }
     }
 }
