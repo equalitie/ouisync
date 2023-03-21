@@ -146,7 +146,7 @@ impl Branch {
     }
 
     pub(crate) fn pin_blob(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_pinner.pin(blob_id)
+        self.shared.blob_pinner.pin(*self.id(), blob_id)
     }
 
     pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {

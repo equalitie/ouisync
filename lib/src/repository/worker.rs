@@ -522,18 +522,20 @@ mod scan {
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
-        let blob_ids = shared.branch_shared.blob_pinner.all();
-        if blob_ids.is_empty() {
+        let pins = shared.branch_shared.blob_pinner.all();
+        if pins.is_empty() {
             return Ok(());
         }
 
-        let Some(local_branch) = shared.local_branch().ok() else { return Ok(()) };
+        for (branch_id, blob_ids) in pins {
+            let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
-        for blob_id in blob_ids {
-            let mut blob_block_ids = BlockIds::open(local_branch.clone(), blob_id).await?;
+            for blob_id in blob_ids {
+                let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
 
-            while let Some(block_id) = blob_block_ids.try_next().await? {
-                unreachable_block_ids.remove(&block_id);
+                while let Some(block_id) = blob_block_ids.try_next().await? {
+                    unreachable_block_ids.remove(&block_id);
+                }
             }
         }
 

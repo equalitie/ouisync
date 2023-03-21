@@ -584,6 +584,7 @@ async fn version_vector_recreate_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_fork() {
+    init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();

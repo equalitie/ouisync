@@ -8,23 +8,35 @@ pub(crate) mod blob {
     use crate::{
         blob_id::BlobId,
         collections::{hash_map::Entry, HashMap},
+        crypto::sign::PublicKey,
     };
     use std::sync::{Arc, Mutex};
 
     pub(crate) struct BlobPin {
         shared: Arc<Mutex<Shared>>,
-        id: BlobId,
+        branch_id: PublicKey,
+        blob_id: BlobId,
     }
 
     impl Drop for BlobPin {
         fn drop(&mut self) {
-            let mut pinner = self.shared.lock().unwrap();
-            match pinner.entry(self.id) {
-                Entry::Occupied(mut entry) => {
-                    *entry.get_mut() -= 1;
+            let mut shared = self.shared.lock().unwrap();
 
-                    if *entry.get() == 0 {
-                        entry.remove();
+            match shared.entry(self.branch_id) {
+                Entry::Occupied(mut branch_entry) => {
+                    match branch_entry.get_mut().entry(self.blob_id) {
+                        Entry::Occupied(mut blob_entry) => {
+                            *blob_entry.get_mut() -= 1;
+
+                            if *blob_entry.get() == 0 {
+                                blob_entry.remove();
+                            }
+                        }
+                        Entry::Vacant(_) => unreachable!(),
+                    }
+
+                    if branch_entry.get().is_empty() {
+                        branch_entry.remove();
                     }
                 }
                 Entry::Vacant(_) => unreachable!(),
@@ -37,7 +49,7 @@ pub(crate) mod blob {
         shared: Arc<Mutex<Shared>>,
     }
 
-    type Shared = HashMap<BlobId, usize>;
+    type Shared = HashMap<PublicKey, HashMap<BlobId, usize>>;
 
     impl BlobPinner {
         pub fn new() -> Self {
@@ -47,19 +59,27 @@ pub(crate) mod blob {
         }
 
         /// Creates pin for the blob with the given id. The pin is released when dropped.
-        pub fn pin(&self, id: BlobId) -> BlobPin {
-            let mut inner = self.shared.lock().unwrap();
-            *inner.entry(id).or_insert(0) += 1;
+        pub fn pin(&self, branch_id: PublicKey, blob_id: BlobId) -> BlobPin {
+            let mut shared = self.shared.lock().unwrap();
+
+            let blobs = shared.entry(branch_id).or_default();
+            *blobs.entry(blob_id).or_insert(0) += 1;
 
             BlobPin {
                 shared: self.shared.clone(),
-                id,
+                branch_id,
+                blob_id,
             }
         }
 
-        /// Returns the ids of all currently pinned blobs.
-        pub fn all(&self) -> Vec<BlobId> {
-            self.shared.lock().unwrap().keys().copied().collect()
+        /// Returns the ids of all currently pinned blobs grouped by their branch id.
+        pub fn all(&self) -> Vec<(PublicKey, Vec<BlobId>)> {
+            self.shared
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(branch_id, blobs)| (*branch_id, blobs.keys().copied().collect()))
+                .collect()
         }
     }
 }
