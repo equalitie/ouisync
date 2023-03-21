@@ -1,6 +1,6 @@
 use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
-    request::{CompoundPermit, PendingRequests},
+    request::{CompoundPermit, PendingRequests, MAX_REQUESTS_IN_FLIGHT},
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
@@ -18,11 +18,9 @@ use tokio::{
 };
 use tracing::instrument;
 
-// Don't send more requests if the number of received responses in the `recv_queue` exceeds this
-// number. Exceeding it means we're processing the responses too slowly so we can decrease the rate
-// at which we're sending requests.
-// TODO: The number is made up, what would be its ideal value?
-const MAX_QUEUED_RESPONSES: usize = 512;
+// Maximum number of respones that a `Client` received but had not yet processed before the client
+// is allowed to send more requests.
+pub(super) const MAX_PENDING_RESPONSES: usize = MAX_REQUESTS_IN_FLIGHT;
 
 pub(super) struct Client {
     store: Store,
@@ -298,7 +296,7 @@ fn start_sender(
 
     let handle = scoped_task::spawn({
         async move {
-            let client_request_limiter = Arc::new(Semaphore::new(MAX_QUEUED_RESPONSES));
+            let client_request_limiter = Arc::new(Semaphore::new(MAX_PENDING_RESPONSES));
 
             loop {
                 let (request, time_created) = match request_rx.recv().await {

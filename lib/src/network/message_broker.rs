@@ -7,7 +7,7 @@ use super::{
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
-    request::MAX_PENDING_REQUESTS,
+    request::MAX_REQUESTS_IN_FLIGHT,
     runtime_id::PublicRuntimeId,
     server::Server,
 };
@@ -62,7 +62,7 @@ impl MessageBroker {
             that_runtime_id,
             dispatcher: MessageDispatcher::new(),
             links: HashMap::default(),
-            request_limiter: Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
+            request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
             span,
         };
 

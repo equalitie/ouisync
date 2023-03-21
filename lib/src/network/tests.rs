@@ -1,7 +1,7 @@
 use super::{
     client::Client,
     message::{Content, Request, Response},
-    request::MAX_PENDING_REQUESTS,
+    request::MAX_REQUESTS_IN_FLIGHT,
     server::Server,
 };
 use crate::{
@@ -576,7 +576,7 @@ fn create_client(store: Store) -> ClientData {
         store,
         send_tx,
         recv_rx,
-        Arc::new(Semaphore::new(MAX_PENDING_REQUESTS)),
+        Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
     );
 
     (client, send_rx, recv_tx)

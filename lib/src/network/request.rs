@@ -15,11 +15,11 @@ use tokio::{
     time::{self, Duration, Instant},
 };
 
-// Maximum number of sent request for which we haven't received a response yet.
+// Maximum number of request which have been sent but for which we haven't received a response yet.
 // Higher values give better performance but too high risks congesting the network. Also there is a
 // point of diminishing returns. 32 seems to be the sweet spot based on a simple experiment.
 // TODO: run more precise benchmarks to find the actual optimum.
-pub(super) const MAX_PENDING_REQUESTS: usize = 32;
+pub(super) const MAX_REQUESTS_IN_FLIGHT: usize = 512;
 
 // If a response to a pending request is not received within this time, a request timeout error is
 // triggered.
