@@ -6,7 +6,7 @@ use crate::{
     event::{Event, Payload},
     index::{Index, InnerNode, LeafNode, RootNode},
 };
-use futures_util::TryStreamExt;
+use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc},
@@ -30,11 +30,11 @@ impl Server {
 
     pub async fn run(&mut self) -> Result<()> {
         let Self { index, tx, rx } = self;
-        let responder = Responder::new(index, tx, rx);
+        let responder = Responder::new(index, tx);
         let monitor = Monitor::new(index, tx);
 
         select! {
-            result = responder.run() => result,
+            result = responder.run(rx) => result,
             result = monitor.run() => result,
         }
     }
@@ -44,23 +44,39 @@ impl Server {
 struct Responder<'a> {
     index: &'a Index,
     tx: &'a Sender,
-    rx: &'a mut Receiver,
 }
 
 impl<'a> Responder<'a> {
-    fn new(index: &'a Index, tx: &'a Sender, rx: &'a mut Receiver) -> Self {
-        Self { index, tx, rx }
+    fn new(index: &'a Index, tx: &'a Sender) -> Self {
+        Self { index, tx }
     }
 
-    async fn run(mut self) -> Result<()> {
-        while let Some(request) = self.rx.recv().await {
-            self.handle_request(request).await?;
+    async fn run(self, rx: &'a mut Receiver) -> Result<()> {
+        let mut handlers = FuturesUnordered::new();
+
+        loop {
+            // The `select!` is used so we can handle multiple requests at once.
+            select! {
+                request = rx.recv() => {
+                    match request {
+                        Some(request) => {
+                            handlers.push(self.handle_request(request));
+                        },
+                        None => break,
+                    }
+                },
+                Some(result) = handlers.next() => {
+                    if result.is_err() {
+                        break;
+                    }
+                },
+            }
         }
 
         Ok(())
     }
 
-    async fn handle_request(&mut self, request: Request) -> Result<()> {
+    async fn handle_request(&self, request: Request) -> Result<()> {
         match request {
             Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
             Request::ChildNodes(parent_node_hash, disambiguator) => {
@@ -72,7 +88,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self), err(Debug))]
-    async fn handle_root_node(&mut self, branch_id: PublicKey) -> Result<()> {
+    async fn handle_root_node(&self, branch_id: PublicKey) -> Result<()> {
         let mut conn = self.index.pool.acquire().await?;
         let root_node = RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await;
 
@@ -102,7 +118,7 @@ impl<'a> Responder<'a> {
 
     #[instrument(skip(self), err(Debug))]
     async fn handle_child_nodes(
-        &mut self,
+        &self,
         parent_hash: Hash,
         disambiguator: ResponseDisambiguator,
     ) -> Result<()> {
@@ -139,7 +155,7 @@ impl<'a> Responder<'a> {
     }
 
     #[instrument(skip(self), err(Debug))]
-    async fn handle_block(&mut self, id: BlockId) -> Result<()> {
+    async fn handle_block(&self, id: BlockId) -> Result<()> {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let mut conn = self.index.pool.acquire().await?;
         let result = block::read(&mut conn, &id, &mut content).await;
