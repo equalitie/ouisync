@@ -70,13 +70,13 @@ impl<'a> Deref for Writer<'a> {
     type Target = Values;
 
     fn deref(&self) -> &Self::Target {
-        &*self.lock
+        &self.lock
     }
 }
 
 impl<'a> DerefMut for Writer<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.lock
+        &mut self.lock
     }
 }
 
@@ -101,31 +101,31 @@ impl<'a> Drop for Writer<'a> {
         if self.lock.db_acquire_durations != self.old.db_acquire_durations {
             self.lock
                 .db_acquire_durations
-                .write_to_span(&self.db_acquire);
+                .write_to_span(self.db_acquire);
         }
 
         if self.lock.db_read_begin_durations != self.old.db_read_begin_durations {
             self.lock
                 .db_read_begin_durations
-                .write_to_span(&self.db_read_begin);
+                .write_to_span(self.db_read_begin);
         }
 
         if self.lock.db_write_begin_durations != self.old.db_write_begin_durations {
             self.lock
                 .db_write_begin_durations
-                .write_to_span(&self.db_write_begin);
+                .write_to_span(self.db_write_begin);
         }
 
         if self.lock.request_queue_durations != self.old.request_queue_durations {
             self.lock
                 .request_queue_durations
-                .write_to_span(&self.request_queue_durations);
+                .write_to_span(self.request_queue_durations);
         }
 
         if self.lock.request_inflight_durations != self.old.request_inflight_durations {
             self.lock
                 .request_inflight_durations
-                .write_to_span(&self.request_inflight_durations);
+                .write_to_span(self.request_inflight_durations);
         }
     }
 }
