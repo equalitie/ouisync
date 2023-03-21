@@ -139,8 +139,7 @@ impl Inner {
                                     state = State::Working;
                                     break;
                                 }
-                                Ok(Payload::BlockReceived { .. } | Payload::FileClosed)
-                                | Err(RecvError::Lagged(_)) => {
+                                Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
                                     // On any other event, let the current job run to completion
                                     // and then start a new one.
                                     state = State::Working;

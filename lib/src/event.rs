@@ -13,6 +13,7 @@ task_local! {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum Payload {
     /// A new snapshot was created in the specified branch.
     BranchChanged(PublicKey),
@@ -22,8 +23,6 @@ pub enum Payload {
         block_id: BlockId,
         branch_id: PublicKey,
     },
-    /// A file was closed
-    FileClosed,
 }
 
 /// Notification event
