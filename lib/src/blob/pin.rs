@@ -85,6 +85,16 @@ impl BlobPinner {
         }
     }
 
+    /// Returns whether the given blob is currently pinned
+    pub fn is_pinned(&self, branch_id: &PublicKey, blob_id: &BlobId) -> bool {
+        self.shared
+            .lock()
+            .unwrap()
+            .get(branch_id)
+            .map(|blobs| blobs.contains_key(blob_id))
+            .unwrap_or(false)
+    }
+
     /// Returns the ids of all currently pinned blobs grouped by their branch id.
     pub fn all(&self) -> Vec<(PublicKey, Vec<BlobId>)> {
         self.shared

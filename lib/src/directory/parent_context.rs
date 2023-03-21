@@ -90,7 +90,7 @@ impl ParentContext {
         }
 
         // Pin the blob so that it's not garbage collected prematurely.
-        let _pin = dst_branch.pin_blob(blob_id);
+        let _pin = dst_branch.pin_blob_for_collect(blob_id);
 
         // Fork the blob first without inserting it into the dst directory. This is because
         // `blob::fork` is not atomic and in case it's interrupted, we don't want overwrite the dst

@@ -75,7 +75,7 @@ impl Content {
                 entry.insert(new_data);
             }
             Entry::Occupied(mut entry) => {
-                check_overwrite(branch, entry.get(), &new_data)?;
+                check_replace(branch, entry.get(), &new_data)?;
                 entry.insert(new_data);
             }
         }
@@ -91,7 +91,7 @@ impl Content {
         new_data: &EntryData,
     ) -> Result<(), EntryExists> {
         if let Some(old_data) = self.entries.get(name) {
-            check_overwrite(branch, old_data, new_data)
+            check_replace(branch, old_data, new_data)
         } else {
             Ok(())
         }
@@ -152,13 +152,12 @@ fn deserialize_entries<'a, T: Deserialize<'a>>(input: &'a [u8]) -> Result<T, Err
     bincode::deserialize(input).map_err(|_| Error::MalformedDirectory)
 }
 
-fn check_overwrite(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<(), EntryExists> {
-    // Overwrite entries only if the new version is more up to date than the old
-    // version. Additionally, if the old entry is `File`, overwrite it only if it's not
-    // currently open.
+fn check_replace(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<(), EntryExists> {
+    // Replace entries only if the new version is more up to date than the old version.
+    // Additionally, if the old entry is `File`, overwrite it only if it's not currently pinned.
 
     if let EntryData::File(old_data) = old {
-        if branch.is_file_open(&old_data.blob_id) {
+        if branch.is_blob_pinned_for_replace(&old_data.blob_id) {
             return Err(EntryExists::Open);
         }
     }

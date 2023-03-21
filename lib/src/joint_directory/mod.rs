@@ -93,7 +93,6 @@ impl JointDirectory {
     /// - Finally, if there are both files and directories, only the directories are retured (merged
     ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
     ///   to unambiguously lookup a directory even in the presence of conflicting files.
-    #[instrument(skip(self), err(Debug))]
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
         // First try exact match as it is more common.
         let mut entries =
@@ -274,7 +273,7 @@ impl JointDirectory {
                         match entry {
                             JointEntryRef::File(entry) => {
                                 match entry.fork(&local_branch).await {
-                                    Ok(()) => (),
+                                    Ok(()) => {}
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
                                         // so can't be automatically merged. We still proceed with merging the

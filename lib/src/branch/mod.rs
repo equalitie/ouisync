@@ -139,12 +139,18 @@ impl Branch {
         self.shared.file_cache.acquire(*self.id(), blob_id)
     }
 
-    pub(crate) fn is_file_open(&self, blob_id: &BlobId) -> bool {
-        self.shared.file_cache.contains(self.id(), blob_id)
+    pub(crate) fn pin_blob_for_collect(&self, blob_id: BlobId) -> BlobPin {
+        self.shared.blob_collect_pinner.pin(*self.id(), blob_id)
     }
 
-    pub(crate) fn pin_blob(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_pinner.pin(*self.id(), blob_id)
+    pub(crate) fn pin_blob_for_replace(&self, blob_id: BlobId) -> BlobPin {
+        self.shared.blob_replace_pinner.pin(*self.id(), blob_id)
+    }
+
+    pub(crate) fn is_blob_pinned_for_replace(&self, blob_id: &BlobId) -> bool {
+        self.shared
+            .blob_replace_pinner
+            .is_pinned(self.id(), blob_id)
     }
 
     pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
@@ -177,7 +183,10 @@ impl Branch {
 #[derive(Clone)]
 pub(crate) struct BranchShared {
     pub branch_pinner: BranchPinner,
-    pub blob_pinner: BlobPinner,
+    // Pins that protect against garbage collection
+    pub blob_collect_pinner: BlobPinner,
+    // Pins that protect blobs against being replaced (that is, overwritten)
+    pub blob_replace_pinner: BlobPinner,
     pub file_cache: Arc<FileCache>,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
@@ -187,7 +196,8 @@ impl BranchShared {
     pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
         Self {
             branch_pinner: BranchPinner::new(),
-            blob_pinner: BlobPinner::new(),
+            blob_collect_pinner: BlobPinner::new(),
+            blob_replace_pinner: BlobPinner::new(),
             file_cache: Arc::new(FileCache::new(event_tx)),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
         }

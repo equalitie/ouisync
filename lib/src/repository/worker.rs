@@ -522,7 +522,7 @@ mod scan {
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
-        let pins = shared.branch_shared.blob_pinner.all();
+        let pins = shared.branch_shared.blob_collect_pinner.all();
         if pins.is_empty() {
             return Ok(());
         }

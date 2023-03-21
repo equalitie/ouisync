@@ -3,7 +3,6 @@
 use crate::{
     crypto::sign::PublicKey,
     directory::{EntryRef, FileRef},
-    version_vector::VersionVector,
 };
 use std::cmp::Ordering;
 
@@ -14,12 +13,7 @@ pub trait Versioned {
 
 impl Versioned for EntryRef<'_> {
     fn compare_versions(&self, other: &Self) -> Option<Ordering> {
-        compare_entry_versions(
-            self.version_vector(),
-            self.is_open(),
-            other.version_vector(),
-            other.is_open(),
-        )
+        self.version_vector().partial_cmp(other.version_vector())
     }
 
     fn branch_id(&self) -> &PublicKey {
@@ -29,40 +23,11 @@ impl Versioned for EntryRef<'_> {
 
 impl Versioned for FileRef<'_> {
     fn compare_versions(&self, other: &Self) -> Option<Ordering> {
-        compare_entry_versions(
-            self.version_vector(),
-            self.is_open(),
-            other.version_vector(),
-            other.is_open(),
-        )
+        self.version_vector().partial_cmp(other.version_vector())
     }
 
     fn branch_id(&self) -> &PublicKey {
         self.branch().id()
-    }
-}
-
-// Compare the entries by their version vectors but override the comparison in case any of the
-// entries is open (in use) such that an open entry is always considered up-to-date. For example,
-// let's have two entries A and B, where A'a vv is {x:1, y:2} and B's vv is {x:1, y:3}, but A is
-// open and B is not. Even though B's vv is happens-after A's, because A is open the comparison
-// will returns `None` which results in both entries being included.
-fn compare_entry_versions(
-    lhs_vv: &VersionVector,
-    lhs_is_open: bool,
-    rhs_vv: &VersionVector,
-    rhs_is_open: bool,
-) -> Option<Ordering> {
-    match (lhs_vv.partial_cmp(rhs_vv), lhs_is_open, rhs_is_open) {
-        (Some(Ordering::Greater), _, false) => Some(Ordering::Greater),
-        (Some(Ordering::Equal), false, false) => Some(Ordering::Equal),
-        (Some(Ordering::Equal), true, false) => Some(Ordering::Greater),
-        (Some(Ordering::Equal), false, true) => Some(Ordering::Less),
-        (Some(Ordering::Less), false, _) => Some(Ordering::Less),
-        (Some(Ordering::Greater), _, true)
-        | (Some(Ordering::Equal), true, true)
-        | (Some(Ordering::Less), true, _) => None,
-        (None, _, _) => None,
     }
 }
 
@@ -139,7 +104,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iterator::{self, PairCombinations};
+    use crate::{
+        iterator::{self, PairCombinations},
+        version_vector::VersionVector,
+    };
     use assert_matches::assert_matches;
     use proptest::{arbitrary::any, collection::vec, sample::Index, strategy::Strategy};
     use std::ops::Range;

@@ -43,14 +43,4 @@ impl FileCache {
             lock
         }
     }
-
-    pub fn contains(&self, branch_id: &PublicKey, blob_id: &BlobId) -> bool {
-        self.slots
-            .lock()
-            .unwrap()
-            .get(branch_id)
-            .and_then(|branch| branch.get(blob_id))
-            .map(|slot| slot.strong_count() > 0)
-            .unwrap_or(false)
-    }
 }

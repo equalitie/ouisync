@@ -36,7 +36,8 @@ impl BlockIds {
             Err(error) => return Err(error),
         };
 
-        tracing::trace!(?upper_bound, ?blob_id);
+        // DEBUG
+        // tracing::trace!(?upper_bound, ?blob_id);
 
         Ok(Self {
             branch,
