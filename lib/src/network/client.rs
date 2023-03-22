@@ -1,6 +1,7 @@
 use super::{
+    constants::MAX_PENDING_RESPONSES,
     message::{Content, Request, Response, ResponseDisambiguator},
-    request::{CompoundPermit, PendingRequests, MAX_REQUESTS_IN_FLIGHT},
+    request::{CompoundPermit, PendingRequests},
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
@@ -17,10 +18,6 @@ use tokio::{
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::instrument;
-
-// Maximum number of respones that a `Client` received but had not yet processed before the client
-// is allowed to send more requests.
-pub(super) const MAX_PENDING_RESPONSES: usize = MAX_REQUESTS_IN_FLIGHT;
 
 pub(super) struct Client {
     store: Store,

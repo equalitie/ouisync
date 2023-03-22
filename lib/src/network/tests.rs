@@ -1,7 +1,7 @@
 use super::{
     client::Client,
+    constants::MAX_REQUESTS_IN_FLIGHT,
     message::{Content, Request, Response},
-    request::MAX_REQUESTS_IN_FLIGHT,
     server::Server,
 };
 use crate::{

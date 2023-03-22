@@ -2,12 +2,12 @@ use super::{
     barrier::{Barrier, BarrierError},
     client::Client,
     connection::ConnectionPermit,
+    constants::MAX_REQUESTS_IN_FLIGHT,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
-    request::MAX_REQUESTS_IN_FLIGHT,
     runtime_id::PublicRuntimeId,
     server::Server,
 };
