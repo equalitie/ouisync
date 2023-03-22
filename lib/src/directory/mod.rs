@@ -37,7 +37,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
-    _pin: Option<BlobPin>,
+    pin: BlobPin,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -103,8 +103,12 @@ impl Directory {
             .initial_version_vector(&name)
             .incremented(*self.branch().id());
         let data = EntryData::file(blob_id, version_vector);
-        let parent =
-            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
+        let parent = ParentContext::new(
+            *self.locator().blob_id(),
+            self.pin.clone(),
+            name.clone(),
+            self.parent.clone(),
+        );
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
@@ -138,8 +142,12 @@ impl Directory {
         op.apply(self.branch().id(), &mut version_vector);
 
         let data = EntryData::directory(blob_id, version_vector);
-        let parent =
-            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
+        let parent = ParentContext::new(
+            *self.locator().blob_id(),
+            self.pin.clone(),
+            name.clone(),
+            self.parent.clone(),
+        );
 
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
@@ -305,11 +313,8 @@ impl Directory {
         }
     }
 
-    // WARNING: The directory returned from this function should not have any write operation
-    // performed on it past the lifetime of `tx` because it can be deleted in the background (due
-    // to not being pinned) which would make any such operations fail.
-    // TODO: consider enforcing this at the type level.
-    async fn open_unpinned(
+    async fn open_in(
+        pin: BlobPin,
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
@@ -322,8 +327,18 @@ impl Directory {
             blob,
             parent,
             entries,
-            _pin: None,
+            pin,
         })
+    }
+
+    async fn open_snapshot(
+        tx: &mut db::ReadTransaction,
+        branch: Branch,
+        locator: Locator,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Content> {
+        let (_, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        Ok(entries)
     }
 
     async fn open(
@@ -340,7 +355,7 @@ impl Directory {
             blob,
             parent,
             entries,
-            _pin: Some(pin),
+            pin,
         })
     }
 
@@ -352,7 +367,7 @@ impl Directory {
             blob,
             parent,
             entries: Content::empty(),
-            _pin: Some(pin),
+            pin,
         }
     }
 
@@ -367,6 +382,7 @@ impl Directory {
 
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
+                        self.pin.clone(),
                         name.into(),
                         self.parent.clone(),
                     );
@@ -407,6 +423,7 @@ impl Directory {
 
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
+                        self.pin.clone(),
                         name.into(),
                         self.parent.clone(),
                     );
@@ -470,10 +487,10 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_unpinned(tx, MissingBlockStrategy::Fail)
+                        .open_snapshot(tx, MissingBlockStrategy::Fail)
                         .await?
-                        .entries()
-                        .any(|entry| !entry.is_tombstone())
+                        .iter()
+                        .any(|(_, data)| !matches!(data, EntryData::Tombstone(_)))
                     {
                         return Err(Error::DirectoryNotEmpty);
                     }

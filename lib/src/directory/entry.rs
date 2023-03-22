@@ -1,4 +1,5 @@
 use super::{
+    content::Content,
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
     Directory, MissingBlockStrategy,
@@ -201,16 +202,15 @@ impl<'a> DirectoryRef<'a> {
         .await
     }
 
-    pub(crate) async fn open_unpinned(
+    pub(super) async fn open_snapshot(
         &self,
         tx: &mut db::ReadTransaction,
         missing_block_strategy: MissingBlockStrategy,
-    ) -> Result<Directory> {
-        Directory::open_unpinned(
+    ) -> Result<Content> {
+        Directory::open_snapshot(
             tx,
             self.branch().clone(),
             self.locator(),
-            Some(self.inner.parent_context()),
             missing_block_strategy,
         )
         .await
@@ -279,6 +279,7 @@ impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
         ParentContext::new(
             *self.parent.locator().blob_id(),
+            self.parent.pin.clone(),
             self.name.into(),
             self.parent.parent.clone(),
         )

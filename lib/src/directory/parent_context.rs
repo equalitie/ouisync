@@ -1,6 +1,6 @@
 use super::{Error, MissingBlockStrategy};
 use crate::{
-    blob,
+    blob::{self, BlobPin},
     blob_id::BlobId,
     branch::Branch,
     db,
@@ -15,18 +15,27 @@ use tracing::instrument;
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
 pub(crate) struct ParentContext {
-    /// BlobId of the parent directory of the entry.
+    // BlobId of the parent directory of the entry.
     directory_id: BlobId,
-    /// The name of the entry in its parent directory.
+    // Pin of the parent directory to protect it from being garbage collected while this
+    // `ParentContext` exists.
+    directory_pin: BlobPin,
+    // The name of the entry in its parent directory.
     entry_name: String,
     // ParentContext of the parent directory ("grandparent context")
     parent: Option<Box<Self>>,
 }
 
 impl ParentContext {
-    pub(super) fn new(directory_id: BlobId, entry_name: String, parent: Option<Self>) -> Self {
+    pub(super) fn new(
+        directory_id: BlobId,
+        directory_pin: BlobPin,
+        entry_name: String,
+        parent: Option<Self>,
+    ) -> Self {
         Self {
             directory_id,
+            directory_pin,
             entry_name,
             parent: parent.map(Box::new),
         }
@@ -39,7 +48,7 @@ impl ParentContext {
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
-        let mut directory = self.open_unpinned(tx, branch).await?;
+        let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.entries.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
         directory.save(tx, &content).await?;
@@ -69,6 +78,7 @@ impl ParentContext {
 
         let new_context = Self {
             directory_id: *directory.locator().blob_id(),
+            directory_pin: directory.pin.clone(),
             entry_name: self.entry_name.clone(),
             parent: directory.parent.clone().map(Box::new),
         };
@@ -153,13 +163,10 @@ impl ParentContext {
         .await
     }
 
-    /// Opens the parent directory of this entry as unpinned (see [`Directory::open_unpinned`]).
-    async fn open_unpinned(
-        &self,
-        tx: &mut db::ReadTransaction,
-        branch: Branch,
-    ) -> Result<Directory> {
-        Directory::open_unpinned(
+    /// Opens the parent directory of this entry.
+    async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
+        Directory::open_in(
+            self.directory_pin.clone(),
             tx,
             branch,
             Locator::head(self.directory_id),
