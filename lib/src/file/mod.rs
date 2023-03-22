@@ -3,7 +3,7 @@ mod lock;
 pub(crate) use self::lock::{FileWriteLock, FileWriteLocker};
 
 use crate::{
-    blob::Blob,
+    blob::{Blob, BlobPin},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -25,6 +25,10 @@ pub struct File {
     blob: Blob,
     parent: ParentContext,
     write_lock: Option<FileWriteLock>,
+    // Pin that protects the file from being garbage collected
+    _collect_pin: BlobPin,
+    // Pin that protects the file from being replaced (forked over, moved over or deleted)
+    _replace_pin: BlobPin,
 }
 
 impl File {
@@ -34,21 +38,31 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
+
         let mut tx = branch.db().begin_read().await?;
 
         Ok(Self {
             blob: Blob::open(&mut tx, branch, locator).await?,
             parent,
             write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
+        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
+
         Self {
             blob: Blob::create(branch, locator),
             parent,
             write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
         }
     }
 
@@ -170,14 +184,22 @@ impl File {
 
         let new_parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
+        // Need to re-pin because the branch changed
+        let collect_pin = dst_branch.pin_blob_for_collect(*self.blob.locator().blob_id());
+        let replace_pin = dst_branch.pin_blob_for_replace(*self.blob.locator().blob_id());
+
         let new_blob = {
             let mut tx = dst_branch.db().begin_read().await?;
             Blob::open(&mut tx, dst_branch.clone(), *self.blob.locator()).await?
         };
 
-        self.blob = new_blob;
-        self.parent = new_parent;
-        self.write_lock = None;
+        *self = Self {
+            blob: new_blob,
+            parent: new_parent,
+            write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
+        };
 
         Ok(())
     }

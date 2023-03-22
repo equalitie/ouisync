@@ -65,21 +65,13 @@ impl Directory {
 
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
-        let Self {
-            blob,
-            parent,
-            entries,
-        } = Self::open(
+        *self = Self::open(
             self.branch().clone(),
             *self.locator(),
             self.parent.as_ref().cloned(),
             MissingBlockStrategy::Fail,
         )
         .await?;
-
-        self.blob = blob;
-        self.parent = parent;
-        self.entries = entries;
 
         Ok(())
     }
@@ -338,8 +330,8 @@ impl Directory {
         Self::open_in(&mut tx, branch, locator, parent, missing_block_strategy).await
     }
 
-    fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let blob = Blob::create(owner_branch, locator);
+    fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
+        let blob = Blob::create(branch, locator);
 
         Directory {
             blob,

@@ -37,7 +37,6 @@ pub(crate) struct Blob {
     current_block: OpenBlock,
     len: u64,
     len_dirty: bool,
-    _pins: [BlobPin; 2],
 }
 
 impl Blob {
@@ -60,9 +59,6 @@ impl Blob {
     ) -> Result<Self> {
         assert_eq!(branch.id(), snapshot.branch_id());
 
-        let collect_pin = branch.pin_blob_for_collect(*head_locator.blob_id());
-        let replace_pin = branch.pin_blob_for_replace(*head_locator.blob_id());
-
         let mut current_block =
             OpenBlock::open_head(tx, snapshot, branch.keys().read(), head_locator).await?;
         let len = current_block.content.read_u64();
@@ -73,15 +69,11 @@ impl Blob {
             current_block,
             len,
             len_dirty: false,
-            _pins: [collect_pin, replace_pin],
         })
     }
 
     /// Creates a new blob.
     pub fn create(branch: Branch, head_locator: Locator) -> Self {
-        let collect_pin = branch.pin_blob_for_collect(*head_locator.blob_id());
-        let replace_pin = branch.pin_blob_for_replace(*head_locator.blob_id());
-
         let current_block = OpenBlock::new_head(head_locator);
 
         Self {
@@ -90,7 +82,6 @@ impl Blob {
             current_block,
             len: 0,
             len_dirty: false,
-            _pins: [collect_pin, replace_pin],
         }
     }
 

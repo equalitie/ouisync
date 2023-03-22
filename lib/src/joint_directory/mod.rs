@@ -23,7 +23,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt, iter, mem,
 };
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
@@ -257,6 +257,8 @@ impl JointDirectory {
         let old_version_vector = local_version.version_vector().await?;
         let new_version_vector = self.merge_version_vectors().await?;
 
+        tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "started");
+
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             // unwrap is ok because we ensured the local version exists by calling `fork` above.
@@ -291,7 +293,9 @@ impl JointDirectory {
                                         MissingBlockStrategy::Fail,
                                     )
                                     .await?;
-                                dir.merge().await?;
+                                dir.merge()
+                                    .instrument(tracing::info_span!("dir", name))
+                                    .await?;
                             }
                         }
                     }
@@ -317,6 +321,11 @@ impl JointDirectory {
             local_version
                 .merge_version_vector(new_version_vector)
                 .await?;
+        }
+
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let vv = local_version.version_vector().await?;
+            tracing::trace!(?vv, bump, "completed");
         }
 
         Ok(local_version.clone())

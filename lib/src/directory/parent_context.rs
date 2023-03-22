@@ -156,11 +156,6 @@ impl ParentContext {
     }
 
     /// Returns the version vector of this entry.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this `ParentContext` doesn't correspond to any existing entry in the parent
-    /// directory.
     pub async fn entry_version_vector(&self, branch: Branch) -> Result<VersionVector> {
         Ok(self
             .open(branch)
