@@ -192,16 +192,21 @@ impl<'a> DirectoryRef<'a> {
         &self,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Directory> {
-        let mut tx = self.branch().db().begin_read().await?;
-        self.open_in(&mut tx, missing_block_strategy).await
+        Directory::open(
+            self.branch().clone(),
+            self.locator(),
+            Some(self.inner.parent_context()),
+            missing_block_strategy,
+        )
+        .await
     }
 
-    pub(crate) async fn open_in(
+    pub(crate) async fn open_unpinned(
         &self,
         tx: &mut db::ReadTransaction,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Directory> {
-        Directory::open_in(
+        Directory::open_unpinned(
             tx,
             self.branch().clone(),
             self.locator(),

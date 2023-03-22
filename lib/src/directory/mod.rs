@@ -17,7 +17,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::Blob,
+    blob::{Blob, BlobPin},
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -37,6 +37,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
+    _pin: Option<BlobPin>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -304,7 +305,11 @@ impl Directory {
         }
     }
 
-    async fn open_in(
+    // WARNING: The directory returned from this function should not have any write operation
+    // performed on it past the lifetime of `tx` because it can be deleted in the background (due
+    // to not being pinned) which would make any such operations fail.
+    // TODO: consider enforcing this at the type level.
+    async fn open_unpinned(
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
@@ -317,6 +322,7 @@ impl Directory {
             blob,
             parent,
             entries,
+            _pin: None,
         })
     }
 
@@ -326,17 +332,27 @@ impl Directory {
         parent: Option<ParentContext>,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
+        let pin = branch.pin_blob_for_collect(*locator.blob_id());
         let mut tx = branch.db().begin_read().await?;
-        Self::open_in(&mut tx, branch, locator, parent, missing_block_strategy).await
+        let (blob, entries) = load(&mut tx, branch, locator, missing_block_strategy).await?;
+
+        Ok(Self {
+            blob,
+            parent,
+            entries,
+            _pin: Some(pin),
+        })
     }
 
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
+        let pin = branch.pin_blob_for_collect(*locator.blob_id());
         let blob = Blob::create(branch, locator);
 
         Directory {
             blob,
             parent,
             entries: Content::empty(),
+            _pin: Some(pin),
         }
     }
 
@@ -454,7 +470,7 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_in(tx, MissingBlockStrategy::Fail)
+                        .open_unpinned(tx, MissingBlockStrategy::Fail)
                         .await?
                         .entries()
                         .any(|entry| !entry.is_tombstone())

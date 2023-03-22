@@ -39,7 +39,7 @@ impl ParentContext {
         branch: Branch,
         op: &VersionVectorOp,
     ) -> Result<()> {
-        let mut directory = self.open_in(tx, branch).await?;
+        let mut directory = self.open_unpinned(tx, branch).await?;
         let mut content = directory.entries.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
         directory.save(tx, &content).await?;
@@ -132,16 +132,14 @@ impl ParentContext {
         &self.entry_name
     }
 
-    /// Opens the parent directory of this entry.
-    pub async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
-        Directory::open_in(
-            tx,
-            branch,
-            Locator::head(self.directory_id),
-            self.parent.as_deref().cloned(),
-            MissingBlockStrategy::Fail,
-        )
-        .await
+    /// Returns the version vector of this entry.
+    pub async fn entry_version_vector(&self, branch: Branch) -> Result<VersionVector> {
+        Ok(self
+            .open(branch)
+            .await?
+            .lookup(&self.entry_name)?
+            .version_vector()
+            .clone())
     }
 
     /// Opens the parent directory of this entry.
@@ -155,13 +153,19 @@ impl ParentContext {
         .await
     }
 
-    /// Returns the version vector of this entry.
-    pub async fn entry_version_vector(&self, branch: Branch) -> Result<VersionVector> {
-        Ok(self
-            .open(branch)
-            .await?
-            .lookup(&self.entry_name)?
-            .version_vector()
-            .clone())
+    /// Opens the parent directory of this entry as unpinned (see [`Directory::open_unpinned`]).
+    async fn open_unpinned(
+        &self,
+        tx: &mut db::ReadTransaction,
+        branch: Branch,
+    ) -> Result<Directory> {
+        Directory::open_unpinned(
+            tx,
+            branch,
+            Locator::head(self.directory_id),
+            self.parent.as_deref().cloned(),
+            MissingBlockStrategy::Fail,
+        )
+        .await
     }
 }
