@@ -18,7 +18,6 @@ use crate::{
 };
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::broadcast;
-use tracing::instrument;
 
 type LocatorHash = Hash;
 
@@ -228,7 +227,6 @@ impl SnapshotData {
     ///
     /// This operation is executed inside a db transaction which makes it atomic even in the
     /// presence of cancellation.
-    #[instrument(skip_all, err(Debug))]
     pub async fn insert_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -252,7 +250,6 @@ impl SnapshotData {
 
     /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
     /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
-    #[instrument(skip_all, err(Debug))]
     pub async fn remove_block(
         &mut self,
         tx: &mut db::WriteTransaction,
@@ -278,7 +275,6 @@ impl SnapshotData {
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    #[instrument(skip_all, err(Debug))]
     pub async fn get_block(
         &self,
         tx: &mut db::ReadTransaction,
@@ -289,7 +285,6 @@ impl SnapshotData {
     }
 
     /// Update the root version vector of this branch.
-    #[instrument(skip_all, fields(op), err(Debug))]
     pub async fn bump(
         &mut self,
         tx: &mut db::WriteTransaction,

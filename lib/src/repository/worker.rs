@@ -414,11 +414,6 @@ mod scan {
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
                     // content yet. It is safe to ignore it.
-
-                    // DEBUG
-                    let vv = branch.version_vector().await?;
-                    tracing::warn!(id = ?branch.id(), ?vv, "branch with missing root entry");
-
                     continue;
                 }
                 Err(error) => {

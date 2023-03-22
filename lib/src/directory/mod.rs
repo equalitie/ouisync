@@ -272,25 +272,34 @@ impl Directory {
             let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(local_branch).await?;
 
-            match parent_dir.lookup(entry_name) {
+            let dir = match parent_dir.lookup(entry_name) {
                 Ok(EntryRef::Directory(entry)) => {
-                    let mut dir = entry.open(MissingBlockStrategy::Fail).await?;
-                    dir.merge_version_vector(vv).await?;
-                    Ok(dir)
+                    // It's possible the entry exists but the directory it points to has already
+                    // been garbage-collected. In that case just recreate it again.
+                    match entry.open(MissingBlockStrategy::Fail).await {
+                        Ok(dir) => Some(dir),
+                        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => None,
+                        Err(error) => return Err(error),
+                    }
                 }
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
                 Ok(EntryRef::File(_)) => {
                     // TODO: return some kind of `Error::Conflict`
-                    Err(Error::EntryIsFile)
+                    return Err(Error::EntryIsFile);
                 }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    parent_dir
-                        .create_directory_with_version_vector_op(
-                            entry_name.to_owned(),
-                            &VersionVectorOp::Merge(vv),
-                        )
-                        .await
-                }
-                Err(error) => Err(error),
+                Err(error) => return Err(error),
+            };
+
+            if let Some(mut dir) = dir {
+                dir.merge_version_vector(vv).await?;
+                Ok(dir)
+            } else {
+                parent_dir
+                    .create_directory_with_version_vector_op(
+                        entry_name.to_owned(),
+                        &VersionVectorOp::Merge(vv),
+                    )
+                    .await
             }
         } else {
             local_branch.open_or_create_root().await
