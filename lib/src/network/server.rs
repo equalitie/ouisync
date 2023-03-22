@@ -1,4 +1,7 @@
-use super::message::{Content, Request, Response, ResponseDisambiguator};
+use super::{
+    constants::MAX_SERVER_PARALLEL_HANDLING,
+    message::{Content, Request, Response, ResponseDisambiguator},
+};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
@@ -55,21 +58,28 @@ impl<'a> Responder<'a> {
         let mut handlers = FuturesUnordered::new();
 
         loop {
-            // The `select!` is used so we can handle multiple requests at once.
-            select! {
-                request = rx.recv() => {
-                    match request {
-                        Some(request) => {
-                            handlers.push(self.handle_request(request));
-                        },
-                        None => break,
-                    }
-                },
-                Some(result) = handlers.next() => {
-                    if result.is_err() {
-                        break;
-                    }
-                },
+            if handlers.len() < MAX_SERVER_PARALLEL_HANDLING {
+                // The `select!` is used so we can handle multiple requests at once.
+                select! {
+                    request = rx.recv() => {
+                        match request {
+                            Some(request) => {
+                                handlers.push(self.handle_request(request));
+                            },
+                            None => break,
+                        }
+                    },
+                    Some(result) = handlers.next() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    },
+                }
+            } else {
+                // Unwrap is OK because we know `handlers` isn't empty at this point.
+                if handlers.next().await.unwrap().is_err() {
+                    break;
+                }
             }
         }
 

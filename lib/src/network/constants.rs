@@ -7,3 +7,6 @@ pub(super) const MAX_REQUESTS_IN_FLIGHT: usize = 512;
 // Maximum number of respones that a `Client` received but had not yet processed before the client
 // is allowed to send more requests.
 pub(super) const MAX_PENDING_RESPONSES: usize = MAX_REQUESTS_IN_FLIGHT;
+
+// Maximum number of parallel tasks for request handling that the Server is going to create.
+pub(super) const MAX_SERVER_PARALLEL_HANDLING: usize = 32;
