@@ -482,8 +482,6 @@ mod attempt_to_merge_concurrent_file {
         case(local_dir, remote_dir).await;
     }
 
-    // FIXME: failing
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn in_subdirectory() {
         let (_base_dir, [local_branch, remote_branch]) = setup().await;
@@ -524,10 +522,10 @@ mod attempt_to_merge_concurrent_file {
         update_file(&local_dir, "cat.jpg", b"v1", &local_branch).await;
         update_file(&remote_dir, "cat.jpg", b"v2", &remote_branch).await;
 
-        // Merge succeeds but skips over the conflicting entries.
-        merge(local_branch.clone(), remote_branch.clone())
-            .await
-            .unwrap();
+        assert_matches!(
+            merge(local_branch.clone(), remote_branch.clone()).await,
+            Err(Error::AmbiguousEntry)
+        );
 
         local_dir.refresh().await.unwrap();
 

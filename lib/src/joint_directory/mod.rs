@@ -246,9 +246,8 @@ impl JointDirectory {
     /// Merge all versions of this `JointDirectory` into a single `Directory`.
     ///
     /// In the presence of conflicts (multiple concurrent versions of the same file) this function
-    /// still proceeds as far as it can, but the conflicting files remain unmerged.
-    ///
-    /// TODO: consider returning the conflicting paths as well.
+    /// still proceeds as far as it can, but the conflicting files remain unmerged. It signals this
+    /// by returning `Error::AmbiguousEntry`.
     #[async_recursion]
     pub async fn merge(&mut self) -> Result<Directory> {
         let local_version = self.fork().await?;
@@ -265,7 +264,7 @@ impl JointDirectory {
             return Ok(self.local_version().unwrap().clone());
         }
 
-        let mut bump = true;
+        let mut conflict = false;
         let mut check_for_removal = Vec::new();
 
         for (name, merge) in self.merge_entries() {
@@ -281,7 +280,7 @@ impl JointDirectory {
                                         // so can't be automatically merged. We still proceed with merging the
                                         // remaining entries but we won't mark this directory as merged (by bumping its
                                         // vv) to prevent the conflicting remote file from being collected.
-                                        bump = false;
+                                        conflict = true;
                                     }
                                     Err(error) => return Err(error),
                                 }
@@ -293,9 +292,17 @@ impl JointDirectory {
                                         MissingBlockStrategy::Fail,
                                     )
                                     .await?;
-                                dir.merge()
+                                match dir
+                                    .merge()
                                     .instrument(tracing::info_span!("dir", name))
-                                    .await?;
+                                    .await
+                                {
+                                    Ok(_) => (),
+                                    Err(Error::AmbiguousEntry) => {
+                                        conflict = true;
+                                    }
+                                    Err(error) => return Err(error),
+                                }
                             }
                         }
                     }
@@ -317,7 +324,7 @@ impl JointDirectory {
                 .await?;
         }
 
-        if bump {
+        if !conflict {
             local_version
                 .merge_version_vector(&new_version_vector)
                 .await?;
@@ -325,10 +332,14 @@ impl JointDirectory {
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let vv = local_version.version_vector().await?;
-            tracing::trace!(?vv, bump, "completed");
+            tracing::trace!(?vv, ?conflict, "completed");
         }
 
-        Ok(local_version.clone())
+        if conflict {
+            Err(Error::AmbiguousEntry)
+        } else {
+            Ok(local_version.clone())
+        }
     }
 
     // Merge the version vectors of all the versions in this joint directory.
