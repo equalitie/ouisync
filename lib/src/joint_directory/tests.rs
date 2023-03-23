@@ -15,15 +15,15 @@ use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     create_file(&mut root0, "file0.txt", &[]).await;
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     create_file(&mut root1, "file1.txt", &[]).await;
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1]);
     let entries: Vec<_> = root.entries().collect();
 
     assert_eq!(entries.len(), 2);
@@ -46,55 +46,55 @@ async fn no_conflict() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_independent_files() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     create_file(&mut root0, "file.txt", &[]).await;
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     create_file(&mut root1, "file.txt", &[]).await;
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1]);
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
 
     let file0 = entries
         .iter()
-        .find(|file| file.first_branch().id() == branches[0].id())
+        .find(|file| file.first_branch().id() == branch0.id())
         .unwrap();
 
-    let unique_name = conflict::create_unique_name("file.txt", branches[0].id());
+    let unique_name = conflict::create_unique_name("file.txt", branch0.id());
 
     assert_eq!(file0.name(), "file.txt");
     assert_eq!(&file0.unique_name(), &unique_name);
 
     let file_ref = root.lookup_unique(&unique_name).unwrap().file().unwrap();
     assert_eq!(file_ref.name(), file0.name());
-    assert_eq!(file_ref.branch().id(), branches[0].id());
+    assert_eq!(file_ref.branch().id(), branch0.id());
 
     let file1 = entries
         .iter()
-        .find(|file| file.first_branch().id() == branches[1].id())
+        .find(|file| file.first_branch().id() == branch1.id())
         .unwrap();
 
-    let unique_name = conflict::create_unique_name("file.txt", branches[1].id());
+    let unique_name = conflict::create_unique_name("file.txt", branch1.id());
 
     assert_eq!(file1.name(), "file.txt");
     assert_eq!(&file1.unique_name(), &unique_name);
 
     let file_ref = root.lookup_unique(&unique_name).unwrap().file().unwrap();
     assert_eq!(file_ref.name(), file1.name());
-    assert_eq!(file_ref.branch().id(), branches[1].id());
+    assert_eq!(file_ref.branch().id(), branch1.id());
 
     let entries: Vec<_> = root.lookup("file.txt").collect();
     assert_eq!(entries.len(), 2);
     assert!(entries
         .iter()
-        .any(|entry| entry.first_branch().id() == branches[0].id()),);
+        .any(|entry| entry.first_branch().id() == branch0.id()),);
     assert!(entries
         .iter()
-        .any(|entry| entry.first_branch().id() == branches[1].id()));
+        .any(|entry| entry.first_branch().id() == branch1.id()));
 
     assert_matches!(root.lookup_unique("file.txt"), Err(Error::AmbiguousEntry));
 
@@ -103,15 +103,15 @@ async fn conflict_independent_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_forked_files() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     create_file(&mut root0, "file.txt", b"one").await;
 
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&root0, "file.txt").await;
 
-    file1.fork(branches[1].clone()).await.unwrap();
+    file1.fork(branch1.clone()).await.unwrap();
     file1.write(b"two").await.unwrap();
     file1.flush().await.unwrap();
     drop(file1);
@@ -125,17 +125,14 @@ async fn conflict_forked_files() {
     root0.refresh().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
-    let root1 = branches[1]
-        .open_root(MissingBlockStrategy::Fail)
-        .await
-        .unwrap();
+    let root1 = branch1.open_root(MissingBlockStrategy::Fail).await.unwrap();
 
-    let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch1.clone()), [root0, root1]);
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
 
-    for branch in &branches {
+    for branch in [&branch0, &branch1] {
         let file = entries
             .iter()
             .find(|entry| entry.first_branch().id() == branch.id())
@@ -152,15 +149,15 @@ async fn conflict_forked_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_directories() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     root0.create_directory("dir".to_owned()).await.unwrap();
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1.create_directory("dir".to_owned()).await.unwrap();
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1]);
 
     let directories: Vec<_> = root
         .entries()
@@ -173,16 +170,16 @@ async fn conflict_directories() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_file_and_single_version_directory() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
 
     create_file(&mut root0, "config", &[]).await;
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1.create_directory("config".to_owned()).await.unwrap();
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1]);
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
@@ -195,7 +192,7 @@ async fn conflict_file_and_single_version_directory() {
     assert_eq!(file_entry.name(), "config");
     assert_eq!(
         &file_entry.unique_name(),
-        &conflict::create_unique_name("config", branches[0].id())
+        &conflict::create_unique_name("config", branch0.id())
     );
 
     let dir_entry = entries
@@ -206,7 +203,7 @@ async fn conflict_file_and_single_version_directory() {
     assert_eq!(dir_entry.name(), "config");
     assert_eq!(
         &dir_entry.unique_name(),
-        &conflict::create_unique_name("config", branches[1].id())
+        &conflict::create_unique_name("config", branch1.id())
     );
 
     let entries = root.lookup("config");
@@ -214,34 +211,35 @@ async fn conflict_file_and_single_version_directory() {
 
     assert_matches!(root.lookup_unique("config"), Err(Error::AmbiguousEntry));
 
-    let name = conflict::create_unique_name("config", branches[0].id());
+    let name = conflict::create_unique_name("config", branch0.id());
     let entry = root.lookup_unique(&name).unwrap();
     assert_eq!(entry.entry_type(), EntryType::File);
-    assert_eq!(entry.file().unwrap().branch().id(), branches[0].id());
+    assert_eq!(entry.file().unwrap().branch().id(), branch0.id());
 
-    let name = conflict::create_unique_name("config", branches[1].id());
+    let name = conflict::create_unique_name("config", branch1.id());
     let entry = root.lookup_unique(&name).unwrap();
     assert_eq!(entry.entry_type(), EntryType::Directory);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_file_and_multi_version_directory() {
-    let (_base_dir, mut branches) = setup(3).await;
+    let (_base_dir, mut branches): (_, [_; 3]) = setup().await;
 
     // Sort the branches by their ids because directory disambiguator is the lexicographically
     // first branch id.
     branches.sort_by(|lhs, rhs| lhs.id().cmp(rhs.id()));
+    let [branch0, branch1, branch2] = branches;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     create_file(&mut root0, "config", &[]).await;
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     root1.create_directory("config".to_owned()).await.unwrap();
 
-    let mut root2 = branches[2].open_or_create_root().await.unwrap();
+    let mut root2 = branch2.open_or_create_root().await.unwrap();
     root2.create_directory("config".to_owned()).await.unwrap();
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1, root2]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1, root2]);
 
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
@@ -253,7 +251,7 @@ async fn conflict_file_and_multi_version_directory() {
 
     assert_eq!(
         &file_entry.unique_name(),
-        &conflict::create_unique_name("config", branches[0].id())
+        &conflict::create_unique_name("config", branch0.id())
     );
 
     let dir_entry = entries
@@ -263,29 +261,26 @@ async fn conflict_file_and_multi_version_directory() {
 
     assert_eq!(
         &dir_entry.unique_name(),
-        &conflict::create_unique_name("config", branches[1].id())
+        &conflict::create_unique_name("config", branch1.id())
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn conflict_identical_versions() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     // Create a file by one branch.
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
     create_file(&mut root0, "file.txt", b"one").await;
 
     // Fork it into the other branch, creating an identical version of it.
     let mut file1 = open_file(&root0, "file.txt").await;
-    file1.fork(branches[1].clone()).await.unwrap();
+    file1.fork(branch1.clone()).await.unwrap();
 
-    let root1 = branches[1]
-        .open_root(MissingBlockStrategy::Fail)
-        .await
-        .unwrap();
+    let root1 = branch1.open_root(MissingBlockStrategy::Fail).await.unwrap();
 
     // Create joint directory using branch 1 as the local branch.
-    let root = JointDirectory::new(Some(branches[1].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch1.clone()), [root0, root1]);
 
     // The file appears among the entries only once...
     assert_eq!(root.entries().count(), 1);
@@ -300,7 +295,7 @@ async fn conflict_identical_versions() {
         .open()
         .await
         .unwrap();
-    assert_eq!(file.branch().id(), branches[1].id());
+    assert_eq!(file.branch().id(), branch1.id());
     drop(file);
 
     // The file can also be retreived using `lookup`...
@@ -309,7 +304,7 @@ async fn conflict_identical_versions() {
     assert!(versions.next().is_none());
 
     // ...and `lookup_version` using the author branch:
-    root.lookup_version("file.txt", branches[0].id()).unwrap();
+    root.lookup_version("file.txt", branch0.id()).unwrap();
 }
 
 //// TODO: test conflict_forked_directories
@@ -318,18 +313,18 @@ async fn conflict_identical_versions() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cd_into_concurrent_directory() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
+    let mut root0 = branch0.open_or_create_root().await.unwrap();
 
     let mut dir0 = root0.create_directory("pics".to_owned()).await.unwrap();
     create_file(&mut dir0, "dog.jpg", &[]).await;
 
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
+    let mut root1 = branch1.open_or_create_root().await.unwrap();
     let mut dir1 = root1.create_directory("pics".to_owned()).await.unwrap();
     create_file(&mut dir1, "cat.jpg", &[]).await;
 
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
+    let root = JointDirectory::new(Some(branch0.clone()), [root0, root1]);
     let dir = root.cd("pics").await.unwrap();
 
     let entries: Vec<_> = dir.entries().collect();
@@ -341,22 +336,22 @@ async fn cd_into_concurrent_directory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_non_existing_file() {
     // 0 - local, 1 - remote
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     let content = b"cat";
 
     // Create local root dir
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
 
     // Create remote root dir
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // Create a file in the remote root
     create_file(&mut remote_root, "cat.jpg", content).await;
 
     // Construct a joint directory over both root dirs and merge it.
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -381,20 +376,20 @@ async fn merge_locally_non_existing_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_older_file() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // Create a file in the remote root
     create_file(&mut remote_root, "cat.jpg", content_v0).await;
 
     // Merge to transfer the file to the local branch
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -402,13 +397,13 @@ async fn merge_locally_older_file() {
     .unwrap();
 
     // Modify the file by the remote branch
-    update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
+    update_file(&remote_root, "cat.jpg", content_v1, &branch1).await;
 
     local_root.refresh().await.unwrap();
     remote_root.refresh().await.unwrap();
 
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -433,18 +428,18 @@ async fn merge_locally_older_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_locally_newer_file() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     let content_v0 = b"version 0";
     let content_v1 = b"version 1";
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     create_file(&mut remote_root, "cat.jpg", content_v0).await;
 
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -453,9 +448,9 @@ async fn merge_locally_newer_file() {
 
     // Modify the file by the local branch
     local_root.refresh().await.unwrap();
-    update_file(&local_root, "cat.jpg", content_v1, &branches[0]).await;
+    update_file(&local_root, "cat.jpg", content_v1, &branch0).await;
 
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root])
         .merge()
         .await
         .unwrap();
@@ -474,207 +469,211 @@ async fn merge_locally_newer_file() {
     assert_eq!(local_content, content_v1);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn attempt_to_merge_concurrent_file() {
-    let (_base_dir, branches) = setup(2).await;
+mod attempt_to_merge_concurrent_file {
+    use super::*;
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn in_root() {
+        let (_base_dir, [local_branch, remote_branch]) = setup().await;
 
-    create_file(&mut remote_root, "cat.jpg", b"v0").await;
+        let local_dir = local_branch.open_or_create_root().await.unwrap();
+        let remote_dir = remote_branch.open_or_create_root().await.unwrap();
 
-    JointDirectory::new(
-        Some(branches[0].clone()),
-        [local_root.clone(), remote_root.clone()],
-    )
-    .merge()
-    .await
-    .unwrap();
+        case(local_dir, remote_dir).await;
+    }
 
-    local_root.refresh().await.unwrap();
-    remote_root.refresh().await.unwrap();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn in_subdirectory() {
+        let (_base_dir, [local_branch, remote_branch]) = setup().await;
 
-    // Modify the file by both branches concurrently
-    update_file(&local_root, "cat.jpg", b"v1", &branches[0]).await;
-    update_file(&remote_root, "cat.jpg", b"v2", &branches[1]).await;
-
-    local_root.refresh().await.unwrap();
-    remote_root.refresh().await.unwrap();
-
-    assert_eq!(
-        local_root
-            .version_vector()
+        let dir_name = "dir";
+        let local_dir = local_branch
+            .open_or_create_root()
             .await
             .unwrap()
-            .partial_cmp(&remote_root.version_vector().await.unwrap()),
-        None
-    );
+            .create_directory(dir_name.into())
+            .await
+            .unwrap();
+        let remote_dir = remote_branch
+            .open_or_create_root()
+            .await
+            .unwrap()
+            .create_directory(dir_name.into())
+            .await
+            .unwrap();
 
-    // Merge succeeds but skips over the conflicting entries.
-    JointDirectory::new(
-        Some(branches[0].clone()),
-        [local_root.clone(), remote_root.clone()],
-    )
-    .merge()
-    .await
-    .unwrap();
+        case(local_dir, remote_dir).await;
+    }
 
-    local_root.refresh().await.unwrap();
+    async fn case(mut local_dir: Directory, mut remote_dir: Directory) {
+        let local_branch = local_dir.branch().clone();
+        let remote_branch = remote_dir.branch().clone();
 
-    // The local version is unchanged
-    assert_eq!(
-        open_file(&local_root, "cat.jpg")
+        create_file(&mut remote_dir, "cat.jpg", b"v0").await;
+
+        merge(local_branch.clone(), remote_branch.clone())
+            .await
+            .unwrap();
+
+        local_dir.refresh().await.unwrap();
+        remote_dir.refresh().await.unwrap();
+
+        // Modify the file by both branches concurrently
+        update_file(&local_dir, "cat.jpg", b"v1", &local_branch).await;
+        update_file(&remote_dir, "cat.jpg", b"v2", &remote_branch).await;
+
+        assert_matches!(
+            merge(local_branch.clone(), remote_branch.clone()).await,
+            Err(Error::AmbiguousEntry)
+        );
+
+        local_dir.refresh().await.unwrap();
+
+        // The local version is unchanged
+        let content = open_file(&local_dir, "cat.jpg")
             .await
             .read_to_end()
             .await
-            .unwrap(),
-        b"v1"
-    );
+            .unwrap();
+        assert_eq!(content, b"v1");
 
-    // There is still only the local version in the local branch
-    assert_eq!(local_root.entries().count(), 1);
-
-    // The branches are still concurrent
-    assert_eq!(
-        local_root
-            .version_vector()
-            .await
-            .unwrap()
-            .partial_cmp(&remote_root.version_vector().await.unwrap()),
-        None
-    );
+        // The branches are still concurrent
+        let local_vv = local_branch.version_vector().await.unwrap();
+        let remote_vv = remote_branch.version_vector().await.unwrap();
+        assert_eq!(local_vv.partial_cmp(&remote_vv), None);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_is_idempotent() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    let vv0 = branches[0].version_vector().await.unwrap();
+    let local_root = branch0.open_or_create_root().await.unwrap();
+    let vv0 = branch0.version_vector().await.unwrap();
 
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // Merge after a remote modification - this causes local modification.
     create_file(&mut remote_root, "cat.jpg", b"v0").await;
 
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let vv1 = branches[0].version_vector().await.unwrap();
+    let vv1 = branch0.version_vector().await.unwrap();
     assert!(vv1 > vv0);
 
     // Merge again. This time there is no local modification because there was no remote
     // modification either.
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let vv2 = branches[0].version_vector().await.unwrap();
+    let vv2 = branch0.version_vector().await.unwrap();
     assert_eq!(vv2, vv1);
 
     // Perform another remote modification and merge again - this causes local modification
     // again.
-    update_file(&remote_root, "cat.jpg", b"v1", &branches[1]).await;
+    update_file(&remote_root, "cat.jpg", b"v1", &branch1).await;
 
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let vv3 = branches[0].version_vector().await.unwrap();
+    let vv3 = branch0.version_vector().await.unwrap();
     assert!(vv3 > vv2);
 
     // Another idempotent merge which causes no local modification.
-    JointDirectory::new(Some(branches[0].clone()), [local_root, remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root, remote_root])
         .merge()
         .await
         .unwrap();
 
-    let vv4 = branches[0].version_vector().await.unwrap();
+    let vv4 = branch0.version_vector().await.unwrap();
     assert_eq!(vv4, vv3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_file_roundtrip() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let local_root = branch0.open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // remote: create the file
     create_file(&mut remote_root, "cat.jpg", b"v0").await;
 
     // local: merge from remote
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let local_vv0 = branches[0].version_vector().await.unwrap();
+    let local_vv0 = branch0.version_vector().await.unwrap();
 
     // remote: merge from local
     JointDirectory::new(
-        Some(branches[1].clone()),
+        Some(branch1.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let remote_vv0 = branches[1].version_vector().await.unwrap();
+    let remote_vv0 = branch1.version_vector().await.unwrap();
 
     assert_eq!(local_vv0, remote_vv0);
 
     // local: merge from remote - this has no effect
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let local_vv1 = branches[0].version_vector().await.unwrap();
+    let local_vv1 = branch0.version_vector().await.unwrap();
     assert_eq!(local_vv1, local_vv0);
 
     // remote: merge from local - this has no effect either
-    JointDirectory::new(Some(branches[1].clone()), [local_root, remote_root])
+    JointDirectory::new(Some(branch1.clone()), [local_root, remote_root])
         .merge()
         .await
         .unwrap();
 
-    let remote_vv1 = branches[1].version_vector().await.unwrap();
+    let remote_vv1 = branch1.version_vector().await.unwrap();
     assert_eq!(remote_vv1, remote_vv0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_create_and_delete_file_roundtrip() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // local: create the file
     create_file(&mut local_root, "monkey.jpg", b"v0").await;
 
     // remote: merge from local
     JointDirectory::new(
-        Some(branches[1].clone()),
+        Some(branch1.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
@@ -692,7 +691,7 @@ async fn merge_create_and_delete_file_roundtrip() {
     remote_root
         .remove_entry(
             "monkey.jpg",
-            branches[1].id(),
+            branch1.id(),
             EntryTombstoneData::removed(file_vv),
         )
         .await
@@ -700,55 +699,52 @@ async fn merge_create_and_delete_file_roundtrip() {
 
     // local: merge from remote
     JointDirectory::new(
-        Some(branches[0].clone()),
+        Some(branch0.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let local_vv = branches[0].version_vector().await.unwrap();
+    let local_vv = branch0.version_vector().await.unwrap();
 
     // remote: merge from local
     JointDirectory::new(
-        Some(branches[1].clone()),
+        Some(branch1.clone()),
         [local_root.clone(), remote_root.clone()],
     )
     .merge()
     .await
     .unwrap();
 
-    let remote_vv = branches[1].version_vector().await.unwrap();
+    let remote_vv = branch1.version_vector().await.unwrap();
 
     assert_eq!(local_vv, remote_vv);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_remote_only() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
     create_file(&mut remote_root, "cat.jpg", b"v0").await;
 
     // When passing only the remote dir to the joint directory the merge still works.
-    JointDirectory::new(Some(branches[0].clone()), [remote_root])
+    JointDirectory::new(Some(branch0.clone()), [remote_root])
         .merge()
         .await
         .unwrap();
 
-    let local_root = branches[0]
-        .open_root(MissingBlockStrategy::Fail)
-        .await
-        .unwrap();
+    let local_root = branch0.open_root(MissingBlockStrategy::Fail).await.unwrap();
     local_root.lookup("cat.jpg").unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_sequential_modifications() {
-    let (_base_dir, branches) = setup_with_rng(StdRng::seed_from_u64(0), 2).await;
+    let (_base_dir, [branch0, branch1]) = setup_with_rng(StdRng::seed_from_u64(0)).await;
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
 
     // Create a file by local, then modify it by remote, then read it back by local verifying
     // the modification by remote got through.
@@ -759,7 +755,7 @@ async fn merge_sequential_modifications() {
     let vv0 = read_version_vector(&local_root, "dog.jpg").await;
 
     JointDirectory::new(
-        Some(branches[1].clone()),
+        Some(branch1.clone()),
         [remote_root.clone(), local_root.clone()],
     )
     .merge()
@@ -771,13 +767,13 @@ async fn merge_sequential_modifications() {
     let vv1 = read_version_vector(&remote_root, "dog.jpg").await;
     assert_eq!(vv1, vv0);
 
-    update_file(&remote_root, "dog.jpg", b"v1", &branches[1]).await;
+    update_file(&remote_root, "dog.jpg", b"v1", &branch1).await;
     remote_root.refresh().await.unwrap();
 
     let vv2 = read_version_vector(&remote_root, "dog.jpg").await;
     assert!(vv2 > vv1);
 
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root])
         .merge()
         .await
         .unwrap();
@@ -793,23 +789,23 @@ async fn merge_sequential_modifications() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_concurrent_directories() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut local_dir = local_root.create_directory("dir".into()).await.unwrap();
     create_file(&mut local_dir, "dog.jpg", &[]).await;
 
     local_dir.refresh().await.unwrap();
     let local_dir_vv = local_dir.version_vector().await.unwrap();
 
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root.create_directory("dir".into()).await.unwrap();
     create_file(&mut remote_dir, "cat.jpg", &[]).await;
 
     remote_dir.refresh().await.unwrap();
     let remote_dir_vv = remote_dir.version_vector().await.unwrap();
 
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root])
         .merge()
         .await
         .unwrap();
@@ -840,29 +836,29 @@ async fn merge_concurrent_directories() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_file_and_tombstone() {
     // Create two branches.
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     // Create a file in the local one.
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut file = create_file(&mut local_root, "dog.jpg", &[]).await;
     let file_vv = file.version_vector().await.unwrap();
 
     // Fork the file into the remote branch.
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    file.fork(branches[1].clone()).await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
+    file.fork(branch1.clone()).await.unwrap();
 
     // Remove the file in the remote branch.
     remote_root
         .remove_entry(
             "dog.jpg",
-            branches[1].id(),
+            branch1.id(),
             EntryTombstoneData::removed(file_vv),
         )
         .await
         .unwrap();
 
     // Merge should remove the file from the local branch.
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root])
         .merge()
         .await
         .unwrap();
@@ -880,19 +876,19 @@ async fn merge_file_and_tombstone() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_moved_file() {
     // Create two branches.
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
     let dir_name = "b";
     let file_name = "a";
     let file_content = b"content of the file";
 
     // Create a file in the local one.
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut file = create_file(&mut local_root, file_name, file_content).await;
 
     // Fork the file into the remote branch
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
-    file.fork(branches[1].clone()).await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
+    file.fork(branch1.clone()).await.unwrap();
 
     // Drop the file otherwise moving it would be blocked (https://github.com/equalitie/ouisync/issues/58)
     drop(file);
@@ -913,13 +909,13 @@ async fn merge_moved_file() {
             entry_data,
             &mut dir,
             file_name,
-            VersionVector::first(*branches[1].id()),
+            VersionVector::first(*branch1.id()),
         )
         .await
         .unwrap();
 
     // Merge back into the local branch
-    JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root])
+    JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root])
         .merge()
         .await
         .unwrap();
@@ -953,22 +949,21 @@ async fn merge_moved_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn remove_non_empty_subdirectory() {
-    let (_base_dir, branches) = setup(2).await;
+    let (_base_dir, [branch0, branch1]) = setup().await;
 
-    let mut local_root = branches[0].open_or_create_root().await.unwrap();
+    let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut local_dir, "foo.txt", &[]).await;
 
     local_root.create_directory("dir1".into()).await.unwrap();
 
-    let mut remote_root = branches[1].open_or_create_root().await.unwrap();
+    let mut remote_root = branch1.open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut remote_dir, "bar.txt", &[]).await;
 
     remote_root.create_directory("dir2".into()).await.unwrap();
 
-    let mut root =
-        JointDirectory::new(Some(branches[0].clone()), [local_root.clone(), remote_root]);
+    let mut root = JointDirectory::new(Some(branch0.clone()), [local_root.clone(), remote_root]);
 
     root.remove_entry_recursively("dir0").await.unwrap();
 
@@ -981,28 +976,26 @@ async fn remove_non_empty_subdirectory() {
     assert_matches!(local_root.lookup("dir1"), Ok(EntryRef::Directory(_)));
 }
 
-async fn setup(branch_count: usize) -> (TempDir, Vec<Branch>) {
-    setup_with_rng(StdRng::from_entropy(), branch_count).await
+async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
+    setup_with_rng::<N>(StdRng::from_entropy()).await
 }
 
 // Useful for debugging non-deterministic failures.
-async fn setup_with_rng(mut rng: StdRng, branch_count: usize) -> (TempDir, Vec<Branch>) {
+async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N]) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
     let shared = BranchShared::new(event_tx.clone());
 
-    let branches = (0..branch_count)
-        .map(|_| {
-            let id = PublicKey::generate(&mut rng);
-            let event_tx = event_tx.clone();
-            let secrets = secrets.clone();
-            let shared = shared.clone();
+    let branches = [(); N].map(|_| {
+        let id = PublicKey::generate(&mut rng);
+        let event_tx = event_tx.clone();
+        let secrets = secrets.clone();
+        let shared = shared.clone();
 
-            let data = BranchData::new(id, event_tx);
-            Branch::new(pool.clone(), data, secrets.into(), shared)
-        })
-        .collect();
+        let data = BranchData::new(id, event_tx);
+        Branch::new(pool.clone(), data, secrets.into(), shared)
+    });
 
     (base_dir, branches)
 }
@@ -1078,4 +1071,15 @@ async fn read_version_vector(parent: &Directory, name: &str) -> VersionVector {
         .unwrap()
         .version_vector()
         .clone()
+}
+
+async fn merge(local_branch: Branch, remote_branch: Branch) -> Result<()> {
+    let local_root = local_branch.open_or_create_root().await.unwrap();
+    let remote_root = remote_branch.open_or_create_root().await.unwrap();
+
+    JointDirectory::new(Some(local_branch.clone()), [local_root, remote_root])
+        .merge()
+        .await?;
+
+    Ok(())
 }

@@ -10,6 +10,7 @@ temp_dir_prefix="ouisync-stress-test"
 build_args="--release -p ouisync --lib"
 
 concurrency=1
+timeout=70s
 log_open=""
 log_dump=""
 
@@ -72,11 +73,20 @@ for process in $(seq $concurrency); do
         local_iteration=0
 
         while true; do
-            if $exe $args > $dir/test-$process.log 2>&1; then
+            if timeout $timeout $exe $args > $dir/test-$process.log 2>&1; then
                 ((local_iteration=local_iteration+1))
-                echo "$process $local_iteration ok" > $pipe
+
+                if !echo "$process $local_iteration ok" > $pipe; then
+                    echo "$(date_tag) Failed to write to pipe"
+                fi
             else
-                echo "$process $local_iteration fail" > $pipe
+                status=$?
+                echo "$(date_tag) Process $process aborted with status $status after $local_iteration iterations"
+
+                if !echo "$process $local_iteration fail" > $pipe; then
+                    echo "$(date_tag) Failed to write to pipe"
+                fi
+
                 break
             fi
         done
@@ -95,7 +105,6 @@ while true; do
             echo "$(date_tag) Iteration #$global_iteration ($process/$local_iteration)"
         else
             aborted_process=$process
-            echo "$(date_tag) Process $aborted_process aborted after $local_iteration iterations"
             break;
         fi
     else

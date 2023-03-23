@@ -266,11 +266,13 @@ mod merge {
             }
         }
 
-        JointDirectory::new(Some(local_branch.clone()), roots)
+        match JointDirectory::new(Some(local_branch.clone()), roots)
             .merge()
-            .await?;
-
-        Ok(())
+            .await
+        {
+            Ok(_) | Err(Error::AmbiguousEntry) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 }
 
