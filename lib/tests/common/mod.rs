@@ -1,9 +1,8 @@
 use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey,
-    device_id::DeviceId,
     network::{Network, Registration},
-    Access, AccessSecrets, ConfigStore, EntryType, Error, Event, File, Payload, PeerAddr,
+    Access, AccessSecrets, ConfigStore, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr,
     Repository, RepositoryDb, Result,
 };
 use rand::Rng;

@@ -23,8 +23,8 @@ impl ConfigStore {
         }
     }
 
-    // Obtain the config entry for the specified key.
-    pub(crate) fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T>
+    /// Obtain the config entry for the specified key.
+    pub fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T>
     where
         T: fmt::Display + FromStr,
     {
@@ -36,7 +36,7 @@ impl ConfigStore {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ConfigKey<T: 'static> {
+pub struct ConfigKey<T: 'static> {
     name: &'static str,
     comment: &'static str,
     _type: PhantomData<&'static T>,
@@ -53,7 +53,7 @@ impl<T> ConfigKey<T> {
 }
 
 #[derive(Clone)]
-pub(crate) struct ConfigEntry<Value>
+pub struct ConfigEntry<Value>
 where
     Value: fmt::Display + FromStr + 'static,
 {

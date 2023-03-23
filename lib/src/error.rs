@@ -12,8 +12,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     #[error("database error")]
     Db(#[from] db::Error),
-    #[error("failed to read from or write into the device ID config file")]
-    DeviceIdConfig(#[source] io::Error),
     #[error("permission denied")]
     PermissionDenied,
     #[error("data is malformed")]
