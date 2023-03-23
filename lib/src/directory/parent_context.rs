@@ -46,7 +46,7 @@ impl ParentContext {
         &self,
         tx: &mut db::WriteTransaction,
         branch: Branch,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.entries.clone();
@@ -121,7 +121,7 @@ impl ParentContext {
             Ok(()) => {
                 directory.save(&mut tx, &content).await?;
                 directory
-                    .commit(tx, content, &VersionVectorOp::Merge(src_vv))
+                    .commit(tx, content, VersionVectorOp::Merge(&src_vv))
                     .await?;
             }
             Err(EntryExists::Same) => {

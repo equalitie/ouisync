@@ -138,7 +138,7 @@ impl File {
             .bump(
                 &mut tx,
                 self.branch().clone(),
-                &VersionVectorOp::IncrementLocal,
+                VersionVectorOp::IncrementLocal,
             )
             .await?;
         tx.commit().await?;

@@ -337,14 +337,14 @@ impl From<sqlx::Error> for ReceiveError {
 }
 
 /// Operation on version vector
-#[derive(Debug)]
-pub(crate) enum VersionVectorOp {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum VersionVectorOp<'a> {
     IncrementLocal,
-    Merge(VersionVector),
+    Merge(&'a VersionVector),
 }
 
-impl VersionVectorOp {
-    pub fn apply(&self, local_id: &PublicKey, target: &mut VersionVector) {
+impl VersionVectorOp<'_> {
+    pub fn apply(self, local_id: &PublicKey, target: &mut VersionVector) {
         match self {
             Self::IncrementLocal => {
                 target.increment(*local_id);

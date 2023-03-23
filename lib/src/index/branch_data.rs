@@ -164,7 +164,7 @@ impl BranchData {
     pub async fn bump(
         &self,
         tx: &mut db::WriteTransaction,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<()> {
         self.load_or_create_snapshot(tx, write_keys)
@@ -288,7 +288,7 @@ impl SnapshotData {
     pub async fn bump(
         &mut self,
         tx: &mut db::WriteTransaction,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<()> {
         let mut new_vv = self.root_node.proof.version_vector.clone();
@@ -769,7 +769,7 @@ mod tests {
                 PruneTestOp::Bump => {
                     let mut tx = pool.begin_write().await.unwrap();
                     snapshot
-                        .bump(&mut tx, &VersionVectorOp::IncrementLocal, &write_keys)
+                        .bump(&mut tx, VersionVectorOp::IncrementLocal, &write_keys)
                         .await
                         .unwrap();
                     tx.commit().await.unwrap();

@@ -470,7 +470,7 @@ async fn create_changeset(
 
     let mut tx = index.pool.begin_write().await.unwrap();
     branch
-        .bump(&mut tx, &VersionVectorOp::IncrementLocal, write_keys)
+        .bump(&mut tx, VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
     tx.commit().await.unwrap();

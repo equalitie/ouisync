@@ -119,7 +119,7 @@ impl Directory {
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
-        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+        self.commit(tx, content, VersionVectorOp::IncrementLocal)
             .await?;
 
         Ok(file)
@@ -128,14 +128,14 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     #[instrument(skip(self))]
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        self.create_directory_with_version_vector_op(name, &VersionVectorOp::IncrementLocal)
+        self.create_directory_with_version_vector_op(name, VersionVectorOp::IncrementLocal)
             .await
     }
 
     async fn create_directory_with_version_vector_op(
         &mut self,
         name: String,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
     ) -> Result<Self> {
         let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
@@ -165,7 +165,7 @@ impl Directory {
     pub async fn open_or_create_directory(
         &mut self,
         name: &str,
-        merge_vv: VersionVector,
+        merge_vv: &VersionVector,
     ) -> Result<Self> {
         loop {
             let entry = match self.lookup(name) {
@@ -193,15 +193,14 @@ impl Directory {
             match self
                 .create_directory_with_version_vector_op(
                     name.to_owned(),
-                    &VersionVectorOp::Merge(merge_vv.clone()),
+                    VersionVectorOp::Merge(merge_vv),
                 )
                 .await
             {
                 Ok(dir) => return Ok(dir),
                 Err(Error::EntryExists) => {
                     // The directory might have been created in the meantime by some other task.
-                    // Try to open it again on the next iteration of the loop (this directory has
-                    // already been reloaded in the above `create_directory_...` call)
+                    // Try to open it again on the next iteration of the loop.
                 }
                 Err(error) => return Err(error),
             }
@@ -328,7 +327,7 @@ impl Directory {
             // at the time it was initially created.
             let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(local_branch).await?;
-            parent_dir.open_or_create_directory(entry_name, vv).await
+            parent_dir.open_or_create_directory(entry_name, &vv).await
         } else {
             local_branch.open_or_create_root().await
         }
@@ -336,9 +335,9 @@ impl Directory {
 
     /// Updates the version vector of this directory by merging it with `vv`.
     #[instrument(skip(self), err(Debug))]
-    pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
+    pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
         let tx = self.branch().db().begin_write().await?;
-        self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
+        self.commit(tx, Content::empty(), VersionVectorOp::Merge(vv))
             .await
     }
 
@@ -572,7 +571,7 @@ impl Directory {
         let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, data)?;
         self.save(tx, &content).await?;
-        self.bump(tx, &VersionVectorOp::IncrementLocal).await?;
+        self.bump(tx, VersionVectorOp::IncrementLocal).await?;
 
         Ok(content)
     }
@@ -609,7 +608,7 @@ impl Directory {
         &mut self,
         mut tx: db::WriteTransaction,
         content: Content,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
     ) -> Result<()> {
         self.bump(&mut tx, op).await?;
         tx.commit().await?;
@@ -620,7 +619,11 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::WriteTransaction, op: &VersionVectorOp) -> Result<()> {
+    async fn bump<'a: 'async_recursion>(
+        &mut self,
+        tx: &mut db::WriteTransaction,
+        op: VersionVectorOp<'a>,
+    ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent.bump(tx, self.blob.branch().clone(), op).await

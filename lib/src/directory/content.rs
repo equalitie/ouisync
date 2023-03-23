@@ -98,7 +98,7 @@ impl Content {
     }
 
     /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, branch: &Branch, name: &str, op: &VersionVectorOp) -> Result<()> {
+    pub fn bump(&mut self, branch: &Branch, name: &str, op: VersionVectorOp<'_>) -> Result<()> {
         op.apply(
             branch.id(),
             self.entries
