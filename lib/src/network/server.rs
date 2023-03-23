@@ -204,10 +204,6 @@ impl<'a> Monitor<'a> {
                         Payload::BranchChanged(branch_id) | Payload::BlockReceived { branch_id, .. },
                     ..
                 }) => self.handle_branch_changed(branch_id).await?,
-                Ok(Event {
-                    payload: Payload::FileClosed,
-                    ..
-                }) => continue,
                 Err(RecvError::Lagged(_)) => {
                     tracing::warn!("event receiver lagged");
                     self.handle_all_branches_changed().await?

@@ -1,4 +1,5 @@
 use super::{
+    content::Content,
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
     Directory, MissingBlockStrategy,
@@ -94,13 +95,6 @@ impl<'a> EntryRef<'a> {
         }
     }
 
-    pub(crate) fn is_open(&self) -> bool {
-        match self {
-            Self::File(e) => e.is_open(),
-            Self::Directory(_) | Self::Tombstone(_) => false,
-        }
-    }
-
     fn inner(&self) -> &RefInner {
         match self {
             Self::File(r) => &r.inner,
@@ -164,10 +158,6 @@ impl<'a> FileRef<'a> {
     pub(crate) fn data(&self) -> &EntryFileData {
         self.entry_data
     }
-
-    pub(crate) fn is_open(&self) -> bool {
-        self.branch().is_file_open(self.blob_id())
-    }
 }
 
 impl fmt::Debug for FileRef<'_> {
@@ -203,20 +193,24 @@ impl<'a> DirectoryRef<'a> {
         &self,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Directory> {
-        let mut tx = self.branch().db().begin_read().await?;
-        self.open_in(&mut tx, missing_block_strategy).await
-    }
-
-    pub(crate) async fn open_in(
-        &self,
-        tx: &mut db::ReadTransaction,
-        missing_block_strategy: MissingBlockStrategy,
-    ) -> Result<Directory> {
-        Directory::open_in(
-            tx,
+        Directory::open(
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),
+            missing_block_strategy,
+        )
+        .await
+    }
+
+    pub(super) async fn open_snapshot(
+        &self,
+        tx: &mut db::ReadTransaction,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Content> {
+        Directory::open_snapshot(
+            tx,
+            self.branch().clone(),
+            self.locator(),
             missing_block_strategy,
         )
         .await
@@ -283,11 +277,7 @@ struct RefInner<'a> {
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext::new(
-            *self.parent.locator().blob_id(),
-            self.name.into(),
-            self.parent.parent.clone(),
-        )
+        self.parent.create_parent_context(self.name.into())
     }
 
     fn branch(&self) -> &'a Branch {

@@ -240,10 +240,7 @@ pub(crate) fn subscribe(
                     payload: Payload::BlockReceived { .. },
                     ..
                 }) => (),
-                Ok(Event {
-                    payload: Payload::BranchChanged(_) | Payload::FileClosed,
-                    ..
-                }) => continue,
+                Ok(Event { .. }) => continue,
                 Err(RecvError::Lagged(_)) => (),
                 Err(RecvError::Closed) => break,
             }

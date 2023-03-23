@@ -1,11 +1,9 @@
-pub(crate) mod pin;
+mod pin;
 
-use self::pin::{
-    blob::{BlobPin, BlobPinner},
-    branch::{BranchPin, BranchPinner},
-};
+pub(crate) use self::pin::{BranchPin, BranchPinner};
 use crate::{
     access_control::AccessKeys,
+    blob::{BlobPin, BlobPinner},
     blob_id::BlobId,
     block::BlockId,
     crypto::sign::PublicKey,
@@ -14,7 +12,7 @@ use crate::{
     directory::{Directory, EntryRef, MissingBlockStrategy},
     error::{Error, Result},
     event::Event,
-    file::{File, FileCache, OpenLock},
+    file::{File, FileWriteLock, FileWriteLocker},
     index::BranchData,
     locator::Locator,
     path,
@@ -137,16 +135,22 @@ impl Branch {
         Ok(block_id)
     }
 
-    pub(crate) fn acquire_open_lock(&self, blob_id: BlobId) -> Arc<OpenLock> {
-        self.shared.file_cache.acquire(*self.id(), blob_id)
+    pub(crate) fn lock_file_for_write(&self, blob_id: BlobId) -> Option<FileWriteLock> {
+        self.shared.file_write_locker.lock(blob_id)
     }
 
-    pub(crate) fn is_file_open(&self, blob_id: &BlobId) -> bool {
-        self.shared.file_cache.contains(self.id(), blob_id)
+    pub(crate) fn pin_blob_for_collect(&self, blob_id: BlobId) -> BlobPin {
+        self.shared.blob_collect_pinner.pin(*self.id(), blob_id)
     }
 
-    pub(crate) fn pin_blob(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_pinner.pin(blob_id)
+    pub(crate) fn pin_blob_for_replace(&self, blob_id: BlobId) -> BlobPin {
+        self.shared.blob_replace_pinner.pin(*self.id(), blob_id)
+    }
+
+    pub(crate) fn is_blob_pinned_for_replace(&self, blob_id: &BlobId) -> bool {
+        self.shared
+            .blob_replace_pinner
+            .is_pinned(self.id(), blob_id)
     }
 
     pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
@@ -179,18 +183,23 @@ impl Branch {
 #[derive(Clone)]
 pub(crate) struct BranchShared {
     pub branch_pinner: BranchPinner,
-    pub blob_pinner: BlobPinner,
-    pub file_cache: Arc<FileCache>,
+    // Pins that protect against garbage collection
+    pub blob_collect_pinner: BlobPinner,
+    // Pins that protect blobs against being replaced (that is, overwritten)
+    pub blob_replace_pinner: BlobPinner,
+    pub file_write_locker: FileWriteLocker,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
 }
 
 impl BranchShared {
-    pub fn new(event_tx: broadcast::Sender<Event>) -> Self {
+    // TODO: event_tx
+    pub fn new(_event_tx: broadcast::Sender<Event>) -> Self {
         Self {
             branch_pinner: BranchPinner::new(),
-            blob_pinner: BlobPinner::new(),
-            file_cache: Arc::new(FileCache::new(event_tx)),
+            blob_collect_pinner: BlobPinner::new(),
+            blob_replace_pinner: BlobPinner::new(),
+            file_write_locker: FileWriteLocker::new(),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
         }
     }

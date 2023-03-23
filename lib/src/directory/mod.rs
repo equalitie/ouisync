@@ -17,7 +17,7 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::Blob,
+    blob::{Blob, BlobPin},
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -37,6 +37,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
+    pin: BlobPin,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -65,20 +66,16 @@ impl Directory {
 
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
-        let Self {
-            blob,
-            parent,
-            entries,
-        } = Self::open(
+        let mut tx = self.branch().db().begin_read().await?;
+        let (blob, entries) = load(
+            &mut tx,
             self.branch().clone(),
             *self.locator(),
-            self.parent.as_ref().cloned(),
             MissingBlockStrategy::Fail,
         )
         .await?;
 
         self.blob = blob;
-        self.parent = parent;
         self.entries = entries;
 
         Ok(())
@@ -110,15 +107,19 @@ impl Directory {
             .initial_version_vector(&name)
             .incremented(*self.branch().id());
         let data = EntryData::file(blob_id, version_vector);
-        let parent =
-            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
+        let parent = ParentContext::new(
+            *self.locator().blob_id(),
+            self.pin.clone(),
+            name.clone(),
+            self.parent.clone(),
+        );
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
         content.insert(self.branch(), name, data)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
-        self.commit(tx, content, &VersionVectorOp::IncrementLocal)
+        self.commit(tx, content, VersionVectorOp::IncrementLocal)
             .await?;
 
         Ok(file)
@@ -127,14 +128,14 @@ impl Directory {
     /// Creates a new subdirectory of this directory.
     #[instrument(skip(self))]
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        self.create_directory_with_version_vector_op(name, &VersionVectorOp::IncrementLocal)
+        self.create_directory_with_version_vector_op(name, VersionVectorOp::IncrementLocal)
             .await
     }
 
     async fn create_directory_with_version_vector_op(
         &mut self,
         name: String,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
     ) -> Result<Self> {
         let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;
@@ -145,8 +146,7 @@ impl Directory {
         op.apply(self.branch().id(), &mut version_vector);
 
         let data = EntryData::directory(blob_id, version_vector);
-        let parent =
-            ParentContext::new(*self.locator().blob_id(), name.clone(), self.parent.clone());
+        let parent = self.create_parent_context(name.clone());
 
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
@@ -157,6 +157,63 @@ impl Directory {
         self.commit(tx, content, op).await?;
 
         Ok(dir)
+    }
+
+    /// Opens a subdirectory or creates it if it doesn't exists and merges the given version vector
+    /// to it.
+    #[instrument(skip(self))]
+    pub async fn open_or_create_directory(
+        &mut self,
+        name: &str,
+        merge_vv: &VersionVector,
+    ) -> Result<Self> {
+        loop {
+            let entry = match self.lookup(name) {
+                Ok(EntryRef::Directory(entry)) => Some(entry),
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
+                Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
+                Err(error) => return Err(error),
+            };
+
+            if let Some(entry) = entry {
+                match entry.open(MissingBlockStrategy::Fail).await {
+                    Ok(mut dir) => {
+                        dir.merge_version_vector(merge_vv).await?;
+                        return Ok(dir);
+                    }
+                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                        // Directory entry exists, but the directory itself might have already been
+                        // garbage-collected. Here we treat it the same as if the directory didn't
+                        // exist.
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            match self
+                .create_directory_with_version_vector_op(
+                    name.to_owned(),
+                    VersionVectorOp::Merge(merge_vv),
+                )
+                .await
+            {
+                Ok(dir) => return Ok(dir),
+                Err(Error::EntryExists) => {
+                    // The directory might have been created in the meantime by some other task.
+                    // Try to open it again on the next iteration of the loop.
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn create_parent_context(&self, entry_name: String) -> ParentContext {
+        ParentContext::new(
+            *self.locator().blob_id(),
+            self.pin.clone(),
+            entry_name,
+            self.parent.clone(),
+        )
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -270,27 +327,7 @@ impl Directory {
             // at the time it was initially created.
             let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(local_branch).await?;
-
-            match parent_dir.lookup(entry_name) {
-                Ok(EntryRef::Directory(entry)) => {
-                    let mut dir = entry.open(MissingBlockStrategy::Fail).await?;
-                    dir.merge_version_vector(vv).await?;
-                    Ok(dir)
-                }
-                Ok(EntryRef::File(_)) => {
-                    // TODO: return some kind of `Error::Conflict`
-                    Err(Error::EntryIsFile)
-                }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => {
-                    parent_dir
-                        .create_directory_with_version_vector_op(
-                            entry_name.to_owned(),
-                            &VersionVectorOp::Merge(vv),
-                        )
-                        .await
-                }
-                Err(error) => Err(error),
-            }
+            parent_dir.open_or_create_directory(entry_name, &vv).await
         } else {
             local_branch.open_or_create_root().await
         }
@@ -298,9 +335,9 @@ impl Directory {
 
     /// Updates the version vector of this directory by merging it with `vv`.
     #[instrument(skip(self), err(Debug))]
-    pub(crate) async fn merge_version_vector(&mut self, vv: VersionVector) -> Result<()> {
+    pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
         let tx = self.branch().db().begin_write().await?;
-        self.commit(tx, Content::empty(), &VersionVectorOp::Merge(vv))
+        self.commit(tx, Content::empty(), VersionVectorOp::Merge(vv))
             .await
     }
 
@@ -313,6 +350,7 @@ impl Directory {
     }
 
     async fn open_in(
+        pin: BlobPin,
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
@@ -325,7 +363,18 @@ impl Directory {
             blob,
             parent,
             entries,
+            pin,
         })
+    }
+
+    async fn open_snapshot(
+        tx: &mut db::ReadTransaction,
+        branch: Branch,
+        locator: Locator,
+        missing_block_strategy: MissingBlockStrategy,
+    ) -> Result<Content> {
+        let (_, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        Ok(entries)
     }
 
     async fn open(
@@ -334,17 +383,28 @@ impl Directory {
         parent: Option<ParentContext>,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
+        let pin = branch.pin_blob_for_collect(*locator.blob_id());
         let mut tx = branch.db().begin_read().await?;
-        Self::open_in(&mut tx, branch, locator, parent, missing_block_strategy).await
+        Self::open_in(
+            pin,
+            &mut tx,
+            branch,
+            locator,
+            parent,
+            missing_block_strategy,
+        )
+        .await
     }
 
-    fn create(owner_branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let blob = Blob::create(owner_branch, locator);
+    fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
+        let pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let blob = Blob::create(branch, locator);
 
         Directory {
             blob,
             parent,
             entries: Content::empty(),
+            pin,
         }
     }
 
@@ -359,6 +419,7 @@ impl Directory {
 
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
+                        self.pin.clone(),
                         name.into(),
                         self.parent.clone(),
                     );
@@ -399,6 +460,7 @@ impl Directory {
 
                     let parent_context = ParentContext::new(
                         *self.locator().blob_id(),
+                        self.pin.clone(),
                         name.into(),
                         self.parent.clone(),
                     );
@@ -462,10 +524,10 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_in(tx, MissingBlockStrategy::Fail)
+                        .open_snapshot(tx, MissingBlockStrategy::Fail)
                         .await?
-                        .entries()
-                        .any(|entry| !entry.is_tombstone())
+                        .iter()
+                        .any(|(_, data)| !matches!(data, EntryData::Tombstone(_)))
                     {
                         return Err(Error::DirectoryNotEmpty);
                     }
@@ -509,7 +571,7 @@ impl Directory {
         let mut content = self.load(tx).await?;
         content.insert(self.branch(), name, data)?;
         self.save(tx, &content).await?;
-        self.bump(tx, &VersionVectorOp::IncrementLocal).await?;
+        self.bump(tx, VersionVectorOp::IncrementLocal).await?;
 
         Ok(content)
     }
@@ -546,7 +608,7 @@ impl Directory {
         &mut self,
         mut tx: db::WriteTransaction,
         content: Content,
-        op: &VersionVectorOp,
+        op: VersionVectorOp<'_>,
     ) -> Result<()> {
         self.bump(&mut tx, op).await?;
         tx.commit().await?;
@@ -557,7 +619,11 @@ impl Directory {
 
     /// Updates the version vectors of this directory and all its ancestors.
     #[async_recursion]
-    async fn bump(&mut self, tx: &mut db::WriteTransaction, op: &VersionVectorOp) -> Result<()> {
+    async fn bump<'a: 'async_recursion>(
+        &mut self,
+        tx: &mut db::WriteTransaction,
+        op: VersionVectorOp<'a>,
+    ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent.bump(tx, self.blob.branch().clone(), op).await

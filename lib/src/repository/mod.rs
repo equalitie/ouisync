@@ -596,10 +596,7 @@ impl Repository {
             }
         };
 
-        let branch = self
-            .shared
-            .inflate(self.shared.store.index.get_branch(id))?;
-        let branch = branch.pin(pin);
+        let branch = self.shared.get_branch(id)?.pin(pin);
 
         Ok(branch)
     }
@@ -744,7 +741,11 @@ struct Shared {
 
 impl Shared {
     pub fn local_branch(&self) -> Result<Branch> {
-        self.inflate(self.store.index.get_branch(self.this_writer_id))
+        self.get_branch(self.this_writer_id)
+    }
+
+    pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
+        self.inflate(self.store.index.get_branch(id))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {

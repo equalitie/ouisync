@@ -1,10 +1,9 @@
-mod cache;
 mod lock;
 
-use self::lock::WriteLock;
-pub(crate) use self::{cache::FileCache, lock::OpenLock};
+pub(crate) use self::lock::{FileWriteLock, FileWriteLocker};
+
 use crate::{
-    blob::Blob,
+    blob::{Blob, BlobPin},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -25,7 +24,11 @@ const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    write_lock: WriteLock,
+    write_lock: Option<FileWriteLock>,
+    // Pin that protects the file from being garbage collected
+    _collect_pin: BlobPin,
+    // Pin that protects the file from being replaced (forked over, moved over or deleted)
+    _replace_pin: BlobPin,
 }
 
 impl File {
@@ -35,24 +38,31 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
+        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
+
         let mut tx = branch.db().begin_read().await?;
-        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
 
         Ok(Self {
             blob: Blob::open(&mut tx, branch, locator).await?,
             parent,
-            write_lock,
+            write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
-        let write_lock = WriteLock::new(branch.acquire_open_lock(*locator.blob_id()));
+        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
 
         Self {
             blob: Blob::create(branch, locator),
             parent,
-            write_lock,
+            write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
         }
     }
 
@@ -128,7 +138,7 @@ impl File {
             .bump(
                 &mut tx,
                 self.branch().clone(),
-                &VersionVectorOp::IncrementLocal,
+                VersionVectorOp::IncrementLocal,
             )
             .await?;
         tx.commit().await?;
@@ -174,15 +184,22 @@ impl File {
 
         let new_parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
+        // Need to re-pin because the branch changed
+        let collect_pin = dst_branch.pin_blob_for_collect(*self.blob.locator().blob_id());
+        let replace_pin = dst_branch.pin_blob_for_replace(*self.blob.locator().blob_id());
+
         let new_blob = {
             let mut tx = dst_branch.db().begin_read().await?;
             Blob::open(&mut tx, dst_branch.clone(), *self.blob.locator()).await?
         };
 
-        self.blob = new_blob;
-        self.parent = new_parent;
-        self.write_lock =
-            WriteLock::new(dst_branch.acquire_open_lock(*self.blob.locator().blob_id()));
+        *self = Self {
+            blob: new_blob,
+            parent: new_parent,
+            write_lock: None,
+            _collect_pin: collect_pin,
+            _replace_pin: replace_pin,
+        };
 
         Ok(())
     }
@@ -200,10 +217,15 @@ impl File {
     }
 
     fn acquire_write_lock(&mut self) -> Result<()> {
-        self.write_lock
-            .acquire()
-            .then_some(())
-            .ok_or(Error::ConcurrentWriteNotSupported)
+        if self.write_lock.is_none() {
+            self.write_lock = Some(
+                self.branch()
+                    .lock_file_for_write(*self.blob.locator().blob_id())
+                    .ok_or(Error::ConcurrentWriteNotSupported)?,
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -228,10 +250,10 @@ mod tests {
         let (_base_dir, [branch0, branch1]) = setup().await;
 
         // Create a file owned by branch 0
-        let mut file0 = branch0.ensure_file_exists("/dog.jpg".into()).await.unwrap();
-
+        let mut file0 = branch0.ensure_file_exists("dog.jpg".into()).await.unwrap();
         file0.write(b"small").await.unwrap();
         file0.flush().await.unwrap();
+        drop(file0);
 
         // Open the file, fork it into branch 1 and modify it.
         let mut file1 = branch0

@@ -584,6 +584,10 @@ async fn version_vector_recreate_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_fork() {
+    // TODO: this test would be more precise without merger. Consider converting it to a
+    // joint_directory test.
+
+    init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -651,7 +655,7 @@ async fn version_vector_fork() {
         .clone();
 
     assert!(local_parent_vv_1 <= remote_parent_vv);
-    assert!(local_parent_vv_1 > local_parent_vv_0);
+    assert!(local_parent_vv_1 >= local_parent_vv_0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

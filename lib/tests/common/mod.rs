@@ -440,10 +440,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
                 ..
             }))
             | Ok(Err(RecvError::Lagged(_))) => return,
-            Ok(Ok(Event {
-                payload: Payload::FileClosed,
-                ..
-            })) => continue,
+            Ok(Ok(Event { .. })) => continue,
             Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
             Err(_) => panic!("timeout waiting for notification"),
         }

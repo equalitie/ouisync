@@ -110,14 +110,19 @@ async fn conflict_forked_files() {
 
     // Fork the file into branch 1 and then modify it.
     let mut file1 = open_file(&root0, "file.txt").await;
+
     file1.fork(branches[1].clone()).await.unwrap();
     file1.write(b"two").await.unwrap();
     file1.flush().await.unwrap();
+    drop(file1);
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file(&root0, "file.txt").await;
     file0.write(b"three").await.unwrap();
     file0.flush().await.unwrap();
+
+    // Refresh branch 0's root to reflect the changes
+    root0.refresh().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
     let root1 = branches[1]
@@ -307,42 +312,6 @@ async fn conflict_identical_versions() {
     root.lookup_version("file.txt", branches[0].id()).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn conflict_open_file() {
-    let (_base_dir, branches) = setup(2).await;
-    let mut root0 = branches[0].open_or_create_root().await.unwrap();
-    let mut root1 = branches[1].open_or_create_root().await.unwrap();
-
-    let file0 = root0.create_file("file.txt".into()).await.unwrap();
-    let vv0 = file0.version_vector().await.unwrap();
-
-    let mut file1 = file0;
-    file1.fork(branches[1].clone()).await.unwrap();
-    file1.write(b"foo").await.unwrap();
-    file1.flush().await.unwrap();
-    root1.refresh().await.unwrap();
-
-    let vv1 = file1.version_vector().await.unwrap();
-    assert!(vv1 > vv0);
-
-    let _file0 = root0
-        .lookup("file.txt")
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
-
-    let root = JointDirectory::new(Some(branches[0].clone()), [root0, root1]);
-
-    // Despite file1 being newer than file0, both versions are present because file0 is open and
-    // might have unflushed modifications.
-    assert_eq!(root.entries().count(), 2);
-    root.lookup_version("file.txt", branches[0].id()).unwrap();
-    root.lookup_version("file.txt", branches[1].id()).unwrap();
-}
-
 //// TODO: test conflict_forked_directories
 //// TODO: test conflict_multiple_files_and_directories
 //// TODO: test conflict_file_with_name_containing_branch_prefix
@@ -433,8 +402,10 @@ async fn merge_locally_older_file() {
     .unwrap();
 
     // Modify the file by the remote branch
-    remote_root.refresh().await.unwrap();
     update_file(&remote_root, "cat.jpg", content_v1, &branches[1]).await;
+
+    local_root.refresh().await.unwrap();
+    remote_root.refresh().await.unwrap();
 
     JointDirectory::new(
         Some(branches[0].clone()),
@@ -445,23 +416,19 @@ async fn merge_locally_older_file() {
     .unwrap();
 
     local_root.refresh().await.unwrap();
-    let local_content = local_root
-        .lookup("cat.jpg")
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
+
+    let local_content = open_file(&local_root, "cat.jpg")
         .await
-        .unwrap()
         .read_to_end()
         .await
         .unwrap();
     assert_eq!(local_content, content_v1);
 
     // Local branch is up to date
-    assert!(
-        local_root.version_vector().await.unwrap() >= remote_root.version_vector().await.unwrap()
-    );
+    let local_vv = local_root.version_vector().await.unwrap();
+    let remote_vv = remote_root.version_vector().await.unwrap();
+
+    assert!(local_vv >= remote_vv, "{local_vv:?} >= {remote_vv:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1075,7 +1042,12 @@ async fn create_file(parent: &mut Directory, name: &str, content: &[u8]) -> File
     file
 }
 
-async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branch: &Branch) {
+async fn update_file(
+    parent: &Directory,
+    name: &str,
+    content: &[u8],
+    local_branch: &Branch,
+) -> File {
     let mut file = open_file(parent, name).await;
 
     file.fork(local_branch.clone()).await.unwrap();
@@ -1083,6 +1055,8 @@ async fn update_file(parent: &Directory, name: &str, content: &[u8], local_branc
     file.truncate(0).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
+
+    file
 }
 
 async fn open_file(parent: &Directory, name: &str) -> File {

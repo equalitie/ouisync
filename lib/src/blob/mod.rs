@@ -1,10 +1,14 @@
 mod block_ids;
 mod open_block;
+mod pin;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
+pub(crate) use self::{
+    block_ids::BlockIds,
+    pin::{BlobPin, BlobPinner},
+};
 use crate::{
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},
@@ -19,7 +23,7 @@ use crate::{
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
-use tracing::Instrument;
+use tracing::{field, instrument, Span};
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -520,16 +524,14 @@ fn block_count(len: u64) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
+#[instrument(skip(tx, snapshot, read_key), fields(branch.id = ?snapshot.branch_id()), err(Debug))]
 async fn read_block(
     tx: &mut db::ReadTransaction,
     snapshot: &SnapshotData,
     read_key: &cipher::SecretKey,
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, _) = snapshot
-        .get_block(tx, &locator.encode(read_key))
-        .instrument(tracing::info_span!("read_block", ?locator))
-        .await?;
+    let (id, _) = snapshot.get_block(tx, &locator.encode(read_key)).await?;
 
     let mut buffer = Buffer::new();
     let nonce = block::read(tx, &id, &mut buffer).await?;
@@ -539,6 +541,11 @@ async fn read_block(
     Ok((id, buffer))
 }
 
+#[instrument(
+    skip(tx, snapshot, read_key, write_keys, buffer),
+    fields(id),
+    err(Debug)
+)]
 async fn write_block(
     tx: &mut db::WriteTransaction,
     snapshot: &mut SnapshotData,
@@ -551,6 +558,8 @@ async fn write_block(
     encrypt_block(read_key, &nonce, &mut buffer);
     let id = BlockId::from_content(&buffer);
 
+    Span::current().record("id", field::debug(&id));
+
     // NOTE: make sure the index and block store operations run in the same order as in
     // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
     // concurrently and `load_block` runs inside a transaction.
@@ -562,7 +571,6 @@ async fn write_block(
             SingleBlockPresence::Present,
             write_keys,
         )
-        .instrument(tracing::info_span!("write_block", ?locator, ?id))
         .await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we

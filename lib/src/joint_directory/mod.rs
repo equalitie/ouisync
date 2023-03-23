@@ -23,7 +23,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt, iter, mem,
 };
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
@@ -93,7 +93,6 @@ impl JointDirectory {
     /// - Finally, if there are both files and directories, only the directories are retured (merged
     ///   into a `JointEntryRef::Directory`) and the files are discarded. This is so it's possible
     ///   to unambiguously lookup a directory even in the presence of conflicting files.
-    #[instrument(skip(self), err(Debug))]
     pub fn lookup_unique<'a>(&'a self, name: &'a str) -> Result<JointEntryRef<'a>> {
         // First try exact match as it is more common.
         let mut entries =
@@ -258,6 +257,8 @@ impl JointDirectory {
         let old_version_vector = local_version.version_vector().await?;
         let new_version_vector = self.merge_version_vectors().await?;
 
+        tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "started");
+
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             // unwrap is ok because we ensured the local version exists by calling `fork` above.
@@ -274,7 +275,7 @@ impl JointDirectory {
                         match entry {
                             JointEntryRef::File(entry) => {
                                 match entry.fork(&local_branch).await {
-                                    Ok(()) => (),
+                                    Ok(()) => {}
                                     Err(Error::EntryExists) => {
                                         // This error indicates the local and the remote files are in conflict and
                                         // so can't be automatically merged. We still proceed with merging the
@@ -292,7 +293,9 @@ impl JointDirectory {
                                         MissingBlockStrategy::Fail,
                                     )
                                     .await?;
-                                dir.merge().await?;
+                                dir.merge()
+                                    .instrument(tracing::info_span!("dir", name))
+                                    .await?;
                             }
                         }
                     }
@@ -316,8 +319,13 @@ impl JointDirectory {
 
         if bump {
             local_version
-                .merge_version_vector(new_version_vector)
+                .merge_version_vector(&new_version_vector)
                 .await?;
+        }
+
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let vv = local_version.version_vector().await?;
+            tracing::trace!(?vv, bump, "completed");
         }
 
         Ok(local_version.clone())
