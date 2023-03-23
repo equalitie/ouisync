@@ -66,13 +66,17 @@ impl Directory {
 
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
-        *self = Self::open(
+        let mut tx = self.branch().db().begin_read().await?;
+        let (blob, entries) = load(
+            &mut tx,
             self.branch().clone(),
             *self.locator(),
-            self.parent.as_ref().cloned(),
             MissingBlockStrategy::Fail,
         )
         .await?;
+
+        self.blob = blob;
+        self.entries = entries;
 
         Ok(())
     }
@@ -142,12 +146,7 @@ impl Directory {
         op.apply(self.branch().id(), &mut version_vector);
 
         let data = EntryData::directory(blob_id, version_vector);
-        let parent = ParentContext::new(
-            *self.locator().blob_id(),
-            self.pin.clone(),
-            name.clone(),
-            self.parent.clone(),
-        );
+        let parent = self.create_parent_context(name.clone());
 
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
@@ -158,6 +157,64 @@ impl Directory {
         self.commit(tx, content, op).await?;
 
         Ok(dir)
+    }
+
+    /// Opens a subdirectory or creates it if it doesn't exists and merges the given version vector
+    /// to it.
+    #[instrument(skip(self))]
+    pub async fn open_or_create_directory(
+        &mut self,
+        name: &str,
+        merge_vv: VersionVector,
+    ) -> Result<Self> {
+        loop {
+            let entry = match self.lookup(name) {
+                Ok(EntryRef::Directory(entry)) => Some(entry),
+                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
+                Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
+                Err(error) => return Err(error),
+            };
+
+            if let Some(entry) = entry {
+                match entry.open(MissingBlockStrategy::Fail).await {
+                    Ok(mut dir) => {
+                        dir.merge_version_vector(merge_vv).await?;
+                        return Ok(dir);
+                    }
+                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                        // Directory entry exists, but the directory itself might have already been
+                        // garbage-collected. Here we treat it the same as if the directory didn't
+                        // exist.
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            match self
+                .create_directory_with_version_vector_op(
+                    name.to_owned(),
+                    &VersionVectorOp::Merge(merge_vv.clone()),
+                )
+                .await
+            {
+                Ok(dir) => return Ok(dir),
+                Err(Error::EntryExists) => {
+                    // The directory might have been created in the meantime by some other task.
+                    // Try to open it again on the next iteration of the loop (this directory has
+                    // already been reloaded in the above `create_directory_...` call)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn create_parent_context(&self, entry_name: String) -> ParentContext {
+        ParentContext::new(
+            *self.locator().blob_id(),
+            self.pin.clone(),
+            entry_name,
+            self.parent.clone(),
+        )
     }
 
     /// Removes a file or subdirectory from this directory. If the entry to be removed is a
@@ -271,36 +328,7 @@ impl Directory {
             // at the time it was initially created.
             let vv = VersionVector::first(*self.branch().id());
             let mut parent_dir = parent_dir.fork(local_branch).await?;
-
-            let dir = match parent_dir.lookup(entry_name) {
-                Ok(EntryRef::Directory(entry)) => {
-                    // It's possible the entry exists but the directory it points to has already
-                    // been garbage-collected. In that case just recreate it again.
-                    match entry.open(MissingBlockStrategy::Fail).await {
-                        Ok(dir) => Some(dir),
-                        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => None,
-                        Err(error) => return Err(error),
-                    }
-                }
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
-                Ok(EntryRef::File(_)) => {
-                    // TODO: return some kind of `Error::Conflict`
-                    return Err(Error::EntryIsFile);
-                }
-                Err(error) => return Err(error),
-            };
-
-            if let Some(mut dir) = dir {
-                dir.merge_version_vector(vv).await?;
-                Ok(dir)
-            } else {
-                parent_dir
-                    .create_directory_with_version_vector_op(
-                        entry_name.to_owned(),
-                        &VersionVectorOp::Merge(vv),
-                    )
-                    .await
-            }
+            parent_dir.open_or_create_directory(entry_name, vv).await
         } else {
             local_branch.open_or_create_root().await
         }
@@ -358,14 +386,15 @@ impl Directory {
     ) -> Result<Self> {
         let pin = branch.pin_blob_for_collect(*locator.blob_id());
         let mut tx = branch.db().begin_read().await?;
-        let (blob, entries) = load(&mut tx, branch, locator, missing_block_strategy).await?;
-
-        Ok(Self {
-            blob,
-            parent,
-            entries,
+        Self::open_in(
             pin,
-        })
+            &mut tx,
+            branch,
+            locator,
+            parent,
+            missing_block_strategy,
+        )
+        .await
     }
 
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {

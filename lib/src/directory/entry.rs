@@ -277,12 +277,7 @@ struct RefInner<'a> {
 
 impl<'a> RefInner<'a> {
     fn parent_context(&self) -> ParentContext {
-        ParentContext::new(
-            *self.parent.locator().blob_id(),
-            self.parent.pin.clone(),
-            self.name.into(),
-            self.parent.parent.clone(),
-        )
+        self.parent.create_parent_context(self.name.into())
     }
 
     fn branch(&self) -> &'a Branch {

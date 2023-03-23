@@ -88,14 +88,18 @@ echo "$(date_tag) Awaiting first process to fail"
 global_iteration=0
 aborted_process=""
 
-while read process local_iteration status < $pipe; do
-    if [ "$status" = "ok" ]; then
-        ((global_iteration=global_iteration+1))
-        echo "$(date_tag) Iteration #$global_iteration ($process/$local_iteration)"
+while true; do
+    if read process local_iteration status < $pipe; then
+        if [ "$status" = "ok" ]; then
+            ((global_iteration=global_iteration+1))
+            echo "$(date_tag) Iteration #$global_iteration ($process/$local_iteration)"
+        else
+            aborted_process=$process
+            echo "$(date_tag) Process $aborted_process aborted after $local_iteration iterations"
+            break;
+        fi
     else
-        aborted_process=$process
-        echo "$(date_tag) Process $aborted_process aborted after $local_iteration iterations"
-        break;
+        echo "$(date_tag) Failed to read from pipe"
     fi
 done
 
