@@ -1,5 +1,8 @@
-use crate::error::{Error, Result};
-use ouisync_lib::{ConfigKey, ConfigStore, DeviceId};
+use crate::{
+    config::{ConfigKey, ConfigStore},
+    error::{Error, Result},
+};
+use ouisync_lib::DeviceId;
 use rand::{rngs::OsRng, Rng};
 use std::io::ErrorKind;
 

@@ -18,7 +18,6 @@ mod blob_id;
 mod block;
 mod branch;
 mod collections;
-mod config;
 mod conflict;
 mod db;
 mod debug;
@@ -50,7 +49,6 @@ pub use self::{
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     block::BLOCK_SIZE,
     branch::Branch,
-    config::{ConfigKey, ConfigStore},
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, EntryRef, EntryType},

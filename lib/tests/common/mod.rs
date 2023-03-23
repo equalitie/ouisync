@@ -2,8 +2,8 @@ use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey,
     network::{Network, Registration},
-    Access, AccessSecrets, ConfigStore, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr,
-    Repository, RepositoryDb, Result,
+    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
+    RepositoryDb, Result,
 };
 use rand::Rng;
 use std::{
@@ -224,10 +224,7 @@ pub(crate) mod actor {
     use super::*;
 
     pub(crate) fn create_unbound_network() -> Network {
-        let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
-        let config_store = ConfigStore::new(config_store);
-
-        Network::new(config_store)
+        Network::new()
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {

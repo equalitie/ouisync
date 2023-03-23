@@ -33,6 +33,13 @@ impl PeerAddr {
         self.socket_addr().port()
     }
 
+    pub fn set_port(&mut self, port: u16) {
+        match self {
+            Self::Tcp(addr) => addr.set_port(port),
+            Self::Quic(addr) => addr.set_port(port),
+        }
+    }
+
     pub fn peer_port(&self) -> PeerPort {
         match self {
             Self::Tcp(addr) => PeerPort::Tcp(addr.port()),

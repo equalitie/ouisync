@@ -78,10 +78,10 @@ impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
             .await?;
 
         for line in self.key.comment.lines() {
-            file.write_all(format!("# {}\n", line).as_bytes()).await?;
+            file.write_all(format!("# {line}\n").as_bytes()).await?;
         }
 
-        file.write_all(format!("\n{}\n", value).as_bytes()).await?;
+        file.write_all(format!("\n{value}\n").as_bytes()).await?;
 
         Ok(())
     }

@@ -206,6 +206,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => {
                 ouisync_bridge::network::bind(
                     &self.state.network,
+                    &self.state.config,
                     quic_v4,
                     quic_v6,
                     tcp_v4,

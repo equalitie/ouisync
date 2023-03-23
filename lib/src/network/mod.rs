@@ -1,6 +1,5 @@
 mod barrier;
 mod client;
-mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
@@ -44,7 +43,6 @@ pub use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    config::ConfigStore,
     repository::RepositoryId,
     store::Store,
     sync::uninitialized_watch,
@@ -77,9 +75,10 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(config: ConfigStore) -> Self {
+    #[allow(clippy::new_without_default)] // Default doesn't seem right for this
+    pub fn new() -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(config, incoming_tx);
+        let gateway = Gateway::new(incoming_tx);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is

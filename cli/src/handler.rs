@@ -7,11 +7,12 @@ use camino::Utf8PathBuf;
 use dashmap::{mapref::entry::Entry, DashMap};
 use futures_util::future;
 use ouisync_bridge::{
+    config::ConfigStore,
     error::{Error, Result},
     network, repository,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, ConfigStore, PeerAddr, ShareToken};
+use ouisync_lib::{network::Network, PeerAddr, ShareToken};
 use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
@@ -30,7 +31,7 @@ impl State {
 
         let network = {
             let _enter = tracing::info_span!("Network").entered();
-            Network::new(config.clone())
+            Network::new()
         };
 
         Self {
@@ -294,7 +295,15 @@ impl ouisync_bridge::transport::Handler for Handler {
                     }
                 }
 
-                network::bind(&self.state.network, quic_v4, quic_v6, tcp_v4, tcp_v6).await;
+                network::bind(
+                    &self.state.network,
+                    &self.state.config,
+                    quic_v4,
+                    quic_v6,
+                    tcp_v4,
+                    tcp_v6,
+                )
+                .await;
 
                 Ok(().into())
             }
