@@ -18,7 +18,6 @@ impl BlockTracker {
             shared: Arc::new(Shared {
                 inner: BlockingMutex::new(Inner {
                     missing_blocks: HashMap::default(),
-                    pending_blocks: HashMap::default(),
                     clients: Slab::new(),
                 }),
                 notify_tx,
@@ -30,7 +29,16 @@ impl BlockTracker {
     pub fn begin_require(&self, block_id: BlockId) -> Require {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        *inner.pending_blocks.entry(block_id).or_insert(0) += 1;
+        inner
+            .missing_blocks
+            .entry(block_id)
+            .or_insert_with(|| MissingBlock {
+                clients: HashSet::default(),
+                accepted_by: None,
+                being_required: 0,
+                required: 0,
+            })
+            .being_required += 1;
 
         Require {
             shared: self.shared.clone(),
@@ -43,8 +51,6 @@ impl BlockTracker {
         tracing::trace!(?block_id, "complete");
 
         let mut inner = self.shared.inner.lock().unwrap();
-
-        inner.pending_blocks.remove(block_id);
 
         let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
             missing_block
@@ -114,7 +120,9 @@ impl BlockTrackerClient {
             .entry(block_id)
             .or_insert_with(|| MissingBlock {
                 clients: HashSet::default(),
-                state: MissingBlockState::Offered,
+                accepted_by: None,
+                being_required: 0,
+                required: 0,
             });
 
         missing_block.clients.insert(self.client_id);
@@ -134,11 +142,9 @@ impl BlockTrackerClient {
 
         // unwrap is ok because of the invariant in `Inner`
         let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+        missing_block.clients.remove(&self.client_id);
 
-        if missing_block
-            .state
-            .switch_accepted_to_required(self.client_id)
-        {
+        if missing_block.unaccept_by(self.client_id) {
             self.shared.notify();
         }
     }
@@ -171,10 +177,8 @@ impl BlockTrackerClient {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-            if missing_block
-                .state
-                .switch_required_to_accepted(self.client_id)
-            {
+            if missing_block.required > 0 && missing_block.accepted_by.is_none() {
+                missing_block.accepted_by = Some(self.client_id);
                 return Some(*block_id);
             }
         }
@@ -195,10 +199,7 @@ impl Drop for BlockTrackerClient {
 
             missing_block.clients.remove(&self.client_id);
 
-            if missing_block
-                .state
-                .switch_accepted_to_required(self.client_id)
-            {
+            if missing_block.unaccept_by(self.client_id) {
                 notify = true;
             }
         }
@@ -218,48 +219,41 @@ impl Require {
     pub fn commit(self) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.pending_blocks.contains_key(&self.block_id) {
-            // Block already completed in the meantime.
-            return;
-        }
+        match inner.missing_blocks.entry(self.block_id) {
+            Entry::Occupied(mut entry) => {
+                let missing_block = entry.get_mut();
 
-        let new = match inner.missing_blocks.entry(self.block_id) {
-            Entry::Occupied(mut entry) => entry.get_mut().state.switch_offered_to_required(),
-            Entry::Vacant(entry) => {
-                entry.insert(MissingBlock {
-                    clients: HashSet::default(),
-                    state: MissingBlockState::Required,
-                });
+                if missing_block.required == 0 {
+                    tracing::trace!(block_id = ?self.block_id, "require");
+                    self.shared.notify();
+                }
 
-                true
+                missing_block.required += 1;
             }
+            Entry::Vacant(_) => return,
         };
-
-        if new {
-            tracing::trace!(block_id = ?self.block_id, "require");
-            self.shared.notify();
-        }
     }
 }
 
 impl Drop for Require {
     fn drop(&mut self) {
-        match self
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .pending_blocks
-            .entry(self.block_id)
-        {
+        let mut inner = self.shared.inner.lock().unwrap();
+        let mut offered_by = Default::default();
+
+        match inner.missing_blocks.entry(self.block_id) {
             Entry::Occupied(mut entry) => {
-                let rc = entry.get_mut();
-                *rc -= 1;
-                if *rc == 0 {
+                let missing_block = entry.get_mut();
+                missing_block.being_required -= 1;
+                if missing_block.being_required == 0 && missing_block.required == 0 {
+                    std::mem::swap(&mut offered_by, &mut missing_block.clients);
                     entry.remove();
                 }
             }
             Entry::Vacant(_) => {}
+        }
+
+        for client_id in offered_by {
+            inner.clients[client_id].remove(&self.block_id);
         }
     }
 }
@@ -286,51 +280,27 @@ impl Shared {
 // and vice-versa.
 struct Inner {
     missing_blocks: HashMap<BlockId, MissingBlock>,
-    pending_blocks: HashMap<BlockId, usize>,
     clients: Slab<HashSet<BlockId>>,
 }
 
+#[derive(Debug)]
 struct MissingBlock {
     clients: HashSet<ClientId>,
-    state: MissingBlockState,
+    accepted_by: Option<ClientId>,
+    being_required: usize,
+    required: usize,
 }
 
-#[derive(Debug)]
-enum MissingBlockState {
-    Offered,
-    Required,
-    Accepted(ClientId),
-}
-
-impl MissingBlockState {
-    fn switch_offered_to_required(&mut self) -> bool {
-        match self {
-            Self::Offered => {
-                *self = Self::Required;
-                true
+impl MissingBlock {
+    fn unaccept_by(&mut self, client_id: ClientId) -> bool {
+        if let Some(accepted_by) = &self.accepted_by {
+            if accepted_by == &client_id {
+                self.accepted_by = None;
+                return true;
             }
-            Self::Required | Self::Accepted(_) => false,
         }
-    }
 
-    fn switch_required_to_accepted(&mut self, acceptor_id: ClientId) -> bool {
-        match self {
-            Self::Required => {
-                *self = Self::Accepted(acceptor_id);
-                true
-            }
-            Self::Offered | Self::Accepted(_) => false,
-        }
-    }
-
-    fn switch_accepted_to_required(&mut self, acceptor_id: ClientId) -> bool {
-        match self {
-            Self::Accepted(client_id) if *client_id == acceptor_id => {
-                *self = Self::Required;
-                true
-            }
-            Self::Accepted(_) | Self::Offered | Self::Required => false,
-        }
+        return false;
     }
 }
 
@@ -392,6 +362,16 @@ mod tests {
 
         assert_eq!(client0.try_accept(), None);
         assert_eq!(client1.try_accept(), Some(block.id));
+
+        tracker.complete(&block.id);
+
+        assert!(tracker
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .missing_blocks
+            .is_empty());
     }
 
     #[test]
