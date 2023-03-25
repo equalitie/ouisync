@@ -1,5 +1,5 @@
 use super::{
-    message::{Content, Request, Response, ResponseDisambiguator},
+    message::{request, Content, Request, Response, ResponseDisambiguator},
     request::{CompoundPermit, PendingRequests, MAX_REQUESTS_IN_FLIGHT},
 };
 use crate::{
@@ -72,7 +72,7 @@ impl Client {
         loop {
             select! {
                 block_id = self.block_tracker.accept() => {
-                    self.enqueue_request(Request::Block(block_id));
+                    self.enqueue_request(request::Block(block_id).into());
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -169,10 +169,10 @@ impl Client {
 
         if updated {
             tracing::trace!("received updated root node");
-            self.enqueue_request(Request::ChildNodes(
-                hash,
-                ResponseDisambiguator::new(summary.block_presence),
-            ));
+            self.enqueue_request(
+                request::ChildNodes(hash, ResponseDisambiguator::new(summary.block_presence))
+                    .into(),
+            );
         } else {
             tracing::trace!("received outdated root node");
         }
@@ -203,16 +203,19 @@ impl Client {
         );
 
         for node in updated_nodes {
-            self.enqueue_request(Request::ChildNodes(
-                node.hash,
-                ResponseDisambiguator::new(node.summary.block_presence),
-            ));
+            self.enqueue_request(
+                request::ChildNodes(
+                    node.hash,
+                    ResponseDisambiguator::new(node.summary.block_presence),
+                )
+                .into(),
+            );
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.enqueue_request(Request::RootNode(branch_id));
+            self.enqueue_request(request::RootNode(branch_id).into());
         }
 
         Ok(())
@@ -262,7 +265,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.enqueue_request(Request::RootNode(branch_id));
+            self.enqueue_request(request::RootNode(branch_id).into());
         }
 
         Ok(())
@@ -352,19 +355,21 @@ enum ProcessedResponse {
 impl ProcessedResponse {
     fn to_request(&self) -> Request {
         match self {
-            Self::Success(Success::RootNode { proof, .. }) => Request::RootNode(proof.writer_id),
+            Self::Success(Success::RootNode { proof, .. }) => {
+                request::RootNode(proof.writer_id).into()
+            }
             Self::Success(Success::InnerNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
+                request::ChildNodes(nodes.hash(), *disambiguator).into()
             }
             Self::Success(Success::LeafNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
+                request::ChildNodes(nodes.hash(), *disambiguator).into()
             }
-            Self::Success(Success::Block { data, .. }) => Request::Block(data.id),
-            Self::Failure(Failure::RootNode(branch_id)) => Request::RootNode(*branch_id),
+            Self::Success(Success::Block { data, .. }) => request::Block(data.id).into(),
+            Self::Failure(Failure::RootNode(branch_id)) => request::RootNode(*branch_id).into(),
             Self::Failure(Failure::ChildNodes(hash, disambiguator)) => {
-                Request::ChildNodes(*hash, *disambiguator)
+                request::ChildNodes(*hash, *disambiguator).into()
             }
-            Self::Failure(Failure::Block(block_id)) => Request::Block(*block_id),
+            Self::Failure(Failure::Block(block_id)) => request::Block(*block_id).into(),
         }
     }
 }

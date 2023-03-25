@@ -78,12 +78,9 @@ impl<'a> Responder<'a> {
 
     async fn handle_request(&self, request: Request) -> Result<()> {
         match request {
-            Request::RootNode(branch_id) => self.handle_root_node(branch_id).await,
-            Request::ChildNodes(parent_node_hash, disambiguator) => {
-                self.handle_child_nodes(parent_node_hash, disambiguator)
-                    .await
-            }
-            Request::Block(id) => self.handle_block(id).await,
+            Request::RootNode(rq) => self.handle_root_node(rq.0).await,
+            Request::ChildNodes(rq) => self.handle_child_nodes(rq.0, rq.1).await,
+            Request::Block(rq) => self.handle_block(rq.0).await,
         }
     }
 
