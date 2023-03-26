@@ -1,6 +1,7 @@
 mod barrier;
 mod client;
 mod connection;
+mod constants;
 mod crypto;
 pub mod dht_discovery;
 mod gateway;
