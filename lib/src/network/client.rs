@@ -1,14 +1,12 @@
 use super::{
-    message::{
-        request, response, Content, ProcessedResponse, Request, Response, ResponseDisambiguator,
-    },
+    message::{Content, ProcessedResponse, Response, ResponseDisambiguator},
     request::{
         CompoundPermit, PendingRequest, PendingRequests, PendingResponse, MAX_REQUESTS_IN_FLIGHT,
     },
 };
 use crate::{
-    block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    block::{BlockData, BlockNonce, BlockTrackerClient},
+    crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     repository_stats::RepositoryStats,
@@ -85,7 +83,6 @@ impl Client {
                         break;
                     }
                 }
-                _ = self.pending_requests.expired() => return Err(Error::RequestTimeout),
             }
 
             while let Some((response, _permit)) = self.dequeue_response() {

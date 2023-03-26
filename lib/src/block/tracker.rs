@@ -255,7 +255,7 @@ impl AcceptedBlock {
         };
 
         for client_id in missing_block.clients {
-            if let Some(block_ids) = inner.clients.get_mut(self.client_id) {
+            if let Some(block_ids) = inner.clients.get_mut(client_id) {
                 block_ids.remove(&self.block_id);
             }
         }
@@ -268,7 +268,12 @@ impl AcceptedBlock {
     fn cancel_with_reason(&self, reason: &'static str) {
         let mut inner = self.shared.inner.lock().unwrap();
 
-        if !inner.clients[self.client_id].remove(&self.block_id) {
+        let client = match inner.clients.get_mut(self.client_id) {
+            Some(client) => client,
+            None => return,
+        };
+
+        if !client.remove(&self.block_id) {
             return;
         }
 
