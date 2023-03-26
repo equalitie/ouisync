@@ -54,6 +54,7 @@ pub(super) enum PendingResponse {
     Block {
         data: BlockData,
         nonce: BlockNonce,
+        block_promise: Option<BlockPromise>,
     },
 }
 
@@ -108,8 +109,8 @@ impl PendingRequests {
         let response = ProcessedResponse::from(response);
         let request = response.to_request();
 
-        if let Some(data) = self.map.lock().unwrap().remove(&request) {
-            self.request_removed(&request, Some(data.timestamp));
+        if let Some(request_data) = self.map.lock().unwrap().remove(&request) {
+            self.request_removed(&request, Some(request_data.timestamp));
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
             match response {
@@ -125,10 +126,14 @@ impl PendingRequests {
                             PendingResponse::LeafNodes(hash, disambiguator)
                         }
                         processed_response::Success::Block { data, nonce } => {
-                            PendingResponse::Block { data, nonce }
+                            PendingResponse::Block {
+                                data,
+                                nonce,
+                                block_promise: request_data.block_promise,
+                            }
                         }
                     };
-                    Some((r, Some(data.permit.client_permit)))
+                    Some((r, Some(request_data.permit.client_permit)))
                 }
                 ProcessedResponse::Failure(_) => None,
             }
