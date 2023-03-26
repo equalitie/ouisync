@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{array::TryFromSliceError, fmt};
 
 mod store;
-mod tracker;
+pub(crate) mod tracker;
 
 pub(crate) use self::{
     store::{count, exists, read, remove, write, BlockNonce},
