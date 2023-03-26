@@ -162,10 +162,10 @@ impl BlockTrackerClient {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept(&mut self) -> AcceptedBlock {
+    pub async fn accept(&mut self) -> BlockPromise {
         loop {
-            if let Some(accepted_block) = self.try_accept() {
-                return accepted_block;
+            if let Some(block_promise) = self.try_accept() {
+                return block_promise;
             }
 
             // unwrap is ok because the sender exists in self.shared.
@@ -175,7 +175,7 @@ impl BlockTrackerClient {
 
     /// Returns the next required and offered block request or `None` if there is no such request
     /// currently.
-    pub fn try_accept(&self) -> Option<AcceptedBlock> {
+    pub fn try_accept(&self) -> Option<BlockPromise> {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
@@ -186,7 +186,7 @@ impl BlockTrackerClient {
 
             if missing_block.required > 0 && missing_block.accepted_by.is_none() {
                 missing_block.accepted_by = Some(self.client_id);
-                return Some(AcceptedBlock {
+                return Some(BlockPromise {
                     shared: self.shared.clone(),
                     client_id: self.client_id,
                     block_id: *block_id,
@@ -198,28 +198,28 @@ impl BlockTrackerClient {
     }
 }
 
-pub(crate) struct AcceptedBlock {
+pub(crate) struct BlockPromise {
     shared: Arc<Shared>,
     client_id: ClientId,
     block_id: BlockId,
 }
 
-impl AcceptedBlock {
+impl BlockPromise {
     pub(crate) fn block_id(&self) -> &BlockId {
         &self.block_id
     }
 }
 
-impl fmt::Debug for AcceptedBlock {
+impl fmt::Debug for BlockPromise {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("AcceptedBlock")
+        f.debug_struct("BlockPromise")
             .field("client_id", &self.client_id)
             .field("block_id", &self.block_id)
             .finish()
     }
 }
 
-impl Drop for AcceptedBlock {
+impl Drop for BlockPromise {
     fn drop(&mut self) {
         let mut inner = self.shared.inner.lock().unwrap();
 
@@ -395,7 +395,7 @@ mod tests {
         // Required + offered blocks are returned...
         tracker.begin_require(block0.id).commit();
         assert_eq!(
-            client.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block0.id)
         );
 
@@ -420,9 +420,9 @@ mod tests {
 
         assert!(client0.try_accept().is_none());
 
-        let accepted_block = client1.try_accept().unwrap();
+        let block_promise = client1.try_accept().unwrap();
 
-        assert_eq!(accepted_block.block_id(), &block.id);
+        assert_eq!(block_promise.block_id(), &block.id);
 
         tracker.complete(&block.id);
 
@@ -452,8 +452,8 @@ mod tests {
 
         assert!(client0.try_accept().is_none());
 
-        let accepted_block = client1.try_accept().unwrap();
-        assert_eq!(accepted_block.block_id(), &block.id);
+        let block_promise = client1.try_accept().unwrap();
+        assert_eq!(block_promise.block_id(), &block.id);
 
         tracker.complete(&block.id);
 
@@ -479,18 +479,18 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        let accepted_block = client0.try_accept();
+        let block_promise = client0.try_accept();
         assert_eq!(
-            accepted_block.as_ref().map(AcceptedBlock::block_id),
+            block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
         assert!(client1.try_accept().is_none());
 
-        drop(accepted_block);
+        drop(block_promise);
 
         assert!(client0.try_accept().is_none());
         assert_eq!(
-            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client1.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -512,7 +512,7 @@ mod tests {
         drop(client0);
 
         assert_eq!(
-            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client1.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -531,10 +531,10 @@ mod tests {
 
         tracker.begin_require(block.id).commit();
 
-        let accepted_block = client0.try_accept();
+        let block_promise = client0.try_accept();
 
         assert_eq!(
-            accepted_block.as_ref().map(AcceptedBlock::block_id),
+            block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
         assert!(client1.try_accept().is_none());
@@ -542,7 +542,7 @@ mod tests {
         drop(client0);
 
         assert_eq!(
-            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client1.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -564,7 +564,7 @@ mod tests {
         tracker.begin_require(block.id).commit();
 
         assert_eq!(
-            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client1.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -598,7 +598,7 @@ mod tests {
         require2.commit();
 
         assert_eq!(
-            client.try_accept().as_ref().map(AcceptedBlock::block_id),
+            client.try_accept().as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -627,11 +627,8 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let accepted_block = client.try_accept();
-                    let result = accepted_block
-                        .as_ref()
-                        .map(AcceptedBlock::block_id)
-                        .cloned();
+                    let block_promise = client.try_accept();
+                    let result = block_promise.as_ref().map(BlockPromise::block_id).cloned();
                     barrier.wait().await;
                     result
                 }
@@ -685,16 +682,16 @@ mod tests {
             }
         }
 
-        let mut accepted_block_ids = HashSet::with_capacity(block_ids.len());
+        let mut block_promise = HashSet::with_capacity(block_ids.len());
 
-        while let Some(block_id) = client.try_accept().as_ref().map(AcceptedBlock::block_id) {
-            accepted_block_ids.insert(*block_id);
+        while let Some(block_id) = client.try_accept().as_ref().map(BlockPromise::block_id) {
+            block_promise.insert(*block_id);
         }
 
-        assert_eq!(accepted_block_ids.len(), block_ids.len());
+        assert_eq!(block_promise.len(), block_ids.len());
 
         for block_id in &block_ids {
-            assert!(accepted_block_ids.contains(block_id));
+            assert!(block_promise.contains(block_id));
         }
     }
 

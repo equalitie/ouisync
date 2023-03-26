@@ -73,8 +73,8 @@ impl Client {
 
         loop {
             select! {
-                accepted_block = self.block_tracker.accept() => {
-                    self.enqueue_request(PendingRequest::Block(accepted_block));
+                block_promise = self.block_tracker.accept() => {
+                    self.enqueue_request(PendingRequest::Block(block_promise));
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
