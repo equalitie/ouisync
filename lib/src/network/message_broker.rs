@@ -6,8 +6,8 @@ use super::{
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
+    pending::MAX_REQUESTS_IN_FLIGHT,
     raw,
-    request::MAX_REQUESTS_IN_FLIGHT,
     runtime_id::PublicRuntimeId,
     server::Server,
 };

@@ -1,6 +1,6 @@
 use super::{
     message::{Content, Response, ResponseDisambiguator},
-    request::{
+    pending::{
         CompoundPermit, PendingRequest, PendingRequests, PendingResponse, MAX_REQUESTS_IN_FLIGHT,
     },
 };
