@@ -3,8 +3,7 @@ use super::{
         request, response, Content, ProcessedResponse, Request, Response, ResponseDisambiguator,
     },
     request::{
-        pending_response, CompoundPermit, PendingRequest, PendingRequests, PendingResponse,
-        MAX_REQUESTS_IN_FLIGHT,
+        CompoundPermit, PendingRequest, PendingRequests, PendingResponse, MAX_REQUESTS_IN_FLIGHT,
     },
 };
 use crate::{
@@ -32,7 +31,7 @@ pub(super) struct Client {
     rx: mpsc::Receiver<Response>,
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    recv_queue: VecDeque<(pending_response::Success, Option<OwnedSemaphorePermit>)>,
+    recv_queue: VecDeque<(PendingResponse, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
     _request_sender: ScopedJoinHandle<()>,
@@ -104,60 +103,29 @@ impl Client {
 
     fn enqueue_response(&mut self, response: Response) -> Result<()> {
         let response = ProcessedResponse::from(response);
-        let request = response.to_request();
 
-        let (response, permit) = match self.pending_requests.remove(&request, response) {
-            Some((response, permit)) => (response, permit),
-            None => return Ok(()),
-        };
-
-        //let permit = if let Some(permit) = self.pending_requests.remove(&request, &response) {
-        //    Some(permit)
-        //} else {
-        //    // Only `RootNode` response is allowed to be unsolicited
-        //    if !matches!(request, Request::RootNode(_)) {
-        //        // Unsolicited response
-        //        return Ok(());
-        //    }
-        //    None
-        //};
-
-        match response {
-            PendingResponse::Success(response) => {
+        match self.pending_requests.remove(response) {
+            Some((response, permit)) => {
                 self.recv_queue.push_front((response, permit));
             }
-            PendingResponse::Failure(request) => {
-                tracing::trace!(?request, "request failed");
-
-                match request {
-                    pending_response::Failure::Block(block_id) => {
-                        self.block_tracker.cancel(&block_id);
-                    }
-                    pending_response::Failure::RootNode(_)
-                    | pending_response::Failure::ChildNodes { .. } => (),
-                }
-            }
-        }
+            None => (),
+        };
 
         Ok(())
     }
 
-    fn dequeue_response(
-        &mut self,
-    ) -> Option<(pending_response::Success, Option<OwnedSemaphorePermit>)> {
+    fn dequeue_response(&mut self) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
         self.recv_queue.pop_back()
     }
 
-    async fn handle_response(&mut self, response: pending_response::Success) -> Result<()> {
+    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
         let result = match response {
-            pending_response::Success::RootNode { proof, summary } => {
+            PendingResponse::RootNode { proof, summary } => {
                 self.handle_root_node(proof, summary).await
             }
-            pending_response::Success::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
-            pending_response::Success::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
-            pending_response::Success::Block { data, nonce } => {
-                self.handle_block(data, nonce).await
-            }
+            PendingResponse::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
+            PendingResponse::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
+            PendingResponse::Block { data, nonce } => self.handle_block(data, nonce).await,
         };
 
         match result {
