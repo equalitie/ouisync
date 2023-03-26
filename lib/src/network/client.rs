@@ -73,7 +73,7 @@ impl Client {
 
         loop {
             select! {
-                accepted_block = self.block_tracker.accept_() => {
+                accepted_block = self.block_tracker.accept() => {
                     self.enqueue_request(PendingRequest::Block(accepted_block));
                 }
                 response = self.rx.recv() => {
