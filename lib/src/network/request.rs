@@ -1,6 +1,6 @@
 use super::message::{self, request, ProcessedResponse, Request, ResponseDisambiguator};
 use crate::{
-    block::{tracker::AcceptedBlock, BlockData, BlockNonce},
+    block::{tracker::BlockPromise, BlockData, BlockNonce},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
@@ -29,7 +29,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) enum PendingRequest {
     RootNode(PublicKey),
     ChildNodes(Hash, ResponseDisambiguator),
-    Block(AcceptedBlock),
+    Block(BlockPromise),
 }
 
 impl PendingRequest {
@@ -39,7 +39,7 @@ impl PendingRequest {
             Self::ChildNodes(hash, disambiguator) => {
                 request::ChildNodes(*hash, *disambiguator).into()
             }
-            Self::Block(accepted_block) => request::Block(*accepted_block.block_id()).into(),
+            Self::Block(block_promise) => request::Block(*block_promise.block_id()).into(),
         }
     }
 }
@@ -84,15 +84,15 @@ impl PendingRequests {
             Entry::Vacant(entry) => {
                 let msg = pending_request.to_message();
 
-                let accepted_block = match pending_request {
+                let block_promise = match pending_request {
                     PendingRequest::RootNode(_) => None,
                     PendingRequest::ChildNodes(_, _) => None,
-                    PendingRequest::Block(accepted_block) => Some(accepted_block),
+                    PendingRequest::Block(block_promise) => Some(block_promise),
                 };
 
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
-                    accepted_block,
+                    block_promise,
                     permit,
                 });
                 self.request_added(&msg);
@@ -206,7 +206,7 @@ fn run_tracker(
                         // Check it hasn't been removed in a meanwhile for cancel safety.
                         if let Some(mut data) = request_map.lock().unwrap().get_mut(&request) {
                             stats.write().request_timeouts += 1;
-                            data.accepted_block = None;
+                            data.block_promise = None;
                         }
                     }
                 };
@@ -232,7 +232,7 @@ impl Drop for PendingRequests {
 
 struct RequestData {
     timestamp: Instant,
-    accepted_block: Option<AcceptedBlock>,
+    block_promise: Option<BlockPromise>,
     permit: CompoundPermit,
 }
 
