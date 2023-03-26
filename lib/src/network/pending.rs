@@ -1,4 +1,4 @@
-use super::message::{request, Request, Response, ResponseDisambiguator};
+use super::message::{Request, Response, ResponseDisambiguator};
 use crate::{
     block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
@@ -35,11 +35,9 @@ pub(crate) enum PendingRequest {
 impl PendingRequest {
     pub fn to_message(&self) -> Request {
         match self {
-            Self::RootNode(public_key) => request::RootNode(*public_key).into(),
-            Self::ChildNodes(hash, disambiguator) => {
-                request::ChildNodes(*hash, *disambiguator).into()
-            }
-            Self::Block(block_promise) => request::Block(*block_promise.block_id()).into(),
+            Self::RootNode(public_key) => Request::RootNode(*public_key),
+            Self::ChildNodes(hash, disambiguator) => Request::ChildNodes(*hash, *disambiguator),
+            Self::Block(block_promise) => Request::Block(*block_promise.block_id()),
         }
     }
 }
@@ -284,25 +282,25 @@ impl ProcessedResponse {
     fn to_request(&self) -> Request {
         match self {
             Self::Success(processed_response::Success::RootNode { proof, .. }) => {
-                request::RootNode(proof.writer_id).into()
+                Request::RootNode(proof.writer_id)
             }
             Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
+                Request::ChildNodes(nodes.hash(), *disambiguator)
             }
             Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
+                Request::ChildNodes(nodes.hash(), *disambiguator)
             }
             Self::Success(processed_response::Success::Block { data, .. }) => {
-                request::Block(data.id).into()
+                Request::Block(data.id)
             }
             Self::Failure(processed_response::Failure::RootNode(branch_id)) => {
-                request::RootNode(*branch_id).into()
+                Request::RootNode(*branch_id)
             }
             Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator)) => {
-                request::ChildNodes(*hash, *disambiguator).into()
+                Request::ChildNodes(*hash, *disambiguator)
             }
             Self::Failure(processed_response::Failure::Block(block_id)) => {
-                request::Block(*block_id).into()
+                Request::Block(*block_id)
             }
         }
     }
