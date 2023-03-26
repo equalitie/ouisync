@@ -1,7 +1,7 @@
 use super::{crypto::Role, peer_exchange::PexPayload, runtime_id::PublicRuntimeId};
 use crate::{
-    block::{BlockData, BlockId, BlockNonce},
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    block::{BlockId, BlockNonce},
+    crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
     index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, Summary, UntrustedProof},
     repository::RepositoryId,
@@ -121,86 +121,6 @@ impl fmt::Debug for Response {
                 .field("content", &format_args!("{:6x}", Hex(content)))
                 .finish_non_exhaustive(),
             Self::BlockError(id) => f.debug_tuple("BlockError").field(id).finish(),
-        }
-    }
-}
-
-pub(crate) mod response {
-    use super::*;
-
-    pub(crate) enum Success {
-        RootNode {
-            proof: UntrustedProof,
-            summary: Summary,
-        },
-        InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
-        Block {
-            data: BlockData,
-            nonce: BlockNonce,
-        },
-    }
-
-    #[derive(Debug)]
-    pub(crate) enum Failure {
-        RootNode(PublicKey),
-        ChildNodes(Hash, ResponseDisambiguator),
-        Block(BlockId),
-    }
-}
-
-pub(super) enum ProcessedResponse {
-    Success(response::Success),
-    Failure(response::Failure),
-}
-
-impl ProcessedResponse {
-    pub fn to_request(&self) -> Request {
-        match self {
-            Self::Success(response::Success::RootNode { proof, .. }) => {
-                request::RootNode(proof.writer_id).into()
-            }
-            Self::Success(response::Success::InnerNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
-            }
-            Self::Success(response::Success::LeafNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
-            }
-            Self::Success(response::Success::Block { data, .. }) => request::Block(data.id).into(),
-            Self::Failure(response::Failure::RootNode(branch_id)) => {
-                request::RootNode(*branch_id).into()
-            }
-            Self::Failure(response::Failure::ChildNodes(hash, disambiguator)) => {
-                request::ChildNodes(*hash, *disambiguator).into()
-            }
-            Self::Failure(response::Failure::Block(block_id)) => request::Block(*block_id).into(),
-        }
-    }
-}
-
-impl From<Response> for ProcessedResponse {
-    fn from(response: Response) -> Self {
-        match response {
-            Response::RootNode { proof, summary } => {
-                Self::Success(response::Success::RootNode { proof, summary })
-            }
-            Response::InnerNodes(nodes, disambiguator) => {
-                Self::Success(response::Success::InnerNodes(nodes.into(), disambiguator))
-            }
-            Response::LeafNodes(nodes, disambiguator) => {
-                Self::Success(response::Success::LeafNodes(nodes.into(), disambiguator))
-            }
-            Response::Block { content, nonce } => Self::Success(response::Success::Block {
-                data: content.into(),
-                nonce,
-            }),
-            Response::RootNodeError(branch_id) => {
-                Self::Failure(response::Failure::RootNode(branch_id))
-            }
-            Response::ChildNodesError(hash, disambiguator) => {
-                Self::Failure(response::Failure::ChildNodes(hash, disambiguator))
-            }
-            Response::BlockError(block_id) => Self::Failure(response::Failure::Block(block_id)),
         }
     }
 }
