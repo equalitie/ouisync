@@ -133,7 +133,11 @@ impl BlockTrackerClient {
         true
     }
 
-    /// Cancel a previously accepted request so it can be attempted by another client.
+    /// Cancel a previously offered request.
+    // TODO: This currently isn't used in the non-test code, but probably should be. However we
+    // currently don't have code in place which would indicate when a block is no longer offered by
+    // a peer.
+    #[cfg(test)]
     pub fn cancel(&self, block_id: &BlockId) {
         let mut inner = self.shared.inner.lock().unwrap();
 
@@ -158,9 +162,9 @@ impl BlockTrackerClient {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept_(&mut self) -> AcceptedBlock {
+    pub async fn accept(&mut self) -> AcceptedBlock {
         loop {
-            if let Some(accepted_block) = self.try_accept_() {
+            if let Some(accepted_block) = self.try_accept() {
                 return accepted_block;
             }
 
@@ -171,7 +175,7 @@ impl BlockTrackerClient {
 
     /// Returns the next required and offered block request or `None` if there is no such request
     /// currently.
-    pub fn try_accept_(&self) -> Option<AcceptedBlock> {
+    pub fn try_accept(&self) -> Option<AcceptedBlock> {
         let mut inner = self.shared.inner.lock().unwrap();
         let inner = &mut *inner;
 
@@ -192,43 +196,6 @@ impl BlockTrackerClient {
 
         None
     }
-
-    /// Returns the next required and offered block request. If there is no such request at the
-    /// moment this function is called, waits until one appears.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    pub async fn accept(&mut self) -> BlockId {
-        loop {
-            if let Some(block_id) = self.try_accept() {
-                return block_id;
-            }
-
-            // unwrap is ok because the sender exists in self.shared.
-            self.notify_rx.changed().await.unwrap();
-        }
-    }
-
-    /// Returns the next required and offered block request or `None` if there is no such request
-    /// currently.
-    pub fn try_accept(&self) -> Option<BlockId> {
-        let mut inner = self.shared.inner.lock().unwrap();
-        let inner = &mut *inner;
-
-        // TODO: OPTIMIZE (but profile first) this linear lookup
-        for block_id in &inner.clients[self.client_id] {
-            // unwrap is ok because of the invariant in `Inner`
-            let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
-
-            if missing_block.required > 0 && missing_block.accepted_by.is_none() {
-                missing_block.accepted_by = Some(self.client_id);
-                return Some(*block_id);
-            }
-        }
-
-        None
-    }
 }
 
 pub(crate) struct AcceptedBlock {
@@ -240,52 +207,6 @@ pub(crate) struct AcceptedBlock {
 impl AcceptedBlock {
     pub(crate) fn block_id(&self) -> &BlockId {
         &self.block_id
-    }
-
-    pub fn complete(&self) {
-        tracing::trace!(?self.block_id, "complete");
-
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(&self.block_id)
-        {
-            missing_block
-        } else {
-            return;
-        };
-
-        for client_id in missing_block.clients {
-            if let Some(block_ids) = inner.clients.get_mut(client_id) {
-                block_ids.remove(&self.block_id);
-            }
-        }
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.cancel_with_reason("cancel");
-    }
-
-    fn cancel_with_reason(&self, reason: &'static str) {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let client = match inner.clients.get_mut(self.client_id) {
-            Some(client) => client,
-            None => return,
-        };
-
-        if !client.remove(&self.block_id) {
-            return;
-        }
-
-        tracing::trace!(?self.block_id, reason);
-
-        // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(&self.block_id).unwrap();
-        missing_block.clients.remove(&self.client_id);
-
-        if missing_block.unaccept_by(self.client_id) {
-            self.shared.notify();
-        }
     }
 }
 
@@ -300,7 +221,24 @@ impl fmt::Debug for AcceptedBlock {
 
 impl Drop for AcceptedBlock {
     fn drop(&mut self) {
-        self.cancel_with_reason("drop");
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        let client = match inner.clients.get_mut(self.client_id) {
+            Some(client) => client,
+            None => return,
+        };
+
+        if !client.remove(&self.block_id) {
+            return;
+        }
+
+        // unwrap is ok because of the invariant in `Inner`
+        let missing_block = inner.missing_blocks.get_mut(&self.block_id).unwrap();
+        missing_block.clients.remove(&self.client_id);
+
+        if missing_block.unaccept_by(self.client_id) {
+            self.shared.notify();
+        }
     }
 }
 
@@ -442,24 +380,27 @@ mod tests {
         let client = tracker.client();
 
         // Initially no blocks are returned
-        assert_eq!(client.try_accept(), None);
+        assert!(client.try_accept().is_none());
 
         // Offered but not required blocks are not returned
         let block0 = make_block();
         client.offer(block0.id);
-        assert_eq!(client.try_accept(), None);
+        assert!(client.try_accept().is_none());
 
         // Required but not offered blocks are not returned
         let block1 = make_block();
         tracker.begin_require(block1.id).commit();
-        assert_eq!(client.try_accept(), None);
+        assert!(client.try_accept().is_none());
 
         // Required + offered blocks are returned...
         tracker.begin_require(block0.id).commit();
-        assert_eq!(client.try_accept(), Some(block0.id));
+        assert_eq!(
+            client.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block0.id)
+        );
 
         // ...but only once.
-        assert_eq!(client.try_accept(), None);
+        assert!(client.try_accept().is_none());
     }
 
     #[test]
@@ -477,8 +418,11 @@ mod tests {
 
         client0.cancel(&block.id);
 
-        assert_eq!(client0.try_accept(), None);
-        assert_eq!(client1.try_accept(), Some(block.id));
+        assert!(client0.try_accept().is_none());
+
+        let accepted_block = client1.try_accept().unwrap();
+
+        assert_eq!(accepted_block.block_id(), &block.id);
 
         tracker.complete(&block.id);
 
@@ -506,12 +450,12 @@ mod tests {
 
         client0.cancel(&block.id);
 
-        assert_eq!(client0.try_accept(), None);
+        assert!(client0.try_accept().is_none());
 
-        let accepted_block = client1.try_accept_().unwrap();
+        let accepted_block = client1.try_accept().unwrap();
         assert_eq!(accepted_block.block_id(), &block.id);
 
-        accepted_block.complete();
+        tracker.complete(&block.id);
 
         assert!(tracker
             .shared
@@ -535,13 +479,20 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        assert_eq!(client0.try_accept(), Some(block.id));
-        assert_eq!(client1.try_accept(), None);
+        let accepted_block = client0.try_accept();
+        assert_eq!(
+            accepted_block.as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
+        assert!(client1.try_accept().is_none());
 
-        client0.cancel(&block.id);
+        drop(accepted_block);
 
-        assert_eq!(client0.try_accept(), None);
-        assert_eq!(client1.try_accept(), Some(block.id));
+        assert!(client0.try_accept().is_none());
+        assert_eq!(
+            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
     }
 
     #[test]
@@ -560,7 +511,10 @@ mod tests {
 
         drop(client0);
 
-        assert_eq!(client1.try_accept(), Some(block.id));
+        assert_eq!(
+            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
     }
 
     #[test]
@@ -577,12 +531,20 @@ mod tests {
 
         tracker.begin_require(block.id).commit();
 
-        assert_eq!(client0.try_accept(), Some(block.id));
-        assert_eq!(client1.try_accept(), None);
+        let accepted_block = client0.try_accept();
+
+        assert_eq!(
+            accepted_block.as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
+        assert!(client1.try_accept().is_none());
 
         drop(client0);
 
-        assert_eq!(client1.try_accept(), Some(block.id));
+        assert_eq!(
+            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
     }
 
     #[test]
@@ -601,7 +563,10 @@ mod tests {
 
         tracker.begin_require(block.id).commit();
 
-        assert_eq!(client1.try_accept(), Some(block.id));
+        assert_eq!(
+            client1.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
     }
 
     #[test]
@@ -632,7 +597,10 @@ mod tests {
         drop(require1);
         require2.commit();
 
-        assert_eq!(client.try_accept(), Some(block.id));
+        assert_eq!(
+            client.try_accept().as_ref().map(AcceptedBlock::block_id),
+            Some(&block.id)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -659,7 +627,11 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let result = client.try_accept();
+                    let accepted_block = client.try_accept();
+                    let result = accepted_block
+                        .as_ref()
+                        .map(AcceptedBlock::block_id)
+                        .cloned();
                     barrier.wait().await;
                     result
                 }
@@ -715,8 +687,8 @@ mod tests {
 
         let mut accepted_block_ids = HashSet::with_capacity(block_ids.len());
 
-        while let Some(block_id) = client.try_accept() {
-            accepted_block_ids.insert(block_id);
+        while let Some(block_id) = client.try_accept().as_ref().map(AcceptedBlock::block_id) {
+            accepted_block_ids.insert(*block_id);
         }
 
         assert_eq!(accepted_block_ids.len(), block_ids.len());
