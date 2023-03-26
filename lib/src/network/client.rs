@@ -5,7 +5,7 @@ use super::{
     },
 };
 use crate::{
-    block::{BlockData, BlockNonce, BlockTrackerClient},
+    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
     crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
@@ -120,7 +120,11 @@ impl Client {
             }
             PendingResponse::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
             PendingResponse::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
-            PendingResponse::Block { data, nonce } => self.handle_block(data, nonce).await,
+            PendingResponse::Block {
+                data,
+                nonce,
+                block_promise,
+            } => self.handle_block(data, nonce, block_promise).await,
         };
 
         match result {
@@ -253,6 +257,8 @@ impl Client {
         &mut self,
         data: BlockData,
         nonce: BlockNonce,
+        // We need to preserve the lifetime of `_block_promise` until the response is processed.
+        _block_promise: Option<BlockPromise>,
     ) -> Result<(), ReceiveError> {
         match self.store.write_received_block(&data, &nonce).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
