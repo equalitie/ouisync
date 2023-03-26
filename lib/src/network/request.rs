@@ -47,77 +47,17 @@ impl PendingRequest {
     }
 }
 
-pub(super) mod pending_response {
-    use super::*;
-
-    pub(in crate::network) enum Success {
-        RootNode {
-            proof: UntrustedProof,
-            summary: Summary,
-        },
-        InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
-        Block {
-            data: BlockData,
-            nonce: BlockNonce,
-        },
-    }
-
-    #[derive(Debug)]
-    pub(in crate::network) enum Failure {
-        RootNode(PublicKey),
-        ChildNodes(Hash, ResponseDisambiguator),
-        Block(BlockId),
-    }
-}
-
 pub(super) enum PendingResponse {
-    Success(pending_response::Success),
-    Failure(pending_response::Failure),
-}
-
-impl From<pending_response::Success> for PendingResponse {
-    fn from(rsp: pending_response::Success) -> Self {
-        PendingResponse::Success(rsp)
-    }
-}
-
-impl From<pending_response::Failure> for PendingResponse {
-    fn from(rsp: pending_response::Failure) -> Self {
-        PendingResponse::Failure(rsp)
-    }
-}
-
-impl From<ProcessedResponse> for PendingResponse {
-    fn from(pr: ProcessedResponse) -> Self {
-        match pr {
-            ProcessedResponse::Success(success) => match success {
-                message::response::Success::RootNode { proof, summary } => {
-                    pending_response::Success::RootNode { proof, summary }.into()
-                }
-                message::response::Success::InnerNodes(hash, disambiguator) => {
-                    pending_response::Success::InnerNodes(hash, disambiguator).into()
-                }
-                message::response::Success::LeafNodes(hash, disambiguator) => {
-                    pending_response::Success::LeafNodes(hash, disambiguator).into()
-                }
-                message::response::Success::Block { data, nonce } => {
-                    pending_response::Success::Block { data, nonce }.into()
-                }
-            },
-            ProcessedResponse::Failure(failure) => match failure {
-                message::response::Failure::RootNode(public_key) => {
-                    pending_response::Failure::RootNode(public_key).into()
-                }
-                message::response::Failure::ChildNodes(hash, disambiguator) => {
-                    pending_response::Failure::ChildNodes(hash, disambiguator).into()
-                }
-                message::response::Failure::Block(id) => {
-                    pending_response::Failure::Block(id).into()
-                }
-            },
-        }
-    }
+    RootNode {
+        proof: UntrustedProof,
+        summary: Summary,
+    },
+    InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
+    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
+    Block {
+        data: BlockData,
+        nonce: BlockNonce,
+    },
 }
 
 pub(super) struct PendingRequests {
@@ -162,21 +102,43 @@ impl PendingRequests {
 
     pub fn remove(
         &self,
-        request: &Request,
         response: ProcessedResponse,
     ) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
+        let request = response.to_request();
+
         if let Some(data) = self.map.lock().unwrap().remove(&request) {
-            self.request_removed(request, Some(data.timestamp));
+            self.request_removed(&request, Some(data.timestamp));
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
-            Some((response.into(), Some(data.permit.client_permit)))
+            match response {
+                ProcessedResponse::Success(success) => {
+                    let r = match success {
+                        message::response::Success::RootNode { proof, summary } => {
+                            PendingResponse::RootNode { proof, summary }
+                        }
+                        message::response::Success::InnerNodes(hash, disambiguator) => {
+                            PendingResponse::InnerNodes(hash, disambiguator)
+                        }
+                        message::response::Success::LeafNodes(hash, disambiguator) => {
+                            PendingResponse::LeafNodes(hash, disambiguator)
+                        }
+                        message::response::Success::Block { data, nonce } => {
+                            PendingResponse::Block { data, nonce }
+                        }
+                    };
+                    Some((r, Some(data.permit.client_permit)))
+                }
+                ProcessedResponse::Failure(_) => None,
+            }
         } else {
             // Only `RootNode` response is allowed to be unsolicited
-            if !matches!(request, Request::RootNode(_)) {
-                // Unsolicited response
-                return Some((response.into(), None));
+            match response {
+                ProcessedResponse::Success(message::response::Success::RootNode {
+                    proof,
+                    summary,
+                }) => Some((PendingResponse::RootNode { proof, summary }, None)),
+                _ => None,
             }
-            None
         }
     }
 
