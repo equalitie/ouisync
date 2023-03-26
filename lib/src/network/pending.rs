@@ -109,8 +109,6 @@ impl PendingRequests {
 
         if let Some(request_data) = self.map.lock().unwrap().remove(&request) {
             self.request_removed(&request, Some(request_data.timestamp));
-            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
-            // only `drop` it once the request is processed.
             match response {
                 ProcessedResponse::Success(success) => {
                     let r = match success {
@@ -131,6 +129,8 @@ impl PendingRequests {
                             }
                         }
                     };
+                    // We `drop` the `peer_permit` here but the `Client` will need the
+                    // `client_permit` and only `drop` it once the request is processed.
                     Some((r, Some(request_data.permit.client_permit)))
                 }
                 ProcessedResponse::Failure(_) => None,
