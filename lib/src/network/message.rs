@@ -9,46 +9,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};
 
-pub(crate) mod request {
-    use super::*;
-
-    /// Request root node for the given branch.
-    #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-    pub(crate) struct RootNode(pub PublicKey);
-
-    /// Request child nodes (inner or leaf) with the given parent hash. Responded with either
-    /// `InnerNodes` or `LeafNodes` response.
-    #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-    pub(crate) struct ChildNodes(pub Hash, pub ResponseDisambiguator);
-
-    /// Request block with the given id.
-    #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
-    pub(crate) struct Block(pub BlockId);
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    RootNode(request::RootNode),
-    ChildNodes(request::ChildNodes),
-    Block(request::Block),
-}
-
-impl From<request::RootNode> for Request {
-    fn from(rq: request::RootNode) -> Request {
-        Request::RootNode(rq)
-    }
-}
-
-impl From<request::ChildNodes> for Request {
-    fn from(rq: request::ChildNodes) -> Request {
-        Request::ChildNodes(rq)
-    }
-}
-
-impl From<request::Block> for Request {
-    fn from(rq: request::Block) -> Request {
-        Request::Block(rq)
-    }
+    RootNode(PublicKey),
+    ChildNodes(Hash, ResponseDisambiguator),
+    Block(BlockId),
 }
 
 /// ResponseDisambiguator is used to uniquelly assign a response to a request.
