@@ -1,6 +1,9 @@
-use super::message::Request;
+use super::message::{self, request, ProcessedResponse, Request, Response, ResponseDisambiguator};
 use crate::{
+    block::{tracker::AcceptedBlock, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
+    crypto::{sign::PublicKey, CacheHash, Hash},
+    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository_stats::{self, RepositoryStats},
     sync::uninitialized_watch,
 };
@@ -24,6 +27,98 @@ pub(super) const MAX_REQUESTS_IN_FLIGHT: usize = 512;
 // If a response to a pending request is not received within this time, a request timeout error is
 // triggered.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug)]
+pub(crate) enum PendingRequest {
+    RootNode(PublicKey),
+    ChildNodes(Hash, ResponseDisambiguator),
+    Block(AcceptedBlock),
+}
+
+impl PendingRequest {
+    pub fn to_message(&self) -> Request {
+        match self {
+            Self::RootNode(public_key) => request::RootNode(*public_key).into(),
+            Self::ChildNodes(hash, disambiguator) => {
+                request::ChildNodes(*hash, *disambiguator).into()
+            }
+            Self::Block(accepted_block) => request::Block(*accepted_block.block_id()).into(),
+        }
+    }
+}
+
+pub(super) mod pending_response {
+    use super::*;
+
+    pub(in crate::network) enum Success {
+        RootNode {
+            proof: UntrustedProof,
+            summary: Summary,
+        },
+        InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
+        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
+        Block {
+            data: BlockData,
+            nonce: BlockNonce,
+        },
+    }
+
+    #[derive(Debug)]
+    pub(in crate::network) enum Failure {
+        RootNode(PublicKey),
+        ChildNodes(Hash, ResponseDisambiguator),
+        Block(BlockId),
+    }
+}
+
+pub(super) enum PendingResponse {
+    Success(pending_response::Success),
+    Failure(pending_response::Failure),
+}
+
+impl From<pending_response::Success> for PendingResponse {
+    fn from(rsp: pending_response::Success) -> Self {
+        PendingResponse::Success(rsp)
+    }
+}
+
+impl From<pending_response::Failure> for PendingResponse {
+    fn from(rsp: pending_response::Failure) -> Self {
+        PendingResponse::Failure(rsp)
+    }
+}
+
+impl From<ProcessedResponse> for PendingResponse {
+    fn from(pr: ProcessedResponse) -> Self {
+        match pr {
+            ProcessedResponse::Success(success) => match success {
+                message::response::Success::RootNode { proof, summary } => {
+                    pending_response::Success::RootNode { proof, summary }.into()
+                }
+                message::response::Success::InnerNodes(hash, disambiguator) => {
+                    pending_response::Success::InnerNodes(hash, disambiguator).into()
+                }
+                message::response::Success::LeafNodes(hash, disambiguator) => {
+                    pending_response::Success::LeafNodes(hash, disambiguator).into()
+                }
+                message::response::Success::Block { data, nonce } => {
+                    pending_response::Success::Block { data, nonce }.into()
+                }
+            },
+            ProcessedResponse::Failure(failure) => match failure {
+                message::response::Failure::RootNode(public_key) => {
+                    pending_response::Failure::RootNode(public_key).into()
+                }
+                message::response::Failure::ChildNodes(hash, disambiguator) => {
+                    pending_response::Failure::ChildNodes(hash, disambiguator).into()
+                }
+                message::response::Failure::Block(id) => {
+                    pending_response::Failure::Block(id).into()
+                }
+            },
+        }
+    }
+}
 
 pub(super) struct PendingRequests {
     stats: Arc<RepositoryStats>,
@@ -49,27 +144,38 @@ impl PendingRequests {
         }
     }
 
-    pub fn insert(&self, request: Request, permit: CompoundPermit) -> bool {
-        match self.map.lock().unwrap().entry(request) {
+    pub fn insert(&self, pending_request: PendingRequest, permit: CompoundPermit) -> bool {
+        match self.map.lock().unwrap().entry(pending_request.to_message()) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
+                let msg = pending_request.to_message();
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
+                    pending_request,
                     permit,
                 });
-                self.request_added(&request);
+                self.request_added(&msg);
                 true
             }
         }
     }
 
-    pub fn remove(&self, request: &Request) -> Option<OwnedSemaphorePermit> {
-        if let Some(data) = self.map.lock().unwrap().remove(request) {
+    pub fn remove(
+        &self,
+        request: &Request,
+        response: ProcessedResponse,
+    ) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
+        if let Some(data) = self.map.lock().unwrap().remove(&request) {
             self.request_removed(request, Some(data.timestamp));
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
-            Some(data.permit.client_permit)
+            Some((response.into(), Some(data.permit.client_permit)))
         } else {
+            // Only `RootNode` response is allowed to be unsolicited
+            if !matches!(request, Request::RootNode(_)) {
+                // Unsolicited response
+                return Some((response.into(), None));
+            }
             None
         }
     }
@@ -187,6 +293,7 @@ impl Drop for PendingRequests {
 
 struct RequestData {
     timestamp: Instant,
+    pending_request: PendingRequest,
     permit: CompoundPermit,
 }
 

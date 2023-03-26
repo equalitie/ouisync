@@ -1,7 +1,10 @@
 use super::BlockId;
 use crate::collections::{hash_map::Entry, HashMap, HashSet};
 use slab::Slab;
-use std::sync::{Arc, Mutex as BlockingMutex};
+use std::{
+    fmt,
+    sync::{Arc, Mutex as BlockingMutex},
+};
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
@@ -155,6 +158,47 @@ impl BlockTrackerClient {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
+    pub async fn accept_(&mut self) -> AcceptedBlock {
+        loop {
+            if let Some(accepted_block) = self.try_accept_() {
+                return accepted_block;
+            }
+
+            // unwrap is ok because the sender exists in self.shared.
+            self.notify_rx.changed().await.unwrap();
+        }
+    }
+
+    /// Returns the next required and offered block request or `None` if there is no such request
+    /// currently.
+    pub fn try_accept_(&self) -> Option<AcceptedBlock> {
+        let mut inner = self.shared.inner.lock().unwrap();
+        let inner = &mut *inner;
+
+        // TODO: OPTIMIZE (but profile first) this linear lookup
+        for block_id in &inner.clients[self.client_id] {
+            // unwrap is ok because of the invariant in `Inner`
+            let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
+
+            if missing_block.required > 0 && missing_block.accepted_by.is_none() {
+                missing_block.accepted_by = Some(self.client_id);
+                return Some(AcceptedBlock {
+                    shared: self.shared.clone(),
+                    client_id: self.client_id,
+                    block_id: *block_id,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Returns the next required and offered block request. If there is no such request at the
+    /// moment this function is called, waits until one appears.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub async fn accept(&mut self) -> BlockId {
         loop {
             if let Some(block_id) = self.try_accept() {
@@ -184,6 +228,74 @@ impl BlockTrackerClient {
         }
 
         None
+    }
+}
+
+pub(crate) struct AcceptedBlock {
+    shared: Arc<Shared>,
+    client_id: ClientId,
+    block_id: BlockId,
+}
+
+impl AcceptedBlock {
+    pub(crate) fn block_id(&self) -> &BlockId {
+        &self.block_id
+    }
+
+    pub fn complete(&self) {
+        tracing::trace!(?self.block_id, "complete");
+
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(&self.block_id)
+        {
+            missing_block
+        } else {
+            return;
+        };
+
+        for client_id in missing_block.clients {
+            if let Some(block_ids) = inner.clients.get_mut(self.client_id) {
+                block_ids.remove(&self.block_id);
+            }
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancel_with_reason("cancel");
+    }
+
+    fn cancel_with_reason(&self, reason: &'static str) {
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        if !inner.clients[self.client_id].remove(&self.block_id) {
+            return;
+        }
+
+        tracing::trace!(?self.block_id, reason);
+
+        // unwrap is ok because of the invariant in `Inner`
+        let missing_block = inner.missing_blocks.get_mut(&self.block_id).unwrap();
+        missing_block.clients.remove(&self.client_id);
+
+        if missing_block.unaccept_by(self.client_id) {
+            self.shared.notify();
+        }
+    }
+}
+
+impl fmt::Debug for AcceptedBlock {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("AcceptedBlock")
+            .field("client_id", &self.client_id)
+            .field("block_id", &self.block_id)
+            .finish()
+    }
+}
+
+impl Drop for AcceptedBlock {
+    fn drop(&mut self) {
+        self.cancel_with_reason("drop");
     }
 }
 
@@ -364,6 +476,37 @@ mod tests {
         assert_eq!(client1.try_accept(), Some(block.id));
 
         tracker.complete(&block.id);
+
+        assert!(tracker
+            .shared
+            .inner
+            .lock()
+            .unwrap()
+            .missing_blocks
+            .is_empty());
+    }
+
+    #[test]
+    fn fallback_on_cancel_before_accept_() {
+        let tracker = BlockTracker::new();
+
+        let client0 = tracker.client();
+        let client1 = tracker.client();
+
+        let block = make_block();
+
+        tracker.begin_require(block.id).commit();
+        client0.offer(block.id);
+        client1.offer(block.id);
+
+        client0.cancel(&block.id);
+
+        assert_eq!(client0.try_accept(), None);
+
+        let accepted_block = client1.try_accept_().unwrap();
+        assert_eq!(accepted_block.block_id(), &block.id);
+
+        accepted_block.complete();
 
         assert!(tracker
             .shared

@@ -1,6 +1,11 @@
 use super::{
-    message::{request, Content, Request, Response, ResponseDisambiguator},
-    request::{CompoundPermit, PendingRequests, MAX_REQUESTS_IN_FLIGHT},
+    message::{
+        request, response, Content, ProcessedResponse, Request, Response, ResponseDisambiguator,
+    },
+    request::{
+        pending_response, CompoundPermit, PendingRequest, PendingRequests, PendingResponse,
+        MAX_REQUESTS_IN_FLIGHT,
+    },
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
@@ -26,8 +31,8 @@ pub(super) struct Client {
     store: Store,
     rx: mpsc::Receiver<Response>,
     pending_requests: Arc<PendingRequests>,
-    request_tx: mpsc::UnboundedSender<(Request, Instant)>,
-    recv_queue: VecDeque<(Success, Option<OwnedSemaphorePermit>)>,
+    request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
+    recv_queue: VecDeque<(pending_response::Success, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
     block_tracker: BlockTrackerClient,
     _request_sender: ScopedJoinHandle<()>,
@@ -71,8 +76,8 @@ impl Client {
 
         loop {
             select! {
-                block_id = self.block_tracker.accept() => {
-                    self.enqueue_request(request::Block(block_id).into());
+                accepted_block = self.block_tracker.accept_() => {
+                    self.enqueue_request(PendingRequest::Block(accepted_block));
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -92,7 +97,7 @@ impl Client {
         Ok(())
     }
 
-    fn enqueue_request(&mut self, request: Request) {
+    fn enqueue_request(&mut self, request: PendingRequest) {
         // Unwrap OK because the sending task never returns.
         self.request_tx.send((request, Instant::now())).unwrap();
     }
@@ -101,29 +106,35 @@ impl Client {
         let response = ProcessedResponse::from(response);
         let request = response.to_request();
 
-        let permit = if let Some(permit) = self.pending_requests.remove(&request) {
-            Some(permit)
-        } else {
-            // Only `RootNode` response is allowed to be unsolicited
-            if !matches!(request, Request::RootNode(_)) {
-                // Unsolicited response
-                return Ok(());
-            }
-            None
+        let (response, permit) = match self.pending_requests.remove(&request, response) {
+            Some((response, permit)) => (response, permit),
+            None => return Ok(()),
         };
 
+        //let permit = if let Some(permit) = self.pending_requests.remove(&request, &response) {
+        //    Some(permit)
+        //} else {
+        //    // Only `RootNode` response is allowed to be unsolicited
+        //    if !matches!(request, Request::RootNode(_)) {
+        //        // Unsolicited response
+        //        return Ok(());
+        //    }
+        //    None
+        //};
+
         match response {
-            ProcessedResponse::Success(response) => {
+            PendingResponse::Success(response) => {
                 self.recv_queue.push_front((response, permit));
             }
-            ProcessedResponse::Failure(request) => {
+            PendingResponse::Failure(request) => {
                 tracing::trace!(?request, "request failed");
 
                 match request {
-                    Failure::Block(block_id) => {
+                    pending_response::Failure::Block(block_id) => {
                         self.block_tracker.cancel(&block_id);
                     }
-                    Failure::RootNode(_) | Failure::ChildNodes { .. } => (),
+                    pending_response::Failure::RootNode(_)
+                    | pending_response::Failure::ChildNodes { .. } => (),
                 }
             }
         }
@@ -131,16 +142,22 @@ impl Client {
         Ok(())
     }
 
-    fn dequeue_response(&mut self) -> Option<(Success, Option<OwnedSemaphorePermit>)> {
+    fn dequeue_response(
+        &mut self,
+    ) -> Option<(pending_response::Success, Option<OwnedSemaphorePermit>)> {
         self.recv_queue.pop_back()
     }
 
-    async fn handle_response(&mut self, response: Success) -> Result<()> {
+    async fn handle_response(&mut self, response: pending_response::Success) -> Result<()> {
         let result = match response {
-            Success::RootNode { proof, summary } => self.handle_root_node(proof, summary).await,
-            Success::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
-            Success::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
-            Success::Block { data, nonce } => self.handle_block(data, nonce).await,
+            pending_response::Success::RootNode { proof, summary } => {
+                self.handle_root_node(proof, summary).await
+            }
+            pending_response::Success::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
+            pending_response::Success::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
+            pending_response::Success::Block { data, nonce } => {
+                self.handle_block(data, nonce).await
+            }
         };
 
         match result {
@@ -169,10 +186,10 @@ impl Client {
 
         if updated {
             tracing::trace!("received updated root node");
-            self.enqueue_request(
-                request::ChildNodes(hash, ResponseDisambiguator::new(summary.block_presence))
-                    .into(),
-            );
+            self.enqueue_request(PendingRequest::ChildNodes(
+                hash,
+                ResponseDisambiguator::new(summary.block_presence),
+            ));
         } else {
             tracing::trace!("received outdated root node");
         }
@@ -203,19 +220,16 @@ impl Client {
         );
 
         for node in updated_nodes {
-            self.enqueue_request(
-                request::ChildNodes(
-                    node.hash,
-                    ResponseDisambiguator::new(node.summary.block_presence),
-                )
-                .into(),
-            );
+            self.enqueue_request(PendingRequest::ChildNodes(
+                node.hash,
+                ResponseDisambiguator::new(node.summary.block_presence),
+            ));
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.enqueue_request(request::RootNode(branch_id).into());
+            self.enqueue_request(PendingRequest::RootNode(branch_id));
         }
 
         Ok(())
@@ -265,7 +279,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.enqueue_request(request::RootNode(branch_id).into());
+            self.enqueue_request(PendingRequest::RootNode(branch_id));
         }
 
         Ok(())
@@ -293,9 +307,9 @@ fn start_sender(
     stats: Arc<RepositoryStats>,
 ) -> (
     ScopedJoinHandle<()>,
-    mpsc::UnboundedSender<(Request, Instant)>,
+    mpsc::UnboundedSender<(PendingRequest, Instant)>,
 ) {
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
 
     let handle = scoped_task::spawn({
         async move {
@@ -329,6 +343,8 @@ fn start_sender(
                     .write()
                     .note_request_queue_duration(Instant::now() - time_created);
 
+                let msg = request.to_message();
+
                 if !pending_requests.insert(request, send_permit) {
                     // The same request is already in-flight.
                     continue;
@@ -336,7 +352,7 @@ fn start_sender(
 
                 stats.write().total_requests_cummulative += 1;
 
-                tx.send(Content::Request(request)).await.unwrap_or(());
+                tx.send(Content::Request(msg)).await.unwrap_or(());
             }
 
             // Don't exist so we don't need to check whether `request_tx.send()` fails or not.
@@ -345,76 +361,4 @@ fn start_sender(
     });
 
     (handle, request_tx)
-}
-
-enum ProcessedResponse {
-    Success(Success),
-    Failure(Failure),
-}
-
-impl ProcessedResponse {
-    fn to_request(&self) -> Request {
-        match self {
-            Self::Success(Success::RootNode { proof, .. }) => {
-                request::RootNode(proof.writer_id).into()
-            }
-            Self::Success(Success::InnerNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
-            }
-            Self::Success(Success::LeafNodes(nodes, disambiguator)) => {
-                request::ChildNodes(nodes.hash(), *disambiguator).into()
-            }
-            Self::Success(Success::Block { data, .. }) => request::Block(data.id).into(),
-            Self::Failure(Failure::RootNode(branch_id)) => request::RootNode(*branch_id).into(),
-            Self::Failure(Failure::ChildNodes(hash, disambiguator)) => {
-                request::ChildNodes(*hash, *disambiguator).into()
-            }
-            Self::Failure(Failure::Block(block_id)) => request::Block(*block_id).into(),
-        }
-    }
-}
-
-impl From<Response> for ProcessedResponse {
-    fn from(response: Response) -> Self {
-        match response {
-            Response::RootNode { proof, summary } => {
-                Self::Success(Success::RootNode { proof, summary })
-            }
-            Response::InnerNodes(nodes, disambiguator) => {
-                Self::Success(Success::InnerNodes(nodes.into(), disambiguator))
-            }
-            Response::LeafNodes(nodes, disambiguator) => {
-                Self::Success(Success::LeafNodes(nodes.into(), disambiguator))
-            }
-            Response::Block { content, nonce } => Self::Success(Success::Block {
-                data: content.into(),
-                nonce,
-            }),
-            Response::RootNodeError(branch_id) => Self::Failure(Failure::RootNode(branch_id)),
-            Response::ChildNodesError(hash, disambiguator) => {
-                Self::Failure(Failure::ChildNodes(hash, disambiguator))
-            }
-            Response::BlockError(block_id) => Self::Failure(Failure::Block(block_id)),
-        }
-    }
-}
-
-enum Success {
-    RootNode {
-        proof: UntrustedProof,
-        summary: Summary,
-    },
-    InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
-    Block {
-        data: BlockData,
-        nonce: BlockNonce,
-    },
-}
-
-#[derive(Debug)]
-enum Failure {
-    RootNode(PublicKey),
-    ChildNodes(Hash, ResponseDisambiguator),
-    Block(BlockId),
 }
