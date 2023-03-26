@@ -1,6 +1,6 @@
-use super::message::{self, request, ProcessedResponse, Request, Response, ResponseDisambiguator};
+use super::message::{self, request, ProcessedResponse, Request, ResponseDisambiguator};
 use crate::{
-    block::{tracker::AcceptedBlock, BlockData, BlockId, BlockNonce},
+    block::{tracker::AcceptedBlock, BlockData, BlockNonce},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash},
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
@@ -8,13 +8,10 @@ use crate::{
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;
-use std::{
-    future,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tokio::{
     select,
-    sync::{Mutex as AsyncMutex, OwnedSemaphorePermit},
+    sync::OwnedSemaphorePermit,
     time::{self, Duration, Instant},
 };
 
@@ -64,7 +61,6 @@ pub(super) struct PendingRequests {
     stats: Arc<RepositoryStats>,
     map: Arc<Mutex<HashMap<Request, RequestData>>>,
     to_tracker_tx: uninitialized_watch::Sender<()>,
-    from_tracker_rx: AsyncMutex<uninitialized_watch::Receiver<()>>,
     _expiration_tracker: ScopedJoinHandle<()>,
 }
 
@@ -72,14 +68,12 @@ impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
         let map = Arc::new(Mutex::new(HashMap::<Request, RequestData>::default()));
 
-        let (expiration_tracker, to_tracker_tx, from_tracker_rx) =
-            run_tracker(stats.clone(), map.clone());
+        let (expiration_tracker, to_tracker_tx) = run_tracker(stats.clone(), map.clone());
 
         Self {
             stats,
             map,
             to_tracker_tx,
-            from_tracker_rx: AsyncMutex::new(from_tracker_rx),
             _expiration_tracker: expiration_tracker,
         }
     }
@@ -89,9 +83,16 @@ impl PendingRequests {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
                 let msg = pending_request.to_message();
+
+                let accepted_block = match pending_request {
+                    PendingRequest::RootNode(_) => None,
+                    PendingRequest::ChildNodes(_, _) => None,
+                    PendingRequest::Block(accepted_block) => Some(accepted_block),
+                };
+
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
-                    pending_request,
+                    accepted_block,
                     permit,
                 });
                 self.request_added(&msg);
@@ -142,16 +143,6 @@ impl PendingRequests {
         }
     }
 
-    /// Wait until a pending request expires and remove it from the collection. If there are
-    /// currently no pending requests, this method waits forever.
-    ///
-    /// This method is cancel-safe in the sense that no request is removed if the returned future
-    /// is dropped before being driven to completion.
-    pub async fn expired(&self) {
-        // Unwrap OK because the tracker task never returns.
-        self.from_tracker_rx.lock().await.changed().await.unwrap()
-    }
-
     fn request_added(&self, request: &Request) {
         stats_request_added(&mut self.stats.write(), request);
         self.notify_tracker_task();
@@ -191,13 +182,8 @@ fn stats_request_removed(
 fn run_tracker(
     stats: Arc<RepositoryStats>,
     request_map: Arc<Mutex<HashMap<Request, RequestData>>>,
-) -> (
-    ScopedJoinHandle<()>,
-    uninitialized_watch::Sender<()>,
-    uninitialized_watch::Receiver<()>,
-) {
+) -> (ScopedJoinHandle<()>, uninitialized_watch::Sender<()>) {
     let (to_tracker_tx, mut to_tracker_rx) = uninitialized_watch::channel::<()>();
-    let (from_tracker_tx, from_tracker_rx) = uninitialized_watch::channel::<()>();
 
     let expiration_tracker = scoped_task::spawn(async move {
         loop {
@@ -218,14 +204,9 @@ fn run_tracker(
                     }
                     _ = time::sleep_until(timestamp + REQUEST_TIMEOUT) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if request_map.lock().unwrap().remove(&request).is_some() {
-                            let mut stats_writer = stats.write();
-                            stats_request_removed(&mut stats_writer, &request, None);
-                            stats_writer.request_timeouts += 1;
-
-                            if from_tracker_tx.send(()).is_err() {
-                                break;
-                            }
+                        if let Some(mut data) = request_map.lock().unwrap().get_mut(&request) {
+                            stats.write().request_timeouts += 1;
+                            data.accepted_block = None;
                         }
                     }
                 };
@@ -236,13 +217,9 @@ fn run_tracker(
                 }
             }
         }
-
-        // Don't exist so we don't need to check that `from_tracker_rx` returns a
-        // non-error value.
-        future::pending::<()>().await;
     });
 
-    (expiration_tracker, to_tracker_tx, from_tracker_rx)
+    (expiration_tracker, to_tracker_tx)
 }
 
 impl Drop for PendingRequests {
@@ -255,7 +232,7 @@ impl Drop for PendingRequests {
 
 struct RequestData {
     timestamp: Instant,
-    pending_request: PendingRequest,
+    accepted_block: Option<AcceptedBlock>,
     permit: CompoundPermit,
 }
 
