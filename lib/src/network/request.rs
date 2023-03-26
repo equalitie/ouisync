@@ -1,8 +1,8 @@
-use super::message::{self, request, ProcessedResponse, Request, ResponseDisambiguator};
+use super::message::{request, Request, Response, ResponseDisambiguator};
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockNonce},
+    block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
-    crypto::{sign::PublicKey, CacheHash, Hash},
+    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository_stats::{self, RepositoryStats},
     sync::uninitialized_watch,
@@ -103,8 +103,9 @@ impl PendingRequests {
 
     pub fn remove(
         &self,
-        response: ProcessedResponse,
+        response: Response,
     ) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
+        let response = ProcessedResponse::from(response);
         let request = response.to_request();
 
         if let Some(data) = self.map.lock().unwrap().remove(&request) {
@@ -114,16 +115,16 @@ impl PendingRequests {
             match response {
                 ProcessedResponse::Success(success) => {
                     let r = match success {
-                        message::response::Success::RootNode { proof, summary } => {
+                        processed_response::Success::RootNode { proof, summary } => {
                             PendingResponse::RootNode { proof, summary }
                         }
-                        message::response::Success::InnerNodes(hash, disambiguator) => {
+                        processed_response::Success::InnerNodes(hash, disambiguator) => {
                             PendingResponse::InnerNodes(hash, disambiguator)
                         }
-                        message::response::Success::LeafNodes(hash, disambiguator) => {
+                        processed_response::Success::LeafNodes(hash, disambiguator) => {
                             PendingResponse::LeafNodes(hash, disambiguator)
                         }
-                        message::response::Success::Block { data, nonce } => {
+                        processed_response::Success::Block { data, nonce } => {
                             PendingResponse::Block { data, nonce }
                         }
                     };
@@ -134,7 +135,7 @@ impl PendingRequests {
         } else {
             // Only `RootNode` response is allowed to be unsolicited
             match response {
-                ProcessedResponse::Success(message::response::Success::RootNode {
+                ProcessedResponse::Success(processed_response::Success::RootNode {
                     proof,
                     summary,
                 }) => Some((PendingResponse::RootNode { proof, summary }, None)),
@@ -243,4 +244,92 @@ struct RequestData {
 pub(super) struct CompoundPermit {
     pub _peer_permit: OwnedSemaphorePermit,
     pub client_permit: OwnedSemaphorePermit,
+}
+
+mod processed_response {
+    use super::*;
+
+    pub(super) enum Success {
+        RootNode {
+            proof: UntrustedProof,
+            summary: Summary,
+        },
+        InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
+        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
+        Block {
+            data: BlockData,
+            nonce: BlockNonce,
+        },
+    }
+
+    #[derive(Debug)]
+    pub(super) enum Failure {
+        RootNode(PublicKey),
+        ChildNodes(Hash, ResponseDisambiguator),
+        Block(BlockId),
+    }
+}
+
+enum ProcessedResponse {
+    Success(processed_response::Success),
+    Failure(processed_response::Failure),
+}
+
+impl ProcessedResponse {
+    fn to_request(&self) -> Request {
+        match self {
+            Self::Success(processed_response::Success::RootNode { proof, .. }) => {
+                request::RootNode(proof.writer_id).into()
+            }
+            Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator)) => {
+                request::ChildNodes(nodes.hash(), *disambiguator).into()
+            }
+            Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator)) => {
+                request::ChildNodes(nodes.hash(), *disambiguator).into()
+            }
+            Self::Success(processed_response::Success::Block { data, .. }) => {
+                request::Block(data.id).into()
+            }
+            Self::Failure(processed_response::Failure::RootNode(branch_id)) => {
+                request::RootNode(*branch_id).into()
+            }
+            Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator)) => {
+                request::ChildNodes(*hash, *disambiguator).into()
+            }
+            Self::Failure(processed_response::Failure::Block(block_id)) => {
+                request::Block(*block_id).into()
+            }
+        }
+    }
+}
+
+impl From<Response> for ProcessedResponse {
+    fn from(response: Response) -> Self {
+        match response {
+            Response::RootNode { proof, summary } => {
+                Self::Success(processed_response::Success::RootNode { proof, summary })
+            }
+            Response::InnerNodes(nodes, disambiguator) => Self::Success(
+                processed_response::Success::InnerNodes(nodes.into(), disambiguator),
+            ),
+            Response::LeafNodes(nodes, disambiguator) => Self::Success(
+                processed_response::Success::LeafNodes(nodes.into(), disambiguator),
+            ),
+            Response::Block { content, nonce } => {
+                Self::Success(processed_response::Success::Block {
+                    data: content.into(),
+                    nonce,
+                })
+            }
+            Response::RootNodeError(branch_id) => {
+                Self::Failure(processed_response::Failure::RootNode(branch_id))
+            }
+            Response::ChildNodesError(hash, disambiguator) => {
+                Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator))
+            }
+            Response::BlockError(block_id) => {
+                Self::Failure(processed_response::Failure::Block(block_id))
+            }
+        }
+    }
 }

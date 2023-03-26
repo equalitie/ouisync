@@ -1,5 +1,5 @@
 use super::{
-    message::{Content, ProcessedResponse, Response, ResponseDisambiguator},
+    message::{Content, Response, ResponseDisambiguator},
     request::{
         CompoundPermit, PendingRequest, PendingRequests, PendingResponse, MAX_REQUESTS_IN_FLIGHT,
     },
@@ -99,11 +99,9 @@ impl Client {
     }
 
     fn enqueue_response(&mut self, response: Response) -> Result<()> {
-        let response = ProcessedResponse::from(response);
-
         match self.pending_requests.remove(response) {
-            Some((response, permit)) => {
-                self.recv_queue.push_front((response, permit));
+            Some((pending_response, permit)) => {
+                self.recv_queue.push_front((pending_response, permit));
             }
             None => (),
         };
