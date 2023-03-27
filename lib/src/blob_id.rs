@@ -3,9 +3,11 @@ use rand::{
     distributions::{Distribution, Standard},
     Rng,
 };
+use serde::{Deserialize, Serialize};
 
 define_byte_array_wrapper! {
     /// BlobId is used to identify a blob in a directory
+    #[derive(Serialize, Deserialize)]
     pub(crate) struct BlobId([u8; 32]);
 }
 

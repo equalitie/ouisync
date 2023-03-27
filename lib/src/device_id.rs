@@ -1,4 +1,5 @@
 use hex::FromHexError;
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 
 define_byte_array_wrapper! {
@@ -25,5 +26,31 @@ impl FromStr for DeviceId {
         let mut buffer = [0; Self::SIZE];
         hex::decode_to_slice(s.trim(), &mut buffer)?;
         Ok(Self(buffer))
+    }
+}
+
+impl Serialize for DeviceId {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if s.is_human_readable() {
+            self.to_string().serialize(s)
+        } else {
+            self.0.serialize(s)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceId {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if d.is_human_readable() {
+            <&str>::deserialize(d)?.parse().map_err(D::Error::custom)
+        } else {
+            <[u8; Self::SIZE]>::deserialize(d).map(Self)
+        }
     }
 }

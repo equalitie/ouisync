@@ -267,6 +267,7 @@ impl From<Content> for Response {
 define_byte_array_wrapper! {
     // TODO: consider lower size (truncate the hash) which should still be enough to be unique
     // while reducing the message size.
+    #[derive(Serialize, Deserialize)]
     pub(crate) struct MessageChannel([u8; Hash::SIZE]);
 }
 

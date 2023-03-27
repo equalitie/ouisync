@@ -13,7 +13,7 @@ macro_rules! define_byte_array_wrapper {
     ) => {
         $(#[$attrs])*
         #[repr(transparent)]
-        #[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+        #[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
         $vis struct $name([u8; $size]);
 
         impl $name {

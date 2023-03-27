@@ -89,6 +89,7 @@ impl<T> ConfigEntry<T> {
 
         file.write_all(b"\n").await?;
         file.write_all(value.as_bytes()).await?;
+        file.flush().await?;
 
         Ok(())
     }
@@ -209,11 +210,6 @@ mod tests {
             ],
         ] {
             entry.set(&value).await.unwrap();
-
-            // let content = fs::read(entry.path()).await.unwrap();
-            // let content = String::from_utf8(content).unwrap();
-            // println!("-----------\n{content}\n------------");
-
             assert_eq!(entry.get().await.unwrap(), value);
         }
     }
