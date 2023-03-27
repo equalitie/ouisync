@@ -189,6 +189,7 @@ fn run_tracker(
                 .lock()
                 .unwrap()
                 .iter()
+                .filter(|(_, data)| data.block_promise.is_some())
                 .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
                 .map(|(k, v)| (*k, v.timestamp));
 
