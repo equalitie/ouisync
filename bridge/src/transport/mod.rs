@@ -21,6 +21,8 @@ pub trait Handler: Clone + Send + Sync + 'static {
     type Request: DeserializeOwned + Send;
     type Response: Serialize + Send;
 
+    async fn init(&self) {}
+
     async fn handle(
         &self,
         request: Self::Request,

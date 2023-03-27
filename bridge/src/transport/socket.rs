@@ -28,6 +28,8 @@ pub mod server_connection {
         let (notification_tx, mut notification_rx) = mpsc::channel(1);
         let mut request_handlers = FuturesUnordered::new();
 
+        handler.init().await;
+
         loop {
             select! {
                 message = receive(&mut socket) => {

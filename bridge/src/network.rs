@@ -28,6 +28,11 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
 
+/// Initialize the network according to the config.
+pub async fn init(_network: &Network, _config: &ConfigStore) {
+    // ...
+}
+
 /// Binds the network to the specified addresses.
 /// Rebinds if already bound. If any of the addresses is null, that particular protocol/family
 /// combination is not bound. If all are null the network is disabled.
