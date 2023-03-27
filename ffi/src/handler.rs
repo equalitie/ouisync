@@ -26,7 +26,7 @@ impl ouisync_bridge::transport::Handler for Handler {
     type Response = Response;
 
     async fn init(&self) {
-        network::init(&self.state.network, &self.state.config).await
+        ouisync_bridge::network::init(&self.state.network, &self.state.config).await
     }
 
     async fn handle(

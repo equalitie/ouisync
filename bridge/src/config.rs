@@ -1,14 +1,15 @@
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
-    fmt,
+    borrow::Borrow,
     io::{self, ErrorKind},
     marker::PhantomData,
     path::{Path, PathBuf},
-    str::FromStr,
+    str,
     sync::Arc,
 };
 use tokio::{
-    fs::{self, File, OpenOptions},
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    fs::{self, OpenOptions},
+    io::AsyncWriteExt,
 };
 
 #[derive(Clone)]
@@ -24,10 +25,7 @@ impl ConfigStore {
     }
 
     /// Obtain the config entry for the specified key.
-    pub fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T>
-    where
-        T: fmt::Display + FromStr,
-    {
+    pub fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T> {
         ConfigEntry {
             store: self.clone(),
             key,
@@ -53,16 +51,20 @@ impl<T> ConfigKey<T> {
 }
 
 #[derive(Clone)]
-pub struct ConfigEntry<Value>
+pub struct ConfigEntry<T>
 where
-    Value: fmt::Display + FromStr + 'static,
+    T: 'static,
 {
     store: ConfigStore,
-    key: ConfigKey<Value>,
+    key: ConfigKey<T>,
 }
 
-impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
-    pub async fn set(&self, value: &Value) -> io::Result<()> {
+impl<T> ConfigEntry<T> {
+    pub async fn set<U>(&self, value: &U) -> io::Result<()>
+    where
+        T: Borrow<U>,
+        U: Serialize + ?Sized,
+    {
         let path = self.path();
 
         if let Some(dir) = path.parent() {
@@ -73,7 +75,8 @@ impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
         // once writing is done.
         let mut file = OpenOptions::new()
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .open(path)
             .await?;
 
@@ -81,42 +84,137 @@ impl<Value: fmt::Display + FromStr> ConfigEntry<Value> {
             file.write_all(format!("# {line}\n").as_bytes()).await?;
         }
 
-        file.write_all(format!("\n{value}\n").as_bytes()).await?;
+        let value = serde_json::to_string_pretty(value)
+            .map_err(|error| io::Error::new(ErrorKind::Other, error))?;
+
+        file.write_all(b"\n").await?;
+        file.write_all(value.as_bytes()).await?;
 
         Ok(())
     }
 
-    pub async fn get(&self) -> io::Result<Value> {
-        let path = self.path();
-        let file = File::open(path).await?;
-        let line = self.find_value_line(file).await?;
-
-        line.parse().map_err(|_| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                format!("{:?}: malformed value", self.key.name),
-            )
-        })
-    }
-
-    fn path(&self) -> PathBuf {
+    pub(crate) fn path(&self) -> PathBuf {
         self.store.dir.join(self.key.name).with_extension("conf")
     }
+}
 
-    async fn find_value_line(&self, file: File) -> io::Result<String> {
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
+impl<T> ConfigEntry<T>
+where
+    T: DeserializeOwned,
+{
+    pub async fn get(&self) -> io::Result<T> {
+        let path = self.path();
+        let content = fs::read(&path).await?;
+        let content: String = str::from_utf8(&content)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?
+            .lines()
+            .filter(|line| !line.trim().starts_with('#'))
+            .collect();
 
-        while let Some(line) = lines.next_line().await? {
-            let line = line.trim();
+        serde_json::from_str(&content)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
+    }
+}
 
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
-            return Ok(line.to_owned());
+    use super::*;
+    use ouisync_lib::PeerAddr;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn bool_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let key: ConfigKey<bool> = ConfigKey::new("bool", "first line\nsecond line\nthird line");
+        let entry = config.entry(key);
+
+        for value in [true, false] {
+            entry.set(&value).await.unwrap();
+            assert_eq!(entry.get().await.unwrap(), value);
         }
+    }
 
-        Ok(String::new())
+    #[tokio::test]
+    async fn u16_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let key: ConfigKey<u16> = ConfigKey::new("u16", "first line\nsecond line\nthird line");
+        let entry = config.entry(key);
+
+        for value in [0, 1, 2, 1000, u16::MAX] {
+            entry.set(&value).await.unwrap();
+            assert_eq!(entry.get().await.unwrap(), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn string_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let key: ConfigKey<String> =
+            ConfigKey::new("string", "first line\nsecond line\nthird line");
+        let entry = config.entry(key);
+
+        for value in [
+            "foo",
+            "bar",
+            "baz qux",
+            "first line\nsecond line\nthird line",
+        ] {
+            entry.set(value).await.unwrap();
+            assert_eq!(entry.get().await.unwrap(), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn peer_addr_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let key: ConfigKey<PeerAddr> =
+            ConfigKey::new("peer_addr", "first line\nsecond line\nthird line");
+        let entry = config.entry(key);
+
+        for value in [
+            PeerAddr::Quic((Ipv4Addr::LOCALHOST, 45000).into()),
+            PeerAddr::Quic((Ipv6Addr::LOCALHOST, 45001).into()),
+            PeerAddr::Tcp((Ipv6Addr::UNSPECIFIED, 45002).into()),
+        ] {
+            entry.set(&value).await.unwrap();
+            assert_eq!(entry.get().await.unwrap(), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn vec_of_peer_addr_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let key: ConfigKey<Vec<PeerAddr>> =
+            ConfigKey::new("peer_addrs", "first line\nsecond line\nthird line");
+        let entry = config.entry(key);
+
+        for value in [
+            vec![],
+            vec![PeerAddr::Quic((Ipv4Addr::LOCALHOST, 45000).into())],
+            vec![
+                PeerAddr::Quic((Ipv6Addr::LOCALHOST, 45001).into()),
+                PeerAddr::Quic((Ipv6Addr::LOCALHOST, 45002).into()),
+            ],
+        ] {
+            entry.set(&value).await.unwrap();
+
+            // let content = fs::read(entry.path()).await.unwrap();
+            // let content = String::from_utf8(content).unwrap();
+            // println!("-----------\n{content}\n------------");
+
+            assert_eq!(entry.get().await.unwrap(), value);
+        }
     }
 }

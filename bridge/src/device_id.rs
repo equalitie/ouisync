@@ -35,3 +35,21 @@ pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
     }
     .map_err(Error::Config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn config_entry() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let entry = config.entry(KEY);
+        let value = OsRng.gen();
+
+        entry.set(&value).await.unwrap();
+        assert_eq!(entry.get().await.unwrap(), value);
+    }
+}
