@@ -140,27 +140,7 @@ impl Network {
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
-        [
-            self.inner
-                .gateway
-                .quic_listener_local_addr_v4()
-                .map(PeerAddr::Quic),
-            self.inner
-                .gateway
-                .quic_listener_local_addr_v6()
-                .map(PeerAddr::Quic),
-            self.inner
-                .gateway
-                .tcp_listener_local_addr_v4()
-                .map(PeerAddr::Tcp),
-            self.inner
-                .gateway
-                .tcp_listener_local_addr_v6()
-                .map(PeerAddr::Tcp),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
+        self.inner.gateway.listener_local_addrs()
     }
 
     #[deprecated = "use listener_local_addrs"]
@@ -522,13 +502,14 @@ impl Inner {
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
-        let tcp_port = self
-            .gateway
-            .tcp_listener_local_addr_v4()
+        let addrs = self.gateway.listener_local_addrs();
+        let tcp_port = addrs
+            .iter()
+            .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
             .map(|addr| PeerPort::Tcp(addr.port()));
-        let quic_port = self
-            .gateway
-            .quic_listener_local_addr_v4()
+        let quic_port = addrs
+            .iter()
+            .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
             .map(|addr| PeerPort::Quic(addr.port()));
 
         // Arbitrary order of preference.
@@ -876,34 +857,42 @@ impl Drop for MessageBrokerEntryGuard<'_> {
 }
 
 struct PortMappings {
-    _tcp_v4: Option<upnp::Mapping>,
-    _quic_v4: Option<upnp::Mapping>,
+    _mappings: Vec<upnp::Mapping>,
 }
 
 impl PortMappings {
     fn new(forwarder: &upnp::PortForwarder, gateway: &Gateway) -> Self {
-        let tcp_v4 = gateway.tcp_listener_local_addr_v4().map(|addr| {
-            forwarder.add_mapping(
-                addr.port(), // internal
-                addr.port(), // external
-                ip::Protocol::Tcp,
-            )
-        });
-
-        let quic_v4 = gateway.quic_listener_local_addr_v4().map(|addr| {
-            forwarder.add_mapping(
-                addr.port(), // internal
-                addr.port(), // external
-                ip::Protocol::Udp,
-            )
-        });
-
-        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-        // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+        let mappings = gateway
+            .listener_local_addrs()
+            .into_iter()
+            .filter_map(|addr| {
+                match addr {
+                    PeerAddr::Quic(SocketAddr::V4(addr)) => {
+                        Some(forwarder.add_mapping(
+                            addr.port(), // internal
+                            addr.port(), // external
+                            ip::Protocol::Udp,
+                        ))
+                    }
+                    PeerAddr::Tcp(SocketAddr::V4(addr)) => {
+                        Some(forwarder.add_mapping(
+                            addr.port(), // internal
+                            addr.port(), // external
+                            ip::Protocol::Tcp,
+                        ))
+                    }
+                    PeerAddr::Quic(SocketAddr::V6(_)) | PeerAddr::Tcp(SocketAddr::V6(_)) => {
+                        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might
+                        // need to be opened in the firewall ("pinholed"). Consider using UPnP for that
+                        // as well.
+                        None
+                    }
+                }
+            })
+            .collect();
 
         Self {
-            _tcp_v4: tcp_v4,
-            _quic_v4: quic_v4,
+            _mappings: mappings,
         }
     }
 }

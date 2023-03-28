@@ -7,7 +7,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{error::Result, transport::NotificationSender};
-use std::sync::Arc;
+use ouisync_lib::PeerAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct Handler {
@@ -211,26 +212,51 @@ impl ouisync_bridge::transport::Handler for Handler {
                 ouisync_bridge::network::bind(
                     &self.state.network,
                     &self.state.config,
-                    quic_v4,
-                    quic_v6,
-                    tcp_v4,
-                    tcp_v6,
+                    &[
+                        quic_v4.map(SocketAddr::from).map(PeerAddr::Quic),
+                        quic_v6.map(SocketAddr::from).map(PeerAddr::Quic),
+                        tcp_v4.map(SocketAddr::from).map(PeerAddr::Tcp),
+                        tcp_v6.map(SocketAddr::from).map(PeerAddr::Tcp),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
                 )
                 .await;
                 ().into()
             }
-            Request::NetworkTcpListenerLocalAddrV4 => {
-                self.state.network.tcp_listener_local_addr_v4().into()
-            }
-            Request::NetworkTcpListenerLocalAddrV6 => {
-                self.state.network.tcp_listener_local_addr_v6().into()
-            }
-            Request::NetworkQuicListenerLocalAddrV4 => {
-                self.state.network.quic_listener_local_addr_v4().into()
-            }
-            Request::NetworkQuicListenerLocalAddrV6 => {
-                self.state.network.quic_listener_local_addr_v6().into()
-            }
+            Request::NetworkTcpListenerLocalAddrV4 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkTcpListenerLocalAddrV6 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V6(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkQuicListenerLocalAddrV4 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkQuicListenerLocalAddrV6 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V6(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
             Request::NetworkAddUserProvidedPeer(addr) => {
                 self.state.network.add_user_provided_peer(&addr);
                 ().into()

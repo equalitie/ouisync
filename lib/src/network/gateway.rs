@@ -35,18 +35,47 @@ impl Gateway {
         }
     }
 
+    pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
+        let stacks = self.stacks.read();
+        [
+            stacks
+                .quic_listener_local_addr_v4()
+                .copied()
+                .map(PeerAddr::Quic),
+            stacks
+                .quic_listener_local_addr_v6()
+                .copied()
+                .map(PeerAddr::Quic),
+            stacks
+                .tcp_listener_local_addr_v4()
+                .copied()
+                .map(PeerAddr::Tcp),
+            stacks
+                .tcp_listener_local_addr_v6()
+                .copied()
+                .map(PeerAddr::Tcp),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    #[deprecated = "use listener_local_addrs"]
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.stacks.read().quic_listener_local_addr_v4().copied()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.stacks.read().quic_listener_local_addr_v6().copied()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.stacks.read().tcp_listener_local_addr_v4().copied()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.stacks.read().tcp_listener_local_addr_v6().copied()
     }

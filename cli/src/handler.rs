@@ -285,57 +285,29 @@ impl ouisync_bridge::transport::Handler for Handler {
                 Ok(().into())
             }
             Request::Bind { addrs } => {
-                let mut quic_v4 = None;
-                let mut quic_v6 = None;
-                let mut tcp_v4 = None;
-                let mut tcp_v6 = None;
-
-                for addr in addrs {
-                    match addr {
-                        PeerAddr::Quic(SocketAddr::V4(addr)) => quic_v4 = Some(addr),
-                        PeerAddr::Quic(SocketAddr::V6(addr)) => quic_v6 = Some(addr),
-                        PeerAddr::Tcp(SocketAddr::V4(addr)) => tcp_v4 = Some(addr),
-                        PeerAddr::Tcp(SocketAddr::V6(addr)) => tcp_v6 = Some(addr),
-                    }
-                }
-
-                network::bind(
-                    &self.state.network,
-                    &self.state.config,
-                    quic_v4,
-                    quic_v6,
-                    tcp_v4,
-                    tcp_v6,
-                )
-                .await;
-
+                network::bind(&self.state.network, &self.state.config, &addrs).await;
                 Ok(().into())
             }
             Request::ListPorts => {
                 let ports: Vec<_> = self
                     .state
                     .network
-                    .quic_listener_local_addr_v4()
-                    .map(|addr| format!("QUIC, IPv4: {}", addr.port()))
+                    .listener_local_addrs()
                     .into_iter()
-                    .chain(
-                        self.state
-                            .network
-                            .quic_listener_local_addr_v6()
-                            .map(|addr| format!("QUIC, IPv6: {}", addr.port())),
-                    )
-                    .chain(
-                        self.state
-                            .network
-                            .tcp_listener_local_addr_v4()
-                            .map(|addr| format!("TCP, IPv4: {}", addr.port())),
-                    )
-                    .chain(
-                        self.state
-                            .network
-                            .tcp_listener_local_addr_v6()
-                            .map(|addr| format!("TCP, IPv6: {}", addr.port())),
-                    )
+                    .map(|addr| match addr {
+                        PeerAddr::Quic(SocketAddr::V4(addr)) => {
+                            format!("QUIC, IPv4: {}", addr.port())
+                        }
+                        PeerAddr::Quic(SocketAddr::V6(addr)) => {
+                            format!("QUIC, IPv6: {}", addr.port())
+                        }
+                        PeerAddr::Tcp(SocketAddr::V4(addr)) => {
+                            format!("TCP, IPv4: {}", addr.port())
+                        }
+                        PeerAddr::Tcp(SocketAddr::V6(addr)) => {
+                            format!("TCP, IPv6: {}", addr.port())
+                        }
+                    })
                     .collect();
 
                 Ok(ports.into())
