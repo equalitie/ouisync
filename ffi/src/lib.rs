@@ -93,9 +93,12 @@ pub unsafe extern "C" fn session_create(
     let result = Session::create(configs_path, port_sender, client_tx);
 
     if let Ok(session) = &result {
-        session
-            .runtime
-            .spawn(server.run(Handler::new(session.state.clone())));
+        let state = session.state.clone();
+
+        session.runtime.spawn(async move {
+            state.init().await;
+            server.run(Handler::new(state)).await;
+        });
     }
 
     result.into()

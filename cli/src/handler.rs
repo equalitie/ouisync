@@ -26,13 +26,15 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub fn new(dirs: &Dirs) -> Self {
+    pub async fn new(dirs: &Dirs) -> Self {
         let config = ConfigStore::new(&dirs.config_dir);
 
         let network = {
             let _enter = tracing::info_span!("Network").entered();
             Network::new()
         };
+
+        network::init(&network, &config).await;
 
         Self {
             config,
@@ -111,10 +113,6 @@ impl Handler {
 impl ouisync_bridge::transport::Handler for Handler {
     type Request = Request;
     type Response = Response;
-
-    async fn init(&self) {
-        network::init(&self.state.network, &self.state.config).await;
-    }
 
     async fn handle(
         &self,

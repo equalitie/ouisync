@@ -2,7 +2,7 @@ use crate::{
     file::FileHolder,
     registry::{Handle, Registry},
 };
-use ouisync_bridge::{config::ConfigStore, repository::RepositoryHolder};
+use ouisync_bridge::{config::ConfigStore, network, repository::RepositoryHolder};
 use ouisync_lib::{network::Network, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::path::PathBuf;
@@ -39,6 +39,11 @@ impl State {
             files: Registry::new(),
             tasks: Registry::new(),
         }
+    }
+
+    /// Apply configuration
+    pub async fn init(&self) {
+        network::init(&self.network, &self.config).await;
     }
 
     /// Cancel a notification subscription.

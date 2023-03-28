@@ -2,6 +2,9 @@ use crate::config::{ConfigKey, ConfigStore};
 use ouisync_lib::network::{peer_addr::PeerAddr, Network};
 use std::net::SocketAddr;
 
+const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
+    ConfigKey::new("bind", "Addresses to bind the network listeners to");
+
 const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> =
     ConfigKey::new("last_used_tcp_v4_port", LAST_USED_TCP_PORT_COMMENT);
 
@@ -28,14 +31,17 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      default to manually setting up port forwarding on their routers.";
 
 /// Initialize the network according to the config.
-pub async fn init(_network: &Network, _config: &ConfigStore) {
-    // ...
+pub async fn init(network: &Network, config: &ConfigStore) {
+    let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or_default();
+    bind(network, config, &bind_addrs).await;
 }
 
 /// Binds the network to the specified addresses.
 /// Rebinds if already bound. If any of the addresses are missing, that particular protocol/family
 /// combination is not bound. If all are missing the network is disabled.
 pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
+    config.entry(BIND_KEY).set(addrs).await.ok();
+
     let mut last_used_ports = LastUsedPorts::load(config).await;
     let addrs: Vec<_> = addrs
         .iter()

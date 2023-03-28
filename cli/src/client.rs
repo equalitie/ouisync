@@ -70,7 +70,7 @@ async fn connect(
             Ok(client) => Ok(Box::new(client)),
             Err(error) => match error.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let state = State::new(dirs);
+                    let state = State::new(dirs).await;
                     let state = Arc::new(state);
                     let handler = Handler::new(state);
 

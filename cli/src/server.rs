@@ -12,7 +12,7 @@ use tokio::task;
 pub(crate) async fn run(options: Options) -> Result<()> {
     let _logger = logger::new(None);
 
-    let state = State::new(&options.dirs);
+    let state = State::new(&options.dirs).await;
     let state = Arc::new(state);
 
     let addr = match options.host {
