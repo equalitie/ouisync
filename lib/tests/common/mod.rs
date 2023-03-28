@@ -232,7 +232,7 @@ pub(crate) mod actor {
 
         let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
         let bind_addr = proto.wrap(bind_addr);
-        network.handle().bind(&[bind_addr]).await;
+        network.bind(&[bind_addr]).await;
 
         network
     }
@@ -265,7 +265,7 @@ pub(crate) mod actor {
 
     pub(crate) async fn create_linked_repo(network: &Network) -> (Repository, Registration) {
         let repo = create_repo().await;
-        let reg = network.handle().register(repo.store().clone());
+        let reg = network.register(repo.store().clone());
 
         (repo, reg)
     }

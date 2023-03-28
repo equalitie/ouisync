@@ -73,7 +73,7 @@ impl State {
         )
         .await;
 
-        time::timeout(Duration::from_secs(1), self.network.handle().shutdown())
+        time::timeout(Duration::from_secs(1), self.network.shutdown())
             .await
             .ok();
     }

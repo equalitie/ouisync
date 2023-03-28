@@ -139,6 +139,15 @@ impl Network {
         }
     }
 
+    /// Binds the network to the specified addresses.
+    /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
+    ///
+    /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
+    /// and the rest are ignored, but this might change in the future.
+    pub async fn bind(&self, addrs: &[PeerAddr]) {
+        self.inner.bind(addrs).await
+    }
+
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
         self.inner.gateway.listener_local_addrs()
     }
@@ -190,12 +199,6 @@ impl Network {
         self.inner.user_provided_peers.remove(peer)
     }
 
-    pub fn handle(&self) -> Handle {
-        Handle {
-            inner: self.inner.clone(),
-        }
-    }
-
     pub fn this_runtime_id(&self) -> PublicRuntimeId {
         self.inner.this_runtime_id.public()
     }
@@ -225,15 +228,7 @@ impl Network {
     pub fn on_peer_set_change(&self) -> uninitialized_watch::Receiver<()> {
         self.inner.connection_deduplicator.on_change()
     }
-}
 
-/// Handle for the network which can be cheaply cloned and sent to other threads.
-#[derive(Clone)]
-pub struct Handle {
-    inner: Arc<Inner>,
-}
-
-impl Handle {
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
@@ -262,22 +257,8 @@ impl Handle {
         }
     }
 
-    /// Binds the network to the specified addresses.
-    /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
-    ///
-    /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
-    /// and the rest are ignored, but this might change in the future.
-    pub async fn bind(&self, addrs: &[PeerAddr]) {
-        self.inner.bind(addrs).await
-    }
-
-    /// Is the network enabled
-    pub fn is_bound(&self) -> bool {
-        self.inner.gateway.is_bound()
-    }
-
     /// Gracefully disconnect from peers. Failing to call this function on app termination will
-    /// cause the peers to now learn that we disconnected just now. They will still find out later
+    /// cause the peers to not learn that we disconnected just now. They will still find out later
     /// once the keep-alive mechanism kicks in, but in the mean time we will not be able to
     /// reconnect (by starting the app again) because the remote peer will keep dropping new
     /// connections from us.

@@ -90,7 +90,6 @@ fn local_discovery() {
         env.actor(&format!("node-{src_port}"), async move {
             let network = actor::create_unbound_network();
             network
-                .handle()
                 .bind(&[proto.wrap((Ipv4Addr::LOCALHOST, src_port))])
                 .await;
 

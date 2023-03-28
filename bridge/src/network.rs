@@ -89,7 +89,7 @@ async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &
         .map(|addr| last_used_ports.apply(*addr))
         .collect();
 
-    network.handle().bind(&addrs).await;
+    network.bind(&addrs).await;
 
     // Write the actually used ports to the config
     last_used_ports.extract(&network.listener_local_addrs());

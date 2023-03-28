@@ -309,7 +309,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 ().into()
             }
             Request::NetworkShutdown => {
-                self.state.network.handle().shutdown().await;
+                self.state.network.shutdown().await;
                 ().into()
             }
             Request::StateMonitorGet(path) => state_monitor::get(&self.state, path)?.into(),

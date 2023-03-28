@@ -148,12 +148,9 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
     } = *session.release();
 
     runtime.block_on(async move {
-        time::timeout(
-            Duration::from_millis(500),
-            state.network.handle().shutdown(),
-        )
-        .await
-        .unwrap_or(())
+        time::timeout(Duration::from_millis(500), state.network.shutdown())
+            .await
+            .unwrap_or(())
     });
 }
 

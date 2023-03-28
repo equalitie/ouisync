@@ -95,11 +95,6 @@ impl Gateway {
         (side_channel_maker_v4, side_channel_maker_v6)
     }
 
-    /// Checks whether this `Gateway` is bound to at least one address.
-    pub fn is_bound(&self) -> bool {
-        self.stacks.read().is_bound()
-    }
-
     pub async fn connect_with_retries(
         &self,
         peer: &SeenPeer,
@@ -211,13 +206,6 @@ impl Stacks {
         };
 
         (this, side_channel_maker_v4, side_channel_maker_v6)
-    }
-
-    fn is_bound(&self) -> bool {
-        self.quic_v4.is_some()
-            || self.quic_v6.is_some()
-            || self.tcp_v4.is_some()
-            || self.tcp_v6.is_some()
     }
 
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
