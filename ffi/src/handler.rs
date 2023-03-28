@@ -254,11 +254,21 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .map(|addr| *addr.socket_addr())
                 .into(),
             Request::NetworkAddUserProvidedPeer(addr) => {
-                self.state.network.add_user_provided_peer(&addr);
+                ouisync_bridge::network::add_user_provided_peers(
+                    &self.state.network,
+                    &self.state.config,
+                    &[addr],
+                )
+                .await;
                 ().into()
             }
             Request::NetworkRemoveUserProvidedPeer(addr) => {
-                self.state.network.remove_user_provided_peer(&addr);
+                ouisync_bridge::network::remove_user_provided_peers(
+                    &self.state.network,
+                    &self.state.config,
+                    &[addr],
+                )
+                .await;
                 ().into()
             }
             Request::NetworkKnownPeers => self.state.network.collect_peer_info().into(),

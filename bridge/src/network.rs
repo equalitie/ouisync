@@ -11,6 +11,12 @@ const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
 const LOCAL_DISCOVERY_ENABLED_KEY: ConfigKey<bool> =
     ConfigKey::new("local_discovery_enabled", "Enable local discovery");
 
+const PEERS_KEY: ConfigKey<Vec<PeerAddr>> = ConfigKey::new(
+    "peers",
+    "List of peers to connect to in addition to the ones found by various discovery mechanisms\n\
+     (e.g. DHT)",
+);
+
 const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> =
     ConfigKey::new("last_used_tcp_v4_port", LAST_USED_TCP_PORT_COMMENT);
 
@@ -54,6 +60,11 @@ pub async fn init(network: &Network, config: &ConfigStore) {
         .await
         .unwrap_or(false);
     network.set_local_discovery_enabled(enabled);
+
+    let peers = config.entry(PEERS_KEY).get().await.unwrap_or_default();
+    for peer in peers {
+        network.add_user_provided_peer(&peer);
+    }
 }
 
 /// Binds the network to the specified addresses.
@@ -96,6 +107,46 @@ pub async fn set_local_discovery_enabled(network: &Network, config: &ConfigStore
         .await
         .ok();
     network.set_local_discovery_enabled(enabled);
+}
+
+/// Add peers to connect to
+pub async fn add_user_provided_peers(network: &Network, config: &ConfigStore, peers: &[PeerAddr]) {
+    let entry = config.entry(PEERS_KEY);
+    let mut stored = entry.get().await.unwrap_or_default();
+
+    let len = stored.len();
+    stored.extend(peers.iter().copied());
+    stored.sort();
+    stored.dedup();
+
+    if stored.len() > len {
+        entry.set(&stored).await.ok();
+    }
+
+    for peer in peers {
+        network.add_user_provided_peer(peer);
+    }
+}
+
+/// Remove peers previously added with `add_user_provided_peer`
+pub async fn remove_user_provided_peers(
+    network: &Network,
+    config: &ConfigStore,
+    peers: &[PeerAddr],
+) {
+    let entry = config.entry(PEERS_KEY);
+    let mut stored = entry.get().await.unwrap_or_default();
+
+    let len = stored.len();
+    stored.retain(|stored| !peers.contains(stored));
+
+    if stored.len() < len {
+        entry.set(&stored).await.ok();
+    }
+
+    for peer in peers {
+        network.remove_user_provided_peer(peer);
+    }
 }
 
 /// Utility to help reuse bind ports across network restarts.

@@ -240,6 +240,9 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
+    // FIXME: This continues to run on the old stacks even after new stacks are bound. Move it to
+    // Gateway and grab fresh stack on each attemp. Also start the hole puncher on each attempt
+    // unless already running
     async fn connect_with_retries(
         &self,
         peer: &SeenPeer,

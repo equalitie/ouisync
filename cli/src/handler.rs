@@ -337,17 +337,17 @@ impl ouisync_bridge::transport::Handler for Handler {
                 }
             }
             Request::AddPeers { addrs } => {
-                for addr in addrs {
-                    self.state.network.add_user_provided_peer(&addr);
-                }
-
+                network::add_user_provided_peers(&self.state.network, &self.state.config, &addrs)
+                    .await;
                 Ok(().into())
             }
             Request::RemovePeers { addrs } => {
-                for addr in addrs {
-                    self.state.network.remove_user_provided_peer(&addr);
-                }
-
+                network::remove_user_provided_peers(
+                    &self.state.network,
+                    &self.state.config,
+                    &addrs,
+                )
+                .await;
                 Ok(().into())
             }
             Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
