@@ -952,7 +952,6 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
 fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::Db(_)
-        | Error::DeviceIdConfig(_)
         | Error::BlockNotFound(_)
         | Error::BlockNotReferenced
         | Error::MalformedData

@@ -1,6 +1,5 @@
 mod barrier;
 mod client;
-mod config_keys;
 mod connection;
 mod crypto;
 pub mod dht_discovery;
@@ -44,7 +43,6 @@ pub use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    config::ConfigStore,
     repository::RepositoryId,
     store::Store,
     sync::uninitialized_watch,
@@ -77,9 +75,10 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(config: ConfigStore) -> Self {
+    #[allow(clippy::new_without_default)] // Default doesn't seem right for this
+    pub fn new() -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
-        let gateway = Gateway::new(config, incoming_tx);
+        let gateway = Gateway::new(incoming_tx);
 
         // Note that we're now only using quic for the transport discovered over the dht.
         // This is because the dht doesn't let us specify whether the remote peer SocketAddr is
@@ -140,20 +139,8 @@ impl Network {
         }
     }
 
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.inner.gateway.tcp_listener_local_addr_v4()
-    }
-
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.inner.gateway.tcp_listener_local_addr_v6()
-    }
-
-    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.inner.gateway.quic_listener_local_addr_v4()
-    }
-
-    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.inner.gateway.quic_listener_local_addr_v6()
+    pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
+        self.inner.gateway.listener_local_addrs()
     }
 
     pub fn set_port_forwarding_enabled(&self, enabled: bool) {
@@ -277,6 +264,9 @@ impl Handle {
 
     /// Binds the network to the specified addresses.
     /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
+    ///
+    /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
+    /// and the rest are ignored, but this might change in the future.
     pub async fn bind(&self, addrs: &[PeerAddr]) {
         self.inner.bind(addrs).await
     }
@@ -495,13 +485,14 @@ impl Inner {
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
-        let tcp_port = self
-            .gateway
-            .tcp_listener_local_addr_v4()
+        let addrs = self.gateway.listener_local_addrs();
+        let tcp_port = addrs
+            .iter()
+            .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
             .map(|addr| PeerPort::Tcp(addr.port()));
-        let quic_port = self
-            .gateway
-            .quic_listener_local_addr_v4()
+        let quic_port = addrs
+            .iter()
+            .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
             .map(|addr| PeerPort::Quic(addr.port()));
 
         // Arbitrary order of preference.
@@ -849,34 +840,42 @@ impl Drop for MessageBrokerEntryGuard<'_> {
 }
 
 struct PortMappings {
-    _tcp_v4: Option<upnp::Mapping>,
-    _quic_v4: Option<upnp::Mapping>,
+    _mappings: Vec<upnp::Mapping>,
 }
 
 impl PortMappings {
     fn new(forwarder: &upnp::PortForwarder, gateway: &Gateway) -> Self {
-        let tcp_v4 = gateway.tcp_listener_local_addr_v4().map(|addr| {
-            forwarder.add_mapping(
-                addr.port(), // internal
-                addr.port(), // external
-                ip::Protocol::Tcp,
-            )
-        });
-
-        let quic_v4 = gateway.quic_listener_local_addr_v4().map(|addr| {
-            forwarder.add_mapping(
-                addr.port(), // internal
-                addr.port(), // external
-                ip::Protocol::Udp,
-            )
-        });
-
-        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might need to
-        // be opened in the firewall ("pinholed"). Consider using UPnP for that as well.
+        let mappings = gateway
+            .listener_local_addrs()
+            .into_iter()
+            .filter_map(|addr| {
+                match addr {
+                    PeerAddr::Quic(SocketAddr::V4(addr)) => {
+                        Some(forwarder.add_mapping(
+                            addr.port(), // internal
+                            addr.port(), // external
+                            ip::Protocol::Udp,
+                        ))
+                    }
+                    PeerAddr::Tcp(SocketAddr::V4(addr)) => {
+                        Some(forwarder.add_mapping(
+                            addr.port(), // internal
+                            addr.port(), // external
+                            ip::Protocol::Tcp,
+                        ))
+                    }
+                    PeerAddr::Quic(SocketAddr::V6(_)) | PeerAddr::Tcp(SocketAddr::V6(_)) => {
+                        // TODO: the ipv6 port typically doesn't need to be port-mapped but it might
+                        // need to be opened in the firewall ("pinholed"). Consider using UPnP for that
+                        // as well.
+                        None
+                    }
+                }
+            })
+            .collect();
 
         Self {
-            _tcp_v4: tcp_v4,
-            _quic_v4: quic_v4,
+            _mappings: mappings,
         }
     }
 }

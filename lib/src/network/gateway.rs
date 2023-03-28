@@ -1,10 +1,5 @@
-use super::{
-    config_keys, ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer,
-};
-use crate::{
-    config::{ConfigEntry, ConfigStore},
-    sync::atomic_slot::AtomicSlot,
-};
+use super::{ip, peer_addr::PeerAddr, peer_source::PeerSource, raw, seen_peers::SeenPeer};
+use crate::sync::atomic_slot::AtomicSlot;
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use net::{
     quic,
@@ -23,7 +18,6 @@ use tracing::Instrument;
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
     stacks: AtomicSlot<Stacks>,
-    config: ConfigStore,
     incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
 }
 
@@ -31,31 +25,39 @@ impl Gateway {
     /// Create a new `Gateway` that is initially disabled.
     ///
     /// `incoming_tx` is the sender for the incoming connections.
-    pub fn new(config: ConfigStore, incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
+    pub fn new(incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>) -> Self {
         let stacks = Stacks::unbound();
         let stacks = AtomicSlot::new(stacks);
 
         Self {
             stacks,
-            config,
             incoming_tx,
         }
     }
 
-    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.stacks.read().quic_listener_local_addr_v4().copied()
-    }
-
-    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.stacks.read().quic_listener_local_addr_v6().copied()
-    }
-
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.stacks.read().tcp_listener_local_addr_v4().copied()
-    }
-
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.stacks.read().tcp_listener_local_addr_v6().copied()
+    pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
+        let stacks = self.stacks.read();
+        [
+            stacks
+                .quic_listener_local_addr_v4()
+                .copied()
+                .map(PeerAddr::Quic),
+            stacks
+                .quic_listener_local_addr_v6()
+                .copied()
+                .map(PeerAddr::Quic),
+            stacks
+                .tcp_listener_local_addr_v4()
+                .copied()
+                .map(PeerAddr::Tcp),
+            stacks
+                .tcp_listener_local_addr_v6()
+                .copied()
+                .map(PeerAddr::Tcp),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
@@ -67,7 +69,7 @@ impl Gateway {
         Option<quic::SideChannelMaker>,
     ) {
         let (next, side_channel_maker_v4, side_channel_maker_v6) =
-            Stacks::bind(bind, &self.config, self.incoming_tx.clone()).await;
+            Stacks::bind(bind, self.incoming_tx.clone()).await;
 
         let prev = self.stacks.swap(next);
         let next = self.stacks.read();
@@ -147,7 +149,6 @@ impl Stacks {
 
     async fn bind(
         bind: &[PeerAddr],
-        config: &ConfigStore,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> (
         Self,
@@ -173,7 +174,7 @@ impl Stacks {
         });
 
         let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind_quic_v4 {
-            QuicStack::new(addr, config, incoming_tx.clone())
+            QuicStack::new(addr, incoming_tx.clone())
                 .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
@@ -182,7 +183,7 @@ impl Stacks {
         };
 
         let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind_quic_v6 {
-            QuicStack::new(addr, config, incoming_tx.clone())
+            QuicStack::new(addr, incoming_tx.clone())
                 .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
                 .unwrap_or((None, None))
@@ -191,13 +192,13 @@ impl Stacks {
         };
 
         let tcp_v4 = if let Some(addr) = bind_tcp_v4 {
-            TcpStack::new(addr, config, incoming_tx.clone()).await
+            TcpStack::new(addr, incoming_tx.clone()).await
         } else {
             None
         };
 
         let tcp_v6 = if let Some(addr) = bind_tcp_v6 {
-            TcpStack::new(addr, config, incoming_tx).await
+            TcpStack::new(addr, incoming_tx).await
         } else {
             None
         };
@@ -239,6 +240,9 @@ impl Stacks {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
     }
 
+    // FIXME: This continues to run on the old stacks even after new stacks are bound. Move it to
+    // Gateway and grab fresh stack on each attemp. Also start the hole puncher on each attempt
+    // unless already running
     async fn connect_with_retries(
         &self,
         peer: &SeenPeer,
@@ -372,15 +376,12 @@ struct QuicStack {
 impl QuicStack {
     async fn new(
         preferred_addr: SocketAddr,
-        config: &ConfigStore,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
-        let (family, config_key) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_UDP_PORT_V4_KEY),
-            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_UDP_PORT_V6_KEY),
+        let family = match preferred_addr {
+            SocketAddr::V4(_) => "IPv4",
+            SocketAddr::V6(_) => "IPv6",
         };
-        let config_entry = config.entry(config_key);
-        let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
         let (connector, listener, side_channel_maker) = match quic::configure(preferred_addr).await
         {
@@ -390,8 +391,6 @@ impl QuicStack {
                     family,
                     listener.local_addr()
                 );
-
-                config_entry.set(&listener.local_addr().port()).await.ok();
 
                 (connector, listener, side_channel_maker)
             }
@@ -434,20 +433,14 @@ struct TcpStack {
 }
 
 impl TcpStack {
-    // If the user did not specify (through NetworkOptions) the preferred port, then try to use
-    // the one used last time. If that fails, or if this is the first time the app is running,
-    // then use a random port.
     async fn new(
         preferred_addr: SocketAddr,
-        config: &ConfigStore,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> Option<Self> {
-        let (family, config_key) = match preferred_addr {
-            SocketAddr::V4(_) => ("IPv4", config_keys::LAST_USED_TCP_V4_PORT_KEY),
-            SocketAddr::V6(_) => ("IPv6", config_keys::LAST_USED_TCP_V6_PORT_KEY),
+        let family = match preferred_addr {
+            SocketAddr::V4(_) => "IPv4",
+            SocketAddr::V6(_) => "IPv6",
         };
-        let config_entry = config.entry(config_key);
-        let preferred_addr = use_last_port(preferred_addr, &config_entry).await;
 
         let listener = match TcpListener::bind(preferred_addr).await {
             Ok(listener) => listener,
@@ -465,7 +458,6 @@ impl TcpStack {
         let listener_local_addr = match listener.local_addr() {
             Ok(addr) => {
                 tracing::info!("Configured {} TCP listener on {:?}", family, addr);
-                config_entry.set(&addr.port()).await.ok();
                 addr
             }
             Err(err) => {
@@ -583,14 +575,4 @@ fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
     }
 
     true
-}
-
-async fn use_last_port(mut addr: SocketAddr, config: &ConfigEntry<u16>) -> SocketAddr {
-    if addr.port() == 0 {
-        if let Ok(last_port) = config.get().await {
-            addr.set_port(last_port);
-        }
-    }
-
-    addr
 }

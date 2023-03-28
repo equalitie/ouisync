@@ -1,3 +1,4 @@
+use crate::config::ConfigError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -24,6 +25,8 @@ pub enum Error {
     InvalidArgument,
     #[error("connection lost")]
     ConnectionLost,
+    #[error("failed to read from or write into the config file")]
+    Config(#[from] ConfigError),
     #[error("input/output error")]
     Io(#[from] io::Error),
 }
@@ -36,7 +39,6 @@ impl Error {
 
                 match error {
                     Db(_) => ErrorCode::Db,
-                    DeviceIdConfig(_) => ErrorCode::DeviceIdConfig,
                     PermissionDenied => ErrorCode::PermissionDenied,
                     MalformedData | MalformedDirectory => ErrorCode::MalformedData,
                     EntryExists => ErrorCode::EntryExists,
@@ -55,6 +57,7 @@ impl Error {
             Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Io(_) => {
                 ErrorCode::Other
             }
+            Self::Config(_) => ErrorCode::Config,
             Self::MalformedRequest(_) => ErrorCode::MalformedRequest,
             Self::RequestFailed { code, .. } => *code,
             Self::InvalidArgument => ErrorCode::InvalidArgument,
@@ -88,8 +91,8 @@ pub enum ErrorCode {
     DirectoryNotEmpty = 7,
     /// The indended operation is not supported
     OperationNotSupported = 8,
-    /// Failed to read from or write into the device ID config file
-    DeviceIdConfig = 10,
+    /// Failed to read from or write into the config file
+    Config = 10,
     /// Argument passed to a function is not valid
     InvalidArgument = 11,
     /// Interface request is malformed
@@ -120,7 +123,7 @@ mod tests {
             ErrorCode::AmbiguousEntry,
             ErrorCode::DirectoryNotEmpty,
             ErrorCode::OperationNotSupported,
-            ErrorCode::DeviceIdConfig,
+            ErrorCode::Config,
             ErrorCode::InvalidArgument,
             ErrorCode::MalformedRequest,
             ErrorCode::StorageVersionMismatch,

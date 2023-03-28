@@ -1,10 +1,9 @@
 use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey,
-    device_id::DeviceId,
     network::{Network, Registration},
-    Access, AccessSecrets, ConfigStore, EntryType, Error, Event, File, Payload, PeerAddr,
-    Repository, RepositoryDb, Result,
+    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
+    RepositoryDb, Result,
 };
 use rand::Rng;
 use std::{
@@ -225,10 +224,7 @@ pub(crate) mod actor {
     use super::*;
 
     pub(crate) fn create_unbound_network() -> Network {
-        let config_store = ACTOR.with(|actor| actor.base_dir.join("config"));
-        let config_store = ConfigStore::new(config_store);
-
-        Network::new(config_store)
+        Network::new()
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {
@@ -386,27 +382,19 @@ impl Proto {
         }
     }
 
-    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
-    #[track_caller]
-    pub fn listener_local_addr_v4(&self, network: &Network) -> PeerAddr {
-        match self {
-            Self::Tcp => PeerAddr::Tcp(network.tcp_listener_local_addr_v4().unwrap()),
-            Self::Quic => PeerAddr::Quic(network.quic_listener_local_addr_v4().unwrap()),
-        }
-    }
-
     #[track_caller]
     pub fn detect(network: &Network) -> Self {
-        match (
-            network.quic_listener_local_addr_v4(),
-            network.quic_listener_local_addr_v6(),
-            network.tcp_listener_local_addr_v4(),
-            network.tcp_listener_local_addr_v6(),
-        ) {
-            (Some(_), _, _, _) | (_, Some(_), _, _) => Self::Quic,
-            (_, _, Some(_), _) | (_, _, _, Some(_)) => Self::Tcp,
-            (None, None, None, None) => panic!("no protocol"),
+        let addrs = network.listener_local_addrs();
+
+        if addrs.iter().any(|addr| addr.is_quic()) {
+            return Self::Quic;
         }
+
+        if addrs.iter().any(|addr| addr.is_tcp()) {
+            return Self::Tcp;
+        }
+
+        panic!("no protocol")
     }
 }
 

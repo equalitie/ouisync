@@ -1,11 +1,10 @@
-use crate::error::Result;
+use crate::{config::ConfigStore, device_id, error::Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_lib::{
     crypto::Password,
-    device_id,
     network::{Network, Registration},
-    Access, AccessMode, AccessSecrets, ConfigStore, LocalSecret, ReopenToken, Repository,
-    RepositoryDb, ShareToken,
+    Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository, RepositoryDb,
+    ShareToken,
 };
 use std::{borrow::Cow, sync::Arc};
 use tracing::{Instrument, Span};

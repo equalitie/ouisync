@@ -1,8 +1,6 @@
-use crate::config::{ConfigKey, ConfigStore};
-use crate::error::{Error, Result};
 use hex::FromHexError;
-use rand::{rngs::OsRng, Rng};
-use std::{io::ErrorKind, str::FromStr};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use std::str::FromStr;
 
 define_byte_array_wrapper! {
     /// DeviceId uniquely identifies machines on which this software is running. Its only purpose is
@@ -31,32 +29,28 @@ impl FromStr for DeviceId {
     }
 }
 
-const KEY: ConfigKey<DeviceId> = ConfigKey::new(
-    "device_id",
-    "The value stored in this file is the device ID. It is uniquelly generated for each device\n\
-     and its only purpose is to detect when a database has been migrated from one device to\n\
-     another.\n\
-     \n\
-     * When a database is migrated, the safest option is to NOT migrate this file with it. *\n\
-     \n\
-     However, the user may chose to *move* this file alongside the database. In such case it is\n\
-     important to ensure the same device ID is never used by a writer replica concurrently from\n\
-     more than one location. Doing so will likely result in data loss.\n\
-     \n\
-     Device ID is never used in construction of network messages and thus can't be used for peer\n\
-     identification.",
-);
-
-pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
-    let cfg = config.entry(KEY);
-
-    match cfg.get().await {
-        Ok(id) => Ok(id),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            let new_id = OsRng.gen();
-            cfg.set(&new_id).await.map(|_| new_id)
+impl Serialize for DeviceId {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if s.is_human_readable() {
+            self.to_string().serialize(s)
+        } else {
+            self.0.serialize(s)
         }
-        Err(e) => Err(e),
     }
-    .map_err(Error::DeviceIdConfig)
+}
+
+impl<'de> Deserialize<'de> for DeviceId {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if d.is_human_readable() {
+            <&str>::deserialize(d)?.parse().map_err(D::Error::custom)
+        } else {
+            <[u8; Self::SIZE]>::deserialize(d).map(Self)
+        }
+    }
 }

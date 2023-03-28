@@ -7,7 +7,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{error::Result, transport::NotificationSender};
-use std::sync::Arc;
+use ouisync_lib::PeerAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct Handler {
@@ -197,6 +198,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileLen(file) => file::len(&self.state, file).await.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),
+            Request::NetworkInit(defaults) => {
+                ouisync_bridge::network::init(&self.state.network, &self.state.config, defaults)
+                    .await;
+                ().into()
+            }
             Request::NetworkSubscribe => network::subscribe(&self.state, notification_tx).into(),
             Request::NetworkBind {
                 quic_v4,
@@ -206,32 +212,68 @@ impl ouisync_bridge::transport::Handler for Handler {
             } => {
                 ouisync_bridge::network::bind(
                     &self.state.network,
-                    quic_v4,
-                    quic_v6,
-                    tcp_v4,
-                    tcp_v6,
+                    &self.state.config,
+                    &[
+                        quic_v4.map(SocketAddr::from).map(PeerAddr::Quic),
+                        quic_v6.map(SocketAddr::from).map(PeerAddr::Quic),
+                        tcp_v4.map(SocketAddr::from).map(PeerAddr::Tcp),
+                        tcp_v6.map(SocketAddr::from).map(PeerAddr::Tcp),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
                 )
                 .await;
                 ().into()
             }
-            Request::NetworkTcpListenerLocalAddrV4 => {
-                self.state.network.tcp_listener_local_addr_v4().into()
-            }
-            Request::NetworkTcpListenerLocalAddrV6 => {
-                self.state.network.tcp_listener_local_addr_v6().into()
-            }
-            Request::NetworkQuicListenerLocalAddrV4 => {
-                self.state.network.quic_listener_local_addr_v4().into()
-            }
-            Request::NetworkQuicListenerLocalAddrV6 => {
-                self.state.network.quic_listener_local_addr_v6().into()
-            }
+            Request::NetworkTcpListenerLocalAddrV4 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkTcpListenerLocalAddrV6 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V6(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkQuicListenerLocalAddrV4 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
+            Request::NetworkQuicListenerLocalAddrV6 => self
+                .state
+                .network
+                .listener_local_addrs()
+                .into_iter()
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V6(_))))
+                .map(|addr| *addr.socket_addr())
+                .into(),
             Request::NetworkAddUserProvidedPeer(addr) => {
-                self.state.network.add_user_provided_peer(&addr);
+                ouisync_bridge::network::add_user_provided_peers(
+                    &self.state.network,
+                    &self.state.config,
+                    &[addr],
+                )
+                .await;
                 ().into()
             }
             Request::NetworkRemoveUserProvidedPeer(addr) => {
-                self.state.network.remove_user_provided_peer(&addr);
+                ouisync_bridge::network::remove_user_provided_peers(
+                    &self.state.network,
+                    &self.state.config,
+                    &[addr],
+                )
+                .await;
                 ().into()
             }
             Request::NetworkKnownPeers => self.state.network.collect_peer_info().into(),
@@ -246,14 +288,24 @@ impl ouisync_bridge::transport::Handler for Handler {
                 self.state.network.is_port_forwarding_enabled().into()
             }
             Request::NetworkSetPortForwardingEnabled(enabled) => {
-                self.state.network.set_port_forwarding_enabled(enabled);
+                ouisync_bridge::network::set_port_forwarding_enabled(
+                    &self.state.network,
+                    &self.state.config,
+                    enabled,
+                )
+                .await;
                 ().into()
             }
             Request::NetworkIsLocalDiscoveryEnabled => {
                 self.state.network.is_local_discovery_enabled().into()
             }
             Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
-                self.state.network.set_local_discovery_enabled(enabled);
+                ouisync_bridge::network::set_local_discovery_enabled(
+                    &self.state.network,
+                    &self.state.config,
+                    enabled,
+                )
+                .await;
                 ().into()
             }
             Request::NetworkShutdown => {

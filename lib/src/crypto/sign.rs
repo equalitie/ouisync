@@ -100,7 +100,7 @@ impl fmt::LowerHex for PublicKey {
 }
 
 // https://github.com/dalek-cryptography/ed25519-dalek/issues/183
-#[allow(clippy::derive_hash_xor_eq)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 impl StdHash for PublicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         StdHash::hash(self.0.as_bytes(), state);

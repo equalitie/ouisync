@@ -2,8 +2,8 @@ use crate::{
     file::FileHolder,
     registry::{Handle, Registry},
 };
-use ouisync_bridge::repository::RepositoryHolder;
-use ouisync_lib::{network::Network, ConfigStore, StateMonitor};
+use ouisync_bridge::{config::ConfigStore, repository::RepositoryHolder};
+use ouisync_lib::{network::Network, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::path::PathBuf;
 use tracing::Span;
@@ -25,7 +25,7 @@ impl State {
         // Create network
         let network = {
             let _enter = tracing::info_span!("Network").entered();
-            Network::new(config.clone())
+            Network::new()
         };
 
         let repos_span = tracing::info_span!("Repositories");

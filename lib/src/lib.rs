@@ -9,7 +9,6 @@ mod macros;
 
 pub mod crypto;
 pub mod deadlock;
-pub mod device_id;
 pub mod network;
 pub mod path;
 
@@ -19,10 +18,10 @@ mod blob_id;
 mod block;
 mod branch;
 mod collections;
-mod config;
 mod conflict;
 mod db;
 mod debug;
+mod device_id;
 mod directory;
 mod error;
 mod event;
@@ -50,8 +49,8 @@ pub use self::{
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
     block::BLOCK_SIZE,
     branch::Branch,
-    config::ConfigStore,
     debug::DebugPrinter,
+    device_id::DeviceId,
     directory::{Directory, EntryRef, EntryType},
     error::{Error, Result},
     event::{Event, Payload},
