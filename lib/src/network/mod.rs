@@ -139,18 +139,46 @@ impl Network {
         }
     }
 
+    pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
+        [
+            self.inner
+                .gateway
+                .quic_listener_local_addr_v4()
+                .map(PeerAddr::Quic),
+            self.inner
+                .gateway
+                .quic_listener_local_addr_v6()
+                .map(PeerAddr::Quic),
+            self.inner
+                .gateway
+                .tcp_listener_local_addr_v4()
+                .map(PeerAddr::Tcp),
+            self.inner
+                .gateway
+                .tcp_listener_local_addr_v6()
+                .map(PeerAddr::Tcp),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    #[deprecated = "use listener_local_addrs"]
     pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.inner.gateway.tcp_listener_local_addr_v4()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.inner.gateway.tcp_listener_local_addr_v6()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
         self.inner.gateway.quic_listener_local_addr_v4()
     }
 
+    #[deprecated = "use listener_local_addrs"]
     pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
         self.inner.gateway.quic_listener_local_addr_v6()
     }
