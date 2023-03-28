@@ -320,7 +320,12 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::PortForwarding { enabled } => {
                 if let Some(enabled) = enabled {
-                    self.state.network.set_port_forwarding_enabled(enabled);
+                    network::set_port_forwarding_enabled(
+                        &self.state.network,
+                        &self.state.config,
+                        enabled,
+                    )
+                    .await;
                     Ok(().into())
                 } else {
                     Ok(self.state.network.is_port_forwarding_enabled().into())

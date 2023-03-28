@@ -1,3 +1,4 @@
+use crate::config::ConfigError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -25,7 +26,7 @@ pub enum Error {
     #[error("connection lost")]
     ConnectionLost,
     #[error("failed to read from or write into the config file")]
-    Config(#[source] io::Error),
+    Config(#[source] ConfigError),
     #[error("input/output error")]
     Io(#[from] io::Error),
 }

@@ -5,6 +5,9 @@ use std::net::SocketAddr;
 const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
     ConfigKey::new("bind", "Addresses to bind the network listeners to");
 
+const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
+    ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
+
 const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> =
     ConfigKey::new("last_used_tcp_v4_port", LAST_USED_TCP_PORT_COMMENT);
 
@@ -53,6 +56,16 @@ pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     // Write the actually used ports to the config
     last_used_ports.extract(&network.listener_local_addrs());
     last_used_ports.save(config).await;
+}
+
+/// Enable/disable port forwarding
+pub async fn set_port_forwarding_enabled(network: &Network, config: &ConfigStore, enabled: bool) {
+    config
+        .entry(PORT_FORWARDING_ENABLED_KEY)
+        .set(&enabled)
+        .await
+        .ok();
+    network.set_port_forwarding_enabled(enabled);
 }
 
 /// Utility to help reuse bind ports across network restarts.

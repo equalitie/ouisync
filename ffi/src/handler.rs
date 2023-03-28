@@ -273,7 +273,12 @@ impl ouisync_bridge::transport::Handler for Handler {
                 self.state.network.is_port_forwarding_enabled().into()
             }
             Request::NetworkSetPortForwardingEnabled(enabled) => {
-                self.state.network.set_port_forwarding_enabled(enabled);
+                ouisync_bridge::network::set_port_forwarding_enabled(
+                    &self.state.network,
+                    &self.state.config,
+                    enabled,
+                )
+                .await;
                 ().into()
             }
             Request::NetworkIsLocalDiscoveryEnabled => {

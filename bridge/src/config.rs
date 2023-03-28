@@ -7,10 +7,12 @@ use std::{
     str,
     sync::Arc,
 };
+use thiserror::Error;
 use tokio::{
     fs::{self, OpenOptions},
     io::AsyncWriteExt,
 };
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct ConfigStore {
@@ -60,7 +62,8 @@ where
 }
 
 impl<T> ConfigEntry<T> {
-    pub async fn set<U>(&self, value: &U) -> io::Result<()>
+    #[instrument(name = "config.set", skip_all, fields(key = self.key.name), err(Debug))]
+    pub async fn set<U>(&self, value: &U) -> Result<(), ConfigError>
     where
         T: Borrow<U>,
         U: Serialize + ?Sized,
@@ -87,6 +90,8 @@ impl<T> ConfigEntry<T> {
         let value = serde_json::to_string_pretty(value)
             .map_err(|error| io::Error::new(ErrorKind::Other, error))?;
 
+        tracing::debug!(value);
+
         file.write_all(b"\n").await?;
         file.write_all(value.as_bytes()).await?;
         file.flush().await?;
@@ -103,18 +108,42 @@ impl<T> ConfigEntry<T>
 where
     T: DeserializeOwned,
 {
-    pub async fn get(&self) -> io::Result<T> {
+    #[instrument(name = "config.get", skip(self), fields(key = self.key.name), err(Debug))]
+    pub async fn get(&self) -> Result<T, ConfigError> {
         let path = self.path();
-        let content = fs::read(&path).await?;
+
+        let content = match fs::read(&path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(ConfigError::NotFound);
+            }
+            Err(error) => return Err(error.into()),
+        };
+
         let content: String = str::from_utf8(&content)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?
+            .map_err(|error| ConfigError::Malformed(Box::new(error)))?
             .lines()
-            .filter(|line| !line.trim().starts_with('#'))
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect();
 
-        serde_json::from_str(&content)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
+        tracing::debug!(value = content);
+
+        let value = serde_json::from_str(&content)
+            .map_err(|error| ConfigError::Malformed(Box::new(error)))?;
+
+        Ok(value)
     }
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("config entry not found")]
+    NotFound,
+    #[error("config value is malformed")]
+    Malformed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("input/output error")]
+    Io(#[from] io::Error),
 }
 
 #[cfg(test)]

@@ -1,10 +1,9 @@
 use crate::{
-    config::{ConfigKey, ConfigStore},
+    config::{ConfigError, ConfigKey, ConfigStore},
     error::{Error, Result},
 };
 use ouisync_lib::DeviceId;
 use rand::{rngs::OsRng, Rng};
-use std::io::ErrorKind;
 
 const KEY: ConfigKey<DeviceId> = ConfigKey::new(
     "device_id",
@@ -27,7 +26,7 @@ pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
 
     match cfg.get().await {
         Ok(id) => Ok(id),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
+        Err(ConfigError::NotFound) => {
             let new_id = OsRng.gen();
             cfg.set(&new_id).await.map(|_| new_id)
         }
