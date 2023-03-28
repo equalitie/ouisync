@@ -231,7 +231,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .network
                 .listener_local_addrs()
                 .into_iter()
-                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
                 .map(|addr| *addr.socket_addr())
                 .into(),
             Request::NetworkTcpListenerLocalAddrV6 => self
@@ -239,7 +239,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .network
                 .listener_local_addrs()
                 .into_iter()
-                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V6(_))))
+                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V6(_))))
                 .map(|addr| *addr.socket_addr())
                 .into(),
             Request::NetworkQuicListenerLocalAddrV4 => self
@@ -247,7 +247,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .network
                 .listener_local_addrs()
                 .into_iter()
-                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
                 .map(|addr| *addr.socket_addr())
                 .into(),
             Request::NetworkQuicListenerLocalAddrV6 => self
@@ -255,7 +255,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .network
                 .listener_local_addrs()
                 .into_iter()
-                .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V6(_))))
+                .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V6(_))))
                 .map(|addr| *addr.socket_addr())
                 .into(),
             Request::NetworkAddUserProvidedPeer(addr) => {
