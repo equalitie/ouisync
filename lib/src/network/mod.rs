@@ -143,26 +143,6 @@ impl Network {
         self.inner.gateway.listener_local_addrs()
     }
 
-    #[deprecated = "use listener_local_addrs"]
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.inner.gateway.tcp_listener_local_addr_v4()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.inner.gateway.tcp_listener_local_addr_v6()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.inner.gateway.quic_listener_local_addr_v4()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.inner.gateway.quic_listener_local_addr_v6()
-    }
-
     pub fn set_port_forwarding_enabled(&self, enabled: bool) {
         let mut state = self.inner.port_forwarder_state.lock().unwrap();
 
@@ -284,6 +264,9 @@ impl Handle {
 
     /// Binds the network to the specified addresses.
     /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
+    ///
+    /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
+    /// and the rest are ignored, but this might change in the future.
     pub async fn bind(&self, addrs: &[PeerAddr]) {
         self.inner.bind(addrs).await
     }

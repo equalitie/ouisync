@@ -60,26 +60,6 @@ impl Gateway {
         .collect()
     }
 
-    #[deprecated = "use listener_local_addrs"]
-    pub fn quic_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.stacks.read().quic_listener_local_addr_v4().copied()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn quic_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.stacks.read().quic_listener_local_addr_v6().copied()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn tcp_listener_local_addr_v4(&self) -> Option<SocketAddr> {
-        self.stacks.read().tcp_listener_local_addr_v4().copied()
-    }
-
-    #[deprecated = "use listener_local_addrs"]
-    pub fn tcp_listener_local_addr_v6(&self) -> Option<SocketAddr> {
-        self.stacks.read().tcp_listener_local_addr_v6().copied()
-    }
-
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
     pub async fn bind(
         &self,
