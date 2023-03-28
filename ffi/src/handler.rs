@@ -198,6 +198,11 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::FileLen(file) => file::len(&self.state, file).await.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),
+            Request::NetworkInit(defaults) => {
+                ouisync_bridge::network::init(&self.state.network, &self.state.config, defaults)
+                    .await;
+                ().into()
+            }
             Request::NetworkSubscribe => network::subscribe(&self.state, notification_tx).into(),
             Request::NetworkBind {
                 quic_v4,

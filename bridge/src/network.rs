@@ -1,5 +1,6 @@
 use crate::config::{ConfigKey, ConfigStore};
 use ouisync_lib::network::{peer_addr::PeerAddr, Network};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
 const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
@@ -42,8 +43,14 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
 
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct NetworkDefaults {
+    pub port_forwarding_enabled: bool,
+    pub local_discovery_enabled: bool,
+}
+
 /// Initialize the network according to the config.
-pub async fn init(network: &Network, config: &ConfigStore) {
+pub async fn init(network: &Network, config: &ConfigStore, defaults: NetworkDefaults) {
     let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or_default();
     bind_with_reuse_ports(network, config, &bind_addrs).await;
 
@@ -51,14 +58,14 @@ pub async fn init(network: &Network, config: &ConfigStore) {
         .entry(PORT_FORWARDING_ENABLED_KEY)
         .get()
         .await
-        .unwrap_or(false);
+        .unwrap_or(defaults.port_forwarding_enabled);
     network.set_port_forwarding_enabled(enabled);
 
     let enabled = config
         .entry(LOCAL_DISCOVERY_ENABLED_KEY)
         .get()
         .await
-        .unwrap_or(false);
+        .unwrap_or(defaults.local_discovery_enabled);
     network.set_local_discovery_enabled(enabled);
 
     let peers = config.entry(PEERS_KEY).get().await.unwrap_or_default();

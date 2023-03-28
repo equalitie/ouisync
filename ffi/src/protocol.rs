@@ -1,6 +1,6 @@
 use crate::{directory::Directory, file::FileHolder, registry::Handle, state::SubscriptionHandle};
 use camino::Utf8PathBuf;
-use ouisync_bridge::{error::Result, repository::RepositoryHolder};
+use ouisync_bridge::{error::Result, network::NetworkDefaults, repository::RepositoryHolder};
 use ouisync_lib::{AccessMode, MonitorId, PeerAddr, PeerInfo, Progress, ShareToken, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -125,6 +125,7 @@ pub(crate) enum Request {
     FileLen(Handle<FileHolder>),
     FileFlush(Handle<FileHolder>),
     FileClose(Handle<FileHolder>),
+    NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkBind {
         #[serde(with = "as_option_str")]

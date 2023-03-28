@@ -9,7 +9,8 @@ use futures_util::future;
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
-    network, repository,
+    network::{self, NetworkDefaults},
+    repository,
     transport::NotificationSender,
 };
 use ouisync_lib::{network::Network, PeerAddr, ShareToken};
@@ -34,7 +35,15 @@ impl State {
             Network::new()
         };
 
-        network::init(&network, &config).await;
+        network::init(
+            &network,
+            &config,
+            NetworkDefaults {
+                port_forwarding_enabled: false,
+                local_discovery_enabled: false,
+            },
+        )
+        .await;
 
         Self {
             config,
