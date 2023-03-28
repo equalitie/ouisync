@@ -8,6 +8,9 @@ const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
 const PORT_FORWARDING_ENABLED_KEY: ConfigKey<bool> =
     ConfigKey::new("port_forwarding_enabled", "Enable port forwarding / UPnP");
 
+const LOCAL_DISCOVERY_ENABLED_KEY: ConfigKey<bool> =
+    ConfigKey::new("local_discovery_enabled", "Enable local discovery");
+
 const LAST_USED_TCP_V4_PORT_KEY: ConfigKey<u16> =
     ConfigKey::new("last_used_tcp_v4_port", LAST_USED_TCP_PORT_COMMENT);
 
@@ -36,7 +39,21 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
 /// Initialize the network according to the config.
 pub async fn init(network: &Network, config: &ConfigStore) {
     let bind_addrs = config.entry(BIND_KEY).get().await.unwrap_or_default();
-    bind(network, config, &bind_addrs).await;
+    bind_with_reuse_ports(network, config, &bind_addrs).await;
+
+    let enabled = config
+        .entry(PORT_FORWARDING_ENABLED_KEY)
+        .get()
+        .await
+        .unwrap_or(false);
+    network.set_port_forwarding_enabled(enabled);
+
+    let enabled = config
+        .entry(LOCAL_DISCOVERY_ENABLED_KEY)
+        .get()
+        .await
+        .unwrap_or(false);
+    network.set_local_discovery_enabled(enabled);
 }
 
 /// Binds the network to the specified addresses.
@@ -44,7 +61,10 @@ pub async fn init(network: &Network, config: &ConfigStore) {
 /// combination is not bound. If all are missing the network is disabled.
 pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     config.entry(BIND_KEY).set(addrs).await.ok();
+    bind_with_reuse_ports(network, config, addrs).await;
+}
 
+async fn bind_with_reuse_ports(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     let mut last_used_ports = LastUsedPorts::load(config).await;
     let addrs: Vec<_> = addrs
         .iter()
@@ -66,6 +86,16 @@ pub async fn set_port_forwarding_enabled(network: &Network, config: &ConfigStore
         .await
         .ok();
     network.set_port_forwarding_enabled(enabled);
+}
+
+/// Enable/disable local discovery
+pub async fn set_local_discovery_enabled(network: &Network, config: &ConfigStore, enabled: bool) {
+    config
+        .entry(LOCAL_DISCOVERY_ENABLED_KEY)
+        .set(&enabled)
+        .await
+        .ok();
+    network.set_local_discovery_enabled(enabled);
 }
 
 /// Utility to help reuse bind ports across network restarts.
@@ -109,7 +139,7 @@ impl LastUsedPorts {
             (LAST_USED_TCP_V4_PORT_KEY, self.tcp_v4),
             (LAST_USED_TCP_V6_PORT_KEY, self.tcp_v6),
         ] {
-            if value > 0 {
+            if value != 0 {
                 config.entry(key).set(&value).await.ok();
             }
         }

@@ -1,6 +1,7 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Borrow,
+    fmt,
     io::{self, ErrorKind},
     marker::PhantomData,
     path::{Path, PathBuf},
@@ -66,7 +67,7 @@ impl<T> ConfigEntry<T> {
     pub async fn set<U>(&self, value: &U) -> Result<(), ConfigError>
     where
         T: Borrow<U>,
-        U: Serialize + ?Sized,
+        U: Serialize + fmt::Debug + ?Sized,
     {
         let path = self.path();
 
@@ -87,14 +88,15 @@ impl<T> ConfigEntry<T> {
             file.write_all(format!("# {line}\n").as_bytes()).await?;
         }
 
-        let value = serde_json::to_string_pretty(value)
+        let content = serde_json::to_string_pretty(value)
             .map_err(|error| io::Error::new(ErrorKind::Other, error))?;
 
-        tracing::debug!(value);
-
         file.write_all(b"\n").await?;
-        file.write_all(value.as_bytes()).await?;
+        file.write_all(content.as_bytes()).await?;
+        file.write_all(b"\n").await?;
         file.flush().await?;
+
+        tracing::debug!(?value);
 
         Ok(())
     }
@@ -106,7 +108,7 @@ impl<T> ConfigEntry<T> {
 
 impl<T> ConfigEntry<T>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + fmt::Debug,
 {
     #[instrument(name = "config.get", skip(self), fields(key = self.key.name), err(Debug))]
     pub async fn get(&self) -> Result<T, ConfigError> {
@@ -127,10 +129,10 @@ where
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect();
 
-        tracing::debug!(value = content);
-
         let value = serde_json::from_str(&content)
             .map_err(|error| ConfigError::Malformed(Box::new(error)))?;
+
+        tracing::debug!(?value);
 
         Ok(value)
     }

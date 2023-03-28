@@ -312,7 +312,12 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::LocalDiscovery { enabled } => {
                 if let Some(enabled) = enabled {
-                    self.state.network.set_local_discovery_enabled(enabled);
+                    network::set_local_discovery_enabled(
+                        &self.state.network,
+                        &self.state.config,
+                        enabled,
+                    )
+                    .await;
                     Ok(().into())
                 } else {
                     Ok(self.state.network.is_local_discovery_enabled().into())

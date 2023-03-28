@@ -285,7 +285,12 @@ impl ouisync_bridge::transport::Handler for Handler {
                 self.state.network.is_local_discovery_enabled().into()
             }
             Request::NetworkSetLocalDiscoveryEnabled(enabled) => {
-                self.state.network.set_local_discovery_enabled(enabled);
+                ouisync_bridge::network::set_local_discovery_enabled(
+                    &self.state.network,
+                    &self.state.config,
+                    enabled,
+                )
+                .await;
                 ().into()
             }
             Request::NetworkShutdown => {
