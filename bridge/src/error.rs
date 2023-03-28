@@ -26,7 +26,7 @@ pub enum Error {
     #[error("connection lost")]
     ConnectionLost,
     #[error("failed to read from or write into the config file")]
-    Config(#[source] ConfigError),
+    Config(#[from] ConfigError),
     #[error("input/output error")]
     Io(#[from] io::Error),
 }

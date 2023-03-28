@@ -1,6 +1,6 @@
 use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
-    error::{Error, Result},
+    error::Result,
 };
 use ouisync_lib::DeviceId;
 use rand::{rngs::OsRng, Rng};
@@ -26,19 +26,20 @@ pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
 
     match cfg.get().await {
         Ok(id) => Ok(id),
-        Err(ConfigError::NotFound) => {
+        Err(ConfigError::NotFound | ConfigError::Malformed(_)) => {
             let new_id = OsRng.gen();
-            cfg.set(&new_id).await.map(|_| new_id)
+            cfg.set(&new_id).await?;
+            Ok(new_id)
         }
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
-    .map_err(Error::Config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use tokio::fs;
 
     #[tokio::test]
     async fn config_entry() {
@@ -50,5 +51,18 @@ mod tests {
 
         entry.set(&value).await.unwrap();
         assert_eq!(entry.get().await.unwrap(), value);
+    }
+
+    #[tokio::test]
+    async fn legacy_config_format() {
+        let dir = TempDir::new().unwrap();
+        let config = ConfigStore::new(dir.path());
+
+        let device_id: DeviceId = rand::random();
+        fs::write(config.entry(KEY).path(), device_id.to_string().as_bytes())
+            .await
+            .unwrap();
+
+        get_or_create(&config).await.unwrap();
     }
 }
