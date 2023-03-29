@@ -26,7 +26,7 @@ fn peer_exchange() {
         async move {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
-            reg.enable_pex();
+            reg.set_pex_enabled(true);
 
             barrier.wait().await;
         }
@@ -39,7 +39,7 @@ fn peer_exchange() {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
-            reg.enable_pex();
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, proto, "carol").await;
             barrier.wait().await;
@@ -51,7 +51,7 @@ fn peer_exchange() {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
-            reg.enable_pex();
+            reg.set_pex_enabled(true);
 
             expect_peer_known(&network, proto, "bob").await;
             barrier.wait().await;

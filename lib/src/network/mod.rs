@@ -309,22 +309,14 @@ impl Registration {
         state.registry[self.key].dht.is_some()
     }
 
-    pub fn enable_pex(&self) {
+    pub fn set_pex_enabled(&self, enabled: bool) {
         let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.set_enabled(true);
-    }
-
-    pub fn disable_pex(&self) {
-        let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.set_enabled(false);
+        state.registry[self.key].pex.set_enabled(enabled);
     }
 
     pub fn is_pex_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.is_enabled()
+        state.registry[self.key].pex.is_enabled()
     }
 }
 

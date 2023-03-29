@@ -208,14 +208,6 @@ pub async fn set_read_and_write_access(
     Ok(())
 }
 
-pub fn set_pex_enabled(reg: &Registration, enabled: bool) {
-    if enabled {
-        reg.enable_pex()
-    } else {
-        reg.disable_pex()
-    }
-}
-
 /// The `password` parameter is optional, if `None` the current access level of the opened
 /// repository is used. If provided, the highest access level that the password can unlock is used.
 pub async fn create_share_token(

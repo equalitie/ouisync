@@ -270,7 +270,7 @@ pub(crate) fn is_pex_enabled(state: &State, handle: Handle<RepositoryHolder>) ->
 
 pub(crate) fn set_pex_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
     let reg = &state.repositories.get(handle).registration;
-    repository::set_pex_enabled(reg, enabled)
+    reg.set_pex_enabled(enabled)
 }
 
 /// The `password` parameter is optional, if `None` the current access level of the opened
