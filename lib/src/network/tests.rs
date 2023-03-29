@@ -521,7 +521,7 @@ where
 // Simulate connection forever.
 async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
     let (server, server_send_rx, server_recv_tx) = server;
-    let (client, client_send_rx, client_recv_tx) = client;
+    let (client, client_send_rx, client_recv_rx, client_recv_tx) = client;
 
     let mut server_conn = Connection {
         send_rx: server_send_rx,
@@ -537,7 +537,7 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
         biased; // deterministic poll order for repeatable tests
 
         result = server.run() => result.unwrap(),
-        result = client.run() => result.unwrap(),
+        result = client.run(client_recv_rx) => result.unwrap(),
         _ = server_conn.run() => panic!("connection closed prematurely"),
         _ = client_conn.run() => panic!("connection closed prematurely"),
     }
@@ -559,7 +559,12 @@ where
 }
 
 type ServerData = (Server, mpsc::Receiver<Content>, mpsc::Sender<Request>);
-type ClientData = (Client, mpsc::Receiver<Content>, mpsc::Sender<Response>);
+type ClientData = (
+    Client,
+    mpsc::Receiver<Content>,
+    mpsc::Receiver<Response>,
+    mpsc::Sender<Response>,
+);
 
 fn create_server(index: Index) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
@@ -575,11 +580,10 @@ fn create_client(store: Store) -> ClientData {
     let client = Client::new(
         store,
         send_tx,
-        recv_rx,
         Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
     );
 
-    (client, send_rx, recv_tx)
+    (client, send_rx, recv_rx, recv_tx)
 }
 
 // Simulated connection between a server and a client.

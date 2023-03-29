@@ -13,7 +13,7 @@ use crate::{
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;
-use std::{collections::VecDeque, future, sync::Arc, time::Instant};
+use std::{future, pin::pin, sync::Arc, time::Instant};
 use tokio::{
     select,
     sync::{mpsc, OwnedSemaphorePermit, Semaphore},
@@ -22,12 +22,11 @@ use tracing::instrument;
 
 pub(super) struct Client {
     store: Store,
-    rx: mpsc::Receiver<Response>,
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
-    recv_queue: VecDeque<(PendingResponse, Option<OwnedSemaphorePermit>)>,
+    //recv_queue: VecDeque<(PendingResponse, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
-    block_tracker: BlockTrackerClient,
+    block_tracker: Arc<BlockTrackerClient>,
     _request_sender: ScopedJoinHandle<()>,
 }
 
@@ -35,11 +34,10 @@ impl Client {
     pub fn new(
         store: Store,
         tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pool = store.db().clone();
-        let block_tracker = store.block_tracker.client();
+        let block_tracker = Arc::new(store.block_tracker.client());
 
         let pending_requests = Arc::new(PendingRequests::new(store.stats().clone()));
 
@@ -54,65 +52,82 @@ impl Client {
 
         Self {
             store,
-            rx,
             pending_requests,
             request_tx,
-            recv_queue: VecDeque::new(),
+            //recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
             block_tracker,
             _request_sender: request_sender,
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         self.receive_filter.reset().await?;
 
-        // TODO: Do receiving and handling in parallel because only once a message is enqueued we
-        // stop counting the timeout for it.
+        let block_tracker = self.block_tracker.clone();
+        let request_tx = self.request_tx.clone();
+        let pending_requests = self.pending_requests.clone();
+
+        // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
+        // some unsolicited responses and also the peer may be malicious and send us too many
+        // responses (so we shoulnd't use unbounded_channel).
+        let (queued_responses_tx, queued_responses_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
+
+        let mut response_handler = pin!(self.handle_responses(queued_responses_rx));
+
+        // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
+        // with response handling. It is because response handling may take a long time (e.g. due
+        // to acquiring database write transaction if there are other write transactions currently
+        // going on - such as when forking) and so waiting for it could cause some requests in
+        // `pending_requests` to time out.
         loop {
             select! {
-                block_promise = self.block_tracker.accept() => {
+                block_promise = block_tracker.accept() => {
                     let debug = DebugRequest::start();
-                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
+                    // Unwrap OK because the sending task never returns.
+                    request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
                 }
-                response = self.rx.recv() => {
+                response = rx.recv() => {
                     if let Some(response) = response {
-                        self.enqueue_response(response)?;
+                        if let Some((response, permit)) = pending_requests.remove(response) {
+                            if queued_responses_tx.send((response, permit)).await.is_err() {
+                                break;
+                            }
+                        }
                     } else {
                         break;
                     }
                 }
-            }
-
-            while let Some((response, _permit)) = self.dequeue_response() {
-                self.handle_response(response).await?;
+                _ = &mut response_handler => break,
             }
         }
 
         Ok(())
     }
 
-    fn enqueue_request(&mut self, request: PendingRequest) {
+    fn enqueue_request(&self, request: PendingRequest) {
         // Unwrap OK because the sending task never returns.
         self.request_tx.send((request, Instant::now())).unwrap();
     }
 
-    fn enqueue_response(&mut self, response: Response) -> Result<()> {
-        match self.pending_requests.remove(response) {
-            Some((pending_response, permit)) => {
-                self.recv_queue.push_front((pending_response, permit));
-            }
-            None => (),
-        };
-
-        Ok(())
+    async fn handle_responses(
+        &mut self,
+        mut queued_responses_rx: mpsc::Receiver<(PendingResponse, Option<OwnedSemaphorePermit>)>,
+    ) -> Result<()> {
+        loop {
+            let (response, permit) = match queued_responses_rx.recv().await {
+                Some(response_and_permit) => response_and_permit,
+                None => return Ok(()),
+            };
+            self.handle_response(response, permit).await?;
+        }
     }
 
-    fn dequeue_response(&mut self) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
-        self.recv_queue.pop_back()
-    }
-
-    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
+    async fn handle_response(
+        &mut self,
+        response: PendingResponse,
+        _permit: Option<OwnedSemaphorePermit>,
+    ) -> Result<()> {
         let result = match response {
             PendingResponse::RootNode {
                 proof,
@@ -150,7 +165,7 @@ impl Client {
         err(Debug)
     )]
     async fn handle_root_node(
-        &mut self,
+        &self,
         proof: UntrustedProof,
         summary: Summary,
         _debug: DebugReceivedResponse,
