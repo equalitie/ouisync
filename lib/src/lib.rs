@@ -32,7 +32,6 @@ mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
-mod metadata;
 mod progress;
 mod repository;
 mod repository_stats;
@@ -59,7 +58,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
-    repository::{ReopenToken, Repository, RepositoryDb},
+    repository::{Metadata, ReopenToken, Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };

@@ -67,6 +67,9 @@ use tokio::{
 };
 use tracing::{instrument, Instrument, Span};
 
+const DHT_ENABLED: &str = "dht_enabled";
+const PEX_ENABLED: &str = "pex_enabled";
+
 pub struct Network {
     inner: Arc<Inner>,
     // We keep tasks here instead of in Inner because we want them to be
@@ -233,23 +236,35 @@ impl Network {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
-    pub fn register(&self, store: Store) -> Registration {
+    pub async fn register(&self, store: Store) -> Registration {
         tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id()));
+
+        let metadata = store.metadata();
+        let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
+        let pex_enabled = metadata.get(PEX_ENABLED).await.unwrap_or(false);
+
+        let dht = if dht_enabled {
+            Some(
+                self.inner
+                    .start_dht_lookup(repository_info_hash(store.index.repository_id())),
+            )
+        } else {
+            None
+        };
 
         let pex = PexController::new(
             self.inner.connection_deduplicator.on_change(),
             self.inner.pex_discovery_tx.clone(),
         );
+        pex.set_enabled(pex_enabled);
 
         let mut network_state = self.inner.state.lock().unwrap();
 
         network_state.create_link(store.clone(), &pex);
 
-        let key = network_state.registry.insert(RegistrationHolder {
-            store,
-            dht: None,
-            pex,
-        });
+        let key = network_state
+            .registry
+            .insert(RegistrationHolder { store, dht, pex });
 
         Registration {
             inner: self.inner.clone(),
@@ -286,18 +301,20 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn enable_dht(&self) {
+    pub async fn set_dht_enabled(&self, enabled: bool) {
+        self.set_metadata_bool(DHT_ENABLED, enabled).await;
+
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht = Some(
-            self.inner
-                .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
-        );
-    }
 
-    pub fn disable_dht(&self) {
-        let mut state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht = None;
+        if enabled {
+            holder.dht = Some(
+                self.inner
+                    .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
+            );
+        } else {
+            holder.dht = None;
+        }
     }
 
     /// This function provides the information to the user whether DHT is enabled for this
@@ -309,22 +326,23 @@ impl Registration {
         state.registry[self.key].dht.is_some()
     }
 
-    pub fn enable_pex(&self) {
-        let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.set_enabled(true);
-    }
+    pub async fn set_pex_enabled(&self, enabled: bool) {
+        self.set_metadata_bool(PEX_ENABLED, enabled).await;
 
-    pub fn disable_pex(&self) {
         let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.set_enabled(false);
+        state.registry[self.key].pex.set_enabled(enabled);
     }
 
     pub fn is_pex_enabled(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        let holder = &state.registry[self.key];
-        holder.pex.is_enabled()
+        state.registry[self.key].pex.is_enabled()
+    }
+
+    async fn set_metadata_bool(&self, name: &str, value: bool) {
+        let metadata = self.inner.state.lock().unwrap().registry[self.key]
+            .store
+            .metadata();
+        metadata.set(name, value).await.ok();
     }
 }
 

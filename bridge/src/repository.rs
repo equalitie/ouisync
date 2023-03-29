@@ -65,7 +65,7 @@ pub async fn create(
         let repository = Repository::create(db, device_id, access).await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,
@@ -98,7 +98,7 @@ pub async fn open(
         .await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,
@@ -121,7 +121,7 @@ pub async fn reopen(
         let repository = Repository::reopen(store.into_std_path_buf(), token).await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,
@@ -206,22 +206,6 @@ pub async fn set_read_and_write_access(
         .await?;
 
     Ok(())
-}
-
-pub fn set_dht_enabled(reg: &Registration, enabled: bool) {
-    if enabled {
-        reg.enable_dht()
-    } else {
-        reg.disable_dht()
-    }
-}
-
-pub fn set_pex_enabled(reg: &Registration, enabled: bool) {
-    if enabled {
-        reg.enable_pex()
-    } else {
-        reg.disable_pex()
-    }
 }
 
 /// The `password` parameter is optional, if `None` the current access level of the opened

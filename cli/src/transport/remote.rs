@@ -1,5 +1,8 @@
 //! Client and Server than run on different devices.
 
+// TODO: remove this attr once we actually use this
+#![allow(unused)]
+
 use crate::{
     handler::Handler,
     options::{Request, Response},

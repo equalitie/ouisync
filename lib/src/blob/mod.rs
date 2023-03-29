@@ -606,11 +606,11 @@ async fn load_block_count_hint(branch: &Branch, blob_id: BlobId) -> Result<u32> 
 }
 
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
-    let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
+    let block_key = SecretKey::derive_from_key(blob_key.as_array(), block_nonce);
     block_key.decrypt_no_aead(&Nonce::default(), content);
 }
 
 fn encrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {
-    let block_key = SecretKey::derive_from_key(blob_key.as_ref(), block_nonce);
+    let block_key = SecretKey::derive_from_key(blob_key.as_array(), block_nonce);
     block_key.encrypt_no_aead(&Nonce::default(), content);
 }

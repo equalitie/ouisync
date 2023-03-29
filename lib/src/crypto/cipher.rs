@@ -104,6 +104,12 @@ impl SecretKey {
         cipher.apply_keystream(buffer)
     }
 
+    /// Note this method is somewhat dangerous because if used carelessly the underlying sensitive data
+    /// can be copied or revealed.
+    pub(crate) fn as_array(&self) -> &[u8; Self::SIZE] {
+        &self.0
+    }
+
     // Use this only for initialization.
     fn zero() -> Self {
         Self(Arc::new(Zeroizing::new([0; Self::SIZE])))
@@ -131,9 +137,9 @@ impl TryFrom<&[u8]> for SecretKey {
 
 /// Note this trait is somewhat dangerous because if used carelessly the underlying sensitive data
 /// can be copied or revealed.
-impl AsRef<[u8; Self::SIZE]> for SecretKey {
-    fn as_ref(&self) -> &[u8; Self::SIZE] {
-        &self.0
+impl AsRef<[u8]> for SecretKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0[..]
     }
 }
 

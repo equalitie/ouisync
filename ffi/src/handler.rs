@@ -127,7 +127,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository,
                 enabled,
             } => {
-                repository::set_dht_enabled(&self.state, repository, enabled);
+                repository::set_dht_enabled(&self.state, repository, enabled).await;
                 ().into()
             }
             Request::RepositoryIsPexEnabled(repository) => {
@@ -137,7 +137,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository,
                 enabled,
             } => {
-                repository::set_pex_enabled(&self.state, repository, enabled);
+                repository::set_pex_enabled(&self.state, repository, enabled).await;
                 ().into()
             }
             Request::RepositoryCreateShareToken {
