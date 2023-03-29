@@ -1,7 +1,7 @@
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use scoped_task::{spawn, ScopedJoinHandle};
 use std::future::Future;
-use std::{backtrace::Backtrace, fmt, panic::Location, time::Duration};
+use std::{fmt, panic::Location, time::Duration};
 use tokio::time::sleep;
 
 //------------------------------------------------------------------------------
@@ -41,13 +41,17 @@ impl ExpectShortLifetime {
     #[track_caller]
     pub fn new(max_lifetime: Duration) -> Self {
         let file_and_line = Location::caller();
-        let backtrace = Backtrace::capture();
+        Self::new_at(max_lifetime, file_and_line)
+    }
+
+    pub fn new_at(max_lifetime: Duration, file_and_line: &'static Location<'static>) -> Self {
         Self {
             _watcher: spawn(async move {
                 sleep(max_lifetime.into()).await;
+                println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
                 println!("Expected short lifetime, but exceeded {:?}", max_lifetime);
                 println!("Location: {:?}", file_and_line);
-                println!("Backtrace: {:?}", backtrace);
+                println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
             }),
         }
     }
