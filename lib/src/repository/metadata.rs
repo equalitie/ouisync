@@ -82,7 +82,7 @@ pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<Databas
         Ok(database_id) => database_id,
         Err(Error::EntryNotFound) => {
             let database_id: DatabaseId = OsRng.gen();
-            set_public(&mut tx, DATABASE_ID, database_id.as_ref()).await?;
+            set_public(&mut tx, DATABASE_ID, &database_id).await?;
             tx.commit().await?;
             database_id
         }
@@ -107,7 +107,7 @@ pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<()> {
-    set(tx, WRITER_ID, writer_id.as_ref(), local_key).await?;
+    set(tx, WRITER_ID, writer_id, local_key).await?;
     Ok(())
 }
 
@@ -128,7 +128,7 @@ pub(crate) async fn set_device_id(
     tx: &mut db::WriteTransaction,
     device_id: &DeviceId,
 ) -> Result<()> {
-    set_public(tx, DEVICE_ID, device_id.as_ref()).await?;
+    set_public(tx, DEVICE_ID, device_id).await?;
     Ok(())
 }
 
@@ -139,7 +139,7 @@ async fn set_public_read_key(
     tx: &mut db::WriteTransaction,
     read_key: &cipher::SecretKey,
 ) -> Result<()> {
-    set_public(tx, READ_KEY, read_key.as_ref()).await
+    set_public(tx, READ_KEY, read_key).await
 }
 
 async fn set_secret_read_key(
@@ -148,14 +148,8 @@ async fn set_secret_read_key(
     read_key: &cipher::SecretKey,
     local_key: &cipher::SecretKey,
 ) -> Result<()> {
-    set_secret(tx, READ_KEY, read_key.as_ref(), local_key).await?;
-    set_secret(
-        tx,
-        READ_KEY_VALIDATOR,
-        read_key_validator(id).as_ref(),
-        read_key,
-    )
-    .await
+    set_secret(tx, READ_KEY, read_key, local_key).await?;
+    set_secret(tx, READ_KEY_VALIDATOR, read_key_validator(id), read_key).await
 }
 
 pub(crate) async fn set_read_key(
@@ -173,12 +167,8 @@ pub(crate) async fn set_read_key(
     }
 }
 
-async fn remove_public_read_key(tx: &mut db::Connection) -> Result<()> {
-    sqlx::query("DELETE FROM metadata_public WHERE name = ?")
-        .bind(READ_KEY)
-        .execute(tx)
-        .await?;
-    Ok(())
+async fn remove_public_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
+    remove_public(tx, READ_KEY).await
 }
 
 async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
@@ -186,11 +176,11 @@ async fn remove_secret_read_key(tx: &mut db::WriteTransaction) -> Result<()> {
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_read_key = cipher::SecretKey::random();
 
-    set_secret(tx, READ_KEY, dummy_read_key.as_ref(), &dummy_local_key).await?;
+    set_secret(tx, READ_KEY, &dummy_read_key, &dummy_local_key).await?;
     set_secret(
         tx,
         READ_KEY_VALIDATOR,
-        read_key_validator(&dummy_id).as_ref(),
+        read_key_validator(&dummy_id),
         &dummy_read_key,
     )
     .await?;
@@ -206,7 +196,7 @@ pub(crate) async fn remove_read_key(tx: &mut db::WriteTransaction) -> Result<()>
 // ------------------------------
 
 async fn set_public_write_key(tx: &mut db::WriteTransaction, secrets: &WriteSecrets) -> Result<()> {
-    set_public(tx, WRITE_KEY, secrets.write_keys.secret.as_ref()).await
+    set_public(tx, WRITE_KEY, &secrets.write_keys.secret).await
 }
 
 async fn set_secret_write_key(
@@ -214,7 +204,7 @@ async fn set_secret_write_key(
     secrets: &WriteSecrets,
     local_key: &cipher::SecretKey,
 ) -> Result<()> {
-    set_secret(tx, WRITE_KEY, secrets.write_keys.secret.as_ref(), local_key).await
+    set_secret(tx, WRITE_KEY, &secrets.write_keys.secret, local_key).await
 }
 
 pub(crate) async fn set_write_key(
@@ -231,18 +221,14 @@ pub(crate) async fn set_write_key(
     }
 }
 
-async fn remove_public_write_key(tx: &mut db::Connection) -> Result<()> {
-    sqlx::query("DELETE FROM metadata_public WHERE name = ?")
-        .bind(WRITE_KEY)
-        .execute(tx)
-        .await?;
-    Ok(())
+async fn remove_public_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
+    remove_public(tx, WRITE_KEY).await
 }
 
 async fn remove_secret_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
     let dummy_local_key = cipher::SecretKey::random();
     let dummy_write_key = sign::SecretKey::random();
-    set_secret(tx, WRITE_KEY, dummy_write_key.as_ref(), &dummy_local_key).await
+    set_secret(tx, WRITE_KEY, &dummy_write_key, &dummy_local_key).await
 }
 
 pub(crate) async fn remove_write_key(tx: &mut db::WriteTransaction) -> Result<()> {
@@ -278,7 +264,7 @@ pub(crate) async fn initialize_access_secrets(
     tx: &mut db::WriteTransaction,
     access: &Access,
 ) -> Result<()> {
-    set_public(tx, REPOSITORY_ID, access.id().as_ref()).await?;
+    set_public(tx, REPOSITORY_ID, access.id()).await?;
     set_access(tx, access).await
 }
 
@@ -431,13 +417,24 @@ where
     bytes.try_into().map_err(|_| Error::MalformedData)
 }
 
-async fn set_public(tx: &mut db::WriteTransaction, id: &[u8], blob: &[u8]) -> Result<()> {
+async fn set_public<T>(tx: &mut db::WriteTransaction, id: &[u8], blob: T) -> Result<()>
+where
+    T: AsRef<[u8]>,
+{
     sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)")
         .bind(id)
-        .bind(blob)
+        .bind(blob.as_ref())
         .execute(tx)
         .await?;
 
+    Ok(())
+}
+
+async fn remove_public(tx: &mut db::WriteTransaction, id: &[u8]) -> Result<()> {
+    sqlx::query("DELETE FROM metadata_public WHERE name = ?")
+        .bind(id)
+        .execute(tx)
+        .await?;
     Ok(())
 }
 
@@ -471,15 +468,18 @@ where
     Ok(secret)
 }
 
-async fn set_secret(
+async fn set_secret<T>(
     tx: &mut db::WriteTransaction,
     id: &[u8],
-    blob: &[u8],
+    blob: T,
     local_key: &cipher::SecretKey,
-) -> Result<()> {
+) -> Result<()>
+where
+    T: AsRef<[u8]>,
+{
     let nonce = make_nonce();
 
-    let mut cypher = blob.to_vec();
+    let mut cypher = blob.as_ref().to_vec();
     local_key.encrypt_no_aead(&nonce, &mut cypher);
 
     sqlx::query(
@@ -522,12 +522,15 @@ where
     }
 }
 
-async fn set(
+async fn set<T>(
     tx: &mut db::WriteTransaction,
     id: &[u8],
-    blob: &[u8],
+    blob: T,
     local_key: Option<&cipher::SecretKey>,
-) -> Result<()> {
+) -> Result<()>
+where
+    T: AsRef<[u8]>,
+{
     match local_key {
         Some(local_key) => set_secret(tx, id, blob, local_key).await,
         None => set_public(tx, id, blob).await,

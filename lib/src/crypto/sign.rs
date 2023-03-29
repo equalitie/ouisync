@@ -223,6 +223,10 @@ impl SecretKey {
         let expanded: ext::ExpandedSecretKey = (&self.0).into();
         Signature(expanded.sign(msg, &public_key.0))
     }
+
+    pub(crate) fn as_array(&self) -> &[u8; Self::SIZE] {
+        self.0.as_bytes()
+    }
 }
 
 impl TryFrom<&[u8]> for SecretKey {
@@ -233,9 +237,9 @@ impl TryFrom<&[u8]> for SecretKey {
     }
 }
 
-impl AsRef<[u8; Self::SIZE]> for SecretKey {
-    fn as_ref(&self) -> &[u8; Self::SIZE] {
-        self.0.as_bytes()
+impl AsRef<[u8]> for SecretKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.as_array()[..]
     }
 }
 

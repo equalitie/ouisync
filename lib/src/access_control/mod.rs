@@ -224,7 +224,7 @@ impl From<WriteSecrets> for AccessKeys {
 }
 
 fn derive_read_key_from_write_key(write_key: &sign::SecretKey) -> cipher::SecretKey {
-    cipher::SecretKey::derive_from_key(write_key.as_ref(), b"ouisync repository read key")
+    cipher::SecretKey::derive_from_key(write_key.as_array(), b"ouisync repository read key")
 }
 
 #[derive(Debug, Error)]
