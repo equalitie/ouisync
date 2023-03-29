@@ -280,12 +280,15 @@ impl Require {
 
                 if missing_block.required == 0 {
                     tracing::trace!(block_id = ?self.block_id, "require");
-                    self.shared.notify();
                 }
 
                 missing_block.required += 1;
+
+                if !missing_block.clients.is_empty() {
+                    self.shared.notify();
+                }
             }
-            Entry::Vacant(_) => return,
+            Entry::Vacant(_) => (),
         };
     }
 }
