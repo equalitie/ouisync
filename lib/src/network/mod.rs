@@ -207,8 +207,8 @@ impl Network {
         self.inner.connection_deduplicator.collect_peer_info()
     }
 
-    pub fn knows_peer(&self, addr: PeerAddr) -> bool {
-        self.inner.connection_deduplicator.contains(addr)
+    pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
+        self.inner.connection_deduplicator.get_peer_info(addr)
     }
 
     pub fn current_protocol_version(&self) -> u32 {

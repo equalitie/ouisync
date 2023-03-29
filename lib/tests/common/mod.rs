@@ -96,12 +96,12 @@ pub(crate) mod env {
         }
     }
 
-    pub(super) fn bind_addr() -> IpAddr {
+    pub(super) fn bind_ip() -> IpAddr {
         let name = ACTOR_NAME.with(|name| name.clone());
-        lookup(&name)
+        lookup_ip(&name)
     }
 
-    pub(super) fn lookup(target: &str) -> IpAddr {
+    pub(super) fn lookup_ip(target: &str) -> IpAddr {
         DNS.with(|dns| dns.lock().unwrap().lookup(target))
     }
 
@@ -203,11 +203,11 @@ pub(crate) mod env {
         }
     }
 
-    pub(super) fn bind_addr() -> IpAddr {
+    pub(super) fn bind_ip() -> IpAddr {
         Ipv4Addr::UNSPECIFIED.into()
     }
 
-    pub(super) fn lookup(target: &str) -> IpAddr {
+    pub(super) fn lookup_ip(target: &str) -> IpAddr {
         turmoil::lookup(target)
     }
 
@@ -230,11 +230,18 @@ pub(crate) mod actor {
     pub(crate) async fn create_network(proto: Proto) -> Network {
         let network = create_unbound_network();
 
-        let bind_addr = SocketAddr::new(env::bind_addr(), env::default_port());
-        let bind_addr = proto.wrap(bind_addr);
+        let bind_addr = default_bind_addr(proto);
         network.bind(&[bind_addr]).await;
 
         network
+    }
+
+    pub(crate) fn default_bind_addr(proto: Proto) -> PeerAddr {
+        proto.wrap(SocketAddr::new(env::bind_ip(), env::default_port()))
+    }
+
+    pub(crate) fn lookup(name: &str) -> SocketAddr {
+        SocketAddr::new(env::lookup_ip(name), env::default_port())
     }
 
     pub(crate) fn make_repo_path() -> PathBuf {
@@ -325,21 +332,12 @@ impl Actor {
 
 pub(crate) trait NetworkExt {
     fn connect(&self, to: &str);
-    fn knows(&self, to: &str) -> bool;
 }
 
 impl NetworkExt for Network {
     fn connect(&self, to: &str) {
-        self.add_user_provided_peer(&peer_addr(self, to))
+        self.add_user_provided_peer(&Proto::detect(self).wrap(actor::lookup(to)))
     }
-
-    fn knows(&self, to: &str) -> bool {
-        self.knows_peer(peer_addr(self, to))
-    }
-}
-
-fn peer_addr(network: &Network, name: &str) -> PeerAddr {
-    Proto::detect(network).wrap(SocketAddr::new(env::lookup(name), env::default_port()))
 }
 
 /// Wrapper for `tempfile::TempDir` which preserves the dir in case of panic.

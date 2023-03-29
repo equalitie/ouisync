@@ -91,21 +91,13 @@ impl ConnectionDeduplicator {
             .lock()
             .unwrap()
             .iter()
-            .map(|(key, peer)| PeerInfo {
-                ip: key.addr.socket_addr().ip(),
-                port: key.addr.socket_addr().port(),
-                source: peer.source,
-                state: peer.state,
-            })
+            .map(|(key, peer)| PeerInfo::new(&key.addr, peer))
             .collect()
     }
 
-    pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
-        self.on_change_tx.subscribe()
-    }
-
-    pub fn contains(&self, addr: PeerAddr) -> bool {
+    pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
         let connections = self.connections.lock().unwrap();
+
         let incoming = ConnectionInfo {
             addr,
             dir: ConnectionDirection::Incoming,
@@ -115,7 +107,14 @@ impl ConnectionDeduplicator {
             dir: ConnectionDirection::Outgoing,
         };
 
-        connections.contains_key(&incoming) || connections.contains_key(&outgoing)
+        connections
+            .get(&incoming)
+            .or_else(|| connections.get(&outgoing))
+            .map(|peer| PeerInfo::new(&addr, peer))
+    }
+
+    pub fn on_change(&self) -> uninitialized_watch::Receiver<()> {
+        self.on_change_tx.subscribe()
     }
 }
 
@@ -133,6 +132,17 @@ pub struct PeerInfo {
     pub port: u16,
     pub source: PeerSource,
     pub state: PeerState,
+}
+
+impl PeerInfo {
+    fn new(addr: &PeerAddr, peer: &Peer) -> Self {
+        Self {
+            ip: addr.socket_addr().ip(),
+            port: addr.socket_addr().port(),
+            source: peer.source,
+            state: peer.state,
+        }
+    }
 }
 
 mod as_str {
