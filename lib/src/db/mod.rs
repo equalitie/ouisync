@@ -7,7 +7,7 @@ mod migrations;
 
 pub use id::DatabaseId;
 
-use crate::repository_stats::RepositoryStats;
+use crate::{deadlock::asynch::ExpectShortLifetime, repository_stats::RepositoryStats};
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
@@ -20,7 +20,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -30,6 +30,8 @@ use tokio::{
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
 use tracing::Span;
+
+const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
 pub(crate) use self::connection::Connection;
 
@@ -77,7 +79,12 @@ impl Pool {
     /// Acquire a read-only database connection.
     pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
         let start = Instant::now();
-        let tx = self.reads.acquire().await.map(PoolConnection)?;
+        let track_lifetime = ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME);
+        let tx = self
+            .reads
+            .acquire()
+            .await
+            .map(|con| PoolConnection(con, track_lifetime))?;
         self.stats
             .write()
             .note_db_acquire_duration(Instant::now() - start);
@@ -91,7 +98,8 @@ impl Pool {
         self.stats
             .write()
             .note_db_read_begin_duration(Instant::now() - start);
-        Ok(ReadTransaction(tx))
+        let track_lifetime = ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME);
+        Ok(ReadTransaction(tx, track_lifetime))
     }
 
     /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
@@ -103,7 +111,18 @@ impl Pool {
     ///
     /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
     /// automatically committed before the regular write transaction is created.
-    pub async fn begin_write(&self) -> Result<WriteTransaction, sqlx::Error> {
+    #[track_caller]
+    pub fn begin_write<'a>(
+        &'a self,
+    ) -> impl std::future::Future<Output = Result<WriteTransaction, sqlx::Error>> + 'a {
+        let file_and_line = std::panic::Location::caller();
+        self.begin_write_from(file_and_line)
+    }
+
+    async fn begin_write_from(
+        &self,
+        file_and_line: &'static std::panic::Location<'static>,
+    ) -> Result<WriteTransaction, sqlx::Error> {
         let start = Instant::now();
 
         let mut shared_tx = self.shared_tx.lock().await;
@@ -118,7 +137,10 @@ impl Pool {
             .write()
             .note_db_write_begin_duration(Instant::now() - start);
 
-        Ok(WriteTransaction(ReadTransaction(tx)))
+        let track_lifetime =
+            ExpectShortLifetime::new_at(WARN_AFTER_TRANSACTION_LIFETIME, file_and_line);
+
+        Ok(WriteTransaction(ReadTransaction(tx, track_lifetime)))
     }
 
     /// Begin a shared write transaction. Unlike regular write transaction, a shared write
@@ -134,7 +156,9 @@ impl Pool {
         let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
         if shared_tx.is_none() {
-            *shared_tx = Some(WriteTransaction(ReadTransaction(self.write.begin().await?)));
+            let tx = self.write.begin().await?;
+            let track_lifetime = ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME);
+            *shared_tx = Some(WriteTransaction(ReadTransaction(tx, track_lifetime)));
         }
 
         Ok(SharedWriteTransaction(shared_tx))
@@ -157,7 +181,7 @@ impl Pool {
 }
 
 /// Database connection from pool
-pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
+pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>, ExpectShortLifetime);
 
 impl Deref for PoolConnection {
     type Target = Connection;
@@ -181,7 +205,7 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 #[derive(Debug)]
-pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
+pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>, ExpectShortLifetime);
 
 impl Deref for ReadTransaction {
     type Target = Connection;
