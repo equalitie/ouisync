@@ -1,4 +1,7 @@
-use super::message::{Content, Request, Response, ResponseDisambiguator};
+use super::{
+    debug_payload::{DebugRequestPayload, DebugResponsePayload},
+    message::{Content, Request, Response, ResponseDisambiguator},
+};
 use crate::{
     block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
@@ -56,6 +59,9 @@ impl<'a> Responder<'a> {
 
         loop {
             // The `select!` is used so we can handle multiple requests at once.
+            // TODO: Do we need to limit the number of concurrent handlers? We have a limit on the
+            // number of read DB transactions, so that might be enough, but perhaps we also want to
+            // limit per peer?
             select! {
                 request = rx.recv() => {
                     match request {
@@ -78,16 +84,22 @@ impl<'a> Responder<'a> {
 
     async fn handle_request(&self, request: Request) -> Result<()> {
         match request {
-            Request::RootNode(public_key) => self.handle_root_node(public_key).await,
-            Request::ChildNodes(hash, disambiguator) => {
-                self.handle_child_nodes(hash, disambiguator).await
+            Request::RootNode(public_key, debug) => self.handle_root_node(public_key, debug).await,
+            Request::ChildNodes(hash, disambiguator, debug) => {
+                self.handle_child_nodes(hash, disambiguator, debug).await
             }
-            Request::Block(block_id) => self.handle_block(block_id).await,
+            Request::Block(block_id, debug) => self.handle_block(block_id, debug).await,
         }
     }
 
-    #[instrument(skip(self), err(Debug))]
-    async fn handle_root_node(&self, branch_id: PublicKey) -> Result<()> {
+    #[instrument(skip(self, debug), err(Debug))]
+    async fn handle_root_node(
+        &self,
+        branch_id: PublicKey,
+        debug: DebugRequestPayload,
+    ) -> Result<()> {
+        let debug = debug.begin_reply();
+
         let mut conn = self.index.pool.acquire().await?;
         let root_node = RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await;
 
@@ -98,6 +110,7 @@ impl<'a> Responder<'a> {
                 let response = Response::RootNode {
                     proof: node.proof.into(),
                     summary: node.summary,
+                    debug: debug.send(),
                 };
 
                 self.tx.send(response).await;
@@ -105,22 +118,29 @@ impl<'a> Responder<'a> {
             }
             Err(Error::EntryNotFound) => {
                 tracing::warn!("root node not found");
-                self.tx.send(Response::RootNodeError(branch_id)).await;
+                self.tx
+                    .send(Response::RootNodeError(branch_id, debug.send()))
+                    .await;
                 Ok(())
             }
             Err(error) => {
-                self.tx.send(Response::RootNodeError(branch_id)).await;
+                self.tx
+                    .send(Response::RootNodeError(branch_id, debug.send()))
+                    .await;
                 Err(error)
             }
         }
     }
 
-    #[instrument(skip(self), err(Debug))]
+    #[instrument(skip(self, debug), err(Debug))]
     async fn handle_child_nodes(
         &self,
         parent_hash: Hash,
         disambiguator: ResponseDisambiguator,
+        debug: DebugRequestPayload,
     ) -> Result<()> {
+        let debug = debug.begin_reply();
+
         let mut conn = self.index.pool.acquire().await?;
 
         // At most one of these will be non-empty.
@@ -133,28 +153,37 @@ impl<'a> Responder<'a> {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
                 self.tx
-                    .send(Response::InnerNodes(inner_nodes, disambiguator))
+                    .send(Response::InnerNodes(
+                        inner_nodes,
+                        disambiguator,
+                        debug.send(),
+                    ))
                     .await;
             }
 
             if !leaf_nodes.is_empty() {
                 tracing::trace!("leaf nodes found");
                 self.tx
-                    .send(Response::LeafNodes(leaf_nodes, disambiguator))
+                    .send(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
                     .await;
             }
         } else {
             tracing::warn!("child nodes not found");
             self.tx
-                .send(Response::ChildNodesError(parent_hash, disambiguator))
+                .send(Response::ChildNodesError(
+                    parent_hash,
+                    disambiguator,
+                    debug.send(),
+                ))
                 .await;
         }
 
         Ok(())
     }
 
-    #[instrument(skip(self), err(Debug))]
-    async fn handle_block(&self, id: BlockId) -> Result<()> {
+    #[instrument(skip(self, debug), err(Debug))]
+    async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
+        let debug = debug.begin_reply();
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         let mut conn = self.index.pool.acquire().await?;
         let result = block::read(&mut conn, &id, &mut content).await;
@@ -163,16 +192,22 @@ impl<'a> Responder<'a> {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.tx.send(Response::Block { content, nonce }).await;
+                self.tx
+                    .send(Response::Block {
+                        content,
+                        nonce,
+                        debug: debug.send(),
+                    })
+                    .await;
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
                 tracing::warn!("block not found");
-                self.tx.send(Response::BlockError(id)).await;
+                self.tx.send(Response::BlockError(id, debug.send())).await;
                 Ok(())
             }
             Err(error) => {
-                self.tx.send(Response::BlockError(id)).await;
+                self.tx.send(Response::BlockError(id, debug.send())).await;
                 Err(error)
             }
         }
@@ -258,6 +293,7 @@ impl<'a> Monitor<'a> {
         let response = Response::RootNode {
             proof: root_node.proof.into(),
             summary: root_node.summary,
+            debug: DebugResponsePayload::unsolicited(),
         };
 
         self.tx.send(response).await;

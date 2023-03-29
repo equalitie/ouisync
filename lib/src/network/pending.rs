@@ -1,4 +1,7 @@
-use super::message::{Request, Response, ResponseDisambiguator};
+use super::{
+    debug_payload::{DebugReceivedResponse, DebugRequest},
+    message::{Request, Response, ResponseDisambiguator},
+};
 use crate::{
     block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
@@ -9,11 +12,8 @@ use crate::{
 };
 use scoped_task::ScopedJoinHandle;
 use std::sync::{Arc, Mutex};
-use tokio::{
-    select,
-    sync::OwnedSemaphorePermit,
-    time::{self, Duration, Instant},
-};
+use std::time::{Duration, Instant};
+use tokio::{select, sync::OwnedSemaphorePermit, time};
 
 // If a response to a pending request is not received within this time, a request timeout error is
 // triggered.
@@ -21,17 +21,30 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) enum PendingRequest {
-    RootNode(PublicKey),
-    ChildNodes(Hash, ResponseDisambiguator),
-    Block(BlockPromise),
+    RootNode(PublicKey, DebugRequest),
+    ChildNodes(Hash, ResponseDisambiguator, DebugRequest),
+    Block(BlockPromise, DebugRequest),
 }
 
 impl PendingRequest {
+    pub fn to_key(&self) -> Key {
+        // Debug payloads are ignored in keys.
+        match self {
+            Self::RootNode(public_key, _) => Key::RootNode(*public_key),
+            Self::ChildNodes(hash, disambiguator, _) => Key::ChildNodes(*hash, *disambiguator),
+            Self::Block(block_promise, _) => Key::Block(*block_promise.block_id()),
+        }
+    }
+
     pub fn to_message(&self) -> Request {
         match self {
-            Self::RootNode(public_key) => Request::RootNode(*public_key),
-            Self::ChildNodes(hash, disambiguator) => Request::ChildNodes(*hash, *disambiguator),
-            Self::Block(block_promise) => Request::Block(*block_promise.block_id()),
+            Self::RootNode(public_key, debug) => Request::RootNode(*public_key, debug.send()),
+            Self::ChildNodes(hash, disambiguator, debug) => {
+                Request::ChildNodes(*hash, *disambiguator, debug.send())
+            }
+            Self::Block(block_promise, debug) => {
+                Request::Block(*block_promise.block_id(), debug.send())
+            }
         }
     }
 }
@@ -40,26 +53,36 @@ pub(super) enum PendingResponse {
     RootNode {
         proof: UntrustedProof,
         summary: Summary,
+        debug: DebugReceivedResponse,
     },
-    InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
+    InnerNodes(
+        CacheHash<InnerNodeMap>,
+        ResponseDisambiguator,
+        DebugReceivedResponse,
+    ),
+    LeafNodes(
+        CacheHash<LeafNodeSet>,
+        ResponseDisambiguator,
+        DebugReceivedResponse,
+    ),
     Block {
         data: BlockData,
         nonce: BlockNonce,
         block_promise: Option<BlockPromise>,
+        debug: DebugReceivedResponse,
     },
 }
 
 pub(super) struct PendingRequests {
     stats: Arc<RepositoryStats>,
-    map: Arc<Mutex<HashMap<Request, RequestData>>>,
+    map: Arc<Mutex<HashMap<Key, RequestData>>>,
     to_tracker_tx: uninitialized_watch::Sender<()>,
     _expiration_tracker: ScopedJoinHandle<()>,
 }
 
 impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
-        let map = Arc::new(Mutex::new(HashMap::<Request, RequestData>::default()));
+        let map = Arc::new(Mutex::new(HashMap::<Key, RequestData>::default()));
 
         let (expiration_tracker, to_tracker_tx) = run_tracker(stats.clone(), map.clone());
 
@@ -72,15 +95,15 @@ impl PendingRequests {
     }
 
     pub fn insert(&self, pending_request: PendingRequest, permit: CompoundPermit) -> bool {
-        match self.map.lock().unwrap().entry(pending_request.to_message()) {
+        match self.map.lock().unwrap().entry(pending_request.to_key()) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
-                let msg = pending_request.to_message();
+                let msg = pending_request.to_key();
 
-                let block_promise = match pending_request {
-                    PendingRequest::RootNode(_) => None,
-                    PendingRequest::ChildNodes(_, _) => None,
-                    PendingRequest::Block(block_promise) => Some(block_promise),
+                let (block_promise, debug) = match pending_request {
+                    PendingRequest::RootNode(_, debug) => (None, debug),
+                    PendingRequest::ChildNodes(_, _, debug) => (None, debug),
+                    PendingRequest::Block(block_promise, debug) => (Some(block_promise), debug),
                 };
 
                 entry.insert(RequestData {
@@ -99,26 +122,33 @@ impl PendingRequests {
         response: Response,
     ) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
         let response = ProcessedResponse::from(response);
-        let request = response.to_request();
+        let key = response.to_key();
 
-        if let Some(request_data) = self.map.lock().unwrap().remove(&request) {
-            self.request_removed(&request, Some(request_data.timestamp));
+        if let Some(request_data) = self.map.lock().unwrap().remove(&key) {
+            self.request_removed(&key, Some(request_data.timestamp));
             match response {
                 ProcessedResponse::Success(success) => {
                     let r = match success {
-                        processed_response::Success::RootNode { proof, summary } => {
-                            PendingResponse::RootNode { proof, summary }
+                        processed_response::Success::RootNode {
+                            proof,
+                            summary,
+                            debug,
+                        } => PendingResponse::RootNode {
+                            proof,
+                            summary,
+                            debug,
+                        },
+                        processed_response::Success::InnerNodes(hash, disambiguator, debug) => {
+                            PendingResponse::InnerNodes(hash, disambiguator, debug)
                         }
-                        processed_response::Success::InnerNodes(hash, disambiguator) => {
-                            PendingResponse::InnerNodes(hash, disambiguator)
+                        processed_response::Success::LeafNodes(hash, disambiguator, debug) => {
+                            PendingResponse::LeafNodes(hash, disambiguator, debug)
                         }
-                        processed_response::Success::LeafNodes(hash, disambiguator) => {
-                            PendingResponse::LeafNodes(hash, disambiguator)
-                        }
-                        processed_response::Success::Block { data, nonce } => {
+                        processed_response::Success::Block { data, nonce, debug } => {
                             PendingResponse::Block {
                                 data,
                                 nonce,
+                                debug,
                                 block_promise: request_data.block_promise,
                             }
                         }
@@ -135,19 +165,27 @@ impl PendingRequests {
                 ProcessedResponse::Success(processed_response::Success::RootNode {
                     proof,
                     summary,
-                }) => Some((PendingResponse::RootNode { proof, summary }, None)),
+                    debug,
+                }) => Some((
+                    PendingResponse::RootNode {
+                        proof,
+                        summary,
+                        debug,
+                    },
+                    None,
+                )),
                 _ => None,
             }
         }
     }
 
-    fn request_added(&self, request: &Request) {
-        stats_request_added(&mut self.stats.write(), request);
+    fn request_added(&self, key: &Key) {
+        stats_request_added(&mut self.stats.write(), key);
         self.notify_tracker_task();
     }
 
-    fn request_removed(&self, request: &Request, timestamp: Option<Instant>) {
-        stats_request_removed(&mut self.stats.write(), request, timestamp);
+    fn request_removed(&self, key: &Key, timestamp: Option<Instant>) {
+        stats_request_removed(&mut self.stats.write(), key, timestamp);
         self.notify_tracker_task();
     }
 
@@ -156,21 +194,21 @@ impl PendingRequests {
     }
 }
 
-fn stats_request_added(stats: &mut repository_stats::Writer, request: &Request) {
-    match request {
-        Request::RootNode(_) | Request::ChildNodes { .. } => stats.index_requests_inflight += 1,
-        Request::Block(_) => stats.block_requests_inflight += 1,
+fn stats_request_added(stats: &mut repository_stats::Writer, key: &Key) {
+    match key {
+        Key::RootNode(_) | Key::ChildNodes { .. } => stats.index_requests_inflight += 1,
+        Key::Block(_) => stats.block_requests_inflight += 1,
     }
 }
 
 fn stats_request_removed(
     stats: &mut repository_stats::Writer,
-    request: &Request,
+    key: &Key,
     timestamp: Option<Instant>,
 ) {
-    match request {
-        Request::RootNode(_) | Request::ChildNodes { .. } => stats.index_requests_inflight -= 1,
-        Request::Block(_) => stats.block_requests_inflight -= 1,
+    match key {
+        Key::RootNode(_) | Key::ChildNodes { .. } => stats.index_requests_inflight -= 1,
+        Key::Block(_) => stats.block_requests_inflight -= 1,
     }
     if let Some(timestamp) = timestamp {
         stats.note_request_inflight_duration(Instant::now() - timestamp);
@@ -179,7 +217,7 @@ fn stats_request_removed(
 
 fn run_tracker(
     stats: Arc<RepositoryStats>,
-    request_map: Arc<Mutex<HashMap<Request, RequestData>>>,
+    request_map: Arc<Mutex<HashMap<Key, RequestData>>>,
 ) -> (ScopedJoinHandle<()>, uninitialized_watch::Sender<()>) {
     let (to_tracker_tx, mut to_tracker_rx) = uninitialized_watch::channel::<()>();
 
@@ -193,7 +231,7 @@ fn run_tracker(
                 .min_by(|(_, lhs), (_, rhs)| lhs.timestamp.cmp(&rhs.timestamp))
                 .map(|(k, v)| (*k, v.timestamp));
 
-            if let Some((request, timestamp)) = entry {
+            if let Some((key, timestamp)) = entry {
                 select! {
                     r = to_tracker_rx.changed() => {
                         match r {
@@ -201,9 +239,9 @@ fn run_tracker(
                             Err(_) => break,
                         }
                     }
-                    _ = time::sleep_until(timestamp + REQUEST_TIMEOUT) => {
+                    _ = time::sleep_until((timestamp + REQUEST_TIMEOUT).into()) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if let Some(mut data) = request_map.lock().unwrap().get_mut(&request) {
+                        if let Some(mut data) = request_map.lock().unwrap().get_mut(&key) {
                             stats.write().request_timeouts += 1;
                             data.block_promise = None;
                         }
@@ -223,8 +261,8 @@ fn run_tracker(
 
 impl Drop for PendingRequests {
     fn drop(&mut self) {
-        for request in self.map.lock().unwrap().keys() {
-            self.request_removed(request, None);
+        for key in self.map.lock().unwrap().keys() {
+            self.request_removed(key, None);
         }
     }
 }
@@ -251,20 +289,30 @@ mod processed_response {
         RootNode {
             proof: UntrustedProof,
             summary: Summary,
+            debug: DebugReceivedResponse,
         },
-        InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-        LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
+        InnerNodes(
+            CacheHash<InnerNodeMap>,
+            ResponseDisambiguator,
+            DebugReceivedResponse,
+        ),
+        LeafNodes(
+            CacheHash<LeafNodeSet>,
+            ResponseDisambiguator,
+            DebugReceivedResponse,
+        ),
         Block {
             data: BlockData,
             nonce: BlockNonce,
+            debug: DebugReceivedResponse,
         },
     }
 
     #[derive(Debug)]
     pub(super) enum Failure {
-        RootNode(PublicKey),
-        ChildNodes(Hash, ResponseDisambiguator),
-        Block(BlockId),
+        RootNode(PublicKey, DebugReceivedResponse),
+        ChildNodes(Hash, ResponseDisambiguator, DebugReceivedResponse),
+        Block(BlockId, DebugReceivedResponse),
     }
 }
 
@@ -274,29 +322,25 @@ enum ProcessedResponse {
 }
 
 impl ProcessedResponse {
-    fn to_request(&self) -> Request {
+    fn to_key(&self) -> Key {
         match self {
             Self::Success(processed_response::Success::RootNode { proof, .. }) => {
-                Request::RootNode(proof.writer_id)
+                Key::RootNode(proof.writer_id)
             }
-            Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
+            Self::Success(processed_response::Success::InnerNodes(nodes, disambiguator, _)) => {
+                Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
+            Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator, _)) => {
+                Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::Block { data, .. }) => {
-                Request::Block(data.id)
+            Self::Success(processed_response::Success::Block { data, .. }) => Key::Block(data.id),
+            Self::Failure(processed_response::Failure::RootNode(branch_id, _)) => {
+                Key::RootNode(*branch_id)
             }
-            Self::Failure(processed_response::Failure::RootNode(branch_id)) => {
-                Request::RootNode(*branch_id)
+            Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator, _)) => {
+                Key::ChildNodes(*hash, *disambiguator)
             }
-            Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator)) => {
-                Request::ChildNodes(*hash, *disambiguator)
-            }
-            Self::Failure(processed_response::Failure::Block(block_id)) => {
-                Request::Block(*block_id)
-            }
+            Self::Failure(processed_response::Failure::Block(block_id, _)) => Key::Block(*block_id),
         }
     }
 }
@@ -304,30 +348,54 @@ impl ProcessedResponse {
 impl From<Response> for ProcessedResponse {
     fn from(response: Response) -> Self {
         match response {
-            Response::RootNode { proof, summary } => {
-                Self::Success(processed_response::Success::RootNode { proof, summary })
+            Response::RootNode {
+                proof,
+                summary,
+                debug,
+            } => Self::Success(processed_response::Success::RootNode {
+                proof,
+                summary,
+                debug: debug.received(),
+            }),
+            Response::InnerNodes(nodes, disambiguator, debug) => {
+                Self::Success(processed_response::Success::InnerNodes(
+                    nodes.into(),
+                    disambiguator,
+                    debug.received(),
+                ))
             }
-            Response::InnerNodes(nodes, disambiguator) => Self::Success(
-                processed_response::Success::InnerNodes(nodes.into(), disambiguator),
+            Response::LeafNodes(nodes, disambiguator, debug) => {
+                Self::Success(processed_response::Success::LeafNodes(
+                    nodes.into(),
+                    disambiguator,
+                    debug.received(),
+                ))
+            }
+            Response::Block {
+                content,
+                nonce,
+                debug,
+            } => Self::Success(processed_response::Success::Block {
+                data: content.into(),
+                nonce,
+                debug: debug.received(),
+            }),
+            Response::RootNodeError(branch_id, debug) => Self::Failure(
+                processed_response::Failure::RootNode(branch_id, debug.received()),
             ),
-            Response::LeafNodes(nodes, disambiguator) => Self::Success(
-                processed_response::Success::LeafNodes(nodes.into(), disambiguator),
+            Response::ChildNodesError(hash, disambiguator, debug) => Self::Failure(
+                processed_response::Failure::ChildNodes(hash, disambiguator, debug.received()),
             ),
-            Response::Block { content, nonce } => {
-                Self::Success(processed_response::Success::Block {
-                    data: content.into(),
-                    nonce,
-                })
-            }
-            Response::RootNodeError(branch_id) => {
-                Self::Failure(processed_response::Failure::RootNode(branch_id))
-            }
-            Response::ChildNodesError(hash, disambiguator) => {
-                Self::Failure(processed_response::Failure::ChildNodes(hash, disambiguator))
-            }
-            Response::BlockError(block_id) => {
-                Self::Failure(processed_response::Failure::Block(block_id))
-            }
+            Response::BlockError(block_id, debug) => Self::Failure(
+                processed_response::Failure::Block(block_id, debug.received()),
+            ),
         }
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub(crate) enum Key {
+    RootNode(PublicKey),
+    ChildNodes(Hash, ResponseDisambiguator),
+    Block(BlockId),
 }
