@@ -32,7 +32,6 @@ mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
-mod metadata;
 mod progress;
 mod repository;
 mod repository_stats;

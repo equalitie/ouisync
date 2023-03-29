@@ -1,4 +1,5 @@
 mod id;
+mod metadata;
 mod reopen_token;
 #[cfg(test)]
 mod tests;
@@ -26,7 +27,7 @@ use crate::{
     file::File,
     index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    metadata, path,
+    path,
     progress::Progress,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
