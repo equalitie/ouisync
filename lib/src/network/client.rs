@@ -1,5 +1,6 @@
 use super::{
     constants::MAX_PENDING_RESPONSES,
+    debug_payload::{DebugReceivedResponse, DebugRequest},
     message::{Content, Response, ResponseDisambiguator},
     pending::{CompoundPermit, PendingRequest, PendingRequests, PendingResponse},
 };
@@ -66,10 +67,13 @@ impl Client {
     pub async fn run(&mut self) -> Result<()> {
         self.receive_filter.reset().await?;
 
+        // TODO: Do receiving and handling in parallel because only once a message is enqueued we
+        // stop counting the timeout for it.
         loop {
             select! {
                 block_promise = self.block_tracker.accept() => {
-                    self.enqueue_request(PendingRequest::Block(block_promise));
+                    let debug = DebugRequest::start();
+                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
                 }
                 response = self.rx.recv() => {
                     if let Some(response) = response {
@@ -110,16 +114,23 @@ impl Client {
 
     async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
         let result = match response {
-            PendingResponse::RootNode { proof, summary } => {
-                self.handle_root_node(proof, summary).await
+            PendingResponse::RootNode {
+                proof,
+                summary,
+                debug,
+            } => self.handle_root_node(proof, summary, debug).await,
+            PendingResponse::InnerNodes(nodes, _, debug) => {
+                self.handle_inner_nodes(nodes, debug).await
             }
-            PendingResponse::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
-            PendingResponse::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
+            PendingResponse::LeafNodes(nodes, _, debug) => {
+                self.handle_leaf_nodes(nodes, debug).await
+            }
             PendingResponse::Block {
                 data,
                 nonce,
                 block_promise,
-            } => self.handle_block(data, nonce, block_promise).await,
+                debug,
+            } => self.handle_block(data, nonce, block_promise, debug).await,
         };
 
         match result {
@@ -142,6 +153,7 @@ impl Client {
         &mut self,
         proof: UntrustedProof,
         summary: Summary,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
         let updated = self.store.index.receive_root_node(proof, summary).await?;
@@ -151,6 +163,7 @@ impl Client {
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(summary.block_presence),
+                DebugRequest::start(),
             ));
         } else {
             tracing::trace!("received outdated root node");
@@ -163,13 +176,17 @@ impl Client {
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
+
         let (updated_nodes, completed_branches) = self
             .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
+
+        let debug = DebugRequest::start();
 
         tracing::trace!(
             "received {}/{} inner nodes: {:?}",
@@ -185,13 +202,14 @@ impl Client {
             self.enqueue_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
+                debug,
             ));
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id));
+            self.enqueue_request(PendingRequest::RootNode(branch_id, debug));
         }
 
         Ok(())
@@ -201,6 +219,7 @@ impl Client {
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
         let (updated_blocks, completed_branches) =
@@ -241,7 +260,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id));
+            self.enqueue_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
         }
 
         Ok(())
@@ -254,6 +273,7 @@ impl Client {
         nonce: BlockNonce,
         // We need to preserve the lifetime of `_block_promise` until the response is processed.
         _block_promise: Option<BlockPromise>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         match self.store.write_received_block(&data, &nonce).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer

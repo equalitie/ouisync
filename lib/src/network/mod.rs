@@ -3,6 +3,7 @@ mod client;
 mod connection;
 mod constants;
 mod crypto;
+mod debug_payload;
 pub mod dht_discovery;
 mod gateway;
 mod interface;

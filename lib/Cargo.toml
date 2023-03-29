@@ -41,6 +41,7 @@ rupnp = { version = "1.1.0", default-features = false, features = [] }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
+serde_millis = "0.1.1"
 slab = "0.4.6"
 sqlx = { version = "0.6.2", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 ssdp-client = "1.0"

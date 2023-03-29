@@ -1,4 +1,9 @@
-use super::{crypto::Role, peer_exchange::PexPayload, runtime_id::PublicRuntimeId};
+use super::{
+    crypto::Role,
+    debug_payload::{DebugRequestPayload, DebugResponsePayload},
+    peer_exchange::PexPayload,
+    runtime_id::PublicRuntimeId,
+};
 use crate::{
     block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
@@ -11,9 +16,9 @@ use std::{fmt, io::Write};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub(crate) enum Request {
-    RootNode(PublicKey),
-    ChildNodes(Hash, ResponseDisambiguator),
-    Block(BlockId),
+    RootNode(PublicKey, DebugRequestPayload),
+    ChildNodes(Hash, ResponseDisambiguator, DebugRequestPayload),
+    Block(BlockId, DebugRequestPayload),
 }
 
 /// ResponseDisambiguator is used to uniquelly assign a response to a request.
@@ -36,47 +41,49 @@ pub(crate) enum Response {
     RootNode {
         proof: UntrustedProof,
         summary: Summary,
+        debug: DebugResponsePayload,
     },
     /// Send that a RootNode request failed
-    RootNodeError(PublicKey),
+    RootNodeError(PublicKey, DebugResponsePayload),
     /// Send inner nodes.
-    InnerNodes(InnerNodeMap, ResponseDisambiguator),
+    InnerNodes(InnerNodeMap, ResponseDisambiguator, DebugResponsePayload),
     /// Send leaf nodes.
-    LeafNodes(LeafNodeSet, ResponseDisambiguator),
+    LeafNodes(LeafNodeSet, ResponseDisambiguator, DebugResponsePayload),
     /// Send that a ChildNodes request failed
-    ChildNodesError(Hash, ResponseDisambiguator),
+    ChildNodesError(Hash, ResponseDisambiguator, DebugResponsePayload),
     /// Send a requested block.
     Block {
         content: Box<[u8]>,
         nonce: BlockNonce,
+        debug: DebugResponsePayload,
     },
     /// Send that a Block request failed
-    BlockError(BlockId),
+    BlockError(BlockId, DebugResponsePayload),
 }
 
 // Custom `Debug` impl to avoid printing the whole block content in the `Block` variant.
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::RootNode { proof, summary } => f
+            Self::RootNode { proof, summary, .. } => f
                 .debug_struct("RootNode")
                 .field("proof", proof)
                 .field("summary", summary)
                 .finish(),
-            Self::RootNodeError(branch_id) => {
+            Self::RootNodeError(branch_id, _) => {
                 f.debug_tuple("RootNodeError").field(branch_id).finish()
             }
-            Self::InnerNodes(nodes, disambiguator) => f
+            Self::InnerNodes(nodes, disambiguator, _) => f
                 .debug_tuple("InnerNodes")
                 .field(nodes)
                 .field(disambiguator)
                 .finish(),
-            Self::LeafNodes(nodes, disambiguator) => f
+            Self::LeafNodes(nodes, disambiguator, _) => f
                 .debug_tuple("LeafNodes")
                 .field(nodes)
                 .field(disambiguator)
                 .finish(),
-            Self::ChildNodesError(hash, disambiguator) => f
+            Self::ChildNodesError(hash, disambiguator, _) => f
                 .debug_tuple("ChildNodesError")
                 .field(hash)
                 .field(disambiguator)
@@ -85,7 +92,7 @@ impl fmt::Debug for Response {
                 .debug_struct("Block")
                 .field("content", &format_args!("{:6x}", Hex(content)))
                 .finish_non_exhaustive(),
-            Self::BlockError(id) => f.debug_tuple("BlockError").field(id).finish(),
+            Self::BlockError(id, _) => f.debug_tuple("BlockError").field(id).finish(),
         }
     }
 }
