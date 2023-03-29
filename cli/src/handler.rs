@@ -371,7 +371,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_dht_enabled(enabled);
+                    holder.base.registration.set_dht_enabled(enabled).await;
                     Ok(().into())
                 } else {
                     Ok(holder.base.registration.is_dht_enabled().into())
@@ -388,7 +388,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_pex_enabled(enabled);
+                    holder.base.registration.set_pex_enabled(enabled).await;
                     Ok(().into())
                 } else {
                     Ok(holder.base.registration.is_pex_enabled().into())
