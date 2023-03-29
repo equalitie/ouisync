@@ -6,4 +6,4 @@ pub(super) const MAX_REQUESTS_IN_FLIGHT: usize = 32;
 
 // Maximum number of respones that a `Client` received but had not yet processed before the client
 // is allowed to send more requests.
-pub(super) const MAX_PENDING_RESPONSES: usize = 512;
+pub(super) const MAX_PENDING_RESPONSES: usize = 2 * MAX_REQUESTS_IN_FLIGHT;
