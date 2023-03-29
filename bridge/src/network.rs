@@ -360,7 +360,7 @@ mod tests {
             let mut rx = network.on_peer_set_change();
 
             loop {
-                if network.knows_peer(peer_addr) {
+                if network.get_peer_info(peer_addr).is_some() {
                     break;
                 }
 

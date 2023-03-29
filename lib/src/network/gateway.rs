@@ -100,7 +100,60 @@ impl Gateway {
         peer: &SeenPeer,
         source: PeerSource,
     ) -> Option<raw::Stream> {
-        self.stacks.read().connect_with_retries(peer, source).await
+        if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
+            return None;
+        }
+
+        let mut backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(200))
+            .with_max_interval(Duration::from_secs(10))
+            // We'll continue trying for as long as `peer.addr().is_some()`.
+            .with_max_elapsed_time(None)
+            .build();
+
+        let mut hole_punching_task = None;
+
+        loop {
+            // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
+            // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
+            // found it is no longer seeing it.
+            let addr = *peer.addr_if_seen()?;
+
+            // Note: we need to grab fresh stacks on each loop because the network might get
+            // re-bound in the meantime which would change the connectors.
+            let stacks = self.stacks.read();
+
+            if hole_punching_task.is_none() {
+                hole_punching_task = stacks.start_punching_holes(addr);
+            }
+
+            match stacks.connect(addr).await {
+                Ok(socket) => {
+                    return Some(socket);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to create {} connection to address {:?}: {:?}",
+                        source,
+                        addr,
+                        error
+                    );
+
+                    if error.is_localy_closed() {
+                        // Connector locally closed - no point in retrying.
+                        return None;
+                    }
+
+                    match backoff.next_backoff() {
+                        Some(duration) => {
+                            time::sleep(duration).await;
+                        }
+                        // We set max elapsed time to None above.
+                        None => unreachable!(),
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -226,62 +279,6 @@ impl Stacks {
 
     fn tcp_listener_local_addr_v6(&self) -> Option<&SocketAddr> {
         self.tcp_v6.as_ref().map(|stack| &stack.listener_local_addr)
-    }
-
-    // FIXME: This continues to run on the old stacks even after new stacks are bound. Move it to
-    // Gateway and grab fresh stack on each attemp. Also start the hole puncher on each attempt
-    // unless already running
-    async fn connect_with_retries(
-        &self,
-        peer: &SeenPeer,
-        source: PeerSource,
-    ) -> Option<raw::Stream> {
-        if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
-            return None;
-        }
-
-        let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(200))
-            .with_max_interval(Duration::from_secs(10))
-            // We'll continue trying for as long as `peer.addr().is_some()`.
-            .with_max_elapsed_time(None)
-            .build();
-
-        let _hole_punching_task = self.start_punching_holes(*peer.addr_if_seen()?);
-
-        loop {
-            // Note: This needs to be probed each time the loop starts. When the `addr` fn returns
-            // `None` that means whatever discovery mechanism (LocalDiscovery or DhtDiscovery)
-            // found it is no longer seeing it.
-            let addr = *peer.addr_if_seen()?;
-
-            match self.connect(addr).await {
-                Ok(socket) => {
-                    return Some(socket);
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        "Failed to create {} connection to address {:?}: {:?}",
-                        source,
-                        addr,
-                        error
-                    );
-
-                    if error.is_localy_closed() {
-                        // Connector locally closed - no point in retrying.
-                        return None;
-                    }
-
-                    match backoff.next_backoff() {
-                        Some(duration) => {
-                            time::sleep(duration).await;
-                        }
-                        // We set max elapsed time to None above.
-                        None => unreachable!(),
-                    }
-                }
-            }
-        }
     }
 
     async fn connect(&self, addr: PeerAddr) -> Result<raw::Stream, ConnectError> {
