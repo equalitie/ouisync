@@ -409,7 +409,7 @@ impl Repository {
     /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are
     /// stored inside the repository but not synced to other replicas.
     pub fn metadata(&self) -> Metadata {
-        Metadata(self.db().clone())
+        self.shared.store.metadata()
     }
 
     pub fn store(&self) -> &Store {

@@ -26,7 +26,7 @@ fn peer_exchange() {
         async move {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
-            reg.set_pex_enabled(true);
+            reg.set_pex_enabled(true).await;
 
             barrier.wait().await;
         }
@@ -39,7 +39,7 @@ fn peer_exchange() {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
-            reg.set_pex_enabled(true);
+            reg.set_pex_enabled(true).await;
 
             expect_peer_known(&network, proto, "carol").await;
             barrier.wait().await;
@@ -51,7 +51,7 @@ fn peer_exchange() {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
             network.connect("alice");
-            reg.set_pex_enabled(true);
+            reg.set_pex_enabled(true).await;
 
             expect_peer_known(&network, proto, "bob").await;
             barrier.wait().await;
@@ -69,9 +69,9 @@ fn dht_toggle() {
         let network = actor::create_network(proto).await;
         let (_repo, reg) = actor::create_linked_repo(&network).await;
 
-        reg.set_dht_enabled(true);
-        reg.set_dht_enabled(false);
-        reg.set_dht_enabled(true);
+        reg.set_dht_enabled(true).await;
+        reg.set_dht_enabled(false).await;
+        reg.set_dht_enabled(true).await;
     });
 }
 

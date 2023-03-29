@@ -65,7 +65,7 @@ pub async fn create(
         let repository = Repository::create(db, device_id, access).await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,
@@ -98,7 +98,7 @@ pub async fn open(
         .await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,
@@ -121,7 +121,7 @@ pub async fn reopen(
         let repository = Repository::reopen(store.into_std_path_buf(), token).await?;
         let repository = Arc::new(repository);
 
-        let registration = network.register(repository.store().clone());
+        let registration = network.register(repository.store().clone()).await;
 
         Ok(RepositoryHolder {
             repository,

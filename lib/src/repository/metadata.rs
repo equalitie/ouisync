@@ -11,7 +11,8 @@ use crate::{
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
+use tracing::instrument;
 use zeroize::Zeroize;
 
 // Metadata keys
@@ -38,10 +39,37 @@ const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 // -------------------------------------------------------------------
 // Accessor for user-defined metadata
 // -------------------------------------------------------------------
-pub struct Metadata(pub(super) db::Pool);
+pub struct Metadata {
+    db: db::Pool,
+}
 
 impl Metadata {
-    // TODO
+    pub(crate) fn new(db: db::Pool) -> Self {
+        Self { db }
+    }
+
+    #[instrument(skip(self), err(Debug))]
+    pub async fn get<T>(&self, name: &str) -> Result<T>
+    where
+        T: MetadataGet + fmt::Debug,
+    {
+        let mut conn = self.db.acquire().await?;
+        let value = get_public(&mut conn, name.as_bytes()).await?;
+        tracing::debug!(?value);
+
+        Ok(value)
+    }
+
+    #[instrument(skip(self), err(Debug))]
+    pub async fn set<T>(&self, name: &str, value: T) -> Result<()>
+    where
+        T: MetadataSet + fmt::Debug,
+    {
+        let mut tx = self.db.begin_write().await?;
+        set_public(&mut tx, name.as_bytes(), value).await?;
+
+        Ok(())
+    }
 }
 
 // -------------------------------------------------------------------
@@ -439,12 +467,69 @@ where
     Ok(())
 }
 
+async fn get_public<T>(conn: &mut db::Connection, id: &[u8]) -> Result<T>
+where
+    T: MetadataGet,
+{
+    let row = sqlx::query("SELECT value FROM metadata_public WHERE name = ?")
+        .bind(id)
+        .fetch_optional(conn)
+        .await?;
+    let row = row.ok_or(Error::EntryNotFound)?;
+    T::get(&row).map_err(|_| Error::MalformedData)
+}
+
+async fn set_public<T>(tx: &mut db::WriteTransaction, id: &[u8], value: T) -> Result<()>
+where
+    T: MetadataSet,
+{
+    let query = sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)");
+    let query = query.bind(id);
+    let query = value.bind(query);
+    query.execute(tx).await?;
+
+    Ok(())
+}
+
 async fn remove_public(tx: &mut db::WriteTransaction, id: &[u8]) -> Result<()> {
     sqlx::query("DELETE FROM metadata_public WHERE name = ?")
         .bind(id)
         .execute(tx)
         .await?;
     Ok(())
+}
+
+pub trait MetadataGet: detail::Get {}
+pub trait MetadataSet: detail::Set {}
+
+impl<T> MetadataGet for T where T: detail::Get {}
+impl<T> MetadataSet for T where T: detail::Set {}
+
+// Use the sealed trait pattern to avoid exposing implementation details outside of this crate.
+mod detail {
+    use sqlx::Row;
+
+    type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+
+    pub trait Get: Sized {
+        fn get(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error>;
+    }
+
+    pub trait Set {
+        fn bind(self, query: Query) -> Query;
+    }
+
+    impl Get for bool {
+        fn get(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+            row.try_get(0)
+        }
+    }
+
+    impl Set for bool {
+        fn bind(self, query: Query) -> Query {
+            query.bind(self)
+        }
+    }
 }
 
 // -------------------------------------------------------------------

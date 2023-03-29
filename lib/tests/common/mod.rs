@@ -272,7 +272,7 @@ pub(crate) mod actor {
 
     pub(crate) async fn create_linked_repo(network: &Network) -> (Repository, Registration) {
         let repo = create_repo().await;
-        let reg = network.register(repo.store().clone());
+        let reg = network.register(repo.store().clone()).await;
 
         (repo, reg)
     }

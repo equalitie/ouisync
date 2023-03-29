@@ -7,7 +7,7 @@ use crate::{
     event::{Event, Payload},
     index::{self, Index},
     progress::Progress,
-    repository::LocalId,
+    repository::{LocalId, Metadata},
     repository_stats::RepositoryStats,
 };
 use futures_util::TryStreamExt;
@@ -137,6 +137,10 @@ impl Store {
             lower_bound: None,
             page_size,
         }
+    }
+
+    pub(crate) fn metadata(&self) -> Metadata {
+        Metadata::new(self.db().clone())
     }
 }
 

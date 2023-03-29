@@ -259,18 +259,26 @@ pub(crate) fn is_dht_enabled(state: &State, handle: Handle<RepositoryHolder>) ->
     state.repositories.get(handle).registration.is_dht_enabled()
 }
 
-pub(crate) fn set_dht_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
+pub(crate) async fn set_dht_enabled(
+    state: &State,
+    handle: Handle<RepositoryHolder>,
+    enabled: bool,
+) {
     let reg = &state.repositories.get(handle).registration;
-    reg.set_dht_enabled(enabled)
+    reg.set_dht_enabled(enabled).await
 }
 
 pub(crate) fn is_pex_enabled(state: &State, handle: Handle<RepositoryHolder>) -> bool {
     state.repositories.get(handle).registration.is_pex_enabled()
 }
 
-pub(crate) fn set_pex_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
+pub(crate) async fn set_pex_enabled(
+    state: &State,
+    handle: Handle<RepositoryHolder>,
+    enabled: bool,
+) {
     let reg = &state.repositories.get(handle).registration;
-    reg.set_pex_enabled(enabled)
+    reg.set_pex_enabled(enabled).await
 }
 
 /// The `password` parameter is optional, if `None` the current access level of the opened

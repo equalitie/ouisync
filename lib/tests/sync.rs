@@ -62,7 +62,7 @@ fn relink_repository() {
         writer_rx.recv().await;
 
         // Relink the repo
-        let _reg = network.register(repo.store().clone());
+        let _reg = network.register(repo.store().clone()).await;
 
         // Wait until the file is updated
         common::expect_file_content(&repo, "test.txt", b"second").await;
@@ -130,7 +130,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
                 actor::default_secrets().with_mode(relay_access_mode),
             )
             .await;
-            let _reg = network.register(repo.store().clone());
+            let _reg = network.register(repo.store().clone()).await;
 
             rx.recv().await.unwrap();
         }
@@ -421,7 +421,7 @@ fn recreate_local_branch() {
                 .unwrap();
 
         // 4. Establish link
-        let reg = network.register(repo.store().clone());
+        let reg = network.register(repo.store().clone()).await;
 
         // 7. Sync with Bob. Afterwards our local branch will become outdated compared to Bob's
         common::expect_file_content(&repo, "foo.txt", b"hello from Alice\nhello from Bob\n").await;
@@ -628,7 +628,7 @@ fn remote_rename_directory_during_conflict() {
         // Create file before linking the repo to ensure we create conflict.
         repo.create_file("dummy.txt").await.unwrap();
 
-        let _reg = network.register(repo.store().clone());
+        let _reg = network.register(repo.store().clone()).await;
 
         repo.create_directory("foo").await.unwrap();
         rx.recv().await;
@@ -647,7 +647,7 @@ fn remote_rename_directory_during_conflict() {
         // This prevents the remote branch from being pruned.
         repo.create_file("dummy.txt").await.unwrap();
 
-        let _reg = network.register(repo.store().clone());
+        let _reg = network.register(repo.store().clone()).await;
 
         expect_local_directory_exists(&repo, "foo").await;
         tx.send(()).await.unwrap();
@@ -720,7 +720,7 @@ fn concurrent_update_and_delete_during_conflict() {
             // branch from being pruned.
             repo.create_file("dummy.txt").await.unwrap();
 
-            let reg = network.register(repo.store().clone());
+            let reg = network.register(repo.store().clone()).await;
 
             // 3. Wait until the file gets merged
             common::expect_file_version_content(&repo, "data.txt", Some(&id_a), &content).await;
@@ -733,7 +733,7 @@ fn concurrent_update_and_delete_during_conflict() {
             repo.remove_entry("data.txt").await.unwrap();
 
             // 6a. Relink
-            let _reg = network.register(repo.store().clone());
+            let _reg = network.register(repo.store().clone()).await;
 
             // 7. We are able to read the whole file again including the previously gc-ed blocks.
             common::expect_file_version_content(&repo, "data.txt", Some(&id_b), &content).await;
@@ -758,7 +758,7 @@ fn concurrent_update_and_delete_during_conflict() {
             // from being pruned.
             repo.create_file("dummy.txt").await.unwrap();
 
-            let reg = network.register(repo.store().clone());
+            let reg = network.register(repo.store().clone()).await;
 
             // 2. Create the file and wait until alice sees it
             let mut file = repo.create_file("data.txt").await.unwrap();
@@ -779,7 +779,7 @@ fn concurrent_update_and_delete_during_conflict() {
             file.flush().await.unwrap();
 
             // 6b. Relink
-            let _reg = network.register(repo.store().clone());
+            let _reg = network.register(repo.store().clone()).await;
 
             alice_rx.recv().await.unwrap();
         }
@@ -828,7 +828,7 @@ fn content_stays_available_during_sync() {
                 actor::default_secrets().with_mode(AccessMode::Read),
             )
             .await;
-            let _reg = network.register(repo.store().clone());
+            let _reg = network.register(repo.store().clone()).await;
             network.connect("alice");
 
             // 2. Sync "b/c.dat"
