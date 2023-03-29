@@ -99,7 +99,7 @@ pub(crate) async fn get_writer_id(
     conn: &mut db::Connection,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<sign::PublicKey> {
-    get(conn, WRITER_ID, local_key).await
+    get_blob(conn, WRITER_ID, local_key).await
 }
 
 pub(crate) async fn set_writer_id(
@@ -107,7 +107,7 @@ pub(crate) async fn set_writer_id(
     writer_id: &sign::PublicKey,
     local_key: Option<&cipher::SecretKey>,
 ) -> Result<()> {
-    set(tx, WRITER_ID, writer_id, local_key).await?;
+    set_blob(tx, WRITER_ID, writer_id, local_key).await?;
     Ok(())
 }
 
@@ -352,11 +352,11 @@ async fn get_write_key(
     id: &RepositoryId,
 ) -> Result<sign::Keypair> {
     // Try to interpret it first as the write key.
-    let write_key: sign::SecretKey = match get(conn, WRITE_KEY, local_key).await {
+    let write_key: sign::SecretKey = match get_blob(conn, WRITE_KEY, local_key).await {
         Ok(write_key) => write_key,
         Err(Error::EntryNotFound) => {
             // Let's be backward compatible.
-            get(conn, DEPRECATED_ACCESS_KEY, local_key).await?
+            get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await?
         }
         Err(error) => return Err(error),
     };
@@ -377,11 +377,11 @@ async fn get_read_key(
     local_key: Option<&cipher::SecretKey>,
     id: &RepositoryId,
 ) -> Result<cipher::SecretKey> {
-    let read_key: cipher::SecretKey = match get(conn, READ_KEY, local_key).await {
+    let read_key: cipher::SecretKey = match get_blob(conn, READ_KEY, local_key).await {
         Ok(read_key) => read_key,
         Err(Error::EntryNotFound) => {
             // Let's be backward compatible.
-            get(conn, DEPRECATED_ACCESS_KEY, local_key).await?
+            get_blob(conn, DEPRECATED_ACCESS_KEY, local_key).await?
         }
         Err(error) => return Err(error),
     };
@@ -508,7 +508,7 @@ fn read_key_validator(id: &RepositoryId) -> Hash {
 }
 
 // -------------------------------------------------------------------
-async fn get<T>(
+async fn get_blob<T>(
     conn: &mut db::Connection,
     id: &[u8],
     local_key: Option<&cipher::SecretKey>,
@@ -522,7 +522,7 @@ where
     }
 }
 
-async fn set<T>(
+async fn set_blob<T>(
     tx: &mut db::WriteTransaction,
     id: &[u8],
     blob: T,
