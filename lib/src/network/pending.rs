@@ -53,22 +53,24 @@ pub(super) enum PendingResponse {
     RootNode {
         proof: UntrustedProof,
         summary: Summary,
+        permit: Option<OwnedSemaphorePermit>,
         debug: DebugReceivedResponse,
     },
-    InnerNodes(
-        CacheHash<InnerNodeMap>,
-        ResponseDisambiguator,
-        DebugReceivedResponse,
-    ),
-    LeafNodes(
-        CacheHash<LeafNodeSet>,
-        ResponseDisambiguator,
-        DebugReceivedResponse,
-    ),
+    InnerNodes {
+        hash: CacheHash<InnerNodeMap>,
+        permit: Option<OwnedSemaphorePermit>,
+        debug: DebugReceivedResponse,
+    },
+    LeafNodes {
+        hash: CacheHash<LeafNodeSet>,
+        permit: Option<OwnedSemaphorePermit>,
+        debug: DebugReceivedResponse,
+    },
     Block {
         data: BlockData,
         nonce: BlockNonce,
         block_promise: Option<BlockPromise>,
+        permit: Option<OwnedSemaphorePermit>,
         debug: DebugReceivedResponse,
     },
 }
@@ -117,15 +119,17 @@ impl PendingRequests {
         }
     }
 
-    pub fn remove(
-        &self,
-        response: Response,
-    ) -> Option<(PendingResponse, Option<OwnedSemaphorePermit>)> {
+    pub fn remove(&self, response: Response) -> Option<PendingResponse> {
         let response = ProcessedResponse::from(response);
         let key = response.to_key();
 
         if let Some(request_data) = self.map.lock().unwrap().remove(&key) {
             self.request_removed(&key, Some(request_data.timestamp));
+
+            // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
+            // only `drop` it once the request is processed.
+            let permit = Some(request_data.permit.client_permit);
+
             match response {
                 ProcessedResponse::Success(success) => {
                     let r = match success {
@@ -136,26 +140,34 @@ impl PendingRequests {
                         } => PendingResponse::RootNode {
                             proof,
                             summary,
+                            permit,
                             debug,
                         },
-                        processed_response::Success::InnerNodes(hash, disambiguator, debug) => {
-                            PendingResponse::InnerNodes(hash, disambiguator, debug)
+                        processed_response::Success::InnerNodes(hash, _disambiguator, debug) => {
+                            PendingResponse::InnerNodes {
+                                hash,
+                                permit,
+                                debug,
+                            }
                         }
-                        processed_response::Success::LeafNodes(hash, disambiguator, debug) => {
-                            PendingResponse::LeafNodes(hash, disambiguator, debug)
+                        processed_response::Success::LeafNodes(hash, _disambiguator, debug) => {
+                            PendingResponse::LeafNodes {
+                                hash,
+                                permit,
+                                debug,
+                            }
                         }
                         processed_response::Success::Block { data, nonce, debug } => {
                             PendingResponse::Block {
                                 data,
                                 nonce,
+                                permit,
                                 debug,
                                 block_promise: request_data.block_promise,
                             }
                         }
                     };
-                    // We `drop` the `peer_permit` here but the `Client` will need the
-                    // `client_permit` and only `drop` it once the request is processed.
-                    Some((r, Some(request_data.permit.client_permit)))
+                    Some(r)
                 }
                 ProcessedResponse::Failure(_) => None,
             }
@@ -166,14 +178,12 @@ impl PendingRequests {
                     proof,
                     summary,
                     debug,
-                }) => Some((
-                    PendingResponse::RootNode {
-                        proof,
-                        summary,
-                        debug,
-                    },
-                    None,
-                )),
+                }) => Some(PendingResponse::RootNode {
+                    proof,
+                    summary,
+                    permit: None,
+                    debug,
+                }),
                 _ => None,
             }
         }

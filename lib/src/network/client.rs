@@ -16,7 +16,7 @@ use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
 use tokio::{
     select,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
+    sync::{mpsc, Semaphore},
 };
 use tracing::instrument;
 
@@ -89,8 +89,8 @@ impl Client {
                 }
                 response = rx.recv() => {
                     if let Some(response) = response {
-                        if let Some((response, permit)) = pending_requests.remove(response) {
-                            if queued_responses_tx.send((response, permit)).await.is_err() {
+                        if let Some(response) = pending_requests.remove(response) {
+                            if queued_responses_tx.send(response).await.is_err() {
                                 break;
                             }
                         }
@@ -112,38 +112,39 @@ impl Client {
 
     async fn handle_responses(
         &mut self,
-        mut queued_responses_rx: mpsc::Receiver<(PendingResponse, Option<OwnedSemaphorePermit>)>,
+        mut queued_responses_rx: mpsc::Receiver<PendingResponse>,
     ) -> Result<()> {
         loop {
-            let (response, permit) = match queued_responses_rx.recv().await {
-                Some(response_and_permit) => response_and_permit,
+            match queued_responses_rx.recv().await {
+                Some(response) => self.handle_response(response).await?,
                 None => return Ok(()),
             };
-            self.handle_response(response, permit).await?;
         }
     }
 
-    async fn handle_response(
-        &mut self,
-        response: PendingResponse,
-        _permit: Option<OwnedSemaphorePermit>,
-    ) -> Result<()> {
+    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
         let result = match response {
             PendingResponse::RootNode {
                 proof,
                 summary,
+                permit: _permit,
                 debug,
             } => self.handle_root_node(proof, summary, debug).await,
-            PendingResponse::InnerNodes(nodes, _, debug) => {
-                self.handle_inner_nodes(nodes, debug).await
-            }
-            PendingResponse::LeafNodes(nodes, _, debug) => {
-                self.handle_leaf_nodes(nodes, debug).await
-            }
+            PendingResponse::InnerNodes {
+                hash,
+                permit: _permit,
+                debug,
+            } => self.handle_inner_nodes(hash, debug).await,
+            PendingResponse::LeafNodes {
+                hash,
+                permit: _permit,
+                debug,
+            } => self.handle_leaf_nodes(hash, debug).await,
             PendingResponse::Block {
                 data,
                 nonce,
                 block_promise,
+                permit: _permit,
                 debug,
             } => self.handle_block(data, nonce, block_promise, debug).await,
         };

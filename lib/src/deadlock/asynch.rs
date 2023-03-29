@@ -50,7 +50,7 @@ impl ExpectShortLifetime {
                 sleep(max_lifetime.into()).await;
                 println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
                 println!("Expected short lifetime, but exceeded {:?}", max_lifetime);
-                println!("Location: {:?}", file_and_line);
+                println!("{:?}", file_and_line);
                 println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
             }),
         }
