@@ -5,8 +5,9 @@ mod reopen_token;
 mod tests;
 mod worker;
 
+pub use self::{id::RepositoryId, metadata::Metadata, reopen_token::ReopenToken};
+
 pub(crate) use self::id::LocalId;
-pub use self::{id::RepositoryId, reopen_token::ReopenToken};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -403,6 +404,12 @@ impl Repository {
             secrets: self.secrets().clone(),
             writer_id: self.shared.this_writer_id,
         }
+    }
+
+    /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are
+    /// stored inside the repository but not synced to other replicas.
+    pub fn metadata(&self) -> Metadata {
+        Metadata(self.db().clone())
     }
 
     pub fn store(&self) -> &Store {

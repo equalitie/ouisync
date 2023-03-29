@@ -35,6 +35,18 @@ const DEPRECATED_ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
 const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
+// -------------------------------------------------------------------
+// Accessor for user-defined metadata
+// -------------------------------------------------------------------
+pub struct Metadata(pub(super) db::Pool);
+
+impl Metadata {
+    // TODO
+}
+
+// -------------------------------------------------------------------
+// Password
+// -------------------------------------------------------------------
 pub(crate) async fn password_to_key(
     tx: &mut db::WriteTransaction,
     password: &Password,
@@ -56,9 +68,6 @@ pub(crate) async fn secret_to_key<'a>(
     }
 }
 
-// -------------------------------------------------------------------
-// Salt
-// -------------------------------------------------------------------
 async fn get_or_generate_password_salt(tx: &mut db::WriteTransaction) -> Result<PasswordSalt> {
     let salt = match get_public_blob(tx, PASSWORD_SALT).await {
         Ok(salt) => salt,
@@ -112,7 +121,7 @@ pub(crate) async fn set_writer_id(
 }
 
 // -------------------------------------------------------------------
-// Replica id
+// Device id
 // -------------------------------------------------------------------
 
 // Checks whether the stored device id is the same as the specified one.

@@ -58,7 +58,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
-    repository::{ReopenToken, Repository, RepositoryDb},
+    repository::{Metadata, ReopenToken, Repository, RepositoryDb},
     state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };
