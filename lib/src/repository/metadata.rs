@@ -60,13 +60,16 @@ impl Metadata {
         Ok(value)
     }
 
-    #[instrument(skip(self), err(Debug))]
+    #[instrument(skip(self, value), err(Debug))]
     pub async fn set<T>(&self, name: &str, value: T) -> Result<()>
     where
         T: MetadataSet + fmt::Debug,
     {
+        tracing::debug!(?value);
+
         let mut tx = self.db.begin_write().await?;
         set_public(&mut tx, name.as_bytes(), value).await?;
+        tx.commit().await?;
 
         Ok(())
     }
