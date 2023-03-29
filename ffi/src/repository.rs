@@ -261,7 +261,7 @@ pub(crate) fn is_dht_enabled(state: &State, handle: Handle<RepositoryHolder>) ->
 
 pub(crate) fn set_dht_enabled(state: &State, handle: Handle<RepositoryHolder>, enabled: bool) {
     let reg = &state.repositories.get(handle).registration;
-    repository::set_dht_enabled(reg, enabled)
+    reg.set_dht_enabled(enabled)
 }
 
 pub(crate) fn is_pex_enabled(state: &State, handle: Handle<RepositoryHolder>) -> bool {

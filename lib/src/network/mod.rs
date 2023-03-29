@@ -286,18 +286,18 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn enable_dht(&self) {
+    pub fn set_dht_enabled(&self, enabled: bool) {
         let mut state = self.inner.state.lock().unwrap();
         let holder = &mut state.registry[self.key];
-        holder.dht = Some(
-            self.inner
-                .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
-        );
-    }
 
-    pub fn disable_dht(&self) {
-        let mut state = self.inner.state.lock().unwrap();
-        state.registry[self.key].dht = None;
+        if enabled {
+            holder.dht = Some(
+                self.inner
+                    .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
+            );
+        } else {
+            holder.dht = None;
+        }
     }
 
     /// This function provides the information to the user whether DHT is enabled for this

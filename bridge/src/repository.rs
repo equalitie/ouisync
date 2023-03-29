@@ -208,14 +208,6 @@ pub async fn set_read_and_write_access(
     Ok(())
 }
 
-pub fn set_dht_enabled(reg: &Registration, enabled: bool) {
-    if enabled {
-        reg.enable_dht()
-    } else {
-        reg.disable_dht()
-    }
-}
-
 pub fn set_pex_enabled(reg: &Registration, enabled: bool) {
     if enabled {
         reg.enable_pex()

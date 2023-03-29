@@ -371,7 +371,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    repository::set_dht_enabled(&holder.base.registration, enabled);
+                    holder.base.registration.set_dht_enabled(enabled);
                     Ok(().into())
                 } else {
                     Ok(holder.base.registration.is_dht_enabled().into())

@@ -69,9 +69,9 @@ fn dht_toggle() {
         let network = actor::create_network(proto).await;
         let (_repo, reg) = actor::create_linked_repo(&network).await;
 
-        reg.enable_dht();
-        reg.disable_dht();
-        reg.enable_dht();
+        reg.set_dht_enabled(true);
+        reg.set_dht_enabled(false);
+        reg.set_dht_enabled(true);
     });
 }
 
