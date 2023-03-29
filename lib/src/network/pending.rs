@@ -100,10 +100,10 @@ impl PendingRequests {
             Entry::Vacant(entry) => {
                 let msg = pending_request.to_key();
 
-                let (block_promise, debug) = match pending_request {
-                    PendingRequest::RootNode(_, debug) => (None, debug),
-                    PendingRequest::ChildNodes(_, _, debug) => (None, debug),
-                    PendingRequest::Block(block_promise, debug) => (Some(block_promise), debug),
+                let block_promise = match pending_request {
+                    PendingRequest::RootNode(_, _) => None,
+                    PendingRequest::ChildNodes(_, _, _) => None,
+                    PendingRequest::Block(block_promise, _) => Some(block_promise),
                 };
 
                 entry.insert(RequestData {

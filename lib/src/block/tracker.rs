@@ -5,7 +5,7 @@ use std::{
     fmt,
     sync::{Arc, Mutex as BlockingMutex},
 };
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
 /// Helper for tracking required missing blocks.
 #[derive(Clone)]
@@ -77,7 +77,7 @@ impl BlockTracker {
             .clients
             .insert(HashSet::default());
 
-        let notify_rx = self.shared.notify_tx.subscribe();
+        let notify_rx = AsyncMutex::new(self.shared.notify_tx.subscribe());
 
         BlockTrackerClient {
             shared: self.shared.clone(),
@@ -100,7 +100,7 @@ impl BlockTracker {
 pub(crate) struct BlockTrackerClient {
     shared: Arc<Shared>,
     client_id: ClientId,
-    notify_rx: watch::Receiver<()>,
+    notify_rx: AsyncMutex<watch::Receiver<()>>,
 }
 
 impl BlockTrackerClient {
@@ -162,14 +162,14 @@ impl BlockTrackerClient {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept(&mut self) -> BlockPromise {
+    pub async fn accept(&self) -> BlockPromise {
         loop {
             if let Some(block_promise) = self.try_accept() {
                 return block_promise;
             }
 
             // unwrap is ok because the sender exists in self.shared.
-            self.notify_rx.changed().await.unwrap();
+            self.notify_rx.lock().await.changed().await.unwrap();
         }
     }
 
