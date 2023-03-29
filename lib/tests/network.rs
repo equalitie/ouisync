@@ -106,8 +106,6 @@ fn local_discovery() {
     }
 }
 
-// FIXME: this currently fails
-#[ignore]
 #[test]
 fn add_peer_before_bind() {
     let mut env = Env::new();
