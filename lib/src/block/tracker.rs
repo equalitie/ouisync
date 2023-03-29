@@ -5,7 +5,7 @@ use std::{
     fmt,
     sync::{Arc, Mutex as BlockingMutex},
 };
-use tokio::sync::{watch, Mutex as AsyncMutex};
+use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.
 #[derive(Clone)]
@@ -77,7 +77,7 @@ impl BlockTracker {
             .clients
             .insert(HashSet::default());
 
-        let notify_rx = AsyncMutex::new(self.shared.notify_tx.subscribe());
+        let notify_rx = self.shared.notify_tx.subscribe();
 
         BlockTrackerClient {
             shared: self.shared.clone(),
@@ -100,10 +100,18 @@ impl BlockTracker {
 pub(crate) struct BlockTrackerClient {
     shared: Arc<Shared>,
     client_id: ClientId,
-    notify_rx: AsyncMutex<watch::Receiver<()>>,
+    notify_rx: watch::Receiver<()>,
 }
 
 impl BlockTrackerClient {
+    pub fn acceptor(&self) -> BlockPromiseAcceptor {
+        BlockPromiseAcceptor {
+            shared: self.shared.clone(),
+            client_id: self.client_id,
+            notify_rx: self.notify_rx.clone(),
+        }
+    }
+
     /// Offer to request the given block by the client with `client_id` if it is, or will become,
     /// required. Returns `true` if this block was offered for the first time (by any client), `false` if it was
     /// already offered before but not yet
@@ -155,21 +163,29 @@ impl BlockTrackerClient {
             self.shared.notify();
         }
     }
+}
 
+pub(crate) struct BlockPromiseAcceptor {
+    shared: Arc<Shared>,
+    client_id: ClientId,
+    notify_rx: watch::Receiver<()>,
+}
+
+impl BlockPromiseAcceptor {
     /// Returns the next required and offered block request. If there is no such request at the
     /// moment this function is called, waits until one appears.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept(&self) -> BlockPromise {
+    pub async fn accept(&mut self) -> BlockPromise {
         loop {
             if let Some(block_promise) = self.try_accept() {
                 return block_promise;
             }
 
             // unwrap is ok because the sender exists in self.shared.
-            self.notify_rx.lock().await.changed().await.unwrap();
+            self.notify_rx.changed().await.unwrap();
         }
     }
 
@@ -383,27 +399,31 @@ mod tests {
         let client = tracker.client();
 
         // Initially no blocks are returned
-        assert!(client.try_accept().is_none());
+        assert!(client.acceptor().try_accept().is_none());
 
         // Offered but not required blocks are not returned
         let block0 = make_block();
         client.offer(block0.id);
-        assert!(client.try_accept().is_none());
+        assert!(client.acceptor().try_accept().is_none());
 
         // Required but not offered blocks are not returned
         let block1 = make_block();
         tracker.begin_require(block1.id).commit();
-        assert!(client.try_accept().is_none());
+        assert!(client.acceptor().try_accept().is_none());
 
         // Required + offered blocks are returned...
         tracker.begin_require(block0.id).commit();
         assert_eq!(
-            client.try_accept().as_ref().map(BlockPromise::block_id),
+            client
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block0.id)
         );
 
         // ...but only once.
-        assert!(client.try_accept().is_none());
+        assert!(client.acceptor().try_accept().is_none());
     }
 
     #[test]
@@ -421,9 +441,9 @@ mod tests {
 
         client0.cancel(&block.id);
 
-        assert!(client0.try_accept().is_none());
+        assert!(client0.acceptor().try_accept().is_none());
 
-        let block_promise = client1.try_accept().unwrap();
+        let block_promise = client1.acceptor().try_accept().unwrap();
 
         assert_eq!(block_promise.block_id(), &block.id);
 
@@ -453,9 +473,9 @@ mod tests {
 
         client0.cancel(&block.id);
 
-        assert!(client0.try_accept().is_none());
+        assert!(client0.acceptor().try_accept().is_none());
 
-        let block_promise = client1.try_accept().unwrap();
+        let block_promise = client1.acceptor().try_accept().unwrap();
         assert_eq!(block_promise.block_id(), &block.id);
 
         tracker.complete(&block.id);
@@ -482,18 +502,22 @@ mod tests {
         client0.offer(block.id);
         client1.offer(block.id);
 
-        let block_promise = client0.try_accept();
+        let block_promise = client0.acceptor().try_accept();
         assert_eq!(
             block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
-        assert!(client1.try_accept().is_none());
+        assert!(client1.acceptor().try_accept().is_none());
 
         drop(block_promise);
 
-        assert!(client0.try_accept().is_none());
+        assert!(client0.acceptor().try_accept().is_none());
         assert_eq!(
-            client1.try_accept().as_ref().map(BlockPromise::block_id),
+            client1
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -515,7 +539,11 @@ mod tests {
         drop(client0);
 
         assert_eq!(
-            client1.try_accept().as_ref().map(BlockPromise::block_id),
+            client1
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -534,18 +562,22 @@ mod tests {
 
         tracker.begin_require(block.id).commit();
 
-        let block_promise = client0.try_accept();
+        let block_promise = client0.acceptor().try_accept();
 
         assert_eq!(
             block_promise.as_ref().map(BlockPromise::block_id),
             Some(&block.id)
         );
-        assert!(client1.try_accept().is_none());
+        assert!(client1.acceptor().try_accept().is_none());
 
         drop(client0);
 
         assert_eq!(
-            client1.try_accept().as_ref().map(BlockPromise::block_id),
+            client1
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -567,7 +599,11 @@ mod tests {
         tracker.begin_require(block.id).commit();
 
         assert_eq!(
-            client1.try_accept().as_ref().map(BlockPromise::block_id),
+            client1
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -601,7 +637,11 @@ mod tests {
         require2.commit();
 
         assert_eq!(
-            client.try_accept().as_ref().map(BlockPromise::block_id),
+            client
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
             Some(&block.id)
         );
     }
@@ -630,7 +670,7 @@ mod tests {
             task::spawn({
                 let barrier = barrier.clone();
                 async move {
-                    let block_promise = client.try_accept();
+                    let block_promise = client.acceptor().try_accept();
                     let result = block_promise.as_ref().map(BlockPromise::block_id).cloned();
                     barrier.wait().await;
                     result
@@ -687,7 +727,12 @@ mod tests {
 
         let mut block_promise = HashSet::with_capacity(block_ids.len());
 
-        while let Some(block_id) = client.try_accept().as_ref().map(BlockPromise::block_id) {
+        while let Some(block_id) = client
+            .acceptor()
+            .try_accept()
+            .as_ref()
+            .map(BlockPromise::block_id)
+        {
             block_promise.insert(*block_id);
         }
 

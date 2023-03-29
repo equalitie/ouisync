@@ -64,7 +64,7 @@ impl Client {
     pub async fn run(&mut self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         self.receive_filter.reset().await?;
 
-        let block_tracker = self.block_tracker.clone();
+        let mut block_promise_acceptor = self.block_tracker.acceptor();
         let request_tx = self.request_tx.clone();
         let pending_requests = self.pending_requests.clone();
 
@@ -82,7 +82,7 @@ impl Client {
         // `pending_requests` to time out.
         loop {
             select! {
-                block_promise = block_tracker.accept() => {
+                block_promise = block_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
                     // Unwrap OK because the sending task never returns.
                     request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
