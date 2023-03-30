@@ -77,9 +77,9 @@ impl State {
         future::join_all(
             repositories
                 .into_iter()
-                .map(|(path, repository)| async move {
+                .map(|(name, repository)| async move {
                     if let Err(error) = repository.close().await {
-                        tracing::error!(?error, ?path, "failed to close repository");
+                        tracing::error!(?name, ?error, "failed to gracefully close repository");
                     }
                 }),
         )
@@ -185,6 +185,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                     mount_guard: None,
                 };
 
+                tracing::info!(?name, "repository created");
+
                 self.state.repositories.insert(name, holder);
 
                 Ok(().into())
@@ -192,14 +194,17 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::Delete { name } => {
                 if let Some((_, holder)) = self.state.repositories.remove(&name) {
                     if let Err(error) = holder.repository.close().await {
-                        tracing::error!(?error, "failed to close repository");
+                        tracing::error!(?name, ?error, "failed to gracefully close repository");
                     }
+
+                    tracing::info!(?name, "repository closed");
                 }
 
                 let store_path = self.state.store_path(&name);
 
                 // Try to delete all three files even if any of them fail, then return the first
                 // error (if any)
+                // TODO: this should be moved to `lib`
                 future::join_all(
                     ["", "-wal", "-shm"]
                         .into_iter()
@@ -241,6 +246,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                     mount_guard: None,
                 };
 
+                tracing::info!(?name, "repository opened");
+
                 match self.state.repositories.entry(name) {
                     Entry::Vacant(entry) => {
                         entry.insert(holder);
@@ -262,6 +269,12 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .set(OPEN_ON_START, false) // TODO: use remove()
                     .await
                     .ok();
+
+                if let Err(error) = holder.repository.close().await {
+                    tracing::error!(?name, ?error, "failed to gracefully close repository");
+                }
+
+                tracing::info!(?name, "repository closed");
 
                 Ok(().into())
             }
@@ -448,7 +461,7 @@ async fn open_repositories(
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                tracing::error!(?error, "failed to read directory entry");
+                tracing::error!(%error, "failed to read directory entry");
                 continue;
             }
         };
@@ -483,6 +496,10 @@ async fn open_repositories(
             continue;
         }
 
+        let name = path.strip_prefix(store_path).unwrap_or(path).as_str();
+
+        tracing::info!(?name, "repository opened");
+
         let repository = Arc::new(repository);
         let registration = network.register(repository.store().clone()).await;
         let holder = RepositoryHolder {
@@ -491,13 +508,7 @@ async fn open_repositories(
             mount_guard: None,
         };
 
-        let key = path
-            .strip_prefix(store_path)
-            .unwrap_or(path)
-            .as_str()
-            .to_owned();
-
-        repositories.insert(key, holder);
+        repositories.insert(name.to_owned(), holder);
     }
 
     repositories
