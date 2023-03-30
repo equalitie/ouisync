@@ -23,6 +23,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
 
 const OPEN_ON_START: &str = "open_on_start";
+const MOUNT_POINT: &str = "mount_point";
 
 pub(crate) struct State {
     config: ConfigStore,
@@ -53,8 +54,7 @@ impl State {
         .await;
 
         let repositories_monitor = monitor.make_child("Repositories");
-        let repositories =
-            open_repositories(&dirs.store_dir, &network, &config, &repositories_monitor).await;
+        let repositories = open_repositories(dirs, &network, &config, &repositories_monitor).await;
 
         Self {
             config,
@@ -93,10 +93,6 @@ impl State {
     fn store_path(&self, name: &str) -> Utf8PathBuf {
         self.store_dir.join(name).with_extension(DB_EXTENSION)
     }
-
-    fn mount_path(&self, name: &str) -> Utf8PathBuf {
-        self.mount_dir.join(name)
-    }
 }
 
 struct RepositoryHolder {
@@ -115,6 +111,51 @@ impl RepositoryHolder {
             registration,
             mount_guard: None,
         }
+    }
+
+    async fn mount(&mut self, name: &str, mount_dir: &Utf8Path) -> Result<()> {
+        let mount_point: Option<String> = self.repository.metadata().get(MOUNT_POINT).await.ok();
+        let mount_point = mount_point.map(|mount_point| {
+            if mount_point.is_empty() {
+                mount_dir.join(name)
+            } else {
+                mount_point.into()
+            }
+        });
+
+        let mount_guard = if let Some(mount_point) = mount_point {
+            if let Err(error) = fs::create_dir_all(&mount_point).await {
+                tracing::error!(?name, ?error, ?mount_point, "failed to create mount point");
+                return Err(error.into());
+            }
+
+            let mount_guard = match ouisync_vfs::mount(
+                runtime::Handle::current(),
+                self.repository.clone(),
+                mount_point.clone(),
+            ) {
+                Ok(mount_guard) => {
+                    tracing::info!(?name, ?mount_point, "repository mounted");
+                    mount_guard
+                }
+                Err(error) => {
+                    tracing::error!(?name, ?error, "failed to mount repository");
+                    return Err(error.into());
+                }
+            };
+
+            Some(mount_guard)
+        } else {
+            None
+        };
+
+        self.mount_guard = mount_guard;
+
+        Ok(())
+    }
+
+    fn unmount(&mut self) {
+        self.mount_guard = None;
     }
 }
 
@@ -211,6 +252,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                 Ok(().into())
             }
             Request::Open { name, password } => {
+                // TODO: support reopen in different mode
+
                 if self.state.repositories.contains_key(&name) {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
@@ -229,9 +272,11 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 tracing::info!(?name, "repository opened");
 
-                match self.state.repositories.entry(name) {
+                let mut holder = RepositoryHolder::new(repository, &self.state.network).await;
+                holder.mount(&name, &self.state.mount_dir).await.ok();
+
+                match self.state.repositories.entry(name.clone()) {
                     Entry::Vacant(entry) => {
-                        let holder = RepositoryHolder::new(repository, &self.state.network).await;
                         entry.insert(holder);
                         Ok(().into())
                     }
@@ -278,32 +323,33 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::Mount { name, path, all: _ } => {
                 if let Some(name) = name {
-                    let mut holder = self
+                    let mut entry = self
                         .state
                         .repositories
                         .get_mut(&name)
                         .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                    let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
-                    holder.mount_guard = Some(ouisync_vfs::mount(
-                        runtime::Handle::current(),
-                        holder.repository.clone(),
-                        mount_path,
-                    )?);
+                    entry
+                        .repository
+                        .metadata()
+                        .set(
+                            MOUNT_POINT,
+                            path.as_ref().map(|path| path.as_str()).unwrap_or_default(),
+                        )
+                        .await
+                        .ok();
+
+                    entry.mount(&name, &self.state.mount_dir).await?;
                 } else {
                     for mut entry in self.state.repositories.iter_mut() {
                         if entry.mount_guard.is_some() {
                             continue;
                         }
 
-                        let mount_path = self.state.mount_path(entry.key());
-                        fs::create_dir_all(&mount_path).await?;
+                        let name = entry.key().to_owned();
 
-                        entry.mount_guard = Some(ouisync_vfs::mount(
-                            runtime::Handle::current(),
-                            entry.repository.clone(),
-                            mount_path,
-                        )?);
+                        entry.repository.metadata().set(MOUNT_POINT, "").await.ok();
+                        entry.mount(&name, &self.state.mount_dir).await?;
                     }
                 }
 
@@ -311,12 +357,14 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::Unmount { name, all: _ } => {
                 if let Some(name) = name {
-                    if let Some(mut holder) = self.state.repositories.get_mut(&name) {
-                        holder.mount_guard.take();
+                    if let Some(mut entry) = self.state.repositories.get_mut(&name) {
+                        entry.repository.metadata().remove(MOUNT_POINT).await.ok();
+                        entry.unmount();
                     }
                 } else {
                     for mut entry in self.state.repositories.iter_mut() {
-                        entry.mount_guard.take();
+                        entry.repository.metadata().remove(MOUNT_POINT).await.ok();
+                        entry.unmount();
                     }
                 }
 
@@ -431,12 +479,12 @@ impl ouisync_bridge::transport::Handler for Handler {
 
 // Find repositories that are marked to be opened on startup and open them.
 async fn open_repositories(
-    store_path: &Utf8Path,
+    dirs: &Dirs,
     network: &Network,
     config: &ConfigStore,
     monitor: &StateMonitor,
 ) -> DashMap<String, RepositoryHolder> {
-    let mut walkdir = async_walkdir::new(store_path);
+    let mut walkdir = async_walkdir::new(&dirs.store_dir);
     let repositories = DashMap::new();
 
     while let Some(entry) = walkdir.next().await {
@@ -478,11 +526,13 @@ async fn open_repositories(
             continue;
         }
 
-        let name = path.strip_prefix(store_path).unwrap_or(path).as_str();
+        let name = path.strip_prefix(&dirs.store_dir).unwrap_or(path).as_str();
 
         tracing::info!(?name, "repository opened");
 
-        let holder = RepositoryHolder::new(repository, network).await;
+        let mut holder = RepositoryHolder::new(repository, network).await;
+        holder.mount(name, &dirs.mount_dir).await.ok();
+
         repositories.insert(name.to_owned(), holder);
     }
 

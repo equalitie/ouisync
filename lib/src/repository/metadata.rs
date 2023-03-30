@@ -12,7 +12,7 @@ use crate::{
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
 use std::{borrow::Cow, fmt};
-use tracing::instrument;
+use tracing::{field, instrument, Span};
 use zeroize::Zeroize;
 
 // Metadata keys
@@ -48,28 +48,41 @@ impl Metadata {
         Self { db }
     }
 
-    #[instrument(skip(self), err(Debug))]
+    #[instrument(skip(self), fields(value), err(Debug))]
     pub async fn get<T>(&self, name: &str) -> Result<T>
     where
         T: MetadataGet + fmt::Debug,
     {
         let mut conn = self.db.acquire().await?;
         let value = get_public(&mut conn, name.as_bytes()).await?;
-        tracing::debug!(?value);
+
+        Span::current().record("value", field::debug(&value));
+        tracing::debug!("ok");
 
         Ok(value)
     }
 
-    #[instrument(skip(self, value), err(Debug))]
-    pub async fn set<T>(&self, name: &str, value: T) -> Result<()>
+    #[instrument(skip(self), err(Debug))]
+    pub async fn set<'a, T>(&self, name: &'a str, value: T) -> Result<()>
     where
-        T: MetadataSet + fmt::Debug,
+        T: MetadataSet<'a> + fmt::Debug,
     {
-        tracing::debug!(?value);
-
         let mut tx = self.db.begin_write().await?;
         set_public(&mut tx, name.as_bytes(), value).await?;
         tx.commit().await?;
+
+        tracing::debug!("ok");
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), err(Debug))]
+    pub async fn remove(&self, name: &str) -> Result<()> {
+        let mut tx = self.db.begin_write().await?;
+        remove_public(&mut tx, name.as_bytes()).await?;
+        tx.commit().await?;
+
+        tracing::debug!("ok");
 
         Ok(())
     }
@@ -526,9 +539,9 @@ where
     T::get(&row).map_err(|_| Error::MalformedData)
 }
 
-async fn set_public<T>(tx: &mut db::WriteTransaction, id: &[u8], value: T) -> Result<()>
+async fn set_public<'a, T>(tx: &mut db::WriteTransaction, id: &'a [u8], value: T) -> Result<()>
 where
-    T: MetadataSet,
+    T: MetadataSet<'a>,
 {
     let query = sqlx::query("INSERT OR REPLACE INTO metadata_public(name, value) VALUES (?, ?)");
     let query = query.bind(id);
@@ -547,33 +560,57 @@ async fn remove_public(tx: &mut db::WriteTransaction, id: &[u8]) -> Result<()> {
 }
 
 pub trait MetadataGet: detail::Get {}
-pub trait MetadataSet: detail::Set {}
+pub trait MetadataSet<'a>: detail::Set<'a> {}
 
 impl<T> MetadataGet for T where T: detail::Get {}
-impl<T> MetadataSet for T where T: detail::Set {}
+impl<'a, T> MetadataSet<'a> for T where T: detail::Set<'a> {}
 
 // Use the sealed trait pattern to avoid exposing implementation details outside of this crate.
 mod detail {
-    use sqlx::Row;
+    use sqlx::{
+        sqlite::{SqliteArguments, SqliteRow},
+        Row, Sqlite,
+    };
 
-    type Query<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+    type Query<'q> = sqlx::query::Query<'q, Sqlite, SqliteArguments<'q>>;
 
     pub trait Get: Sized {
-        fn get(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error>;
+        fn get(row: &SqliteRow) -> Result<Self, sqlx::Error>;
     }
 
-    pub trait Set {
-        fn bind(self, query: Query) -> Query;
+    pub trait Set<'a>
+    where
+        Self: 'a,
+    {
+        fn bind(self, query: Query<'a>) -> Query<'a>;
     }
 
     impl Get for bool {
-        fn get(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        fn get(row: &SqliteRow) -> Result<Self, sqlx::Error> {
             row.try_get(0)
         }
     }
 
-    impl Set for bool {
-        fn bind(self, query: Query) -> Query {
+    impl<'a> Set<'a> for bool {
+        fn bind(self, query: Query<'a>) -> Query<'a> {
+            query.bind(self)
+        }
+    }
+
+    impl Get for String {
+        fn get(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+            row.try_get(0)
+        }
+    }
+
+    impl<'a> Set<'a> for String {
+        fn bind(self, query: Query<'a>) -> Query<'a> {
+            query.bind(self)
+        }
+    }
+
+    impl<'a> Set<'a> for &'a str {
+        fn bind(self, query: Query<'a>) -> Query<'a> {
             query.bind(self)
         }
     }
