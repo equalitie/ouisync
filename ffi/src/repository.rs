@@ -7,11 +7,19 @@ use ouisync_bridge::{
     constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
     error::Result,
     protocol::Notification,
-    repository::{self, RepositoryHolder},
+    repository,
     transport::NotificationSender,
 };
-use ouisync_lib::{network, path, AccessMode, EntryType, Event, Payload, Progress, ShareToken};
+use ouisync_lib::{
+    network::{self, Registration},
+    path, AccessMode, EntryType, Event, Payload, Progress, Repository, ShareToken,
+};
 use tokio::sync::broadcast::error::RecvError;
+
+pub(crate) struct RepositoryHolder {
+    pub repository: Repository,
+    pub registration: Registration,
+}
 
 pub(crate) async fn create(
     state: &State,
@@ -20,16 +28,23 @@ pub(crate) async fn create(
     local_write_password: Option<String>,
     share_token: Option<ShareToken>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let holder = repository::create(
+    let repository = repository::create(
         store,
         local_read_password,
         local_write_password,
         share_token,
         &state.config,
-        &state.network,
         &state.repos_monitor,
     )
     .await?;
+
+    let registration = state.network.register(repository.store().clone()).await;
+
+    let holder = RepositoryHolder {
+        repository,
+        registration,
+    };
+
     let handle = state.repositories.insert(holder);
 
     Ok(handle)
@@ -41,14 +56,13 @@ pub(crate) async fn open(
     store: Utf8PathBuf,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let holder = repository::open(
-        store,
-        local_password,
-        &state.config,
-        &state.network,
-        &state.repos_monitor,
-    )
-    .await?;
+    let repository =
+        repository::open(store, local_password, &state.config, &state.repos_monitor).await?;
+    let registration = state.network.register(repository.store().clone()).await;
+    let holder = RepositoryHolder {
+        repository,
+        registration,
+    };
     let handle = state.repositories.insert(holder);
 
     Ok(handle)
@@ -80,7 +94,12 @@ pub(crate) async fn reopen(
     store: Utf8PathBuf,
     token: Vec<u8>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let holder = repository::reopen(store, token, &state.network, &state.repos_monitor).await?;
+    let repository = repository::reopen(store, token, &state.repos_monitor).await?;
+    let registration = state.network.register(repository.store().clone()).await;
+    let holder = RepositoryHolder {
+        repository,
+        registration,
+    };
     let handle = state.repositories.insert(holder);
 
     Ok(handle)

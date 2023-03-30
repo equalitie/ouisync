@@ -1,8 +1,9 @@
 use crate::{
     file::FileHolder,
     registry::{Handle, Registry},
+    repository::RepositoryHolder,
 };
-use ouisync_bridge::{config::ConfigStore, repository::RepositoryHolder};
+use ouisync_bridge::config::ConfigStore;
 use ouisync_lib::{network::Network, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::path::PathBuf;

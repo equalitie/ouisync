@@ -13,7 +13,10 @@ use ouisync_bridge::{
     repository,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
+use ouisync_lib::{
+    network::{Network, Registration},
+    PeerAddr, Repository, ShareToken, StateMonitor,
+};
 use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
@@ -60,7 +63,7 @@ impl State {
         let mut repositories = Vec::with_capacity(self.repositories.len());
 
         self.repositories.retain(|path, holder| {
-            repositories.push((path.clone(), holder.base.repository.clone()));
+            repositories.push((path.clone(), holder.repository.clone()));
             false
         });
 
@@ -92,17 +95,9 @@ impl State {
 }
 
 struct RepositoryHolder {
-    base: ouisync_bridge::repository::RepositoryHolder,
+    repository: Arc<Repository>,
+    registration: Registration,
     mount_guard: Option<MountGuard>,
-}
-
-impl RepositoryHolder {
-    fn new(base: ouisync_bridge::repository::RepositoryHolder) -> Self {
-        Self {
-            base,
-            mount_guard: None,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -161,17 +156,26 @@ impl ouisync_bridge::transport::Handler for Handler {
                 let read_password = read_password.or_else(|| password.as_ref().cloned());
                 let write_password = write_password.or(password);
 
-                let holder = repository::create(
+                let repository = repository::create(
                     store_path.clone(),
                     read_password,
                     write_password,
                     share_token,
                     &self.state.config,
-                    &self.state.network,
                     &self.state.repositories_monitor,
                 )
                 .await?;
-                let holder = RepositoryHolder::new(holder);
+                let repository = Arc::new(repository);
+                let registration = self
+                    .state
+                    .network
+                    .register(repository.store().clone())
+                    .await;
+                let holder = RepositoryHolder {
+                    repository,
+                    registration,
+                    mount_guard: None,
+                };
 
                 self.state.repositories.insert(name, holder);
 
@@ -179,7 +183,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::Delete { name } => {
                 if let Some((_, holder)) = self.state.repositories.remove(&name) {
-                    if let Err(error) = holder.base.repository.close().await {
+                    if let Err(error) = holder.repository.close().await {
                         tracing::error!(?error, "failed to close repository");
                     }
                 }
@@ -207,15 +211,24 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 let store_path = self.state.store_path(&name);
 
-                let holder = repository::open(
+                let repository = repository::open(
                     store_path,
                     password,
                     &self.state.config,
-                    &self.state.network,
                     &self.state.repositories_monitor,
                 )
                 .await?;
-                let holder = RepositoryHolder::new(holder);
+                let repository = Arc::new(repository);
+                let registration = self
+                    .state
+                    .network
+                    .register(repository.store().clone())
+                    .await;
+                let holder = RepositoryHolder {
+                    repository,
+                    registration,
+                    mount_guard: None,
+                };
 
                 match self.state.repositories.entry(name) {
                     Entry::Vacant(entry) => {
@@ -242,7 +255,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .state
                     .repositories
                     .get(&name)
-                    .map(|r| r.value().base.repository.clone())
+                    .map(|r| r.value().repository.clone())
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 repository::create_share_token(&repository, password, mode, Some(name))
@@ -260,7 +273,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
                     holder.mount_guard = Some(ouisync_vfs::mount(
                         runtime::Handle::current(),
-                        holder.base.repository.clone(),
+                        holder.repository.clone(),
                         mount_path,
                     )?);
                 } else {
@@ -274,7 +287,7 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                         entry.mount_guard = Some(ouisync_vfs::mount(
                             runtime::Handle::current(),
-                            entry.base.repository.clone(),
+                            entry.repository.clone(),
                             mount_path,
                         )?);
                     }
@@ -375,10 +388,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_dht_enabled(enabled).await;
+                    holder.registration.set_dht_enabled(enabled).await;
                     Ok(().into())
                 } else {
-                    Ok(holder.base.registration.is_dht_enabled().into())
+                    Ok(holder.registration.is_dht_enabled().into())
                 }
             }
             Request::Pex {
@@ -392,10 +405,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_pex_enabled(enabled).await;
+                    holder.registration.set_pex_enabled(enabled).await;
                     Ok(().into())
                 } else {
-                    Ok(holder.base.registration.is_pex_enabled().into())
+                    Ok(holder.registration.is_pex_enabled().into())
                 }
             }
         }
