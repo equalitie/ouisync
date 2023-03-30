@@ -2,12 +2,12 @@ use super::{
     barrier::{Barrier, BarrierError},
     client::Client,
     connection::ConnectionPermit,
+    constants::MAX_REQUESTS_IN_FLIGHT,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, RecvError, Role, SendError},
     message::{Content, MessageChannel, Request, Response},
     message_dispatcher::{ContentSink, ContentStream, MessageDispatcher},
     peer_exchange::{PexAnnouncer, PexController, PexDiscoverySender},
     raw,
-    request::MAX_REQUESTS_IN_FLIGHT,
     runtime_id::PublicRuntimeId,
     server::Server,
 };
@@ -356,12 +356,12 @@ async fn send_messages(
 async fn run_client(
     store: Store,
     content_tx: mpsc::Sender<Content>,
-    response_rx: mpsc::Receiver<Response>,
+    mut response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(store, content_tx, response_rx, request_limiter);
+    let mut client = Client::new(store, content_tx, request_limiter);
 
-    match client.run().await {
+    match client.run(&mut response_rx).await {
         Ok(()) => forever().await,
         Err(_) => ControlFlow::Continue,
     }

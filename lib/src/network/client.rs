@@ -1,35 +1,32 @@
 use super::{
-    message::{Content, Request, Response, ResponseDisambiguator},
-    request::{CompoundPermit, PendingRequests, MAX_REQUESTS_IN_FLIGHT},
+    constants::MAX_PENDING_RESPONSES,
+    debug_payload::{DebugReceivedResponse, DebugRequest},
+    message::{Content, Response, ResponseDisambiguator},
+    pending::{CompoundPermit, PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block::{BlockData, BlockId, BlockNonce, BlockTrackerClient},
-    crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
+    crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     repository_stats::RepositoryStats,
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;
-use std::{collections::VecDeque, future, sync::Arc, time::Instant};
+use std::{future, pin::pin, sync::Arc, time::Instant};
 use tokio::{
     select,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
+    sync::{mpsc, Semaphore},
 };
 use tracing::instrument;
 
-// Maximum number of respones that a `Client` received but had not yet processed before the client
-// is allowed to send more requests.
-pub(super) const MAX_PENDING_RESPONSES: usize = MAX_REQUESTS_IN_FLIGHT;
-
 pub(super) struct Client {
     store: Store,
-    rx: mpsc::Receiver<Response>,
     pending_requests: Arc<PendingRequests>,
-    request_tx: mpsc::UnboundedSender<(Request, Instant)>,
-    recv_queue: VecDeque<(Success, Option<OwnedSemaphorePermit>)>,
+    request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
+    //recv_queue: VecDeque<(PendingResponse, Option<OwnedSemaphorePermit>)>,
     receive_filter: ReceiveFilter,
-    block_tracker: BlockTrackerClient,
+    block_tracker: Arc<BlockTrackerClient>,
     _request_sender: ScopedJoinHandle<()>,
 }
 
@@ -37,11 +34,10 @@ impl Client {
     pub fn new(
         store: Store,
         tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Response>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pool = store.db().clone();
-        let block_tracker = store.block_tracker.client();
+        let block_tracker = Arc::new(store.block_tracker.client());
 
         let pending_requests = Arc::new(PendingRequests::new(store.stats().clone()));
 
@@ -56,91 +52,101 @@ impl Client {
 
         Self {
             store,
-            rx,
             pending_requests,
             request_tx,
-            recv_queue: VecDeque::new(),
+            //recv_queue: VecDeque::new(),
             receive_filter: ReceiveFilter::new(pool),
             block_tracker,
             _request_sender: request_sender,
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         self.receive_filter.reset().await?;
 
+        let mut block_promise_acceptor = self.block_tracker.acceptor();
+        let request_tx = self.request_tx.clone();
+        let pending_requests = self.pending_requests.clone();
+
+        // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
+        // some unsolicited responses and also the peer may be malicious and send us too many
+        // responses (so we shoulnd't use unbounded_channel).
+        let (queued_responses_tx, queued_responses_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
+
+        let mut response_handler = pin!(self.handle_responses(queued_responses_rx));
+
+        // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
+        // with response handling. It is because response handling may take a long time (e.g. due
+        // to acquiring database write transaction if there are other write transactions currently
+        // going on - such as when forking) and so waiting for it could cause some requests in
+        // `pending_requests` to time out.
         loop {
             select! {
-                block_id = self.block_tracker.accept() => {
-                    self.enqueue_request(Request::Block(block_id));
+                block_promise = block_promise_acceptor.accept() => {
+                    let debug = DebugRequest::start();
+                    // Unwrap OK because the sending task never returns.
+                    request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
                 }
-                response = self.rx.recv() => {
+                response = rx.recv() => {
                     if let Some(response) = response {
-                        self.enqueue_response(response)?;
+                        if let Some(response) = pending_requests.remove(response) {
+                            if queued_responses_tx.send(response).await.is_err() {
+                                break;
+                            }
+                        }
                     } else {
                         break;
                     }
                 }
-                _ = self.pending_requests.expired() => return Err(Error::RequestTimeout),
-            }
-
-            while let Some((response, _permit)) = self.dequeue_response() {
-                self.handle_response(response).await?;
+                _ = &mut response_handler => break,
             }
         }
 
         Ok(())
     }
 
-    fn enqueue_request(&mut self, request: Request) {
+    fn enqueue_request(&self, request: PendingRequest) {
         // Unwrap OK because the sending task never returns.
         self.request_tx.send((request, Instant::now())).unwrap();
     }
 
-    fn enqueue_response(&mut self, response: Response) -> Result<()> {
-        let response = ProcessedResponse::from(response);
-        let request = response.to_request();
-
-        let permit = if let Some(permit) = self.pending_requests.remove(&request) {
-            Some(permit)
-        } else {
-            // Only `RootNode` response is allowed to be unsolicited
-            if !matches!(request, Request::RootNode(_)) {
-                // Unsolicited response
-                return Ok(());
-            }
-            None
-        };
-
-        match response {
-            ProcessedResponse::Success(response) => {
-                self.recv_queue.push_front((response, permit));
-            }
-            ProcessedResponse::Failure(request) => {
-                tracing::trace!(?request, "request failed");
-
-                match request {
-                    Failure::Block(block_id) => {
-                        self.block_tracker.cancel(&block_id);
-                    }
-                    Failure::RootNode(_) | Failure::ChildNodes { .. } => (),
-                }
-            }
+    async fn handle_responses(
+        &mut self,
+        mut queued_responses_rx: mpsc::Receiver<PendingResponse>,
+    ) -> Result<()> {
+        loop {
+            match queued_responses_rx.recv().await {
+                Some(response) => self.handle_response(response).await?,
+                None => return Ok(()),
+            };
         }
-
-        Ok(())
     }
 
-    fn dequeue_response(&mut self) -> Option<(Success, Option<OwnedSemaphorePermit>)> {
-        self.recv_queue.pop_back()
-    }
-
-    async fn handle_response(&mut self, response: Success) -> Result<()> {
+    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
         let result = match response {
-            Success::RootNode { proof, summary } => self.handle_root_node(proof, summary).await,
-            Success::InnerNodes(nodes, _) => self.handle_inner_nodes(nodes).await,
-            Success::LeafNodes(nodes, _) => self.handle_leaf_nodes(nodes).await,
-            Success::Block { data, nonce } => self.handle_block(data, nonce).await,
+            PendingResponse::RootNode {
+                proof,
+                summary,
+                permit: _permit,
+                debug,
+            } => self.handle_root_node(proof, summary, debug).await,
+            PendingResponse::InnerNodes {
+                hash,
+                permit: _permit,
+                debug,
+            } => self.handle_inner_nodes(hash, debug).await,
+            PendingResponse::LeafNodes {
+                hash,
+                permit: _permit,
+                debug,
+            } => self.handle_leaf_nodes(hash, debug).await,
+            PendingResponse::Block {
+                data,
+                nonce,
+                block_promise,
+                permit: _permit,
+                debug,
+            } => self.handle_block(data, nonce, block_promise, debug).await,
         };
 
         match result {
@@ -160,18 +166,20 @@ impl Client {
         err(Debug)
     )]
     async fn handle_root_node(
-        &mut self,
+        &self,
         proof: UntrustedProof,
         summary: Summary,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
         let updated = self.store.index.receive_root_node(proof, summary).await?;
 
         if updated {
             tracing::trace!("received updated root node");
-            self.enqueue_request(Request::ChildNodes(
+            self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(summary.block_presence),
+                DebugRequest::start(),
             ));
         } else {
             tracing::trace!("received outdated root node");
@@ -184,13 +192,17 @@ impl Client {
     async fn handle_inner_nodes(
         &mut self,
         nodes: CacheHash<InnerNodeMap>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
+
         let (updated_nodes, completed_branches) = self
             .store
             .index
             .receive_inner_nodes(nodes, &mut self.receive_filter)
             .await?;
+
+        let debug = DebugRequest::start();
 
         tracing::trace!(
             "received {}/{} inner nodes: {:?}",
@@ -203,16 +215,17 @@ impl Client {
         );
 
         for node in updated_nodes {
-            self.enqueue_request(Request::ChildNodes(
+            self.enqueue_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
+                debug,
             ));
         }
 
         // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
         // for explanation.
         for branch_id in completed_branches {
-            self.enqueue_request(Request::RootNode(branch_id));
+            self.enqueue_request(PendingRequest::RootNode(branch_id, debug));
         }
 
         Ok(())
@@ -222,6 +235,7 @@ impl Client {
     async fn handle_leaf_nodes(
         &mut self,
         nodes: CacheHash<LeafNodeSet>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
         let (updated_blocks, completed_branches) =
@@ -262,7 +276,7 @@ impl Client {
         // By requesting the root node again immediatelly, we ensure that the missing block is
         // requested as soon as possible.
         for branch_id in completed_branches {
-            self.enqueue_request(Request::RootNode(branch_id));
+            self.enqueue_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
         }
 
         Ok(())
@@ -273,6 +287,9 @@ impl Client {
         &mut self,
         data: BlockData,
         nonce: BlockNonce,
+        // We need to preserve the lifetime of `_block_promise` until the response is processed.
+        _block_promise: Option<BlockPromise>,
+        _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         match self.store.write_received_block(&data, &nonce).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
@@ -290,9 +307,9 @@ fn start_sender(
     stats: Arc<RepositoryStats>,
 ) -> (
     ScopedJoinHandle<()>,
-    mpsc::UnboundedSender<(Request, Instant)>,
+    mpsc::UnboundedSender<(PendingRequest, Instant)>,
 ) {
-    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
 
     let handle = scoped_task::spawn({
         async move {
@@ -326,6 +343,8 @@ fn start_sender(
                     .write()
                     .note_request_queue_duration(Instant::now() - time_created);
 
+                let msg = request.to_message();
+
                 if !pending_requests.insert(request, send_permit) {
                     // The same request is already in-flight.
                     continue;
@@ -333,7 +352,7 @@ fn start_sender(
 
                 stats.write().total_requests_cummulative += 1;
 
-                tx.send(Content::Request(request)).await.unwrap_or(());
+                tx.send(Content::Request(msg)).await.unwrap_or(());
             }
 
             // Don't exist so we don't need to check whether `request_tx.send()` fails or not.
@@ -342,74 +361,4 @@ fn start_sender(
     });
 
     (handle, request_tx)
-}
-
-enum ProcessedResponse {
-    Success(Success),
-    Failure(Failure),
-}
-
-impl ProcessedResponse {
-    fn to_request(&self) -> Request {
-        match self {
-            Self::Success(Success::RootNode { proof, .. }) => Request::RootNode(proof.writer_id),
-            Self::Success(Success::InnerNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
-            }
-            Self::Success(Success::LeafNodes(nodes, disambiguator)) => {
-                Request::ChildNodes(nodes.hash(), *disambiguator)
-            }
-            Self::Success(Success::Block { data, .. }) => Request::Block(data.id),
-            Self::Failure(Failure::RootNode(branch_id)) => Request::RootNode(*branch_id),
-            Self::Failure(Failure::ChildNodes(hash, disambiguator)) => {
-                Request::ChildNodes(*hash, *disambiguator)
-            }
-            Self::Failure(Failure::Block(block_id)) => Request::Block(*block_id),
-        }
-    }
-}
-
-impl From<Response> for ProcessedResponse {
-    fn from(response: Response) -> Self {
-        match response {
-            Response::RootNode { proof, summary } => {
-                Self::Success(Success::RootNode { proof, summary })
-            }
-            Response::InnerNodes(nodes, disambiguator) => {
-                Self::Success(Success::InnerNodes(nodes.into(), disambiguator))
-            }
-            Response::LeafNodes(nodes, disambiguator) => {
-                Self::Success(Success::LeafNodes(nodes.into(), disambiguator))
-            }
-            Response::Block { content, nonce } => Self::Success(Success::Block {
-                data: content.into(),
-                nonce,
-            }),
-            Response::RootNodeError(branch_id) => Self::Failure(Failure::RootNode(branch_id)),
-            Response::ChildNodesError(hash, disambiguator) => {
-                Self::Failure(Failure::ChildNodes(hash, disambiguator))
-            }
-            Response::BlockError(block_id) => Self::Failure(Failure::Block(block_id)),
-        }
-    }
-}
-
-enum Success {
-    RootNode {
-        proof: UntrustedProof,
-        summary: Summary,
-    },
-    InnerNodes(CacheHash<InnerNodeMap>, ResponseDisambiguator),
-    LeafNodes(CacheHash<LeafNodeSet>, ResponseDisambiguator),
-    Block {
-        data: BlockData,
-        nonce: BlockNonce,
-    },
-}
-
-#[derive(Debug)]
-enum Failure {
-    RootNode(PublicKey),
-    ChildNodes(Hash, ResponseDisambiguator),
-    Block(BlockId),
 }

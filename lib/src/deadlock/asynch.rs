@@ -1,5 +1,10 @@
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
+use scoped_task::{spawn, ScopedJoinHandle};
 use std::future::Future;
+use std::{fmt, panic::Location, time::Duration};
+use tokio::time::sleep;
+
+//------------------------------------------------------------------------------
 
 /// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
 pub struct Mutex<T> {
@@ -25,3 +30,35 @@ impl<T> Mutex<T> {
 }
 
 pub type MutexGuard<'a, T> = DeadlockGuard<tokio::sync::MutexGuard<'a, T>>;
+
+//------------------------------------------------------------------------------
+
+pub(crate) struct ExpectShortLifetime {
+    _watcher: ScopedJoinHandle<()>,
+}
+
+impl ExpectShortLifetime {
+    #[track_caller]
+    pub fn new(max_lifetime: Duration) -> Self {
+        let file_and_line = Location::caller();
+        Self::new_at(max_lifetime, file_and_line)
+    }
+
+    pub fn new_at(max_lifetime: Duration, file_and_line: &'static Location<'static>) -> Self {
+        Self {
+            _watcher: spawn(async move {
+                sleep(max_lifetime.into()).await;
+                println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                println!("Expected short lifetime, but exceeded {:?}", max_lifetime);
+                println!("{:?}", file_and_line);
+                println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+            }),
+        }
+    }
+}
+
+impl fmt::Debug for ExpectShortLifetime {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ExpectShortLifetime")
+    }
+}
