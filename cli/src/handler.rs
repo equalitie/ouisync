@@ -204,20 +204,11 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 let store_path = self.state.store_path(&name);
 
-                // Try to delete all three files even if any of them fail, then return the first
-                // error (if any)
-                // TODO: this should be moved to `lib`
-                future::join_all(
-                    ["", "-wal", "-shm"]
-                        .into_iter()
-                        .map(|suffix| fs::remove_file(format!("{store_path}-{suffix}"))),
-                )
-                .await
-                .into_iter()
-                .find_map(Result::err)
-                .map(Err)
-                .unwrap_or(Ok(().into()))
-                .map_err(Error::Io)
+                ouisync_lib::delete_repository(store_path)
+                    .await
+                    .map_err(Error::Io)?;
+
+                Ok(().into())
             }
             Request::Open { name, password } => {
                 if self.state.repositories.contains_key(&name) {
