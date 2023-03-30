@@ -1,11 +1,12 @@
 use crate::{
+    async_walkdir,
     options::{Dirs, Request, Response},
-    APP_NAME,
+    DB_EXTENSION,
 };
 use async_trait::async_trait;
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use dashmap::{mapref::entry::Entry, DashMap};
-use futures_util::future;
+use futures_util::{future, StreamExt};
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
@@ -20,6 +21,8 @@ use ouisync_lib::{
 use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
+
+const OPEN_ON_START: &str = "open_on_start";
 
 pub(crate) struct State {
     config: ConfigStore,
@@ -49,13 +52,17 @@ impl State {
         )
         .await;
 
+        let repositories_monitor = monitor.make_child("Repositories");
+        let repositories =
+            open_repositories(&dirs.store_dir, &network, &config, &repositories_monitor).await;
+
         Self {
             config,
             store_dir: dirs.store_dir.clone(),
             mount_dir: dirs.mount_dir.clone(),
             network,
-            repositories: DashMap::new(),
-            repositories_monitor: monitor.make_child("Repositories"),
+            repositories,
+            repositories_monitor,
         }
     }
 
@@ -84,9 +91,7 @@ impl State {
     }
 
     fn store_path(&self, name: &str) -> Utf8PathBuf {
-        self.store_dir
-            .join(name)
-            .with_extension(format!("{APP_NAME}db"))
+        self.store_dir.join(name).with_extension(DB_EXTENSION)
     }
 
     fn mount_path(&self, name: &str) -> Utf8PathBuf {
@@ -165,6 +170,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     &self.state.repositories_monitor,
                 )
                 .await?;
+
+                repository.metadata().set(OPEN_ON_START, true).await.ok();
+
                 let repository = Arc::new(repository);
                 let registration = self
                     .state
@@ -218,6 +226,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     &self.state.repositories_monitor,
                 )
                 .await?;
+
+                repository.metadata().set(OPEN_ON_START, true).await.ok();
+
                 let repository = Arc::new(repository);
                 let registration = self
                     .state
@@ -239,10 +250,18 @@ impl ouisync_bridge::transport::Handler for Handler {
                 }
             }
             Request::Close { name } => {
-                self.state
+                let (_, holder) = self
+                    .state
                     .repositories
                     .remove(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, false) // TODO: use remove()
+                    .await
+                    .ok();
 
                 Ok(().into())
             }
@@ -413,4 +432,73 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
         }
     }
+}
+
+// Find repositories that are marked to be opened on startup and open them.
+async fn open_repositories(
+    store_path: &Utf8Path,
+    network: &Network,
+    config: &ConfigStore,
+    monitor: &StateMonitor,
+) -> DashMap<String, RepositoryHolder> {
+    let mut walkdir = async_walkdir::new(store_path);
+    let repositories = DashMap::new();
+
+    while let Some(entry) = walkdir.next().await {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::error!(?error, "failed to read directory entry");
+                continue;
+            }
+        };
+
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path: &Utf8Path = match entry.path().try_into() {
+            Ok(path) => path,
+            Err(_) => {
+                tracing::error!(path = ?entry.path(), "invalid repository path - not utf8");
+                continue;
+            }
+        };
+
+        if path.extension() != Some(DB_EXTENSION) {
+            continue;
+        }
+
+        let repository = match repository::open(path.to_path_buf(), None, config, monitor).await {
+            Ok(repository) => repository,
+            Err(error) => {
+                tracing::error!(?error, ?path, "failed to open repository");
+                continue;
+            }
+        };
+
+        let metadata = repository.metadata();
+
+        if !metadata.get(OPEN_ON_START).await.unwrap_or(false) {
+            continue;
+        }
+
+        let repository = Arc::new(repository);
+        let registration = network.register(repository.store().clone()).await;
+        let holder = RepositoryHolder {
+            repository,
+            registration,
+            mount_guard: None,
+        };
+
+        let key = path
+            .strip_prefix(store_path)
+            .unwrap_or(path)
+            .as_str()
+            .to_owned();
+
+        repositories.insert(key, holder);
+    }
+
+    repositories
 }

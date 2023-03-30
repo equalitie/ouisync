@@ -30,8 +30,10 @@ ouisync-vfs = { path = "../vfs" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
 tokio-tungstenite = "0.18.0"
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
+walkdir = "2.3.3"
 
 [dev-dependencies]
 backoff = "0.4.0"
