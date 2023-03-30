@@ -467,10 +467,15 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
     let end = load_block_count_hint(src_branch, blob_id).await?;
     let mut locators = Locator::head(blob_id).sequence().take(end as usize);
-    let mut running = true;
 
-    while running {
-        let mut tx = src_branch.db().begin_write().await?;
+    let mut i = 0;
+
+    loop {
+        i += 1;
+
+        // Use a shared transaction for forking to "yield" a transaction to the networking code
+        // when needed.
+        let mut tx = src_branch.db().begin_shared_write().await?;
 
         let src_snapshot = src_branch.data().load_snapshot(&mut tx).await?;
         let mut dst_snapshot = dst_branch
@@ -478,40 +483,41 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             .load_or_create_snapshot(&mut tx, write_keys)
             .await?;
 
-        for _ in 0..BATCH_SIZE {
-            let Some(locator) = locators.next() else {
-                running = false;
-                break;
+        let Some(locator) = locators.next() else {
+            tx.commit().await?;
+            break;
+        };
+
+        let encoded_locator = locator.encode(read_key);
+
+        let (block_id, block_presence) =
+            match src_snapshot.get_block(&mut tx, &encoded_locator).await {
+                Ok(block) => block,
+                Err(Error::EntryNotFound) => {
+                    // end of the blob
+                    tx.commit().await?;
+                    break;
+                }
+                Err(error) => return Err(error),
             };
 
-            let encoded_locator = locator.encode(read_key);
+        // It can happen that the current and dst branches are different, but the blob has
+        // already been forked by some other task in the meantime. In that case this
+        // `insert` is a no-op. We still proceed normally to maintain idempotency.
+        dst_snapshot
+            .insert_block(
+                &mut tx,
+                &encoded_locator,
+                &block_id,
+                block_presence,
+                write_keys,
+            )
+            .await?;
 
-            let (block_id, block_presence) =
-                match src_snapshot.get_block(&mut tx, &encoded_locator).await {
-                    Ok(block) => block,
-                    Err(Error::EntryNotFound) => {
-                        // end of the blob
-                        running = false;
-                        break;
-                    }
-                    Err(error) => return Err(error),
-                };
-
-            // It can happen that the current and dst branches are different, but the blob has
-            // already been forked by some other task in the meantime. In that case this
-            // `insert` is a no-op. We still proceed normally to maintain idempotency.
-            dst_snapshot
-                .insert_block(
-                    &mut tx,
-                    &encoded_locator,
-                    &block_id,
-                    block_presence,
-                    write_keys,
-                )
-                .await?;
+        if i == BATCH_SIZE {
+            i = 0;
+            tx.commit().await?;
         }
-
-        tx.commit().await?;
     }
 
     Ok(())
