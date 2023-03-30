@@ -105,6 +105,19 @@ struct RepositoryHolder {
     mount_guard: Option<MountGuard>,
 }
 
+impl RepositoryHolder {
+    async fn new(repository: Repository, network: &Network) -> Self {
+        let repository = Arc::new(repository);
+        let registration = network.register(repository.store().clone()).await;
+
+        Self {
+            repository,
+            registration,
+            mount_guard: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Handler {
     state: Arc<State>,
@@ -173,20 +186,9 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 repository.metadata().set(OPEN_ON_START, true).await.ok();
 
-                let repository = Arc::new(repository);
-                let registration = self
-                    .state
-                    .network
-                    .register(repository.store().clone())
-                    .await;
-                let holder = RepositoryHolder {
-                    repository,
-                    registration,
-                    mount_guard: None,
-                };
-
                 tracing::info!(?name, "repository created");
 
+                let holder = RepositoryHolder::new(repository, &self.state.network).await;
                 self.state.repositories.insert(name, holder);
 
                 Ok(().into())
@@ -234,22 +236,11 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 repository.metadata().set(OPEN_ON_START, true).await.ok();
 
-                let repository = Arc::new(repository);
-                let registration = self
-                    .state
-                    .network
-                    .register(repository.store().clone())
-                    .await;
-                let holder = RepositoryHolder {
-                    repository,
-                    registration,
-                    mount_guard: None,
-                };
-
                 tracing::info!(?name, "repository opened");
 
                 match self.state.repositories.entry(name) {
                     Entry::Vacant(entry) => {
+                        let holder = RepositoryHolder::new(repository, &self.state.network).await;
                         entry.insert(holder);
                         Ok(().into())
                     }
@@ -500,14 +491,7 @@ async fn open_repositories(
 
         tracing::info!(?name, "repository opened");
 
-        let repository = Arc::new(repository);
-        let registration = network.register(repository.store().clone()).await;
-        let holder = RepositoryHolder {
-            repository,
-            registration,
-            mount_guard: None,
-        };
-
+        let holder = RepositoryHolder::new(repository, network).await;
         repositories.insert(name.to_owned(), holder);
     }
 
