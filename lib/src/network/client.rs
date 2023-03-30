@@ -2,7 +2,7 @@ use super::{
     constants::MAX_PENDING_RESPONSES,
     debug_payload::{DebugReceivedResponse, DebugRequest},
     message::{Content, Response, ResponseDisambiguator},
-    pending::{CompoundPermit, PendingRequest, PendingRequests, PendingResponse},
+    pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
     block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
@@ -334,18 +334,13 @@ fn start_sender(
 
                 let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
 
-                let send_permit = CompoundPermit {
-                    _peer_permit: peer_permit,
-                    client_permit,
-                };
-
                 stats
                     .write()
                     .note_request_queue_duration(Instant::now() - time_created);
 
                 let msg = request.to_message();
 
-                if !pending_requests.insert(request, send_permit) {
+                if !pending_requests.insert(request, peer_permit, client_permit) {
                     // The same request is already in-flight.
                     continue;
                 }

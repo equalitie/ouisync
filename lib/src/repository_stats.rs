@@ -90,6 +90,10 @@ impl<'a> Drop for Writer<'a> {
             state_monitor!(parent: self.span, block_requests_inflight = self.lock.block_requests_inflight);
         }
 
+        if self.lock.pending_requests != self.old.pending_requests {
+            state_monitor!(parent: self.span, pending_requests = self.lock.pending_requests);
+        }
+
         if self.lock.total_requests_cummulative != self.old.total_requests_cummulative {
             state_monitor!(parent: self.span, total_requests_cummulative = self.lock.total_requests_cummulative);
         }
@@ -182,6 +186,7 @@ pub(crate) struct Values {
     // UI to indicate that the index is being synchronized.
     pub index_requests_inflight: u64,
     pub block_requests_inflight: u64,
+    pub pending_requests: u64,
     pub total_requests_cummulative: u64,
     pub request_timeouts: u64,
 

@@ -53,24 +53,24 @@ pub(super) enum PendingResponse {
     RootNode {
         proof: UntrustedProof,
         summary: Summary,
-        permit: Option<OwnedSemaphorePermit>,
+        permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
     InnerNodes {
         hash: CacheHash<InnerNodeMap>,
-        permit: Option<OwnedSemaphorePermit>,
+        permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
     LeafNodes {
         hash: CacheHash<LeafNodeSet>,
-        permit: Option<OwnedSemaphorePermit>,
+        permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
     Block {
         data: BlockData,
         nonce: BlockNonce,
         block_promise: Option<BlockPromise>,
-        permit: Option<OwnedSemaphorePermit>,
+        permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
 }
@@ -96,7 +96,12 @@ impl PendingRequests {
         }
     }
 
-    pub fn insert(&self, pending_request: PendingRequest, permit: CompoundPermit) -> bool {
+    pub fn insert(
+        &self,
+        pending_request: PendingRequest,
+        peer_permit: OwnedSemaphorePermit,
+        client_permit: OwnedSemaphorePermit,
+    ) -> bool {
         match self.map.lock().unwrap().entry(pending_request.to_key()) {
             Entry::Occupied(_) => false,
             Entry::Vacant(entry) => {
@@ -111,7 +116,8 @@ impl PendingRequests {
                 entry.insert(RequestData {
                     timestamp: Instant::now(),
                     block_promise,
-                    permit,
+                    _peer_permit: peer_permit,
+                    client_permit,
                 });
                 self.request_added(&msg);
                 true
@@ -128,7 +134,7 @@ impl PendingRequests {
 
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
-            let permit = Some(request_data.permit.client_permit);
+            let permit = Some(ClientPermit(request_data.client_permit, self.stats.clone()));
 
             match response {
                 ProcessedResponse::Success(success) => {
@@ -205,6 +211,8 @@ impl PendingRequests {
 }
 
 fn stats_request_added(stats: &mut repository_stats::Writer, key: &Key) {
+    stats.pending_requests += 1;
+
     match key {
         Key::RootNode(_) | Key::ChildNodes { .. } => stats.index_requests_inflight += 1,
         Key::Block(_) => stats.block_requests_inflight += 1,
@@ -280,16 +288,16 @@ impl Drop for PendingRequests {
 struct RequestData {
     timestamp: Instant,
     block_promise: Option<BlockPromise>,
-    permit: CompoundPermit,
+    _peer_permit: OwnedSemaphorePermit,
+    client_permit: OwnedSemaphorePermit,
 }
 
-// When sending requests, we need to limit it in two ways:
-//
-// 1. Limit how many requests we send to the peer across all repositories, and
-// 2. Limit sending requests from a Client if too many responses are queued up.
-pub(super) struct CompoundPermit {
-    pub _peer_permit: OwnedSemaphorePermit,
-    pub client_permit: OwnedSemaphorePermit,
+pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryStats>);
+
+impl Drop for ClientPermit {
+    fn drop(&mut self) {
+        self.1.write().pending_requests -= 1;
+    }
 }
 
 mod processed_response {
