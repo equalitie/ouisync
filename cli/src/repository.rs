@@ -8,7 +8,7 @@ use ouisync_lib::{
 use ouisync_vfs::MountGuard;
 use std::{
     collections::HashMap,
-    mem,
+    io, mem,
     sync::{Arc, Mutex, RwLock},
 };
 use tokio::{fs, runtime, task};
@@ -57,15 +57,19 @@ impl RepositoryHolder {
         let point = point.map(|point| self.resolve_mount_point(point, mount_dir));
 
         let mount = if let Some(point) = point {
-            if let Err(error) = fs::create_dir_all(&point).await {
-                tracing::error!(
-                    name = self.name,
-                    mount_point = %point,
-                    ?error,
-                    "failed to create mount point"
-                );
-                return Err(error.into());
-            }
+            let depth = match create_mount_point(&point).await {
+                Ok(depth) => depth,
+                Err(error) => {
+                    tracing::error!(
+                        name = self.name,
+                        mount_point = %point,
+                        ?error,
+                        "failed to create mount point"
+                    );
+
+                    return Err(error.into());
+                }
+            };
 
             let guard = match ouisync_vfs::mount(
                 runtime::Handle::current(),
@@ -89,7 +93,8 @@ impl RepositoryHolder {
 
             Some(Mount {
                 point,
-                _guard: guard,
+                depth,
+                guard,
             })
         } else {
             None
@@ -103,8 +108,19 @@ impl RepositoryHolder {
     pub async fn unmount(&self) {
         let mount = self.mount.lock().unwrap().take();
 
-        if let Some(Mount { point, .. }) = mount {
-            remove_mount_point(&point, &self.name).await;
+        if let Some(Mount {
+            point,
+            depth,
+            guard,
+        }) = mount
+        {
+            // Make sure to unmount before attempting to remove the mount point.
+            drop(guard);
+
+            if let Err(error) = remove_mount_point(&point, depth).await {
+                tracing::error!(name = self.name, mount_point = %point, ?error, "failed to remove mount point");
+            }
+
             tracing::info!(name = self.name, mount_point = %point, "repository unmounted");
         }
     }
@@ -126,19 +142,26 @@ impl Drop for RepositoryHolder {
     fn drop(&mut self) {
         let repository = self.repository.clone();
         let name = self.name.clone();
-        let mount_point = self.mount.lock().unwrap().take().map(|mount| mount.point);
+        let mount = self
+            .mount
+            .lock()
+            .unwrap()
+            .take()
+            .map(|mount| (mount.point, mount.depth));
 
         task::spawn(async move {
-            if let Some(mount_point) = mount_point {
-                remove_mount_point(&mount_point, &name).await;
+            if let Some((point, depth)) = mount {
+                if let Err(error) = remove_mount_point(&point, depth).await {
+                    tracing::error!(name, mount_point = %point, ?error, "failed to remove mount point");
+                }
             }
 
             match repository.close().await {
                 Ok(()) => {
-                    tracing::info!(?name, "repository closed");
+                    tracing::info!(name, "repository closed");
                 }
                 Err(error) => {
-                    tracing::error!(?name, ?error, "failed to close repository");
+                    tracing::error!(name, ?error, "failed to close repository");
                 }
             }
         });
@@ -147,11 +170,57 @@ impl Drop for RepositoryHolder {
 
 struct Mount {
     point: Utf8PathBuf,
-    _guard: MountGuard,
+    // Number of trailing path components of `point` that were created by us. This is used to
+    // delete only the directories we created on unmount.
+    depth: u32,
+    guard: MountGuard,
 }
 
-async fn remove_mount_point(_mount_point: &Utf8Path, _repository_name: &str) {
-    // TODO
+/// Create the mount point directory and returns the number of trailing path components that were
+/// actually created. For example, if `path` is "/foo/bar/baz" and "/foo" already exists but not
+/// "/foo/bar" then it returns 2 (because it created "/foo/bar" and "/foo/bar/baz").
+async fn create_mount_point(path: &Utf8Path) -> io::Result<u32> {
+    let depth = {
+        let mut depth = 0;
+        let mut path = path;
+
+        loop {
+            if fs::try_exists(path).await? {
+                break;
+            }
+
+            if let Some(parent) = path.parent() {
+                path = parent;
+                depth += 1;
+            } else {
+                break;
+            }
+        }
+
+        depth
+    };
+
+    fs::create_dir_all(path).await?;
+
+    Ok(depth)
+}
+
+/// Remove the last `depth` components from `path`. For example, if `path` is "/foo/bar/baz" and
+/// `depth` is 2, it removes "/foo/bar/baz" and then "/foo/bar" but not "/foo".
+async fn remove_mount_point(path: &Utf8Path, depth: u32) -> io::Result<()> {
+    let mut path = path;
+
+    for _ in 0..depth {
+        fs::remove_dir(path).await?;
+
+        if let Some(parent) = path.parent() {
+            path = parent;
+        } else {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Default)]
