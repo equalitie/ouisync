@@ -4,7 +4,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use walkdir::{DirEntry, Error, WalkDir};
 
 /// Returns a stream that recursively walks a directory. This is an async version of `WalkDir`.
-pub(crate) fn new(root: impl AsRef<Path>) -> ReceiverStream<Result<DirEntry, Error>> {
+pub(crate) fn walk_dir(root: impl AsRef<Path>) -> ReceiverStream<Result<DirEntry, Error>> {
     let root = root.as_ref().to_owned();
 
     let (tx, rx) = mpsc::channel(1);
