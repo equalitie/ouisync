@@ -683,15 +683,22 @@ impl Inner {
 
         state_monitor!(state = "handshaking");
 
-        let that_runtime_id =
-            match perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await {
-                Ok(writer_id) => writer_id,
-                Err(HandshakeError::ProtocolVersionMismatch(their_version)) => {
-                    self.on_protocol_mismatch(their_version);
-                    return false;
-                }
-                Err(HandshakeError::BadMagic | HandshakeError::Fatal(_)) => return false,
-            };
+        let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
+
+        if let Err(error) = &handshake_result {
+            tracing::warn!("Handshake with {:?} failed: {:?}", permit.addr(), error);
+        }
+
+        let that_runtime_id = match handshake_result {
+            Ok(writer_id) => writer_id,
+            Err(HandshakeError::ProtocolVersionMismatch(their_version)) => {
+                self.on_protocol_mismatch(their_version);
+                return false;
+            }
+            Err(HandshakeError::Timeout | HandshakeError::BadMagic | HandshakeError::Fatal(_)) => {
+                return false
+            }
+        };
 
         tracing::trace!(that_runtime_id = ?that_runtime_id.as_public_key());
 
@@ -790,25 +797,33 @@ async fn perform_handshake(
     this_version: Version,
     this_runtime_id: &SecretRuntimeId,
 ) -> Result<PublicRuntimeId, HandshakeError> {
-    stream.write_all(MAGIC).await?;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+        stream.write_all(MAGIC).await?;
 
-    this_version.write_into(stream).await?;
+        this_version.write_into(stream).await?;
 
-    let mut that_magic = [0; MAGIC.len()];
-    stream.read_exact(&mut that_magic).await?;
+        let mut that_magic = [0; MAGIC.len()];
+        stream.read_exact(&mut that_magic).await?;
 
-    if MAGIC != &that_magic {
-        return Err(HandshakeError::BadMagic);
+        if MAGIC != &that_magic {
+            return Err(HandshakeError::BadMagic);
+        }
+
+        let that_version = Version::read_from(stream).await?;
+        if that_version > this_version {
+            return Err(HandshakeError::ProtocolVersionMismatch(that_version));
+        }
+
+        let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
+
+        Ok(that_runtime_id)
+    })
+    .await;
+
+    match result {
+        Ok(subresult) => subresult,
+        Err(_) => Err(HandshakeError::Timeout),
     }
-
-    let that_version = Version::read_from(stream).await?;
-    if that_version > this_version {
-        return Err(HandshakeError::ProtocolVersionMismatch(that_version));
-    }
-
-    let that_runtime_id = runtime_id::exchange(this_runtime_id, stream).await?;
-
-    Ok(that_runtime_id)
 }
 
 #[derive(Debug, Error)]
@@ -817,6 +832,8 @@ enum HandshakeError {
     ProtocolVersionMismatch(Version),
     #[error("bad magic")]
     BadMagic,
+    #[error("timeout")]
+    Timeout,
     #[error("fatal error")]
     Fatal(#[from] io::Error),
 }
