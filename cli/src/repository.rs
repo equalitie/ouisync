@@ -7,6 +7,7 @@ use ouisync_lib::{
 };
 use ouisync_vfs::MountGuard;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io, mem,
     sync::{Arc, Mutex, RwLock},
@@ -329,4 +330,67 @@ pub(crate) async fn find_all(
     }
 
     repositories
+}
+
+pub(crate) async fn delete_store(store_dir: &Utf8Path, repository_name: &str) -> io::Result<()> {
+    ouisync_lib::delete_repository(store_path(store_dir, repository_name)).await?;
+
+    // Remove ancestors directories up to `store_dir` but only if they are empty.
+    for dir in Utf8Path::new(repository_name).ancestors().skip(1) {
+        let path = store_dir.join(dir);
+
+        if path == store_dir {
+            break;
+        }
+
+        // TODO: When `io::ErrorKind::DirectoryNotEmpty` is stabilized, we should break only on that
+        // error and propagate the rest.
+        if let Err(error) = fs::remove_dir(&path).await {
+            tracing::error!(
+                name = repository_name,
+                %path,
+                ?error,
+                "failed to remove repository store subdirectory"
+            );
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn store_path(store_dir: &Utf8Path, repository_name: &str) -> Utf8PathBuf {
+    let suffix = Utf8Path::new(repository_name);
+    let extension = if let Some(extension) = suffix.extension() {
+        Cow::Owned(format!("{extension}.{DB_EXTENSION}"))
+    } else {
+        Cow::Borrowed(DB_EXTENSION)
+    };
+
+    store_dir.join(suffix).with_extension(extension)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_path_sanity_check() {
+        let store_dir = Utf8Path::new("/home/alice/ouisync/store");
+
+        assert_eq!(
+            store_path(store_dir, "foo"),
+            "/home/alice/ouisync/store/foo.ouisyncdb"
+        );
+
+        assert_eq!(
+            store_path(store_dir, "foo/bar"),
+            "/home/alice/ouisync/store/foo/bar.ouisyncdb"
+        );
+
+        assert_eq!(
+            store_path(store_dir, "foo/bar.baz"),
+            "/home/alice/ouisync/store/foo/bar.baz.ouisyncdb"
+        );
+    }
 }

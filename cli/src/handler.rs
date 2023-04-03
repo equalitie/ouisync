@@ -1,7 +1,6 @@
 use crate::{
     options::{Dirs, Request, Response},
     repository::{self, RepositoryHolder, RepositoryMap, OPEN_ON_START},
-    DB_EXTENSION,
 };
 use async_trait::async_trait;
 use camino::Utf8PathBuf;
@@ -82,7 +81,7 @@ impl State {
     }
 
     fn store_path(&self, name: &str) -> Utf8PathBuf {
-        self.store_dir.join(name).with_extension(DB_EXTENSION)
+        repository::store_path(&self.store_dir, name)
     }
 }
 
@@ -165,8 +164,7 @@ impl ouisync_bridge::transport::Handler for Handler {
             Request::Delete { name } => {
                 self.state.repositories.remove(&name);
 
-                let store_path = self.state.store_path(&name);
-                ouisync_lib::delete_repository(store_path)
+                repository::delete_store(&self.state.store_dir, &name)
                     .await
                     .map_err(Error::Io)?;
 
