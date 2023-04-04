@@ -3,6 +3,8 @@
 pub mod asynch;
 pub mod blocking;
 
+mod timer;
+
 use crate::debug;
 use slab::Slab;
 use std::{
