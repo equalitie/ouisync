@@ -361,7 +361,11 @@ async fn run_client(
 ) -> ControlFlow {
     let mut client = Client::new(store, content_tx, request_limiter);
 
-    match client.run(&mut response_rx).await {
+    let result = client.run(&mut response_rx).await;
+
+    tracing::debug!("Client stopped running with result {:?}", result);
+
+    match result {
         Ok(()) => forever().await,
         Err(_) => ControlFlow::Continue,
     }
@@ -375,7 +379,11 @@ async fn run_server(
 ) -> ControlFlow {
     let mut server = Server::new(index, content_tx, request_rx);
 
-    match server.run().await {
+    let result = server.run().await;
+
+    tracing::debug!("Server stopped running with result {:?}", result);
+
+    match result {
         Ok(()) => forever().await,
         Err(_) => ControlFlow::Continue,
     }
