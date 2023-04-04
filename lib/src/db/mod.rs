@@ -16,6 +16,7 @@ use sqlx::{
     Row, SqlitePool,
 };
 use std::{
+    fmt,
     future::Future,
     io,
     ops::{Deref, DerefMut},
@@ -91,7 +92,10 @@ impl Pool {
             let track_lifetime =
                 ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
-            Ok(PoolConnection(conn, track_lifetime))
+            Ok(PoolConnection {
+                inner: conn,
+                _track_lifetime: track_lifetime,
+            })
         }
     }
 
@@ -110,7 +114,10 @@ impl Pool {
             let track_lifetime =
                 ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
-            Ok(ReadTransaction(tx, track_lifetime))
+            Ok(ReadTransaction {
+                inner: tx,
+                track_lifetime: Some(track_lifetime),
+            })
         }
     }
 
@@ -145,7 +152,10 @@ impl Pool {
             let track_lifetime =
                 ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
-            Ok(WriteTransaction(ReadTransaction(tx, track_lifetime)))
+            Ok(WriteTransaction(ReadTransaction {
+                inner: tx,
+                track_lifetime: Some(track_lifetime),
+            }))
         }
     }
 
@@ -165,16 +175,27 @@ impl Pool {
         let location = Location::caller();
 
         async move {
-            let mut shared_tx = self.shared_tx.clone().lock_owned().await;
+            let mut guard = self.shared_tx.clone().lock_owned().await;
 
-            if shared_tx.is_none() {
-                let tx = self.write.begin().await?;
-                let track_lifetime =
-                    ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
-                *shared_tx = Some(WriteTransaction(ReadTransaction(tx, track_lifetime)));
-            }
+            let mut shared_tx = match &mut *guard {
+                Some(shared_tx) => shared_tx,
+                None => {
+                    let tx = self.write.begin().await?;
+                    let tx = ReadTransaction {
+                        inner: tx,
+                        track_lifetime: None,
+                    };
+                    let tx = WriteTransaction(tx);
 
-            Ok(SharedWriteTransaction(shared_tx))
+                    guard.get_or_insert(tx)
+                }
+            };
+
+            let track_lifetime =
+                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
+            shared_tx.0.track_lifetime = Some(track_lifetime);
+
+            Ok(SharedWriteTransaction(guard))
         }
     }
 
@@ -195,19 +216,22 @@ impl Pool {
 }
 
 /// Database connection from pool
-pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>, ExpectShortLifetime);
+pub(crate) struct PoolConnection {
+    inner: sqlx::pool::PoolConnection<Sqlite>,
+    _track_lifetime: ExpectShortLifetime,
+}
 
 impl Deref for PoolConnection {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        Connection::ref_cast(self.inner.deref())
     }
 }
 
 impl DerefMut for PoolConnection {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        Connection::ref_cast_mut(self.inner.deref_mut())
     }
 }
 
@@ -218,20 +242,28 @@ impl DerefMut for PoolConnection {
 /// transaction represents an immutable snapshot of the database at the point the transaction was
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
-#[derive(Debug)]
-pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>, ExpectShortLifetime);
+pub(crate) struct ReadTransaction {
+    inner: sqlx::Transaction<'static, Sqlite>,
+    track_lifetime: Option<ExpectShortLifetime>,
+}
 
 impl Deref for ReadTransaction {
     type Target = Connection;
 
     fn deref(&self) -> &Self::Target {
-        Connection::ref_cast(self.0.deref())
+        Connection::ref_cast(self.inner.deref())
     }
 }
 
 impl DerefMut for ReadTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Connection::ref_cast_mut(self.0.deref_mut())
+        Connection::ref_cast_mut(self.inner.deref_mut())
+    }
+}
+
+impl fmt::Debug for ReadTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ReadTransaction").finish_non_exhaustive()
     }
 }
 
@@ -243,7 +275,7 @@ pub(crate) struct WriteTransaction(ReadTransaction);
 
 impl WriteTransaction {
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.0 .0.commit().await
+        self.0.inner.commit().await
     }
 }
 
@@ -291,6 +323,16 @@ impl DerefMut for SharedWriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // `unwrap` is ok, see the NOTE above.
         self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for SharedWriteTransaction {
+    fn drop(&mut self) {
+        // The shared transaction is being released to the pool. We need to destroy the lifetime
+        // tracker otherwise it could trigger warning while being idle in the pool.
+        if let Some(tx) = &mut *self.0 {
+            tx.0.track_lifetime = None;
+        }
     }
 }
 

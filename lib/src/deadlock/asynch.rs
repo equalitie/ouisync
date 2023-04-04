@@ -1,7 +1,6 @@
 use crate::deadlock::{DeadlockGuard, DeadlockTracker};
 use scoped_task::{spawn, ScopedJoinHandle};
 use std::{
-    fmt,
     future::Future,
     panic::Location,
     sync::{
@@ -95,11 +94,5 @@ impl Drop for ExpectShortLifetime {
                 self.start_time.elapsed()
             );
         }
-    }
-}
-
-impl fmt::Debug for ExpectShortLifetime {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ExpectShortLifetime")
     }
 }
