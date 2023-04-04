@@ -30,6 +30,7 @@ use tempfile::TempDir;
 use thiserror::Error;
 use tokio::{
     fs,
+    // TODO: use `crate::deadlock::asynch::Mutex` here
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
 use tracing::Span;

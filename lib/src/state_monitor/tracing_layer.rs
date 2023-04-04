@@ -1,9 +1,9 @@
 use super::{MonitoredValue, StateMonitor};
-use crate::collections::{hash_map, HashMap};
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
+use crate::{
+    collections::{hash_map, HashMap},
+    deadlock::blocking::Mutex,
 };
+use std::{fmt, sync::Arc};
 use tracing::{
     event::Event,
     field::{Field, Visit},

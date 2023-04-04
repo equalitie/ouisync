@@ -2,8 +2,9 @@ use crate::{
     blob_id::BlobId,
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
+    deadlock::blocking::Mutex,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Protects blob from being garbage collected.
 pub(crate) struct BlobPin {

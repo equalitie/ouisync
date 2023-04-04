@@ -6,12 +6,13 @@ use crate::{
     block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
+    deadlock::blocking::Mutex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository_stats::{self, RepositoryStats},
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::{select, sync::OwnedSemaphorePermit, time};
 

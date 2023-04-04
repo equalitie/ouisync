@@ -3,8 +3,9 @@
 use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
+    deadlock::blocking::Mutex,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct BranchPinner {

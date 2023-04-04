@@ -2,7 +2,7 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::HashMap;
+use crate::{collections::HashMap, deadlock::blocking::Mutex};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -16,7 +16,7 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Weak,
     },
     time::SystemTime,
 };

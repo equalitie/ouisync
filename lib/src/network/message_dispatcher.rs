@@ -9,6 +9,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map, HashMap, HashSet},
+    deadlock::blocking::Mutex,
     iterator::IntoIntersection,
 };
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 use tokio::{

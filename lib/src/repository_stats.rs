@@ -1,6 +1,7 @@
+use crate::deadlock::blocking::{Mutex, MutexGuard};
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::Arc,
     time::Duration,
 };
 use tracing::Span;

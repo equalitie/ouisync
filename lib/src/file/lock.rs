@@ -3,8 +3,8 @@
 //! For simplicity, concurrent writes to the same file are currently not allowed but this should
 //! change in the future. See also https://github.com/equalitie/ouisync/issues/96
 
-use crate::{blob_id::BlobId, collections::HashSet};
-use std::sync::{Arc, Mutex};
+use crate::{blob_id::BlobId, collections::HashSet, deadlock::blocking::Mutex};
+use std::sync::Arc;
 
 /// Lock that permits write access to a file.
 pub(crate) struct FileWriteLock {

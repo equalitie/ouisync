@@ -32,10 +32,8 @@ pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) mod env {
     use super::*;
     use futures_util::future;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use ouisync::deadlock::blocking::Mutex;
+    use std::{collections::HashMap, sync::Arc};
     use tokio::{
         runtime::{self, Runtime},
         task::JoinHandle,

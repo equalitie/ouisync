@@ -15,12 +15,13 @@ const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A Mutex that reports to the standard output when it's not released within WARNING_TIMEOUT
 /// duration.
+#[derive(Default)]
 pub struct Mutex<T: ?Sized> {
     inner: sync::Mutex<T>,
 }
 
 impl<T> Mutex<T> {
-    pub fn new(t: T) -> Self {
+    pub const fn new(t: T) -> Self {
         Self {
             inner: sync::Mutex::new(t),
         }

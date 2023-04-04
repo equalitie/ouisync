@@ -12,12 +12,13 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
+    deadlock::blocking::Mutex,
     sync::uninitialized_watch,
 };
 use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::{
     pin, select,
     sync::{mpsc, watch},

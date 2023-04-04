@@ -1,10 +1,10 @@
 use super::BlockId;
-use crate::collections::{hash_map::Entry, HashMap, HashSet};
-use slab::Slab;
-use std::{
-    fmt,
-    sync::{Arc, Mutex as BlockingMutex},
+use crate::{
+    collections::{hash_map::Entry, HashMap, HashSet},
+    deadlock::blocking::Mutex as BlockingMutex,
 };
+use slab::Slab;
+use std::{fmt, sync::Arc};
 use tokio::sync::watch;
 
 /// Helper for tracking required missing blocks.

@@ -1,5 +1,8 @@
 use super::ip;
-use crate::collections::{hash_map, HashMap};
+use crate::{
+    collections::{hash_map, HashMap},
+    deadlock::blocking::Mutex,
+};
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -13,7 +16,7 @@ use std::{
     fmt,
     future::Future,
     io, net,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Weak},
     time::SystemTime,
 };
 use tokio::{
