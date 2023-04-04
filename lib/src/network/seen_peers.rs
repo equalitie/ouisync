@@ -1,6 +1,9 @@
 use super::PeerAddr;
-use crate::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use crate::{
+    collections::{HashMap, HashSet},
+    deadlock::BlockingRwLock,
+};
+use std::sync::Arc;
 
 /// When a peer is found using some discovery mechanisms (local discovery, DHT, PEX, ...), the
 /// networking code will try to connect to it. However, if connecting to the peer fails we would
@@ -17,13 +20,13 @@ const REMOVE_AFTER_ROUND_COUNT: u64 = 2;
 
 #[derive(Clone)]
 pub(crate) struct SeenPeers {
-    inner: Arc<RwLock<SeenPeersInner>>,
+    inner: Arc<BlockingRwLock<SeenPeersInner>>,
 }
 
 impl SeenPeers {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(SeenPeersInner::new())),
+            inner: Arc::new(BlockingRwLock::new(SeenPeersInner::new())),
         }
     }
 
@@ -91,7 +94,11 @@ impl SeenPeersInner {
 
     /// Returns `Some(SeenPeer)` if the peer has not been seen in the last
     /// REMOVE_AFTER_ROUND_COUNT rounds.
-    fn insert(&mut self, addr: PeerAddr, ext: &Arc<RwLock<SeenPeersInner>>) -> Option<SeenPeer> {
+    fn insert(
+        &mut self,
+        addr: PeerAddr,
+        ext: &Arc<BlockingRwLock<SeenPeersInner>>,
+    ) -> Option<SeenPeer> {
         let round = self.rounds.entry(self.current_round_id).or_default();
 
         if !round.insert(addr) {
@@ -132,7 +139,7 @@ impl SeenPeersInner {
         self.peers.remove(addr);
     }
 
-    fn collect(&mut self, ext: &Arc<RwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
+    fn collect(&mut self, ext: &Arc<BlockingRwLock<SeenPeersInner>>) -> Vec<SeenPeer> {
         self.peers
             .iter_mut()
             .filter_map(|(addr, (rc, rounds))| {
@@ -152,7 +159,7 @@ impl SeenPeersInner {
 
 pub(crate) struct SeenPeer {
     addr: PeerAddr,
-    seen_peers: Arc<RwLock<SeenPeersInner>>,
+    seen_peers: Arc<BlockingRwLock<SeenPeersInner>>,
 }
 
 impl SeenPeer {

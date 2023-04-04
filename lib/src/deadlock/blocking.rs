@@ -25,23 +25,7 @@ impl<T: ?Sized> Mutex<T> {
         let context = Context::new(Location::caller());
         let id = super::schedule(WARNING_TIMEOUT, context);
 
-        let lock_result = self
-            .inner
-            .lock()
-            .map(|inner| MutexGuard { id, inner })
-            .map_err(|err| {
-                sync::PoisonError::new(MutexGuard {
-                    id,
-                    inner: err.into_inner(),
-                })
-            });
-
-        if lock_result.is_err() {
-            // MutexGuard was not created, so we need to remove it ourselves.
-            super::cancel(id);
-        }
-
-        lock_result
+        map(self.inner.lock(), |inner| MutexGuard { id, inner })
     }
 }
 
@@ -50,13 +34,19 @@ pub struct MutexGuard<'a, T: ?Sized + 'a> {
     inner: sync::MutexGuard<'a, T>,
 }
 
-impl<'a, T: ?Sized> Drop for MutexGuard<'a, T> {
+impl<T> Drop for MutexGuard<'_, T>
+where
+    T: ?Sized,
+{
     fn drop(&mut self) {
         super::cancel(self.id);
     }
 }
 
-impl<'a, T: ?Sized> Deref for MutexGuard<'a, T> {
+impl<T> Deref for MutexGuard<'_, T>
+where
+    T: ?Sized,
+{
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -64,8 +54,120 @@ impl<'a, T: ?Sized> Deref for MutexGuard<'a, T> {
     }
 }
 
-impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
+impl<T> DerefMut for MutexGuard<'_, T>
+where
+    T: ?Sized,
+{
     fn deref_mut(&mut self) -> &mut T {
         self.inner.deref_mut()
+    }
+}
+
+/// A RwLock that reports to the standard output when it's not released within WARNING_TIMEOUT
+/// duration.
+pub struct RwLock<T: ?Sized> {
+    inner: sync::RwLock<T>,
+}
+
+impl<T> RwLock<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: sync::RwLock::new(value),
+        }
+    }
+
+    pub fn read(&self) -> sync::LockResult<RwLockReadGuard<'_, T>> {
+        let context = Context::new(Location::caller());
+        let id = super::schedule(WARNING_TIMEOUT, context);
+
+        map(self.inner.read(), move |inner| RwLockReadGuard {
+            id,
+            inner,
+        })
+    }
+
+    pub fn write(&self) -> sync::LockResult<RwLockWriteGuard<'_, T>> {
+        let context = Context::new(Location::caller());
+        let id = super::schedule(WARNING_TIMEOUT, context);
+
+        map(self.inner.write(), move |inner| RwLockWriteGuard {
+            id,
+            inner,
+        })
+    }
+}
+
+pub struct RwLockReadGuard<'a, T>
+where
+    T: ?Sized + 'a,
+{
+    id: Id,
+    inner: sync::RwLockReadGuard<'a, T>,
+}
+
+impl<T> Drop for RwLockReadGuard<'_, T>
+where
+    T: ?Sized,
+{
+    fn drop(&mut self) {
+        super::cancel(self.id);
+    }
+}
+
+impl<T> Deref for RwLockReadGuard<'_, T>
+where
+    T: ?Sized,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+pub struct RwLockWriteGuard<'a, T>
+where
+    T: ?Sized + 'a,
+{
+    id: Id,
+    inner: sync::RwLockWriteGuard<'a, T>,
+}
+
+impl<T> Drop for RwLockWriteGuard<'_, T>
+where
+    T: ?Sized,
+{
+    fn drop(&mut self) {
+        super::cancel(self.id);
+    }
+}
+
+impl<T> Deref for RwLockWriteGuard<'_, T>
+where
+    T: ?Sized,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T> DerefMut for RwLockWriteGuard<'_, T>
+where
+    T: ?Sized,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
+}
+
+fn map<S, T, F>(result: sync::LockResult<S>, f: F) -> sync::LockResult<T>
+where
+    F: FnOnce(S) -> T,
+{
+    match result {
+        Ok(inner) => Ok(f(inner)),
+        Err(error) => Err(sync::PoisonError::new(f(error.into_inner()))),
     }
 }

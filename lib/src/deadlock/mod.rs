@@ -8,7 +8,10 @@ mod timer;
 pub(crate) use self::expect_short_lifetime::ExpectShortLifetime;
 pub use self::{
     async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard},
-    blocking::{Mutex as BlockingMutex, MutexGuard as BlockingMutexGuard},
+    blocking::{
+        Mutex as BlockingMutex, MutexGuard as BlockingMutexGuard, RwLock as BlockingRwLock,
+        RwLockReadGuard as BlockingRwLockReadGuard, RwLockWriteGuard as BlockingRwLockWriteGuard,
+    },
 };
 
 use self::timer::{Id, Timer};
