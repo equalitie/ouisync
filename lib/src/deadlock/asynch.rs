@@ -51,7 +51,7 @@ pub(crate) struct ExpectShortLifetime {
 }
 
 impl ExpectShortLifetime {
-    pub fn new(max_lifetime: Duration, file_and_line: &'static Location<'static>) -> Self {
+    pub fn new(max_lifetime: Duration, location: &'static Location<'static>) -> Self {
         let id = NEXT_EXPECT_SHORT_LIFETIME_ID.fetch_add(1, Ordering::SeqCst);
 
         let start_time = Instant::now();
@@ -68,13 +68,12 @@ impl ExpectShortLifetime {
 
                 if !*lock {
                     *lock = true;
-                    println!("ExpectShortLifetime: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    println!(
-                        "ExpectShortLifetime: Expected short lifetime, but exceeded {:?} (ID:{})",
-                        max_lifetime, id
+                    tracing::warn!(
+                        %location,
+                        id,
+                        "ExpectShortLifetime: Expected short lifetime, but exceeded {:?}",
+                        max_lifetime,
                     );
-                    println!("{:?}", file_and_line);
-                    println!("ExpectShortLifetime: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
                 }
             }),
         }
@@ -90,9 +89,9 @@ impl Drop for ExpectShortLifetime {
             *lock = true;
         } else {
             // The watcher printed the message.
-            println!(
-                "ExpectShortLifetime: Previously reported task with ID:{} eventually took {:?} to finish",
-                self.id,
+            tracing::warn!(
+                id = self.id,
+                "ExpectShortLifetime: Previously reported task eventually took {:?} to finish",
                 self.start_time.elapsed()
             );
         }
