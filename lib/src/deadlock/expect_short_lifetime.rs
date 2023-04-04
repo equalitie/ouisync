@@ -1,8 +1,9 @@
+use super::Context;
 use scoped_task::{spawn, ScopedJoinHandle};
 use std::{
     panic::Location,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -14,7 +15,7 @@ static NEXT_EXPECT_SHORT_LIFETIME_ID: AtomicUsize = AtomicUsize::new(0);
 pub(crate) struct ExpectShortLifetime {
     id: usize,
     start_time: Instant,
-    shared: Arc<std::sync::Mutex<bool>>,
+    fired: Arc<AtomicBool>,
     _watcher: ScopedJoinHandle<()>,
 }
 
@@ -23,24 +24,22 @@ impl ExpectShortLifetime {
         let id = NEXT_EXPECT_SHORT_LIFETIME_ID.fetch_add(1, Ordering::SeqCst);
 
         let start_time = Instant::now();
-        let shared = Arc::new(std::sync::Mutex::new(false));
+        let fired = Arc::new(AtomicBool::new(false));
+        let context = Context::new(location);
 
         Self {
             id,
             start_time,
-            shared: shared.clone(),
+            fired: fired.clone(),
             _watcher: spawn(async move {
                 sleep(max_lifetime).await;
 
-                let mut lock = shared.lock().unwrap();
-
-                if !*lock {
-                    *lock = true;
+                if !fired.swap(true, Ordering::SeqCst) {
                     tracing::warn!(
-                        %location,
                         id,
-                        "ExpectShortLifetime: Expected short lifetime, but exceeded {:?}",
+                        "ExpectShortLifetime: Expected short lifetime, but exceeded {:?} at\n{}",
                         max_lifetime,
+                        context,
                     );
                 }
             }),
@@ -50,12 +49,7 @@ impl ExpectShortLifetime {
 
 impl Drop for ExpectShortLifetime {
     fn drop(&mut self) {
-        let mut lock = self.shared.lock().unwrap();
-
-        if !*lock {
-            // The watcher did not print yet, mark it so it won't in the future.
-            *lock = true;
-        } else {
+        if self.fired.swap(true, Ordering::SeqCst) {
             // The watcher printed the message.
             tracing::warn!(
                 id = self.id,

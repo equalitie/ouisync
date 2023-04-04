@@ -1,12 +1,12 @@
 use super::{
     timer::{Id, Timer},
-    WARNING_TIMEOUT,
+    Context, WARNING_TIMEOUT,
 };
 use core::ops::{Deref, DerefMut};
 use once_cell::sync::Lazy;
-use std::{backtrace::Backtrace, panic::Location, sync, thread, time::Instant};
+use std::{panic::Location, sync, thread, time::Instant};
 
-static TIMER: Timer<WatchedEntry> = Timer::new();
+static TIMER: Timer<Context> = Timer::new();
 static WATCHING_THREAD: Lazy<thread::JoinHandle<()>> = Lazy::new(|| thread::spawn(watching_thread));
 
 /// A Mutex that reports to the standard output when it's not released within WARNING_TIMEOUT
@@ -33,12 +33,9 @@ impl<T: ?Sized> Mutex<T> {
         // `Mutex::new` function?
         let _ = *WATCHING_THREAD;
 
-        let entry = WatchedEntry {
-            file_and_line: Location::caller(),
-            backtrace: Backtrace::capture(),
-        };
+        let context = Context::new(Location::caller());
         let deadline = Instant::now() + WARNING_TIMEOUT;
-        let entry_id = TIMER.schedule(deadline, entry);
+        let entry_id = TIMER.schedule(deadline, context);
 
         let lock_result = self
             .inner
@@ -92,20 +89,15 @@ impl<'a, T: ?Sized> DerefMut for MutexGuard<'a, T> {
     }
 }
 
-struct WatchedEntry {
-    file_and_line: &'static Location<'static>,
-    backtrace: Backtrace,
-}
-
 fn watching_thread() {
     loop {
-        let (entry_id, entry) = TIMER.wait();
+        let (entry_id, context) = TIMER.wait();
 
         // Using `println!` and not `tracing::*` to avoid circular dependencies because on
         // Android tracing uses `StateMonitor` which uses these mutexes.
         println!(
-            "Possible blocking deadlock (id:{}) at:\n{}\n{}\n",
-            entry_id, entry.file_and_line, entry.backtrace
+            "Possible blocking deadlock (id:{}) at:\n{}\n",
+            entry_id, context,
         );
     }
 }
