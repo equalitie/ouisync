@@ -1,3 +1,4 @@
+use ouisync_lib::deadlock::BlockingRwLock;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -6,15 +7,15 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc,
     },
 };
 
-pub struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
+pub struct Registry<T>(BlockingRwLock<HashMap<u64, Arc<T>>>);
 
 impl<T> Registry<T> {
     pub fn new() -> Self {
-        Self(RwLock::new(HashMap::new()))
+        Self(BlockingRwLock::new(HashMap::new()))
     }
 
     pub fn vacant_entry(&self) -> VacantEntry<T> {

@@ -4,7 +4,7 @@ use ouisync_bridge::{
     error::{Error, Result},
     repository::RepositoryHolder,
 };
-use ouisync_lib::{deadlock::asynch::Mutex as AsyncMutex, Branch, File};
+use ouisync_lib::{deadlock::AsyncMutex, Branch, File};
 use std::{convert::TryInto, io::SeekFrom};
 
 pub struct FileHolder {

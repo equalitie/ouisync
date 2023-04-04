@@ -1,9 +1,9 @@
 use super::{MonitoredValue, StateMonitor};
-use crate::collections::{hash_map, HashMap};
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
+use crate::{
+    collections::{hash_map, HashMap},
+    deadlock::BlockingMutex,
 };
+use std::{fmt, sync::Arc};
 use tracing::{
     event::Event,
     field::{Field, Visit},
@@ -17,7 +17,7 @@ use tracing_subscriber::{
 
 #[derive(Clone, Default)]
 pub struct TracingLayer {
-    inner: Arc<Mutex<Option<TraceLayerInner>>>,
+    inner: Arc<BlockingMutex<Option<TraceLayerInner>>>,
 }
 
 impl TracingLayer {

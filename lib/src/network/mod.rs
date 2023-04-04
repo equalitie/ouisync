@@ -45,6 +45,7 @@ pub use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
+    deadlock::BlockingMutex,
     repository::RepositoryId,
     store::Store,
     sync::uninitialized_watch,
@@ -58,7 +59,7 @@ use std::{
     future::Future,
     io, mem,
     net::SocketAddr,
-    sync::{Arc, Mutex as BlockingMutex, Weak},
+    sync::{Arc, Weak},
 };
 use thiserror::Error;
 use tokio::{

@@ -1,139 +1,88 @@
 //! Utilities for deadlock detection
 
-pub mod asynch;
-pub mod blocking;
+mod async_mutex;
+mod blocking;
+mod expect_short_lifetime;
+mod timer;
 
-use crate::debug;
-use slab::Slab;
+pub(crate) use self::expect_short_lifetime::ExpectShortLifetime;
+pub use self::{
+    async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard},
+    blocking::{
+        Mutex as BlockingMutex, MutexGuard as BlockingMutexGuard, RwLock as BlockingRwLock,
+        RwLockReadGuard as BlockingRwLockReadGuard, RwLockWriteGuard as BlockingRwLockWriteGuard,
+    },
+};
+
+use self::timer::{Id, Timer};
+use once_cell::sync::Lazy;
 use std::{
     backtrace::Backtrace,
     fmt,
-    future::Future,
-    ops::{Deref, DerefMut},
     panic::Location,
-    sync::{Arc, Mutex as BlockingMutex},
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
-use tokio::time::Duration;
 
 const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
-// Wrapper for various lock guard types which logs a warning when a potential deadlock is detected.
-pub struct DeadlockGuard<T> {
-    inner: T,
-    _acquire: Acquire,
-}
-
-impl<T> DeadlockGuard<T> {
-    #[track_caller]
-    pub(crate) fn wrap<F>(inner: F, tracker: DeadlockTracker) -> impl Future<Output = Self>
-    where
-        F: Future<Output = T>,
-    {
-        let acquire = tracker.acquire();
-
-        async move {
-            let inner = detect_deadlock(inner, &tracker).await;
-
-            Self {
-                inner,
-                _acquire: acquire,
-            }
-        }
-    }
-}
-
-impl<T> Deref for DeadlockGuard<T>
-where
-    T: Deref,
-{
-    type Target = T::Target;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.deref()
-    }
-}
-
-impl<T> DerefMut for DeadlockGuard<T>
-where
-    T: DerefMut,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.deref_mut()
-    }
-}
-
-struct LockLocation {
-    // NOTE: In release build, the backtrace contains some useful information, but not the actual
-    // line where the `acquire` function was called for, thus we include the `Location` as well as
-    // it's cheap and useful.
-    file_and_line: &'static Location<'static>,
+struct Context {
+    start_time: Instant,
+    location: &'static Location<'static>,
     backtrace: Backtrace,
 }
 
-/// Tracks all locations when a given lock is currently being acquired.
-#[derive(Clone)]
-pub(crate) struct DeadlockTracker {
-    locations: Arc<BlockingMutex<Slab<LockLocation>>>,
-}
-
-impl DeadlockTracker {
-    pub fn new() -> Self {
+impl Context {
+    fn new(location: &'static Location<'static>) -> Self {
         Self {
-            locations: Arc::new(BlockingMutex::new(Slab::new())),
-        }
-    }
-
-    #[track_caller]
-    fn acquire(&self) -> Acquire {
-        let file_and_line = Location::caller();
-        let backtrace = Backtrace::capture();
-
-        let key = self.locations.lock().unwrap().insert(LockLocation {
-            file_and_line,
-            backtrace,
-        });
-
-        Acquire {
-            locations: self.locations.clone(),
-            key,
+            start_time: Instant::now(),
+            location,
+            backtrace: Backtrace::capture(),
         }
     }
 }
 
-impl fmt::Display for DeadlockTracker {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut locations = self.locations.lock().unwrap();
-
-        for (_, location) in &mut *locations {
-            write!(f, "\n{}\n{:?}", location.file_and_line, location.backtrace)?;
-        }
-
-        Ok(())
-    }
-}
-
-struct DeadlockMessage<'a>(&'a DeadlockTracker);
-
-impl fmt::Display for DeadlockMessage<'_> {
+impl fmt::Display for Context {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "potential deadlock at:{}", self.0)
+        write!(
+            f,
+            "elapsed: {:?}, started at: {}\nbacktrace:\n{}",
+            self.start_time.elapsed(),
+            self.location,
+            self.backtrace
+        )
     }
 }
 
-struct Acquire {
-    locations: Arc<BlockingMutex<Slab<LockLocation>>>,
-    key: usize,
+static TIMER: Timer<Context> = Timer::new();
+static WATCHING_THREAD: Lazy<JoinHandle<()>> = Lazy::new(|| thread::spawn(watching_thread));
+
+fn schedule(duration: Duration, context: Context) -> Id {
+    // Make sure the thread is instantiated.
+    let _ = *WATCHING_THREAD;
+    let deadline = Instant::now() + duration;
+
+    TIMER.schedule(deadline, context)
 }
 
-impl Drop for Acquire {
-    fn drop(&mut self) {
-        self.locations.lock().unwrap().remove(self.key);
+fn cancel(id: Id) {
+    if TIMER.cancel(id).is_none() {
+        println!(
+            "🐢🐢🐢 Previously reported task (id: {}) eventually completed 🐢🐢🐢",
+            id
+        );
     }
 }
 
-async fn detect_deadlock<F>(inner: F, tracker: &DeadlockTracker) -> F::Output
-where
-    F: Future,
-{
-    debug::warn_slow(WARNING_TIMEOUT, DeadlockMessage(tracker), inner).await
+fn watching_thread() {
+    loop {
+        let (id, context) = TIMER.wait();
+
+        // Using `println!` and not `tracing::*` to avoid circular dependencies because on
+        // Android tracing uses `StateMonitor` which uses these mutexes.
+        println!(
+            "🐢🐢🐢 Task taking too long (id: {}) 🐢🐢🐢\n{}\n",
+            id, context
+        );
+    }
 }

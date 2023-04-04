@@ -1,12 +1,13 @@
+use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::Arc,
     time::Duration,
 };
 use tracing::Span;
 
 pub(crate) struct RepositoryStats {
-    values: Arc<Mutex<Values>>,
+    values: Arc<BlockingMutex<Values>>,
     span: Span,
     request_queue_durations: Span,
     request_inflight_durations: Span,
@@ -17,7 +18,7 @@ pub(crate) struct RepositoryStats {
 
 impl RepositoryStats {
     pub fn new(span: Span) -> Self {
-        let values = Arc::new(Mutex::new(Values::default()));
+        let values = Arc::new(BlockingMutex::new(Values::default()));
 
         let request_queue_durations =
             tracing::info_span!(parent: span.clone(), "request_queue_durations");
@@ -56,7 +57,7 @@ impl RepositoryStats {
 }
 
 pub(crate) struct Writer<'a> {
-    lock: MutexGuard<'a, Values>,
+    lock: BlockingMutexGuard<'a, Values>,
     old: Values,
     span: &'a Span,
     request_queue_durations: &'a Span,

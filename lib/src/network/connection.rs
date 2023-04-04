@@ -1,11 +1,14 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
-use crate::collections::{hash_map::Entry, HashMap};
+use crate::{
+    collections::{hash_map::Entry, HashMap},
+    deadlock::BlockingMutex,
+};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex as SyncMutex,
+        Arc,
     },
 };
 
@@ -32,7 +35,7 @@ pub enum PeerState {
 /// Prevents establishing duplicate connections.
 pub(super) struct ConnectionDeduplicator {
     next_id: AtomicU64,
-    connections: Arc<SyncMutex<HashMap<ConnectionInfo, Peer>>>,
+    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
     on_change_tx: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -42,7 +45,7 @@ impl ConnectionDeduplicator {
 
         Self {
             next_id: AtomicU64::new(0),
-            connections: Arc::new(SyncMutex::new(HashMap::default())),
+            connections: Arc::new(BlockingMutex::new(HashMap::default())),
             on_change_tx: Arc::new(tx),
         }
     }
@@ -191,7 +194,7 @@ impl ConnectionDirection {
 /// Connection permit that prevents another connection to the same peer (socket address) to be
 /// established as long as it remains in scope.
 pub(super) struct ConnectionPermit {
-    connections: Arc<SyncMutex<HashMap<ConnectionInfo, Peer>>>,
+    connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
     info: ConnectionInfo,
     id: u64,
     on_release: AwaitDrop,
@@ -271,7 +274,7 @@ impl ConnectionPermit {
         let on_release = DropAwaitable::new().subscribe();
 
         Self {
-            connections: Arc::new(SyncMutex::new(HashMap::default())),
+            connections: Arc::new(BlockingMutex::new(HashMap::default())),
             info: ConnectionInfo {
                 addr: PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 0).into()),
                 dir: ConnectionDirection::Incoming,

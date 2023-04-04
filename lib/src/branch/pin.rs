@@ -3,12 +3,13 @@
 use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
+    deadlock::BlockingMutex,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct BranchPinner {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
 }
 
 struct Shared {
@@ -24,7 +25,7 @@ enum State {
 impl BranchPinner {
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(Mutex::new(Shared {
+            shared: Arc::new(BlockingMutex::new(Shared {
                 loads: 0,
                 branches: HashMap::new(),
             })),
@@ -82,7 +83,7 @@ impl BranchPinner {
 }
 
 pub(crate) struct BranchPin {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
     id: PublicKey,
 }
 
@@ -125,7 +126,7 @@ impl Drop for BranchPin {
 }
 
 pub(crate) struct LoadGuard {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
 }
 
 impl Drop for LoadGuard {
@@ -135,7 +136,7 @@ impl Drop for LoadGuard {
 }
 
 pub(crate) struct PruneGuard {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
     id: PublicKey,
 }
 

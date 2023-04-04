@@ -3,7 +3,10 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 use tokio::{
@@ -88,7 +91,7 @@ impl Connection {
         // anywhere else.
         let rx = self.rx.take().unwrap();
         let tx = self.tx.take();
-        let can_finish = Arc::new(RwLock::new(self.can_finish));
+        let can_finish = Arc::new(AtomicBool::new(self.can_finish));
         (
             OwnedReadHalf {
                 rx,
@@ -209,11 +212,11 @@ impl Drop for Connection {
 //------------------------------------------------------------------------------
 pub struct OwnedReadHalf {
     rx: quinn::RecvStream,
-    can_finish: Arc<RwLock<bool>>,
+    can_finish: Arc<AtomicBool>,
 }
 pub struct OwnedWriteHalf {
     tx: Option<quinn::SendStream>,
-    can_finish: Arc<RwLock<bool>>,
+    can_finish: Arc<AtomicBool>,
 }
 
 impl AsyncRead for OwnedReadHalf {
@@ -226,7 +229,7 @@ impl AsyncRead for OwnedReadHalf {
         let poll = Pin::new(&mut this.rx).poll_read(cx, buf);
         if let Poll::Ready(r) = &poll {
             if r.is_err() {
-                *this.can_finish.write().unwrap() = false;
+                this.can_finish.store(false, Ordering::SeqCst);
             }
         }
         poll
@@ -246,7 +249,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        *this.can_finish.write().unwrap() = false;
+                        this.can_finish.store(false, Ordering::SeqCst);
                     }
                 }
 
@@ -267,7 +270,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
                 if let Poll::Ready(r) = &poll {
                     if r.is_err() {
-                        *this.can_finish.write().unwrap() = false;
+                        this.can_finish.store(false, Ordering::SeqCst);
                     }
                 }
 
@@ -284,7 +287,7 @@ impl AsyncWrite for OwnedWriteHalf {
         let this = self.get_mut();
         match &mut this.tx {
             Some(tx) => {
-                *this.can_finish.write().unwrap() = false;
+                this.can_finish.store(false, Ordering::SeqCst);
                 Pin::new(tx).poll_shutdown(cx)
             }
             None => Poll::Ready(Err(io::Error::new(
@@ -297,7 +300,7 @@ impl AsyncWrite for OwnedWriteHalf {
 
 impl Drop for OwnedWriteHalf {
     fn drop(&mut self) {
-        if !*self.can_finish.read().unwrap() {
+        if !self.can_finish.load(Ordering::SeqCst) {
             return;
         }
 

@@ -9,6 +9,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map, HashMap, HashSet},
+    deadlock::BlockingMutex,
     iterator::IntoIntersection,
 };
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 use tokio::{
@@ -46,7 +47,7 @@ impl MessageDispatcher {
         Self {
             recv: Arc::new(RecvState {
                 reader: MultiStream::new(),
-                queues: Mutex::new(HashMap::default()),
+                queues: BlockingMutex::new(HashMap::default()),
                 queues_changed_tx,
             }),
             send: Arc::new(MultiSink::new()),
@@ -256,7 +257,7 @@ struct ChannelQueue {
 
 struct RecvState {
     reader: MultiStream,
-    queues: Mutex<HashMap<MessageChannel, ChannelQueue>>,
+    queues: BlockingMutex<HashMap<MessageChannel, ChannelQueue>>,
     queues_changed_tx: watch::Sender<()>,
 }
 
@@ -387,13 +388,13 @@ impl Sink<Message> for PermittedSink {
 
 // Stream that reads `Message`s from multiple underlying raw (byte) streams concurrently.
 struct MultiStream {
-    inner: Mutex<MultiStreamInner>,
+    inner: BlockingMutex<MultiStreamInner>,
 }
 
 impl MultiStream {
     fn new() -> Self {
         Self {
-            inner: Mutex::new(MultiStreamInner {
+            inner: BlockingMutex::new(MultiStreamInner {
                 streams: SelectAll::new(),
                 waker: None,
             }),
@@ -453,7 +454,7 @@ impl MultiStreamInner {
 
 // Future returned from [`MultiStream::recv`].
 struct Recv<'a> {
-    inner: &'a Mutex<MultiStreamInner>,
+    inner: &'a BlockingMutex<MultiStreamInner>,
 }
 
 impl Future for Recv<'_> {
@@ -482,14 +483,14 @@ impl Future for Recv<'_> {
 // provides an async `send` method.
 struct MultiSink {
     single_send: AsyncMutex<()>,
-    sinks: Mutex<Vec<PermittedSink>>,
+    sinks: BlockingMutex<Vec<PermittedSink>>,
 }
 
 impl MultiSink {
     fn new() -> Self {
         Self {
             single_send: AsyncMutex::new(()),
-            sinks: Mutex::new(Vec::new()),
+            sinks: BlockingMutex::new(Vec::new()),
         }
     }
 
@@ -540,7 +541,7 @@ impl MultiSink {
 // Future returned from [`MultiSink::send`].
 struct Send<'a> {
     message: Option<Message>,
-    sinks: &'a Mutex<Vec<PermittedSink>>,
+    sinks: &'a BlockingMutex<Vec<PermittedSink>>,
 }
 
 impl Future for Send<'_> {

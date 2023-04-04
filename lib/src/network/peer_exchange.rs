@@ -12,12 +12,13 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
+    deadlock::BlockingMutex,
     sync::uninitialized_watch,
 };
 use futures_util::stream;
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::{
     pin, select,
     sync::{mpsc, watch},
@@ -124,7 +125,7 @@ impl PexDiscoverySender {
 
 /// Peer exchange controller associated with a single repository.
 pub(super) struct PexController {
-    contacts: Arc<Mutex<ContactSet>>,
+    contacts: Arc<BlockingMutex<ContactSet>>,
     enabled_tx: watch::Sender<bool>,
     discovery_tx: mpsc::Sender<PexPayload>,
     // Notified when the global peer set changes.
@@ -143,7 +144,7 @@ impl PexController {
         let (link_tx, _) = uninitialized_watch::channel();
 
         Self {
-            contacts: Arc::new(Mutex::new(ContactSet::new())),
+            contacts: Arc::new(BlockingMutex::new(ContactSet::new())),
             enabled_tx,
             discovery_tx,
             peer_rx,
@@ -195,7 +196,7 @@ impl PexController {
 /// Utility to announce known contacts to a specific peer.
 pub(super) struct PexAnnouncer {
     peer_id: PublicRuntimeId,
-    contacts: Arc<Mutex<ContactSet>>,
+    contacts: Arc<BlockingMutex<ContactSet>>,
     enabled_rx: watch::Receiver<bool>,
     peer_rx: uninitialized_watch::Receiver<()>,
     link_rx: uninitialized_watch::Receiver<()>,

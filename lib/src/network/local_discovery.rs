@@ -3,7 +3,10 @@ use super::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::collections::{HashMap, HashSet};
+use crate::{
+    collections::{HashMap, HashSet},
+    deadlock::AsyncMutex,
+};
 use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
 use rand::Rng;
@@ -15,7 +18,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    sync::{mpsc, Mutex},
+    sync::mpsc,
     time::{sleep, Duration},
 };
 use tracing::Instrument;
@@ -352,14 +355,14 @@ enum Message {
 
 struct SocketProvider {
     interface: Ipv4Addr,
-    socket: Mutex<Option<Arc<UdpSocket>>>,
+    socket: AsyncMutex<Option<Arc<UdpSocket>>>,
 }
 
 impl SocketProvider {
     fn new(interface: Ipv4Addr) -> Self {
         Self {
             interface,
-            socket: Mutex::new(None),
+            socket: AsyncMutex::new(None),
         }
     }
 

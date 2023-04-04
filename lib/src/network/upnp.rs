@@ -1,5 +1,8 @@
 use super::ip;
-use crate::collections::{hash_map, HashMap};
+use crate::{
+    collections::{hash_map, HashMap},
+    deadlock::BlockingMutex,
+};
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
 use futures_util::{Stream, StreamExt};
@@ -13,7 +16,7 @@ use std::{
     fmt,
     future::Future,
     io, net,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Weak},
     time::SystemTime,
 };
 use tokio::{
@@ -32,22 +35,22 @@ struct TrackedDevice {
 }
 
 pub(crate) struct PortForwarder {
-    mappings: Arc<Mutex<Mappings>>,
+    mappings: Arc<BlockingMutex<Mappings>>,
     on_change_tx: Arc<watch::Sender<()>>,
-    task: Mutex<Weak<ScopedJoinHandle<()>>>,
+    task: BlockingMutex<Weak<ScopedJoinHandle<()>>>,
     span: Span,
 }
 
 impl PortForwarder {
     pub fn new() -> Self {
         let span = tracing::info_span!("UPnP");
-        let mappings = Arc::new(Mutex::new(Default::default()));
+        let mappings = Arc::new(BlockingMutex::new(Default::default()));
         let (on_change_tx, _) = watch::channel(());
 
         Self {
             mappings,
             on_change_tx: Arc::new(on_change_tx),
-            task: Mutex::new(Weak::new()),
+            task: BlockingMutex::new(Weak::new()),
             span,
         }
     }
@@ -114,7 +117,7 @@ impl PortForwarder {
     }
 
     async fn run(
-        mappings: Arc<Mutex<Mappings>>,
+        mappings: Arc<BlockingMutex<Mappings>>,
         on_change_rx: watch::Receiver<()>,
     ) -> Result<(), rupnp::Error> {
         // Devices may have a timeout period when they don't respond to repeated queries, the
@@ -128,7 +131,7 @@ impl PortForwarder {
 
         const ERROR_SLEEP_DURATION: Duration = Duration::from_secs(5);
 
-        let job_handles = Arc::new(Mutex::new(JobHandles::default()));
+        let job_handles = Arc::new(BlockingMutex::new(JobHandles::default()));
 
         let span = tracing::info_span!("devices");
 
@@ -231,7 +234,7 @@ impl PortForwarder {
 
     fn spawn_if_not_running<JobMaker, JobFuture>(
         device_url: Uri,
-        job_handles: &Arc<Mutex<JobHandles>>,
+        job_handles: &Arc<BlockingMutex<JobHandles>>,
         job: JobMaker,
     ) where
         JobMaker: FnOnce() -> JobFuture + Send + 'static,
@@ -294,7 +297,7 @@ type Mappings = HashMap<MappingData, usize>;
 pub(crate) struct Mapping {
     data: MappingData,
     on_change_tx: Arc<watch::Sender<()>>,
-    mappings: Arc<Mutex<Mappings>>,
+    mappings: Arc<BlockingMutex<Mappings>>,
     _task: Arc<ScopedJoinHandle<()>>,
 }
 
@@ -330,8 +333,8 @@ struct PerIGDPortForwarder {
     device_url: Uri,
     service: Service,
     on_change_rx: watch::Receiver<()>,
-    mappings: Arc<Mutex<Mappings>>,
-    active_mappings: Mutex<HashMap<MappingData, ScopedJoinHandle<()>>>,
+    mappings: Arc<BlockingMutex<Mappings>>,
+    active_mappings: BlockingMutex<HashMap<MappingData, ScopedJoinHandle<()>>>,
 }
 
 impl PerIGDPortForwarder {

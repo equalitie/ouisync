@@ -1,7 +1,7 @@
 pub mod tracing_layer;
 
 use crate::{
-    deadlock::blocking::{Mutex, MutexGuard},
+    deadlock::{BlockingMutex, BlockingMutexGuard},
     sync::uninitialized_watch,
 };
 use serde::{
@@ -134,7 +134,7 @@ struct StateMonitorShared {
     // changed.
     version: AtomicU64,
     parent: Option<StateMonitor>,
-    inner: Mutex<StateMonitorInner>,
+    inner: BlockingMutex<StateMonitorInner>,
 }
 
 struct StateMonitorInner {
@@ -195,7 +195,7 @@ impl StateMonitor {
                     parent: Some(Self {
                         shared: self.shared.clone(),
                     }),
-                    inner: Mutex::new(StateMonitorInner {
+                    inner: BlockingMutex::new(StateMonitorInner {
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
                         on_change: uninitialized_watch::channel().0,
@@ -249,7 +249,7 @@ impl StateMonitor {
         value: T,
     ) -> MonitoredValue<T> {
         let mut lock = self.shared.lock_inner();
-        let value = Arc::new(Mutex::new(value));
+        let value = Arc::new(BlockingMutex::new(value));
 
         match lock.values.entry(name.clone()) {
             btree_map::Entry::Vacant(e) => {
@@ -266,7 +266,7 @@ impl StateMonitor {
                 );
                 let v = e.get_mut();
                 v.refcount += 1;
-                v.ptr = Arc::new(Mutex::new("<AMBIGUOUS>"));
+                v.ptr = Arc::new(BlockingMutex::new("<AMBIGUOUS>"));
             }
         };
 
@@ -337,7 +337,7 @@ impl StateMonitorShared {
             id: MonitorId::root(),
             version: AtomicU64::new(0),
             parent: None,
-            inner: Mutex::new(StateMonitorInner {
+            inner: BlockingMutex::new(StateMonitorInner {
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
                 on_change: uninitialized_watch::channel().0,
@@ -367,7 +367,7 @@ impl StateMonitorShared {
         self.lock_inner().on_change.subscribe()
     }
 
-    fn changed(&self, lock: MutexGuard<'_, StateMonitorInner>) {
+    fn changed(&self, lock: BlockingMutexGuard<'_, StateMonitorInner>) {
         // The only important consideration here is that incrementing `version` happens before
         // `on_change` is notified so that whoever will pick it up will see `version` increased.
         self.version.fetch_add(1, Ordering::SeqCst);
@@ -381,7 +381,7 @@ impl StateMonitorShared {
         }
     }
 
-    fn lock_inner(&self) -> MutexGuard<'_, StateMonitorInner> {
+    fn lock_inner(&self) -> BlockingMutexGuard<'_, StateMonitorInner> {
         self.inner.lock().unwrap()
     }
 
@@ -415,7 +415,7 @@ impl StateMonitorShared {
 pub struct MonitoredValue<T> {
     name: String,
     monitor: StateMonitor,
-    value: Arc<Mutex<T>>,
+    value: Arc<BlockingMutex<T>>,
 }
 
 impl<T> Clone for MonitoredValue<T> {
@@ -446,7 +446,7 @@ impl<T> MonitoredValue<T> {
 pub struct MutexGuardWrap<'a, T> {
     monitor: StateMonitor,
     // This is only None in the destructor.
-    guard: Option<MutexGuard<'a, T>>,
+    guard: Option<BlockingMutexGuard<'a, T>>,
 }
 
 impl<'a, T> core::ops::Deref for MutexGuardWrap<'a, T> {
@@ -496,7 +496,7 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<Mutex<dyn fmt::Display + Sync + Send>>,
+    ptr: Arc<BlockingMutex<dyn fmt::Display + Sync + Send>>,
 }
 
 // --- Serialization
