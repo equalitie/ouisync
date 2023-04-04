@@ -1,15 +1,19 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
 use camino::{Utf8Path, Utf8PathBuf};
-use ouisync_bridge::{config::ConfigStore, error::Result};
+use ouisync_bridge::{
+    config::ConfigStore,
+    error::{Error, Result},
+};
 use ouisync_lib::{
     network::{Network, Registration},
     Repository, StateMonitor,
 };
 use ouisync_vfs::MountGuard;
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     collections::HashMap,
-    io, mem,
+    fmt, io, mem,
+    ops::Deref,
     sync::{Arc, Mutex, RwLock},
 };
 use tokio::{fs, runtime, task};
@@ -19,15 +23,81 @@ use tokio_stream::StreamExt;
 pub(crate) const OPEN_ON_START: &str = "open_on_start";
 pub(crate) const MOUNT_POINT: &str = "mount_point";
 
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub(crate) struct RepositoryName(Arc<str>);
+
+impl RepositoryName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RepositoryName {
+    type Error = InvalidRepositoryName;
+
+    fn try_from(input: String) -> Result<Self, Self::Error> {
+        if input.trim_start().starts_with('/') {
+            return Err(InvalidRepositoryName);
+        }
+
+        if input.contains("..") {
+            return Err(InvalidRepositoryName);
+        }
+
+        Ok(Self(input.into_boxed_str().into()))
+    }
+}
+
+impl fmt::Display for RepositoryName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<str> for RepositoryName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<Utf8Path> for RepositoryName {
+    fn as_ref(&self) -> &Utf8Path {
+        self.as_str().as_ref()
+    }
+}
+
+impl Borrow<str> for RepositoryName {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Deref for RepositoryName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InvalidRepositoryName;
+
+impl From<InvalidRepositoryName> for Error {
+    fn from(_: InvalidRepositoryName) -> Self {
+        Self::InvalidArgument
+    }
+}
+
 pub(crate) struct RepositoryHolder {
     pub repository: Arc<Repository>,
     pub registration: Registration,
-    name: String,
+    name: RepositoryName,
     mount: Mutex<Option<Mount>>,
 }
 
 impl RepositoryHolder {
-    pub async fn new(repository: Repository, name: String, network: &Network) -> Self {
+    pub async fn new(repository: Repository, name: RepositoryName, network: &Network) -> Self {
         let repository = Arc::new(repository);
         let registration = network.register(repository.store().clone()).await;
 
@@ -39,7 +109,7 @@ impl RepositoryHolder {
         }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &RepositoryName {
         &self.name
     }
 
@@ -62,7 +132,7 @@ impl RepositoryHolder {
                 Ok(depth) => depth,
                 Err(error) => {
                     tracing::error!(
-                        name = self.name,
+                        name = %self.name,
                         mount_point = %point,
                         ?error,
                         "failed to create mount point"
@@ -78,12 +148,12 @@ impl RepositoryHolder {
                 point.clone(),
             ) {
                 Ok(mount_guard) => {
-                    tracing::info!(name = self.name, mount_point = %point, "repository mounted");
+                    tracing::info!(name = %self.name, mount_point = %point, "repository mounted");
                     mount_guard
                 }
                 Err(error) => {
                     tracing::error!(
-                        name = self.name,
+                        name = %self.name,
                         mount_point = %point,
                         ?error,
                         "failed to mount repository"
@@ -119,10 +189,10 @@ impl RepositoryHolder {
             drop(guard);
 
             if let Err(error) = remove_mount_point(&point, depth).await {
-                tracing::error!(name = self.name, mount_point = %point, ?error, "failed to remove mount point");
+                tracing::error!(name = %self.name, mount_point = %point, ?error, "failed to remove mount point");
             }
 
-            tracing::info!(name = self.name, mount_point = %point, "repository unmounted");
+            tracing::info!(name = %self.name, mount_point = %point, "repository unmounted");
         }
     }
 
@@ -153,16 +223,16 @@ impl Drop for RepositoryHolder {
         task::spawn(async move {
             if let Some((point, depth)) = mount {
                 if let Err(error) = remove_mount_point(&point, depth).await {
-                    tracing::error!(name, mount_point = %point, ?error, "failed to remove mount point");
+                    tracing::error!(%name, mount_point = %point, ?error, "failed to remove mount point");
                 }
             }
 
             match repository.close().await {
                 Ok(()) => {
-                    tracing::info!(name, "repository closed");
+                    tracing::info!(%name, "repository closed");
                 }
                 Err(error) => {
-                    tracing::error!(name, ?error, "failed to close repository");
+                    tracing::error!(%name, ?error, "failed to close repository");
                 }
             }
         });
@@ -226,7 +296,7 @@ async fn remove_mount_point(path: &Utf8Path, depth: u32) -> io::Result<()> {
 
 #[derive(Default)]
 pub(crate) struct RepositoryMap {
-    inner: RwLock<HashMap<String, Arc<RepositoryHolder>>>,
+    inner: RwLock<HashMap<RepositoryName, Arc<RepositoryHolder>>>,
 }
 
 impl RepositoryMap {
@@ -318,9 +388,13 @@ pub(crate) async fn find_all(
             .strip_prefix(&dirs.store_dir)
             .unwrap_or(path)
             .with_extension("")
-            .into_string();
+            .into_string()
+            .try_into()
+            // This unwrap should be ok because RepositoryName is only not allowed to start with
+            // "/" or contain "..", none of which can happen here.
+            .unwrap();
 
-        tracing::info!(name, "repository opened");
+        tracing::info!(%name, "repository opened");
 
         let holder = RepositoryHolder::new(repository, name, network).await;
         let holder = Arc::new(holder);

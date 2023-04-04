@@ -1,6 +1,6 @@
 use crate::{
     options::{Dirs, Request, Response},
-    repository::{self, RepositoryHolder, RepositoryMap, OPEN_ON_START},
+    repository::{self, RepositoryHolder, RepositoryMap, RepositoryName, OPEN_ON_START},
 };
 use async_trait::async_trait;
 use camino::Utf8PathBuf;
@@ -66,7 +66,7 @@ impl State {
                 .map(|holder| async move {
                     if let Err(error) = holder.repository.close().await {
                         tracing::error!(
-                            name = holder.name(),
+                            name = %holder.name(),
                             ?error,
                             "failed to gracefully close repository"
                         );
@@ -137,7 +137,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
 
-                let store_path = self.state.store_path(&name);
+                let name = RepositoryName::try_from(name)?;
+
+                let store_path = self.state.store_path(name.as_ref());
                 let read_password = read_password.or_else(|| password.as_ref().cloned());
                 let write_password = write_password.or(password);
 
@@ -153,7 +155,7 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 repository.metadata().set(OPEN_ON_START, true).await.ok();
 
-                tracing::info!(name, "repository created");
+                tracing::info!(%name, "repository created");
 
                 let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
                 let holder = Arc::new(holder);
@@ -175,6 +177,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
 
+                let name = RepositoryName::try_from(name)?;
+
                 let store_path = self.state.store_path(&name);
 
                 let repository = ouisync_bridge::repository::open(
@@ -187,7 +191,7 @@ impl ouisync_bridge::transport::Handler for Handler {
 
                 repository.metadata().set(OPEN_ON_START, true).await.ok();
 
-                tracing::info!(name, "repository opened");
+                tracing::info!(%name, "repository opened");
 
                 let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
                 let holder = Arc::new(holder);
