@@ -463,7 +463,10 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
     // To avoid write-blocking the database for too long, we process the blocks in batches. This is
     // the number of blocks per batch.
-    const BATCH_SIZE: u32 = 32;
+    // TODO: It is currently set to 1 because the previous value (32) was found to have negative
+    // impact on network speed. The Client had to wait a long time to acquire a write transaction
+    // and that caused the incoming response messages to queue up.
+    const BATCH_SIZE: u32 = 1;
 
     let end = load_block_count_hint(src_branch, blob_id).await?;
     let mut locators = Locator::head(blob_id).sequence().take(end as usize);
