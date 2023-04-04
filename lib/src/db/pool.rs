@@ -1,13 +1,5 @@
-#[macro_use]
-mod macros;
+use super::{connection::Connection, migrations};
 
-mod connection;
-mod id;
-mod migrations;
-
-pub use id::DatabaseId;
-
-use crate::{deadlock::asynch::ExpectShortLifetime, repository_stats::RepositoryStats};
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
@@ -16,13 +8,10 @@ use sqlx::{
     Row, SqlitePool,
 };
 use std::{
-    future::Future,
     io,
     ops::{Deref, DerefMut},
-    panic::Location,
     path::Path,
     sync::Arc,
-    time::{Duration, Instant},
 };
 #[cfg(test)]
 use tempfile::TempDir;
@@ -31,25 +20,19 @@ use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
-use tracing::Span;
-
-const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
-
-pub(crate) use self::connection::Connection;
 
 /// Database connection pool.
 #[derive(Clone)]
-pub(crate) struct Pool {
+pub(super) struct Pool {
     // Pool with multiple read-only connections
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
     shared_tx: Arc<AsyncMutex<Option<WriteTransaction>>>,
-    stats: Arc<RepositoryStats>,
 }
 
 impl Pool {
-    async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+    pub async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
         let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -74,44 +57,17 @@ impl Pool {
             reads,
             write,
             shared_tx: Arc::new(AsyncMutex::new(None)),
-            stats: Arc::new(RepositoryStats::new(Span::current())),
         })
     }
 
     /// Acquire a read-only database connection.
-    #[track_caller]
-    pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> + '_ {
-        let location = Location::caller();
-
-        async move {
-            let start = Instant::now();
-            let conn = self.reads.acquire().await?;
-            self.stats.write().note_db_acquire_duration(start.elapsed());
-
-            let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
-
-            Ok(PoolConnection(conn, track_lifetime))
-        }
+    pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
+        self.reads.acquire().await.map(PoolConnection)
     }
 
     /// Begin a read-only transaction. See [`ReadTransaction`] for more details.
-    #[track_caller]
-    pub fn begin_read(&self) -> impl Future<Output = Result<ReadTransaction, sqlx::Error>> + '_ {
-        let location = Location::caller();
-
-        async move {
-            let start = Instant::now();
-            let tx = self.reads.begin().await?;
-            self.stats
-                .write()
-                .note_db_read_begin_duration(start.elapsed());
-
-            let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
-
-            Ok(ReadTransaction(tx, track_lifetime))
-        }
+    pub async fn begin_read(&self) -> Result<ReadTransaction, sqlx::Error> {
+        self.reads.begin().await.map(ReadTransaction)
     }
 
     /// Begin a regular ("unique") write transaction. At most one task can hold a write transaction
@@ -123,30 +79,16 @@ impl Pool {
     ///
     /// If an idle `SharedTransaction` exists in the pool when `begin_write` is called, it is
     /// automatically committed before the regular write transaction is created.
-    #[track_caller]
-    pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + '_ {
-        let location = Location::caller();
+    pub async fn begin_write(&self) -> Result<WriteTransaction, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.lock().await;
 
-        async move {
-            let start = Instant::now();
-
-            let mut shared_tx = self.shared_tx.lock().await;
-
-            if let Some(tx) = shared_tx.take() {
-                tx.commit().await?;
-            }
-
-            let tx = self.write.begin().await?;
-
-            self.stats
-                .write()
-                .note_db_write_begin_duration(start.elapsed());
-
-            let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
-
-            Ok(WriteTransaction(ReadTransaction(tx, track_lifetime)))
+        if let Some(tx) = shared_tx.take() {
+            tx.commit().await?;
         }
+
+        let tx = self.write.begin().await?;
+
+        Ok(WriteTransaction(ReadTransaction(tx)))
     }
 
     /// Begin a shared write transaction. Unlike regular write transaction, a shared write
@@ -158,24 +100,15 @@ impl Pool {
     ///
     /// Use shared write transactions to group multiple writes that don't logically need to be in
     /// the same transaction to improve performance by reducing the number of commits.
-    #[track_caller]
-    pub fn begin_shared_write(
-        &self,
-    ) -> impl Future<Output = Result<SharedWriteTransaction, sqlx::Error>> + '_ {
-        let location = Location::caller();
+    pub async fn begin_shared_write(&self) -> Result<SharedWriteTransaction, sqlx::Error> {
+        let mut shared_tx = self.shared_tx.clone().lock_owned().await;
 
-        async move {
-            let mut shared_tx = self.shared_tx.clone().lock_owned().await;
-
-            if shared_tx.is_none() {
-                let tx = self.write.begin().await?;
-                let track_lifetime =
-                    ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
-                *shared_tx = Some(WriteTransaction(ReadTransaction(tx, track_lifetime)));
-            }
-
-            Ok(SharedWriteTransaction(shared_tx))
+        if shared_tx.is_none() {
+            let tx = self.write.begin().await?;
+            *shared_tx = Some(WriteTransaction(ReadTransaction(tx)));
         }
+
+        Ok(SharedWriteTransaction(shared_tx))
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
@@ -188,14 +121,10 @@ impl Pool {
 
         Ok(())
     }
-
-    pub(crate) fn stats(&self) -> &Arc<RepositoryStats> {
-        &self.stats
-    }
 }
 
 /// Database connection from pool
-pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>, ExpectShortLifetime);
+pub(crate) struct PoolConnection(sqlx::pool::PoolConnection<Sqlite>);
 
 impl Deref for PoolConnection {
     type Target = Connection;
@@ -219,7 +148,7 @@ impl DerefMut for PoolConnection {
 /// created. A read transaction doesn't need to be committed or rolled back - it's implicitly ended
 /// when the `ReadTransaction` instance drops.
 #[derive(Debug)]
-pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>, ExpectShortLifetime);
+pub(crate) struct ReadTransaction(sqlx::Transaction<'static, Sqlite>);
 
 impl Deref for ReadTransaction {
     type Target = Connection;
@@ -344,18 +273,6 @@ async fn create_directory(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-// Explicit cast from `i64` to `u64` to work around the lack of native `u64` support in the sqlx
-// crate.
-pub(crate) const fn decode_u64(i: i64) -> u64 {
-    i as u64
-}
-
-// Explicit cast from `u64` to `i64` to work around the lack of native `u64` support in the sqlx
-// crate.
-pub(crate) const fn encode_u64(u: u64) -> i64 {
-    u as i64
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("failed to create database directory")]
@@ -368,46 +285,18 @@ pub enum Error {
     Query(#[from] sqlx::Error),
 }
 
-async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
+pub(super) async fn get_pragma(conn: &mut Connection, name: &str) -> Result<u32, Error> {
     Ok(sqlx::query(&format!("PRAGMA {}", name))
         .fetch_one(&mut *conn)
         .await?
         .get(0))
 }
 
-async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
+pub(super) async fn set_pragma(conn: &mut Connection, name: &str, value: u32) -> Result<(), Error> {
     // `bind` doesn't seem to be supported for setting PRAGMAs...
     sqlx::query(&format!("PRAGMA {} = {}", name, value))
         .execute(&mut *conn)
         .await?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Check the casts are lossless
-
-    #[test]
-    fn decode_u64_sanity_check() {
-        // [0i64,     i64::MAX] -> [0u64,             u64::MAX / 2]
-        // [i64::MIN,    -1i64] -> [u64::MAX / 2 + 1,     u64::MAX]
-
-        assert_eq!(decode_u64(0), 0);
-        assert_eq!(decode_u64(1), 1);
-        assert_eq!(decode_u64(-1), u64::MAX);
-        assert_eq!(decode_u64(i64::MIN), u64::MAX / 2 + 1);
-        assert_eq!(decode_u64(i64::MAX), u64::MAX / 2);
-    }
-
-    #[test]
-    fn encode_u64_sanity_check() {
-        assert_eq!(encode_u64(0), 0);
-        assert_eq!(encode_u64(1), 1);
-        assert_eq!(encode_u64(u64::MAX / 2), i64::MAX);
-        assert_eq!(encode_u64(u64::MAX / 2 + 1), i64::MIN);
-        assert_eq!(encode_u64(u64::MAX), -1);
-    }
 }

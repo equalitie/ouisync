@@ -374,7 +374,7 @@ impl MissingBlock {
             }
         }
 
-        return false;
+        false
     }
 }
 

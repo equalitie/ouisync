@@ -51,13 +51,7 @@ pub(crate) struct ExpectShortLifetime {
 }
 
 impl ExpectShortLifetime {
-    #[track_caller]
-    pub fn new(max_lifetime: Duration) -> Self {
-        let file_and_line = Location::caller();
-        Self::new_at(max_lifetime, file_and_line)
-    }
-
-    pub fn new_at(max_lifetime: Duration, file_and_line: &'static Location<'static>) -> Self {
+    pub fn new(max_lifetime: Duration, file_and_line: &'static Location<'static>) -> Self {
         let id = NEXT_EXPECT_SHORT_LIFETIME_ID.fetch_add(1, Ordering::SeqCst);
 
         let start_time = Instant::now();
@@ -68,7 +62,7 @@ impl ExpectShortLifetime {
             start_time,
             shared: shared.clone(),
             _watcher: spawn(async move {
-                sleep(max_lifetime.into()).await;
+                sleep(max_lifetime).await;
 
                 let mut lock = shared.lock().unwrap();
 
