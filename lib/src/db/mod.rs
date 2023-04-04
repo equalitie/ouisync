@@ -16,8 +16,10 @@ use sqlx::{
     Row, SqlitePool,
 };
 use std::{
+    future::Future,
     io,
     ops::{Deref, DerefMut},
+    panic::Location,
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -77,9 +79,19 @@ impl Pool {
     }
 
     /// Acquire a read-only database connection.
-    pub async fn acquire(&self) -> Result<PoolConnection, sqlx::Error> {
+    #[track_caller]
+    pub fn acquire<'a>(&'a self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> + 'a {
+        let file_and_line = Location::caller();
+        self.acquire_from(file_and_line)
+    }
+
+    async fn acquire_from(
+        &self,
+        file_and_line: &'static Location<'static>,
+    ) -> Result<PoolConnection, sqlx::Error> {
         let start = Instant::now();
-        let track_lifetime = ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME);
+        let track_lifetime =
+            ExpectShortLifetime::new_at(WARN_AFTER_TRANSACTION_LIFETIME, file_and_line);
         let tx = self
             .reads
             .acquire()
@@ -92,13 +104,25 @@ impl Pool {
     }
 
     /// Begin a read-only transaction. See [`ReadTransaction`] for more details.
-    pub async fn begin_read(&self) -> Result<ReadTransaction, sqlx::Error> {
+    #[track_caller]
+    pub fn begin_read<'a>(
+        &'a self,
+    ) -> impl Future<Output = Result<ReadTransaction, sqlx::Error>> + 'a {
+        let file_and_line = Location::caller();
+        self.begin_read_from(file_and_line)
+    }
+
+    async fn begin_read_from(
+        &self,
+        file_and_line: &'static Location<'static>,
+    ) -> Result<ReadTransaction, sqlx::Error> {
         let start = Instant::now();
         let tx = self.reads.begin().await?;
         self.stats
             .write()
             .note_db_read_begin_duration(Instant::now() - start);
-        let track_lifetime = ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME);
+        let track_lifetime =
+            ExpectShortLifetime::new_at(WARN_AFTER_TRANSACTION_LIFETIME, file_and_line);
         Ok(ReadTransaction(tx, track_lifetime))
     }
 
@@ -114,14 +138,14 @@ impl Pool {
     #[track_caller]
     pub fn begin_write<'a>(
         &'a self,
-    ) -> impl std::future::Future<Output = Result<WriteTransaction, sqlx::Error>> + 'a {
-        let file_and_line = std::panic::Location::caller();
+    ) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + 'a {
+        let file_and_line = Location::caller();
         self.begin_write_from(file_and_line)
     }
 
     async fn begin_write_from(
         &self,
-        file_and_line: &'static std::panic::Location<'static>,
+        file_and_line: &'static Location<'static>,
     ) -> Result<WriteTransaction, sqlx::Error> {
         let start = Instant::now();
 
