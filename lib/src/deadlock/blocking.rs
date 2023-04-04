@@ -1,17 +1,13 @@
-use super::timer::{Id, Timer};
+use super::{
+    timer::{Id, Timer},
+    WARNING_TIMEOUT,
+};
 use core::ops::{Deref, DerefMut};
 use once_cell::sync::Lazy;
-use std::{
-    backtrace::Backtrace,
-    panic::Location,
-    sync, thread,
-    time::{Duration, Instant},
-};
+use std::{backtrace::Backtrace, panic::Location, sync, thread, time::Instant};
 
 static TIMER: Timer<WatchedEntry> = Timer::new();
 static WATCHING_THREAD: Lazy<thread::JoinHandle<()>> = Lazy::new(|| thread::spawn(watching_thread));
-
-const WARNING_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A Mutex that reports to the standard output when it's not released within WARNING_TIMEOUT
 /// duration.

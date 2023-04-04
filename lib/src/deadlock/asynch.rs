@@ -1,4 +1,4 @@
-use crate::deadlock::{DeadlockGuard, DeadlockTracker};
+use super::tracker::{DeadlockGuard, DeadlockTracker};
 use scoped_task::{spawn, ScopedJoinHandle};
 use std::{
     future::Future,
