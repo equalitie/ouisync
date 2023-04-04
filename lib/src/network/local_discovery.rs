@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     collections::{HashMap, HashSet},
-    deadlock::asynch::Mutex,
+    deadlock::AsyncMutex,
 };
 use net::udp::{UdpSocket, MULTICAST_ADDR, MULTICAST_PORT};
 use rand::rngs::OsRng;
@@ -355,14 +355,14 @@ enum Message {
 
 struct SocketProvider {
     interface: Ipv4Addr,
-    socket: Mutex<Option<Arc<UdpSocket>>>,
+    socket: AsyncMutex<Option<Arc<UdpSocket>>>,
 }
 
 impl SocketProvider {
     fn new(interface: Ipv4Addr) -> Self {
         Self {
             interface,
-            socket: Mutex::new(None),
+            socket: AsyncMutex::new(None),
         }
     }
 

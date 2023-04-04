@@ -1,10 +1,13 @@
 //! Utilities for deadlock detection
 
-pub mod asynch;
 pub mod blocking;
 
+mod async_mutex;
+mod expect_short_lifetime;
 mod timer;
-mod tracker;
+
+pub use self::async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
+pub(crate) use self::expect_short_lifetime::ExpectShortLifetime;
 
 use std::time::Duration;
 

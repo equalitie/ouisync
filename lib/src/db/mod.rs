@@ -7,7 +7,7 @@ mod migrations;
 
 pub use id::DatabaseId;
 
-use crate::{deadlock::asynch::ExpectShortLifetime, repository_stats::RepositoryStats};
+use crate::{deadlock::ExpectShortLifetime, repository_stats::RepositoryStats};
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
