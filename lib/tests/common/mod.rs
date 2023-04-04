@@ -32,7 +32,7 @@ pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) mod env {
     use super::*;
     use futures_util::future;
-    use ouisync::deadlock::blocking::Mutex;
+    use ouisync::deadlock::BlockingMutex;
     use std::{collections::HashMap, sync::Arc};
     use tokio::{
         runtime::{self, Runtime},
@@ -45,7 +45,7 @@ pub(crate) mod env {
         runtime: Runtime,
         tasks: Vec<JoinHandle<()>>,
         default_port: u16,
-        dns: Arc<Mutex<Dns>>,
+        dns: Arc<BlockingMutex<Dns>>,
     }
 
     impl Env {
@@ -62,7 +62,7 @@ pub(crate) mod env {
                 runtime,
                 tasks: Vec::new(),
                 default_port: next_default_port(),
-                dns: Arc::new(Mutex::new(Dns::new())),
+                dns: Arc::new(BlockingMutex::new(Dns::new())),
             }
         }
 
@@ -150,7 +150,7 @@ pub(crate) mod env {
     }
 
     task_local! {
-        static DNS: Arc<Mutex<Dns>>;
+        static DNS: Arc<BlockingMutex<Dns>>;
         static DEFAULT_PORT: u16;
         static ACTOR_NAME: String;
     }

@@ -6,7 +6,7 @@ use crate::{
     block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
-    deadlock::blocking::Mutex,
+    deadlock::BlockingMutex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository_stats::{self, RepositoryStats},
     sync::uninitialized_watch,
@@ -78,14 +78,14 @@ pub(super) enum PendingResponse {
 
 pub(super) struct PendingRequests {
     stats: Arc<RepositoryStats>,
-    map: Arc<Mutex<HashMap<Key, RequestData>>>,
+    map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
     to_tracker_tx: uninitialized_watch::Sender<()>,
     _expiration_tracker: ScopedJoinHandle<()>,
 }
 
 impl PendingRequests {
     pub fn new(stats: Arc<RepositoryStats>) -> Self {
-        let map = Arc::new(Mutex::new(HashMap::<Key, RequestData>::default()));
+        let map = Arc::new(BlockingMutex::new(HashMap::<Key, RequestData>::default()));
 
         let (expiration_tracker, to_tracker_tx) = run_tracker(stats.clone(), map.clone());
 
@@ -236,7 +236,7 @@ fn stats_request_removed(
 
 fn run_tracker(
     stats: Arc<RepositoryStats>,
-    request_map: Arc<Mutex<HashMap<Key, RequestData>>>,
+    request_map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
 ) -> (ScopedJoinHandle<()>, uninitialized_watch::Sender<()>) {
     let (to_tracker_tx, mut to_tracker_rx) = uninitialized_watch::channel::<()>();
 

@@ -45,7 +45,7 @@ pub use self::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    deadlock::blocking::Mutex as BlockingMutex,
+    deadlock::BlockingMutex,
     repository::RepositoryId,
     store::Store,
     sync::uninitialized_watch,

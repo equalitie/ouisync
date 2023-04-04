@@ -2,13 +2,13 @@ use crate::{
     blob_id::BlobId,
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
-    deadlock::blocking::Mutex,
+    deadlock::BlockingMutex,
 };
 use std::sync::Arc;
 
 /// Protects blob from being garbage collected.
 pub(crate) struct BlobPin {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
     branch_id: PublicKey,
     blob_id: BlobId,
 }
@@ -60,7 +60,7 @@ impl Drop for BlobPin {
 
 #[derive(Clone)]
 pub(crate) struct BlobPinner {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<BlockingMutex<Shared>>,
 }
 
 type Shared = HashMap<PublicKey, HashMap<BlobId, usize>>;
@@ -68,7 +68,7 @@ type Shared = HashMap<PublicKey, HashMap<BlobId, usize>>;
 impl BlobPinner {
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(Mutex::new(HashMap::new())),
+            shared: Arc::new(BlockingMutex::new(HashMap::new())),
         }
     }
 

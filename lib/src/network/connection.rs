@@ -1,7 +1,7 @@
 use super::{peer_addr::PeerAddr, peer_source::PeerSource, runtime_id::PublicRuntimeId};
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    deadlock::blocking::Mutex as BlockingMutex,
+    deadlock::BlockingMutex,
 };
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{

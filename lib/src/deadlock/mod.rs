@@ -1,17 +1,18 @@
 //! Utilities for deadlock detection
 
-pub mod blocking;
-
 mod async_mutex;
+mod blocking;
 mod expect_short_lifetime;
 mod timer;
 
-use once_cell::sync::Lazy;
-
-pub use self::async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 pub(crate) use self::expect_short_lifetime::ExpectShortLifetime;
-use self::timer::{Id, Timer};
+pub use self::{
+    async_mutex::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard},
+    blocking::{Mutex as BlockingMutex, MutexGuard as BlockingMutexGuard},
+};
 
+use self::timer::{Id, Timer};
+use once_cell::sync::Lazy;
 use std::{
     backtrace::Backtrace,
     fmt,

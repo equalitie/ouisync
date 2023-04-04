@@ -2,7 +2,7 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::{collections::HashMap, deadlock::blocking::Mutex};
+use crate::{collections::HashMap, deadlock::BlockingMutex};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -40,9 +40,9 @@ pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
 pub(super) struct DhtDiscovery {
-    v4: Mutex<RestartableDht>,
-    v6: Mutex<RestartableDht>,
-    lookups: Arc<Mutex<Lookups>>,
+    v4: BlockingMutex<RestartableDht>,
+    v6: BlockingMutex<RestartableDht>,
+    lookups: Arc<BlockingMutex<Lookups>>,
     next_id: AtomicU64,
     span: Span,
 }
@@ -52,9 +52,9 @@ impl DhtDiscovery {
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
     ) -> Self {
-        let v4 = Mutex::new(RestartableDht::new(socket_maker_v4));
-        let v6 = Mutex::new(RestartableDht::new(socket_maker_v6));
-        let lookups = Arc::new(Mutex::new(HashMap::default()));
+        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4));
+        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6));
+        let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
         let span = tracing::info_span!("DHT");
 
         Self {
@@ -251,7 +251,7 @@ type RequestId = u64;
 pub struct LookupRequest {
     id: RequestId,
     info_hash: InfoHash,
-    lookups: Weak<Mutex<Lookups>>,
+    lookups: Weak<BlockingMutex<Lookups>>,
 }
 
 impl Drop for LookupRequest {
@@ -276,7 +276,7 @@ impl Drop for LookupRequest {
 
 struct Lookup {
     seen_peers: Arc<SeenPeers>,
-    requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
+    requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
     wake_up_tx: watch::Sender<()>,
     task: Option<ScopedJoinHandle<()>>,
 }
@@ -294,7 +294,7 @@ impl Lookup {
         wake_up_rx.borrow_and_update();
 
         let seen_peers = Arc::new(SeenPeers::new());
-        let requests = Arc::new(Mutex::new(HashMap::default()));
+        let requests = Arc::new(BlockingMutex::new(HashMap::default()));
 
         let task = if dht_v4.is_some() || dht_v6.is_some() {
             let span = tracing::info_span!(parent: span, "lookup", ?info_hash);
@@ -364,7 +364,7 @@ impl Lookup {
         dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
-        requests: Arc<Mutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
+        requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
         mut wake_up: watch::Receiver<()>,
         span: Span,
     ) -> ScopedJoinHandle<()> {

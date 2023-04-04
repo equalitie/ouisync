@@ -1,7 +1,7 @@
 use super::BlockId;
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    deadlock::blocking::Mutex as BlockingMutex,
+    deadlock::BlockingMutex,
 };
 use slab::Slab;
 use std::{fmt, sync::Arc};

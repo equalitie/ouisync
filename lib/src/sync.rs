@@ -162,14 +162,14 @@ impl AwaitDrop {
 
 /// Wrapper that allows non-blocking concurrent read or replace of the underlying value.
 pub(crate) mod atomic_slot {
-    use crate::deadlock::blocking::Mutex;
+    use crate::deadlock::BlockingMutex;
     use std::{mem, ops::Deref, sync::Arc};
 
-    pub struct AtomicSlot<T>(Mutex<Arc<T>>);
+    pub struct AtomicSlot<T>(BlockingMutex<Arc<T>>);
 
     impl<T> AtomicSlot<T> {
         pub fn new(value: T) -> Self {
-            Self(Mutex::new(Arc::new(value)))
+            Self(BlockingMutex::new(Arc::new(value)))
         }
 
         /// Obtain read access to the underlying value without blocking.
