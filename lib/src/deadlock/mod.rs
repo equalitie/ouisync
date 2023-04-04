@@ -67,7 +67,10 @@ fn schedule(duration: Duration, context: Context) -> Id {
 
 fn cancel(id: Id) {
     if TIMER.cancel(id).is_none() {
-        println!("Previously reported task (id: {}) eventually completed", id);
+        println!(
+            "🐢🐢🐢 Previously reported task (id: {}) eventually completed 🐢🐢🐢",
+            id
+        );
     }
 }
 
@@ -77,8 +80,9 @@ fn watching_thread() {
 
         // Using `println!` and not `tracing::*` to avoid circular dependencies because on
         // Android tracing uses `StateMonitor` which uses these mutexes.
-        println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        println!("Task taking too long (id: {})\n{}\n", id, context);
-        println!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        println!(
+            "🐢🐢🐢 Task taking too long (id: {}) 🐢🐢🐢\n{}\n",
+            id, context
+        );
     }
 }
