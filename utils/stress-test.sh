@@ -7,15 +7,23 @@ function date_tag {
 }
 
 temp_dir_prefix="ouisync-stress-test"
-build_args="--release -p ouisync --lib"
+build_args="--release"
 
 concurrency=1
 timeout=70s
 log_open=""
 log_dump=""
+package="ouisync"
+test=""
 
-while getopts "dohn:" arg; do
+while getopts "dohp:t:n:" arg; do
     case $arg in
+        p)
+            package=$OPTARG
+            ;;
+        t)
+            test=$OPTARG
+            ;;
         n)
             concurrency=$OPTARG
             ;;
@@ -30,6 +38,8 @@ while getopts "dohn:" arg; do
             echo
             echo "Options:"
             echo "  -n NUMBER    Number of processes to run concurrently (default: $concurrency)"
+            echo "  -p PACKAGE   Package to build (default: $package)"
+            echo "  -t TEST      If specified, runs integration test TEST, otherwise runs unit tests"
             echo "  -d           Dump log to stdout"
             echo "  -o           Open log in \$EDITOR"
             echo "  -h           Show this help"
@@ -46,16 +56,25 @@ done
 shift $((OPTIND-1))
 args=$@
 
+if [ -n "$package" ]; then
+    build_args="$build_args --package $package"
+fi
+
+if [ -n "$test" ]; then
+    build_args="$build_args --test $test"
+else
+    build_args="$build_args --lib"
+fi
+
 trap "pkill -P $$" EXIT
 
 rm -rf "/tmp/$temp_dir_prefix-*"
 
-echo "$(date_tag) Compiling the test"
+echo "$(date_tag) Compiling the test with '$build_args'"
 cargo test $build_args --no-run
 
 # This next one will not compile again, we need it to get the executable name.
-exe=$(cargo test $build_args --no-run 2>&1 | grep ' Executable unittests src/lib\.rs')
-exe=$(echo $exe | cut -d " " -f 4 | cut -d "(" -f 2 | cut -d ")" -f 1)
+exe=$(cargo test $build_args --no-run 2>&1 | grep "Executable" | sed "s/^.*Executable.*(\(.*\)).*$/\1/")
 
 dir=`mktemp --tmpdir -d $temp_dir_prefix-XXXXXX`
 
@@ -63,7 +82,7 @@ pipe="$dir/pipe"
 mkfifo $pipe
 
 echo "$(date_tag) Working in directory $dir"
-echo "$(date_tag) Starting $concurrency tests"
+echo "$(date_tag) Starting $concurrency tests ('$exe')"
 
 export RUST_BACKTRACE=full
 export PROPTEST_CASES=32
@@ -76,14 +95,14 @@ for process in $(seq $concurrency); do
             if timeout $timeout $exe $args > $dir/test-$process.log 2>&1; then
                 ((local_iteration=local_iteration+1))
 
-                if !echo "$process $local_iteration ok" > $pipe; then
+                if ! echo "$process $local_iteration ok" > $pipe; then
                     echo "$(date_tag) Failed to write to pipe"
                 fi
             else
                 status=$?
                 echo "$(date_tag) Process $process aborted with status $status after $local_iteration iterations"
 
-                if !echo "$process $local_iteration fail" > $pipe; then
+                if ! echo "$process $local_iteration fail" > $pipe; then
                     echo "$(date_tag) Failed to write to pipe"
                 fi
 
