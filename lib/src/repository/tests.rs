@@ -275,7 +275,8 @@ async fn append_to_file() {
 async fn blind_access_non_empty_repo() {
     init_log();
 
-    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
     let device_id = rand::random();
 
     let local_key = SecretKey::random();
@@ -342,7 +343,8 @@ async fn blind_access_non_empty_repo() {
 async fn blind_access_empty_repo() {
     init_log();
 
-    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
     let device_id = rand::random();
 
     let local_key = SecretKey::random();
@@ -378,7 +380,8 @@ async fn blind_access_empty_repo() {
 async fn read_access_same_replica() {
     init_log();
 
-    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
     let device_id = rand::random();
 
     let repo = Repository::create(
@@ -436,7 +439,8 @@ async fn read_access_same_replica() {
 async fn read_access_different_replica() {
     init_log();
 
-    let (_base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
 
     let device_id_a = rand::random();
     let repo = Repository::create(
@@ -849,8 +853,9 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 
 async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
+    let monitor = StateMonitor::make_root();
     let repo = Repository::create(
-        RepositoryDb::create(base_dir.path().join("repo.db"))
+        RepositoryDb::create(base_dir.path().join("repo.db"), monitor)
             .await
             .unwrap(),
         rand::random(),

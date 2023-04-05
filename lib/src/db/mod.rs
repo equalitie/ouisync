@@ -7,7 +7,9 @@ mod migrations;
 
 pub use id::DatabaseId;
 
-use crate::{deadlock::ExpectShortLifetime, repository_stats::RepositoryStats};
+use crate::{
+    deadlock::ExpectShortLifetime, repository_stats::RepositoryStats, state_monitor::StateMonitor,
+};
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
@@ -50,7 +52,10 @@ pub(crate) struct Pool {
 }
 
 impl Pool {
-    async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+    async fn create(
+        connect_options: SqliteConnectOptions,
+        _monitor: StateMonitor,
+    ) -> Result<Self, sqlx::Error> {
         let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -337,7 +342,7 @@ impl Drop for SharedWriteTransaction {
 }
 
 /// Creates a new database and opens a connection to it.
-pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
+pub(crate) async fn create(path: impl AsRef<Path>, monitor: StateMonitor) -> Result<Pool, Error> {
     let path = path.as_ref();
 
     if fs::metadata(path).await.is_ok() {
@@ -350,7 +355,9 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
         .filename(path)
         .create_if_missing(true);
 
-    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
+    let pool = Pool::create(connect_options, monitor)
+        .await
+        .map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 
@@ -359,17 +366,19 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
 /// Creates a new database in a temporary directory. Useful for tests.
 #[cfg(test)]
-pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
+pub(crate) async fn create_temp(monitor: StateMonitor) -> Result<(TempDir, Pool), Error> {
     let temp_dir = TempDir::new().map_err(Error::CreateDirectory)?;
-    let pool = create(temp_dir.path().join("temp.db")).await?;
+    let pool = create(temp_dir.path().join("temp.db"), monitor).await?;
 
     Ok((temp_dir, pool))
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
-pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
+pub(crate) async fn open(path: impl AsRef<Path>, monitor: StateMonitor) -> Result<Pool, Error> {
     let connect_options = SqliteConnectOptions::new().filename(path);
-    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
+    let pool = Pool::create(connect_options, monitor)
+        .await
+        .map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 

@@ -639,11 +639,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
+    use crate::{db, state_monitor::StateMonitor};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp().await.unwrap()
+        db::create_temp(StateMonitor::make_root()).await.unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -723,7 +723,7 @@ mod tests {
         ];
 
         for access in accesses {
-            let (_base_dir, pool) = db::create_temp().await.unwrap();
+            let (_base_dir, pool) = db::create_temp(StateMonitor::make_root()).await.unwrap();
 
             let mut tx = pool.begin_write().await.unwrap();
             initialize_access_secrets(&mut tx, &access).await.unwrap();

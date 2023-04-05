@@ -24,6 +24,7 @@ pub(crate) struct State {
     mount_dir: Utf8PathBuf,
     network: Network,
     repositories: DashMap<String, RepositoryHolder>,
+    repositories_monitor: StateMonitor,
 }
 
 impl State {
@@ -47,6 +48,7 @@ impl State {
             mount_dir: dirs.mount_dir.clone(),
             network,
             repositories: DashMap::new(),
+            repositories_monitor: monitor.make_child("Repositories"),
         }
     }
 
@@ -162,6 +164,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     share_token,
                     &self.state.config,
                     &self.state.network,
+                    &self.state.repositories_monitor,
                 )
                 .await?;
                 let holder = RepositoryHolder::new(holder);
@@ -205,6 +208,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     password,
                     &self.state.config,
                     &self.state.network,
+                    &self.state.repositories_monitor,
                 )
                 .await?;
                 let holder = RepositoryHolder::new(holder);

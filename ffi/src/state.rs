@@ -11,6 +11,7 @@ use tracing::Span;
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
     pub repos_span: Span,
+    pub repos_monitor: StateMonitor,
     pub config: ConfigStore,
     pub network: Network,
     pub repositories: Registry<RepositoryHolder>,
@@ -26,10 +27,12 @@ impl State {
         let network = Network::new(root_monitor.make_child("Network"));
 
         let repos_span = tracing::info_span!("Repositories");
+        let repos_monitor = root_monitor.make_child("Repositories");
 
         Self {
             root_monitor,
             repos_span,
+            repos_monitor,
             config,
             network,
             repositories: Registry::new(),

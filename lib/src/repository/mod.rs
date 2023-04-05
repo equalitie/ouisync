@@ -32,6 +32,7 @@ use crate::{
     progress::Progress,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
+    StateMonitor,
 };
 use camino::Utf8Path;
 use scoped_task::ScopedJoinHandle;
@@ -50,8 +51,8 @@ pub struct RepositoryDb {
 }
 
 impl RepositoryDb {
-    pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
-        let pool = db::create(store).await?;
+    pub async fn create(store: impl AsRef<Path>, monitor: StateMonitor) -> Result<Self> {
+        let pool = db::create(store, monitor).await?;
 
         Ok(Self { pool })
     }
@@ -100,8 +101,9 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
+        monitor: StateMonitor,
     ) -> Result<Self> {
-        Self::open_with_mode(store, device_id, local_secret, AccessMode::Write).await
+        Self::open_with_mode(store, device_id, local_secret, AccessMode::Write, monitor).await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
@@ -111,8 +113,9 @@ impl Repository {
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
+        monitor: StateMonitor,
     ) -> Result<Self> {
-        let pool = db::open(store).await?;
+        let pool = db::open(store, monitor).await?;
         Self::open_in(pool, device_id, local_secret, max_access_mode).await
     }
 
@@ -159,8 +162,12 @@ impl Repository {
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(store: impl AsRef<Path>, token: ReopenToken) -> Result<Self> {
-        let pool = db::open(store).await?;
+    pub async fn reopen(
+        store: impl AsRef<Path>,
+        token: ReopenToken,
+        monitor: StateMonitor,
+    ) -> Result<Self> {
+        let pool = db::open(store, monitor).await?;
         Self::new(pool, token.writer_id, token.secrets).await
     }
 

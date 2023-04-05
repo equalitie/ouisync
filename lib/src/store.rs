@@ -222,6 +222,7 @@ mod tests {
         },
         locator::Locator,
         repository::RepositoryId,
+        state_monitor::StateMonitor,
         test_utils,
         version_vector::VersionVector,
     };
@@ -683,7 +684,7 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp().await.unwrap()
+        db::create_temp(StateMonitor::make_root()).await.unwrap()
     }
 
     fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {

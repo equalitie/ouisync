@@ -485,13 +485,12 @@ async fn count_leaf_nodes(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
         index::EMPTY_INNER_HASH,
         locator::Locator,
+        state_monitor::StateMonitor,
         test_utils,
     };
     use proptest::{arbitrary::any, collection::vec};
@@ -501,6 +500,7 @@ mod tests {
         Rng, SeedableRng,
     };
     use sqlx::Row;
+    use std::collections::BTreeMap;
     use tempfile::TempDir;
     use test_strategy::{proptest, Arbitrary};
 
@@ -836,7 +836,7 @@ mod tests {
     }
 
     async fn init_db() -> (TempDir, db::Pool) {
-        db::create_temp().await.unwrap()
+        db::create_temp(StateMonitor::make_root()).await.unwrap()
     }
 
     async fn setup() -> (TempDir, db::Pool, BranchData) {

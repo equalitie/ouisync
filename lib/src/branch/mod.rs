@@ -229,7 +229,10 @@ impl AtomicCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access_control::WriteSecrets, db, index::Index, locator::Locator};
+    use crate::{
+        access_control::WriteSecrets, db, index::Index, locator::Locator,
+        state_monitor::StateMonitor,
+    };
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -256,7 +259,8 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, Branch) {
-        let (base_dir, pool) = db::create_temp().await.unwrap();
+        let monitor = StateMonitor::make_root();
+        let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
