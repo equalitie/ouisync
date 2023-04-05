@@ -90,7 +90,7 @@ impl Pool {
             self.stats.write().note_db_acquire_duration(start.elapsed());
 
             let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
             Ok(PoolConnection {
                 inner: conn,
@@ -112,7 +112,7 @@ impl Pool {
                 .note_db_read_begin_duration(start.elapsed());
 
             let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
             Ok(ReadTransaction {
                 inner: tx,
@@ -150,7 +150,7 @@ impl Pool {
                 .note_db_write_begin_duration(start.elapsed());
 
             let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
 
             Ok(WriteTransaction(ReadTransaction {
                 inner: tx,
@@ -192,7 +192,7 @@ impl Pool {
             };
 
             let track_lifetime =
-                ExpectShortLifetime::new(WARN_AFTER_TRANSACTION_LIFETIME, location);
+                ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
             shared_tx.0.track_lifetime = Some(track_lifetime);
 
             Ok(SharedWriteTransaction(guard))

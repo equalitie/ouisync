@@ -2,7 +2,6 @@ use super::{ExpectShortLifetime, WARNING_TIMEOUT};
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
-    panic::Location,
 };
 
 /// Replacement for `tokio::sync::Mutex` instrumented for deadlock detection.
@@ -22,11 +21,10 @@ impl<T> Mutex<T> {
     // `async fn` because `track_caller` doesn't work correctly with `async`.
     #[track_caller]
     pub fn lock(&self) -> impl Future<Output = MutexGuard<'_, T>> {
-        let location = Location::caller();
+        let tracker = ExpectShortLifetime::new(WARNING_TIMEOUT);
 
         async move {
             let inner = self.inner.lock().await;
-            let tracker = ExpectShortLifetime::new(WARNING_TIMEOUT, location);
 
             MutexGuard {
                 inner,

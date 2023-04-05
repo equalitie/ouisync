@@ -1,6 +1,6 @@
-use super::{timer::Id, Context, WARNING_TIMEOUT};
+use super::{ExpectShortLifetime, WARNING_TIMEOUT};
 use core::ops::{Deref, DerefMut};
-use std::{panic::Location, sync};
+use std::sync;
 
 /// A Mutex that reports to the standard output when it's not released within WARNING_TIMEOUT
 /// duration.
@@ -22,25 +22,18 @@ impl<T: ?Sized> Mutex<T> {
     // this function is called and not inside it.
     #[track_caller]
     pub fn lock(&self) -> sync::LockResult<MutexGuard<'_, T>> {
-        let context = Context::new(Location::caller());
-        let id = super::schedule(WARNING_TIMEOUT, context);
+        let tracker = ExpectShortLifetime::new(WARNING_TIMEOUT);
 
-        map(self.inner.lock(), |inner| MutexGuard { id, inner })
+        map(self.inner.lock(), |inner| MutexGuard {
+            inner,
+            _tracker: tracker,
+        })
     }
 }
 
 pub struct MutexGuard<'a, T: ?Sized + 'a> {
-    id: Id,
     inner: sync::MutexGuard<'a, T>,
-}
-
-impl<T> Drop for MutexGuard<'_, T>
-where
-    T: ?Sized,
-{
-    fn drop(&mut self) {
-        super::cancel(self.id);
-    }
+    _tracker: ExpectShortLifetime,
 }
 
 impl<T> Deref for MutexGuard<'_, T>
@@ -76,23 +69,23 @@ impl<T> RwLock<T> {
         }
     }
 
+    #[track_caller]
     pub fn read(&self) -> sync::LockResult<RwLockReadGuard<'_, T>> {
-        let context = Context::new(Location::caller());
-        let id = super::schedule(WARNING_TIMEOUT, context);
+        let tracker = ExpectShortLifetime::new(WARNING_TIMEOUT);
 
         map(self.inner.read(), move |inner| RwLockReadGuard {
-            id,
             inner,
+            _tracker: tracker,
         })
     }
 
+    #[track_caller]
     pub fn write(&self) -> sync::LockResult<RwLockWriteGuard<'_, T>> {
-        let context = Context::new(Location::caller());
-        let id = super::schedule(WARNING_TIMEOUT, context);
+        let tracker = ExpectShortLifetime::new(WARNING_TIMEOUT);
 
         map(self.inner.write(), move |inner| RwLockWriteGuard {
-            id,
             inner,
+            _tracker: tracker,
         })
     }
 }
@@ -101,17 +94,8 @@ pub struct RwLockReadGuard<'a, T>
 where
     T: ?Sized + 'a,
 {
-    id: Id,
     inner: sync::RwLockReadGuard<'a, T>,
-}
-
-impl<T> Drop for RwLockReadGuard<'_, T>
-where
-    T: ?Sized,
-{
-    fn drop(&mut self) {
-        super::cancel(self.id);
-    }
+    _tracker: ExpectShortLifetime,
 }
 
 impl<T> Deref for RwLockReadGuard<'_, T>
@@ -129,17 +113,8 @@ pub struct RwLockWriteGuard<'a, T>
 where
     T: ?Sized + 'a,
 {
-    id: Id,
     inner: sync::RwLockWriteGuard<'a, T>,
-}
-
-impl<T> Drop for RwLockWriteGuard<'_, T>
-where
-    T: ?Sized,
-{
-    fn drop(&mut self) {
-        super::cancel(self.id);
-    }
+    _tracker: ExpectShortLifetime,
 }
 
 impl<T> Deref for RwLockWriteGuard<'_, T>
