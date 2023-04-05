@@ -5,6 +5,7 @@ use crate::{
 };
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
+    fmt,
     net::IpAddr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -286,6 +287,12 @@ impl ConnectionPermit {
     }
 }
 
+impl fmt::Debug for ConnectionPermit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ConnectionPermit(id:{}, {:?})", self.id, self.info)
+    }
+}
+
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         if let Entry::Occupied(entry) = self.connections.lock().unwrap().entry(self.info) {
@@ -308,7 +315,7 @@ impl ConnectionPermitHalf {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ConnectionInfo {
     pub addr: PeerAddr,
     pub dir: ConnectionDirection,

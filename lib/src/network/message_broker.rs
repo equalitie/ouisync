@@ -54,7 +54,6 @@ impl MessageBroker {
         let span = tracing::info_span!(
             "message_broker",
             that_runtime_id = ?that_runtime_id.as_public_key(),
-            permit_id = permit.id()
         );
 
         let this = Self {
@@ -66,14 +65,14 @@ impl MessageBroker {
             span,
         };
 
-        tracing::debug!(parent: &this.span, "message broker created");
+        tracing::debug!(parent: &this.span, "message broker created with connection {:?}", permit);
 
         this.add_connection(stream, permit);
         this
     }
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
-        tracing::debug!(parent: &self.span, "add connection");
+        tracing::debug!(parent: &self.span, "add connection {:?}", permit);
         self.dispatcher.bind(stream, permit)
     }
 
@@ -89,6 +88,7 @@ impl MessageBroker {
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
+            repository = ?store.repository_id(),
             local_id = %store.local_id,
             state = field::Empty
         );
