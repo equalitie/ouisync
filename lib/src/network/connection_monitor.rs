@@ -17,9 +17,6 @@ pub(super) struct ConnectionMonitor {
 impl ConnectionMonitor {
     pub fn new(parent: &StateMonitor, addr: &PeerAddr, source: PeerSource) -> Self {
         let span = tracing::info_span!(
-            // the default would be "ouisync::network::connection_monitor" which is unnecessarily
-            // verbose:
-            target: "ouisync::network",
             "connection",
             %addr,
             ?source,

@@ -2,7 +2,7 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::{collections::HashMap, deadlock::BlockingMutex};
+use crate::{collections::HashMap, deadlock::BlockingMutex, state_monitor::StateMonitor};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -44,6 +44,8 @@ pub(super) struct DhtDiscovery {
     v6: BlockingMutex<RestartableDht>,
     lookups: Arc<BlockingMutex<Lookups>>,
     next_id: AtomicU64,
+    main_monitor: StateMonitor,
+    lookups_monitor: StateMonitor,
     span: Span,
 }
 
@@ -51,18 +53,22 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
+        monitor: StateMonitor,
     ) -> Self {
         let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4));
         let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6));
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
-        let span = tracing::info_span!("DHT");
+
+        let lookups_monitor = monitor.make_child("lookups");
 
         Self {
             v4,
             v6,
             lookups,
             next_id: AtomicU64::new(0),
-            span,
+            span: Span::current(),
+            main_monitor: monitor,
+            lookups_monitor,
         }
     }
 
@@ -86,11 +92,17 @@ impl DhtDiscovery {
             return;
         }
 
-        let dht_v4 = v4.fetch(&self.span);
-        let dht_v6 = v6.fetch(&self.span);
+        let dht_v4 = v4.fetch(&self.main_monitor, &self.span);
+        let dht_v6 = v6.fetch(&self.main_monitor, &self.span);
 
         for (info_hash, lookup) in &mut *lookups {
-            lookup.restart(dht_v4.clone(), dht_v6.clone(), *info_hash, &self.span);
+            lookup.restart(
+                dht_v4.clone(),
+                dht_v6.clone(),
+                *info_hash,
+                &self.lookups_monitor,
+                &self.span,
+            );
         }
     }
 
@@ -112,10 +124,18 @@ impl DhtDiscovery {
             .unwrap()
             .entry(info_hash)
             .or_insert_with(|| {
-                let dht_v4 = self.v4.lock().unwrap().fetch(&self.span);
-                let dht_v6 = self.v6.lock().unwrap().fetch(&self.span);
+                let dht_v4 = self
+                    .v4
+                    .lock()
+                    .unwrap()
+                    .fetch(&self.main_monitor, &self.span);
+                let dht_v6 = self
+                    .v6
+                    .lock()
+                    .unwrap()
+                    .fetch(&self.main_monitor, &self.span);
 
-                Lookup::start(dht_v4, dht_v6, info_hash, &self.span)
+                Lookup::start(dht_v4, dht_v6, info_hash, &self.lookups_monitor, &self.span)
             })
             .add_request(id, found_peers_tx);
 
@@ -139,12 +159,12 @@ impl RestartableDht {
 
     // Retrieve a shared pointer to a running DHT instance if there is one already or start a new
     // one. When all such pointers are dropped, the underlying DHT is terminated.
-    fn fetch(&mut self, span: &Span) -> Arc<Option<MonitoredDht>> {
+    fn fetch(&mut self, monitor: &StateMonitor, span: &Span) -> Arc<Option<MonitoredDht>> {
         if let Some(dht) = self.dht.upgrade() {
             dht
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
-            let dht = MonitoredDht::start(socket, span);
+            let dht = MonitoredDht::start(socket, monitor, span);
             let dht = Arc::new(Some(dht));
 
             self.dht = Arc::downgrade(&dht);
@@ -168,13 +188,13 @@ struct MonitoredDht {
 }
 
 impl MonitoredDht {
-    fn start(socket: quic::SideChannel, span: &Span) -> Self {
+    fn start(socket: quic::SideChannel, parent_monitor: &StateMonitor, span: &Span) -> Self {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
 
-        let span = match local_addr {
-            SocketAddr::V4(_) => tracing::info_span!(parent: span, "IPv4"),
-            SocketAddr::V6(_) => tracing::info_span!(parent: span, "IPv6"),
+        let (monitor_name, span) = match local_addr {
+            SocketAddr::V4(_) => ("IPv4", tracing::info_span!(parent: span, "DHT/IPv4")),
+            SocketAddr::V6(_) => ("IPv6", tracing::info_span!(parent: span, "DHT/IPv6")),
         };
 
         // TODO: load the DHT state from a previous save if it exists.
@@ -187,17 +207,26 @@ impl MonitoredDht {
             .unwrap();
 
         // Spawn a task to monitor the DHT status.
+        let monitor = parent_monitor.make_child(monitor_name);
         let monitoring_task = {
             let dht = dht.clone();
 
+            let first_bootstrap = monitor.make_value("first_bootstrap", "in progress");
+            let probe_counter = monitor.make_value("probe_counter", 0);
+            let is_running = monitor.make_value("is_running", false);
+            let bootstrapped = monitor.make_value("bootstrapped", false);
+            let good_nodes = monitor.make_value("good_nodes", 0);
+            let questionable_nodes = monitor.make_value("questionable_nodes", 0);
+            let buckets = monitor.make_value("buckets", 0);
+
             async move {
-                state_monitor!(first_bootstrap = "in progress");
+                tracing::info!("bootstrap started");
 
                 if dht.bootstrapped(None).await {
-                    state_monitor!(first_bootstrap = "done");
+                    *first_bootstrap.get() = "done";
                     tracing::info!("bootstrap complete");
                 } else {
-                    state_monitor!(first_bootstrap = "failed");
+                    *first_bootstrap.get() = "failed";
                     tracing::error!("bootstrap failed");
 
                     // Don't `return`, instead halt here so that the `first_bootstrap` monitored value
@@ -205,29 +234,21 @@ impl MonitoredDht {
                     pending::<()>().await;
                 }
 
-                let mut probe_counter = 0;
-
                 loop {
-                    probe_counter += 1;
+                    *probe_counter.get() += 1;
 
                     if let Some(state) = dht.get_state().await {
-                        state_monitor!(
-                            probe_counter,
-                            is_running = state.is_running,
-                            bootstrapped = state.bootstrapped,
-                            good_node_count = state.good_node_count,
-                            questionable_node_count = state.questionable_node_count,
-                            bucket_count = state.bucket_count,
-                        );
+                        *is_running.get() = true;
+                        *bootstrapped.get() = true;
+                        *good_nodes.get() = state.good_node_count;
+                        *questionable_nodes.get() = state.questionable_node_count;
+                        *buckets.get() = state.bucket_count;
                     } else {
-                        state_monitor!(
-                            probe_counter,
-                            is_running = false,
-                            bootstrapped = false,
-                            good_node_count = 0,
-                            questionable_node_count = 0,
-                            bucket_count = 0,
-                        );
+                        *is_running.get() = false;
+                        *bootstrapped.get() = false;
+                        *good_nodes.get() = 0;
+                        *questionable_nodes.get() = 0;
+                        *buckets.get() = 0;
                     }
 
                     time::sleep(Duration::from_secs(5)).await;
@@ -286,6 +307,7 @@ impl Lookup {
         dht_v4: Arc<Option<MonitoredDht>>,
         dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
+        monitor: &StateMonitor,
         span: &Span,
     ) -> Self {
         let (wake_up_tx, mut wake_up_rx) = watch::channel(());
@@ -297,8 +319,6 @@ impl Lookup {
         let requests = Arc::new(BlockingMutex::new(HashMap::default()));
 
         let task = if dht_v4.is_some() || dht_v6.is_some() {
-            let span = tracing::info_span!(parent: span, "lookup", ?info_hash);
-
             Some(Self::start_task(
                 dht_v4,
                 dht_v6,
@@ -306,6 +326,7 @@ impl Lookup {
                 seen_peers.clone(),
                 requests.clone(),
                 wake_up_rx,
+                monitor,
                 span,
             ))
         } else {
@@ -326,6 +347,7 @@ impl Lookup {
         dht_v4: Arc<Option<MonitoredDht>>,
         dht_v6: Arc<Option<MonitoredDht>>,
         info_hash: InfoHash,
+        monitor: &StateMonitor,
         span: &Span,
     ) {
         if dht_v4.is_none() && dht_v6.is_none() {
@@ -333,7 +355,6 @@ impl Lookup {
             return;
         }
 
-        let span = tracing::info_span!(parent: span, "lookup", ?info_hash);
         let task = Self::start_task(
             dht_v4,
             dht_v6,
@@ -341,6 +362,7 @@ impl Lookup {
             self.seen_peers.clone(),
             self.requests.clone(),
             self.wake_up_tx.subscribe(),
+            monitor,
             span,
         );
 
@@ -359,6 +381,7 @@ impl Lookup {
         self.wake_up_tx.send(()).unwrap_or(());
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_task(
         dht_v4: Arc<Option<MonitoredDht>>,
         dht_v6: Arc<Option<MonitoredDht>>,
@@ -366,19 +389,22 @@ impl Lookup {
         seen_peers: Arc<SeenPeers>,
         requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
         mut wake_up: watch::Receiver<()>,
-        span: Span,
+        lookups_monitor: &StateMonitor,
+        span: &Span,
     ) -> ScopedJoinHandle<()> {
-        let task = async move {
-            state_monitor!(state = "started");
+        let monitor = lookups_monitor.make_child(format!("{info_hash:?}"));
+        let state = monitor.make_value("state", "started");
+        let next = monitor.make_value("next", SystemTime::now().into());
 
+        let task = async move {
             // Wait for the first request to be created
             wake_up.changed().await.unwrap_or(());
 
             loop {
                 seen_peers.start_new_round();
 
-                tracing::debug!("starting search");
-                state_monitor!(state = "making request");
+                tracing::debug!(?info_hash, "starting search");
+                *state.get() = "making request";
 
                 // find peers for the repo and also announce that we have it.
                 let dhts = dht_v4.iter().chain(dht_v6.iter());
@@ -391,12 +417,10 @@ impl Lookup {
                     .flatten()
                 }));
 
-                state_monitor!(state = "awaiting results");
+                *state.get() = "awaiting results";
 
                 while let Some(addr) = peers.next().await {
                     if let Some(peer) = seen_peers.insert(PeerAddr::Quic(addr)) {
-                        tracing::debug!("found peer {:?}", peer.initial_addr());
-
                         for tx in requests.lock().unwrap().values() {
                             tx.send(peer.clone()).unwrap_or(());
                         }
@@ -411,24 +435,23 @@ impl Lookup {
                 {
                     let time: DateTime<Local> = (SystemTime::now() + duration).into();
                     tracing::debug!(
+                        ?info_hash,
                         "search ended. next one scheduled at {} (in {:?})",
                         time.format("%T"),
                         duration
                     );
-                    state_monitor!(state = format!("sleeping until {}", time.format("%T")));
+
+                    *state.get() = "sleeping";
+                    *next.get() = time;
                 }
 
                 select! {
-                    _ = time::sleep(duration) => {
-                        tracing::trace!("sleep duration passed")
-                    },
-                    _ = wake_up.changed() => {
-                        tracing::trace!("wake up")
-                    },
+                    _ = time::sleep(duration) => (),
+                    _ = wake_up.changed() => (),
                 }
             }
         };
-        let task = task.instrument(span);
+        let task = task.instrument(span.clone());
 
         scoped_task::spawn(task)
     }
