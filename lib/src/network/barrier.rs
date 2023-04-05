@@ -1,4 +1,6 @@
-use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
+use super::message_dispatcher::{
+    ChannelClosed, ContentSinkTrait, ContentStreamError, ContentStreamTrait,
+};
 use std::{fmt, mem::size_of};
 use tokio::time::{self, Duration};
 
@@ -378,11 +380,22 @@ pub enum BarrierError {
     Failure,
     #[error("Channel closed")]
     ChannelClosed,
+    #[error("Network transport changed")]
+    TransportChanged,
 }
 
 impl From<ChannelClosed> for BarrierError {
     fn from(_: ChannelClosed) -> Self {
         Self::ChannelClosed
+    }
+}
+
+impl From<ContentStreamError> for BarrierError {
+    fn from(error: ContentStreamError) -> Self {
+        match error {
+            ContentStreamError::ChannelClosed => Self::ChannelClosed,
+            ContentStreamError::TransportChanged => Self::TransportChanged,
+        }
     }
 }
 
@@ -507,7 +520,7 @@ mod tests {
 
     #[async_trait]
     impl ContentStreamTrait for Stream {
-        async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+        async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
             let mut guard = self.rx.lock().await;
             let vec = guard.recv().await.unwrap();
             Ok(vec)

@@ -207,6 +207,7 @@ async fn maintain_link(
             Ok(()) => (),
             Err(BarrierError::Failure) => continue,
             Err(BarrierError::ChannelClosed) => break,
+            Err(BarrierError::TransportChanged) => continue,
         }
 
         state_monitor!(state = "establishing channel");
@@ -216,6 +217,7 @@ async fn maintain_link(
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
+                Err(EstablishError::TransportChanged) => continue,
             };
 
         state_monitor!(state = "running");
@@ -303,6 +305,10 @@ async fn recv_messages(
             Err(RecvError::Closed) => {
                 tracing::debug!("message stream closed");
                 return ControlFlow::Break;
+            }
+            Err(RecvError::TransportChanged) => {
+                tracing::debug!("transport has changed");
+                return ControlFlow::Continue;
             }
         };
 

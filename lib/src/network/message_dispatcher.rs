@@ -1,7 +1,7 @@
 //! Utilities for sending and receiving messages across the network.
 
 use super::{
-    connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf},
+    connection::{ConnectionInfo, ConnectionPermit, ConnectionPermitHalf, PermitId},
     keep_alive::{KeepAliveSink, KeepAliveStream},
     message::{Message, MessageChannel, Type},
     message_io::{MessageSink, MessageStream, SendError},
@@ -117,6 +117,7 @@ pub(super) struct ContentStream {
     channel: MessageChannel,
     state: Arc<RecvState>,
     queues_changed_rx: watch::Receiver<()>,
+    last_transport_id: Option<PermitId>,
 }
 
 impl ContentStream {
@@ -129,29 +130,60 @@ impl ContentStream {
             channel,
             state,
             queues_changed_rx,
+            last_transport_id: None,
         }
     }
 
     /// Receive the next message content.
-    pub async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+    pub async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
         let mut closed = false;
 
         loop {
-            if let Some(content) = self.state.pop(&self.channel) {
-                return Ok(content);
+            {
+                let mut queues = self.state.queues.lock().unwrap();
+
+                if let Some(queue) = queues.get_mut(&self.channel).map(|q| &mut q.queue) {
+                    if let Some((transport, _)) = queue.back() {
+                        match self.last_transport_id {
+                            Some(last_transport_id) => {
+                                if transport == &last_transport_id {
+                                    return Ok(queue.pop_back().unwrap().1);
+                                } else {
+                                    self.last_transport_id = Some(*transport);
+                                    return Err(ContentStreamError::TransportChanged);
+                                }
+                            }
+                            None => {
+                                self.last_transport_id = Some(*transport);
+                                return Ok(queue.pop_back().unwrap().1);
+                            }
+                        }
+                    }
+                }
             }
 
             if closed {
-                return Err(ChannelClosed);
+                return Err(ContentStreamError::ChannelClosed);
             }
 
             select! {
                 message = self.state.reader.recv() => {
-                    if let Some(message) = message {
+                    if let Some((transport, message)) = message {
                         if message.channel == self.channel {
-                            return Ok(message.content);
+                            if let Some(last_transport) = self.last_transport_id {
+                                if transport == last_transport {
+                                    return Ok(message.content);
+                                } else {
+                                    self.last_transport_id = Some(transport);
+                                    self.state.push(transport, message);
+                                    return Err(ContentStreamError::TransportChanged);
+                                }
+                            } else {
+                                self.last_transport_id = Some(transport);
+                                return Ok(message.content);
+                            }
                         } else {
-                            self.state.push(message)
+                            self.state.push(transport, message)
                         }
                     } else {
                         // If the reader closed we still want to check the queues one more time
@@ -173,6 +205,12 @@ impl Drop for ContentStream {
     fn drop(&mut self) {
         self.state.remove_channel(&self.channel);
     }
+}
+
+#[derive(Debug)]
+pub(super) enum ContentStreamError {
+    ChannelClosed,
+    TransportChanged,
 }
 
 #[derive(Clone)]
@@ -208,7 +246,7 @@ pub(super) trait ContentSinkTrait {
 
 #[async_trait]
 pub(super) trait ContentStreamTrait {
-    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed>;
+    async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError>;
 }
 
 #[async_trait]
@@ -220,7 +258,7 @@ impl ContentSinkTrait for ContentSink {
 
 #[async_trait]
 impl ContentStreamTrait for ContentStream {
-    async fn recv(&mut self) -> Result<Vec<u8>, ChannelClosed> {
+    async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
         self.recv().await
     }
 }
@@ -252,7 +290,7 @@ impl LiveConnectionInfoSet {
 
 struct ChannelQueue {
     reference_count: usize,
-    queue: VecDeque<Vec<u8>>,
+    queue: VecDeque<(PermitId, Vec<u8>)>,
 }
 
 struct RecvState {
@@ -289,23 +327,23 @@ impl RecvState {
         }
     }
 
-    // Pops a message from the corresponding queue.
-    fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
-        self.queues
-            .lock()
-            .unwrap()
-            .get_mut(channel)?
-            .queue
-            .pop_back()
-    }
+    //// Pops a message from the corresponding queue.
+    //fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
+    //    self.queues
+    //        .lock()
+    //        .unwrap()
+    //        .get_mut(channel)?
+    //        .queue
+    //        .pop_back()
+    //}
 
     // Pushes the message into the corresponding queue. Wakes up any waiting streams so they can
     // grab the message if it is for them. If there is currently no one waiting on the channel then
     // the message shall be ignored. Note that it should be OK to miss some of those packets
     // because the `Barrier` algorithm should take care of syncing the communication exchanges.
-    fn push(&self, message: Message) {
+    fn push(&self, permit_id: PermitId, message: Message) {
         if let Some(value) = self.queues.lock().unwrap().get_mut(&message.channel) {
-            value.queue.push_front(message.content);
+            value.queue.push_front((permit_id, message.content));
             self.queues_changed_tx.send(()).unwrap_or(());
         }
     }
@@ -335,11 +373,11 @@ impl PermittedStream {
 }
 
 impl Stream for PermittedStream {
-    type Item = Message;
+    type Item = (PermitId, Message);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match ready!(self.inner.poll_next_unpin(cx)) {
-            Some(Ok(message)) => Poll::Ready(Some(message)),
+            Some(Ok(message)) => Poll::Ready(Some((self.permit.id(), message))),
             Some(Err(_)) | None => Poll::Ready(None),
         }
     }
@@ -458,7 +496,7 @@ struct Recv<'a> {
 }
 
 impl Future for Recv<'_> {
-    type Output = Option<Message>;
+    type Output = Option<(PermitId, Message)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut inner = self.inner.lock().unwrap();
@@ -726,7 +764,10 @@ mod tests {
 
         drop(server);
 
-        assert_matches!(server_stream.recv().await, Err(ChannelClosed));
+        assert_matches!(
+            server_stream.recv().await,
+            Err(ContentStreamError::ChannelClosed)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
