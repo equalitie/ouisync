@@ -323,14 +323,13 @@ impl Drop for StateMonitor {
     }
 }
 
-// FIXME: temporary code, remove
+// These impls are needed only for the tests to compile.
 impl PartialEq for StateMonitor {
     fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
 
-// FIXME: temporary code, remote
 impl Eq for StateMonitor {}
 
 impl StateMonitorShared {

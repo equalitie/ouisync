@@ -1,12 +1,15 @@
 use super::{connection::ConnectionDirection, peer_addr::PeerAddr, PeerSource, PublicRuntimeId};
-use crate::state_monitor::{MonitoredValue, StateMonitor};
+use crate::{
+    crypto::sign::PublicKey,
+    state_monitor::{MonitoredValue, StateMonitor},
+};
 
 /// State monitor node for monitoring a network connection.
 pub(super) struct ConnectionMonitor {
     _source: MonitoredValue<PeerSource>,
     state: MonitoredValue<State>,
     permit_id: MonitoredValue<Option<u64>>,
-    runtime_id: MonitoredValue<Option<PublicRuntimeId>>,
+    runtime_id: MonitoredValue<Option<PublicKey>>,
 }
 
 impl ConnectionMonitor {
@@ -50,7 +53,7 @@ impl ConnectionMonitor {
 
     pub fn mark_as_active(&self, runtime_id: PublicRuntimeId) {
         *self.state.get() = State::Active;
-        *self.runtime_id.get() = Some(runtime_id);
+        *self.runtime_id.get() = Some(*runtime_id.as_public_key());
     }
 }
 
