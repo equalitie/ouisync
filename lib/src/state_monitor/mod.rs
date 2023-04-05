@@ -243,12 +243,14 @@ impl StateMonitor {
     /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
-    pub fn make_value<T: fmt::Display + Sync + Send + 'static>(
+    pub fn make_value<N: Into<String>, T: fmt::Debug + Sync + Send + 'static>(
         &self,
-        name: String,
+        name: N,
         value: T,
     ) -> MonitoredValue<T> {
         let mut lock = self.shared.lock_inner();
+
+        let name = name.into();
         let value = Arc::new(BlockingMutex::new(value));
 
         match lock.values.entry(name.clone()) {
@@ -496,7 +498,7 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<BlockingMutex<dyn fmt::Display + Sync + Send>>,
+    ptr: Arc<BlockingMutex<dyn fmt::Debug + Sync + Send>>,
 }
 
 // --- Serialization
@@ -528,7 +530,8 @@ impl<'a> Serialize for ValuesSerializer<'a> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0.iter() {
-            map.serialize_entry(k, &v.ptr.lock().unwrap().to_string())?;
+            let value = format!("{:?}", &*v.ptr.lock().unwrap());
+            map.serialize_entry(k, &value)?;
         }
         map.end()
     }

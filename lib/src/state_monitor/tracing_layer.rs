@@ -178,7 +178,7 @@ impl TraceLayerInner {
                     match values.entry(field.name()) {
                         hash_map::Entry::Occupied(entry) => *(entry.get().get()) = value,
                         hash_map::Entry::Vacant(entry) => {
-                            let value = monitor.make_value::<String>(field.name().into(), value);
+                            let value = monitor.make_value(field.name(), value);
                             entry.insert(value);
                         }
                     }
@@ -287,7 +287,7 @@ impl<'a> RecordVisitor<'a> {
                 *entry.get_mut().get() = value;
             }
             hash_map::Entry::Vacant(entry) => {
-                let value = self.span.monitor.make_value::<String>(name.into(), value);
+                let value = self.span.monitor.make_value(name, value);
                 entry.insert(value);
             }
         }

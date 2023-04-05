@@ -20,7 +20,7 @@ pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
     if let Some(root_monitor) = root_monitor {
         let panic_counter = root_monitor
             .make_child("Session")
-            .make_value("panic_counter".into(), 0u32);
+            .make_value("panic_counter", 0u32);
 
         // Make sure this is done after creating the logger because the logger might override the panic
         // hook.

@@ -1,6 +1,7 @@
 mod barrier;
 mod client;
 mod connection;
+mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
@@ -29,6 +30,7 @@ mod upnp;
 
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
+    connection_monitor::ConnectionMonitor,
     dht_discovery::DhtDiscovery,
     gateway::Gateway,
     local_discovery::LocalDiscovery,
@@ -53,7 +55,6 @@ use crate::{
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
-use futures_util::FutureExt;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use std::{
@@ -83,7 +84,7 @@ pub struct Network {
 
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
-    pub fn new(_monitor: StateMonitor) -> Self {
+    pub fn new(monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
 
@@ -111,7 +112,8 @@ impl Network {
         tracing::debug!(this_runtime_id = ?this_runtime_id.public());
 
         let inner = Arc::new(Inner {
-            span: Span::current(),
+            // TODO: remove
+            span: tracing::info_span!("Network"),
             gateway,
             this_runtime_id,
             state: BlockingMutex::new(State {
@@ -129,6 +131,7 @@ impl Network {
             dht_discovery_tx,
             pex_discovery_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
+            connections_monitor: monitor.make_child("Connections"),
             on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
@@ -382,6 +385,7 @@ struct Inner {
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
+    connections_monitor: StateMonitor,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -589,13 +593,27 @@ impl Inner {
                     break;
                 }
 
-                self.spawn(self.clone().handle_connection(stream, permit).map(|_| ()));
+                let this = self.clone();
+
+                let monitor = ConnectionMonitor::new(
+                    &self.connections_monitor,
+                    &permit.addr(),
+                    permit.source(),
+                );
+                monitor.mark_as_connecting(permit.id());
+
+                self.spawn(async move {
+                    this.handle_connection(stream, permit, &monitor).await;
+                });
             }
         }
     }
 
     #[instrument(parent = &self.span, skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
+        let monitor =
+            ConnectionMonitor::new(&self.connections_monitor, peer.initial_addr(), source);
+
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(100))
             .with_max_interval(Duration::from_secs(8))
@@ -636,7 +654,7 @@ impl Inner {
                         return;
                     }
 
-                    state_monitor!(state = "awaiting permit");
+                    monitor.mark_as_awaiting_permit();
 
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
@@ -648,17 +666,18 @@ impl Inner {
             tracing::trace!(?addr, ?source, "peer found");
 
             permit.mark_as_connecting();
-
-            state_monitor!(state = "connecting", permit_id = permit.id());
+            monitor.mark_as_connecting(permit.id());
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,
                 None => break,
             };
 
-            state_monitor!(state = "handling");
-
-            if !self.clone().handle_connection(socket, permit).await {
+            if !self
+                .clone()
+                .handle_connection(socket, permit, &monitor)
+                .await
+            {
                 break;
             }
         }
@@ -678,12 +697,12 @@ impl Inner {
         self: Arc<Self>,
         mut stream: raw::Stream,
         permit: ConnectionPermit,
+        monitor: &ConnectionMonitor,
     ) -> bool {
         tracing::info!("connection established");
 
         permit.mark_as_handshaking();
-
-        state_monitor!(state = "handshaking");
+        monitor.mark_as_handshaking();
 
         let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
 
@@ -712,6 +731,7 @@ impl Inner {
         }
 
         permit.mark_as_active(that_runtime_id);
+        monitor.mark_as_active(that_runtime_id);
 
         let released = permit.released();
 
@@ -753,8 +773,6 @@ impl Inner {
             state: &self.state,
             that_runtime_id,
         };
-
-        state_monitor!(state = "awaiting message broker release");
 
         released.recv().await;
         tracing::info!("connection lost");
