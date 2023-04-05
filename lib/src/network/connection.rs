@@ -13,6 +13,8 @@ use std::{
     },
 };
 
+pub(super) type PermitId = u64;
+
 // NOTE: Watch (or uninitialized_watch) has an advantage over Notify in that it's better at
 // broadcasting to multiple consumers. This particular line is problematic in Notify documentation:
 //
@@ -168,7 +170,7 @@ mod as_str {
 }
 
 struct Peer {
-    id: u64,
+    id: PermitId,
     state: PeerState,
     source: PeerSource,
     on_release: DropAwaitable,
@@ -197,7 +199,7 @@ impl ConnectionDirection {
 pub(super) struct ConnectionPermit {
     connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
     info: ConnectionInfo,
-    id: u64,
+    id: PermitId,
     on_release: AwaitDrop,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
@@ -254,7 +256,7 @@ impl ConnectionPermit {
         self.info.addr
     }
 
-    pub fn id(&self) -> u64 {
+    pub fn id(&self) -> PermitId {
         self.id
     }
 
@@ -312,6 +314,10 @@ pub(super) struct ConnectionPermitHalf(ConnectionPermit);
 impl ConnectionPermitHalf {
     pub fn info(&self) -> ConnectionInfo {
         self.0.info
+    }
+
+    pub fn id(&self) -> PermitId {
+        self.0.id
     }
 }
 

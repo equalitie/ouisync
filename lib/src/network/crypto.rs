@@ -8,7 +8,7 @@
 //! based on the identity of the replicas is needed.
 
 use super::{
-    message_dispatcher::{ChannelClosed, ContentSink, ContentStream},
+    message_dispatcher::{ChannelClosed, ContentSink, ContentStream, ContentStreamError},
     runtime_id::PublicRuntimeId,
 };
 use crate::repository::RepositoryId;
@@ -179,11 +179,16 @@ pub(super) enum RecvError {
     Closed,
     #[error("nonce counter exhausted")]
     Exhausted,
+    #[error("network transport changed")]
+    TransportChanged,
 }
 
-impl From<ChannelClosed> for RecvError {
-    fn from(_: ChannelClosed) -> Self {
-        Self::Closed
+impl From<ContentStreamError> for RecvError {
+    fn from(error: ContentStreamError) -> Self {
+        match error {
+            ContentStreamError::ChannelClosed => Self::Closed,
+            ContentStreamError::TransportChanged => Self::TransportChanged,
+        }
     }
 }
 
@@ -193,6 +198,8 @@ pub(super) enum EstablishError {
     Crypto,
     #[error("channel closed")]
     Closed,
+    #[error("network transport changed")]
+    TransportChanged,
 }
 
 impl From<noise_protocol::Error> for EstablishError {
@@ -204,6 +211,15 @@ impl From<noise_protocol::Error> for EstablishError {
 impl From<ChannelClosed> for EstablishError {
     fn from(_: ChannelClosed) -> Self {
         Self::Closed
+    }
+}
+
+impl From<ContentStreamError> for EstablishError {
+    fn from(error: ContentStreamError) -> Self {
+        match error {
+            ContentStreamError::ChannelClosed => Self::Closed,
+            ContentStreamError::TransportChanged => Self::TransportChanged,
+        }
     }
 }
 
