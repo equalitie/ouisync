@@ -13,7 +13,7 @@ use ouisync_bridge::{
     repository,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, PeerAddr, ShareToken};
+use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
 use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
@@ -27,13 +27,9 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn new(dirs: &Dirs) -> Self {
+    pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(&dirs.config_dir);
-
-        let network = {
-            let _enter = tracing::info_span!("Network").entered();
-            Network::new()
-        };
+        let network = Network::new(monitor.make_child("Network"));
 
         network::init(
             &network,

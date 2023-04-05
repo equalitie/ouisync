@@ -220,9 +220,10 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
+    use ouisync::StateMonitor;
 
     pub(crate) fn create_unbound_network() -> Network {
-        Network::new()
+        Network::new(StateMonitor::make_root())
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {

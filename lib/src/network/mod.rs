@@ -47,6 +47,7 @@ use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
     deadlock::BlockingMutex,
     repository::RepositoryId,
+    state_monitor::StateMonitor,
     store::Store,
     sync::uninitialized_watch,
 };
@@ -82,7 +83,7 @@ pub struct Network {
 
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
-    pub fn new() -> Self {
+    pub fn new(_monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
 

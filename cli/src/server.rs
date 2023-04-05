@@ -6,13 +6,15 @@ use crate::{
 };
 use anyhow::{format_err, Result};
 use ouisync_bridge::logger;
+use ouisync_lib::StateMonitor;
 use std::{io, sync::Arc};
 use tokio::task;
 
 pub(crate) async fn run(options: Options) -> Result<()> {
-    let _logger = logger::new(None);
+    let monitor = StateMonitor::make_root();
+    let _logger = logger::new(Some(monitor.clone()));
 
-    let state = State::new(&options.dirs).await;
+    let state = State::new(&options.dirs, monitor).await;
     let state = Arc::new(state);
 
     let addr = match options.host {

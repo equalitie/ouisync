@@ -23,10 +23,7 @@ impl State {
         let config = ConfigStore::new(configs_path);
 
         // Create network
-        let network = {
-            let _enter = tracing::info_span!("Network").entered();
-            Network::new()
-        };
+        let network = Network::new(root_monitor.make_child("Network"));
 
         let repos_span = tracing::info_span!("Repositories");
 
