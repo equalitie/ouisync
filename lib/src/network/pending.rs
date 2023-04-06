@@ -8,7 +8,7 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
-    repository_stats::RepositoryStats,
+    repository::RepositoryMonitor,
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;
@@ -77,20 +77,20 @@ pub(super) enum PendingResponse {
 }
 
 pub(super) struct PendingRequests {
-    stats: Arc<RepositoryStats>,
+    monitor: Arc<RepositoryMonitor>,
     map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
     to_tracker_tx: uninitialized_watch::Sender<()>,
     _expiration_tracker: ScopedJoinHandle<()>,
 }
 
 impl PendingRequests {
-    pub fn new(stats: Arc<RepositoryStats>) -> Self {
+    pub fn new(monitor: Arc<RepositoryMonitor>) -> Self {
         let map = Arc::new(BlockingMutex::new(HashMap::<Key, RequestData>::default()));
 
-        let (expiration_tracker, to_tracker_tx) = run_tracker(stats.clone(), map.clone());
+        let (expiration_tracker, to_tracker_tx) = run_tracker(monitor.clone(), map.clone());
 
         Self {
-            stats,
+            monitor,
             map,
             to_tracker_tx,
             _expiration_tracker: expiration_tracker,
@@ -135,7 +135,10 @@ impl PendingRequests {
 
             // We `drop` the `peer_permit` here but the `Client` will need the `client_permit` and
             // only `drop` it once the request is processed.
-            let permit = Some(ClientPermit(request_data.client_permit, self.stats.clone()));
+            let permit = Some(ClientPermit(
+                request_data.client_permit,
+                self.monitor.clone(),
+            ));
 
             match response {
                 ProcessedResponse::Success(success) => {
@@ -197,12 +200,12 @@ impl PendingRequests {
     }
 
     fn request_added(&self, key: &Key) {
-        stats_request_added(&self.stats, key);
+        stats_request_added(&self.monitor, key);
         self.notify_tracker_task();
     }
 
     fn request_removed(&self, key: &Key, timestamp: Option<Instant>) {
-        stats_request_removed(&self.stats, key, timestamp);
+        stats_request_removed(&self.monitor, key, timestamp);
         self.notify_tracker_task();
     }
 
@@ -211,29 +214,29 @@ impl PendingRequests {
     }
 }
 
-fn stats_request_added(stats: &RepositoryStats, key: &Key) {
-    *stats.pending_requests.get() += 1;
+fn stats_request_added(monitor: &RepositoryMonitor, key: &Key) {
+    *monitor.pending_requests.get() += 1;
 
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => *stats.index_requests_inflight.get() += 1,
-        Key::Block(_) => *stats.block_requests_inflight.get() += 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() += 1,
+        Key::Block(_) => *monitor.block_requests_inflight.get() += 1,
     }
 }
 
-fn stats_request_removed(stats: &RepositoryStats, key: &Key, timestamp: Option<Instant>) {
+fn stats_request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Option<Instant>) {
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => *stats.index_requests_inflight.get() -= 1,
-        Key::Block(_) => *stats.block_requests_inflight.get() -= 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => *monitor.index_requests_inflight.get() -= 1,
+        Key::Block(_) => *monitor.block_requests_inflight.get() -= 1,
     }
     if let Some(timestamp) = timestamp {
-        stats
+        monitor
             .request_inflight_durations
             .note(Instant::now() - timestamp);
     }
 }
 
 fn run_tracker(
-    stats: Arc<RepositoryStats>,
+    monitor: Arc<RepositoryMonitor>,
     request_map: Arc<BlockingMutex<HashMap<Key, RequestData>>>,
 ) -> (ScopedJoinHandle<()>, uninitialized_watch::Sender<()>) {
     let (to_tracker_tx, mut to_tracker_rx) = uninitialized_watch::channel::<()>();
@@ -259,7 +262,7 @@ fn run_tracker(
                     _ = time::sleep_until((timestamp + REQUEST_TIMEOUT).into()) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
                         if let Some(mut data) = request_map.lock().unwrap().get_mut(&key) {
-                            *stats.request_timeouts.get() += 1;
+                            *monitor.request_timeouts.get() += 1;
                             data.block_promise = None;
                         }
                     }
@@ -291,7 +294,7 @@ struct RequestData {
     client_permit: OwnedSemaphorePermit,
 }
 
-pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryStats>);
+pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryMonitor>);
 
 impl Drop for ClientPermit {
     fn drop(&mut self) {

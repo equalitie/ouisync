@@ -367,7 +367,7 @@ mod tests {
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
         let monitor = StateMonitor::make_root();
-        let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+        let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let (event_tx, _) = broadcast::channel(1);
         let shared = BranchShared::new(event_tx.clone());

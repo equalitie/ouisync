@@ -984,7 +984,7 @@ async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N]) {
     let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
     let shared = BranchShared::new(event_tx.clone());

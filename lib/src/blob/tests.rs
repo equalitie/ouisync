@@ -645,7 +645,7 @@ async fn setup(rng_seed: u64) -> (StdRng, TempDir, db::Pool, Branch) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let secrets = WriteSecrets::generate(&mut rng);
     let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
     let (event_tx, _) = broadcast::channel(1);
 

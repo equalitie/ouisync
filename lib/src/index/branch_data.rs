@@ -836,7 +836,7 @@ mod tests {
     }
 
     async fn init_db() -> (TempDir, db::Pool) {
-        db::create_temp(StateMonitor::make_root()).await.unwrap()
+        db::create_temp(&StateMonitor::make_root()).await.unwrap()
     }
 
     async fn setup() -> (TempDir, db::Pool, BranchData) {

@@ -247,7 +247,7 @@ impl Network {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub async fn register(&self, store: Store) -> Registration {
-        tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id()));
+        *store.monitor.info_hash.get() = Some(repository_info_hash(store.index.repository_id()));
 
         let metadata = store.metadata();
         let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);

@@ -165,7 +165,7 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp(StateMonitor::make_root()).await.unwrap()
+        db::create_temp(&StateMonitor::make_root()).await.unwrap()
     }
 
     fn random_block_content() -> Vec<u8> {

@@ -1,5 +1,8 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, WriteSecrets};
+use crate::{
+    blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, state_monitor::StateMonitor,
+    WriteSecrets,
+};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -276,13 +279,13 @@ async fn blind_access_non_empty_repo() {
     init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
     let local_key = SecretKey::random();
     // Create the repo and put a file in it.
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone()),
+        RepositoryDb::test(pool.clone(), &monitor),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
@@ -312,7 +315,7 @@ async fn blind_access_non_empty_repo() {
             device_id,
             local_secret.clone(),
             access_mode,
-            Span::current(),
+            RepositoryMonitor::new(&monitor, "test"),
         )
         .await
         .unwrap_or_else(|_| {
@@ -350,14 +353,14 @@ async fn blind_access_empty_repo() {
     init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
     let local_key = SecretKey::random();
 
     // Create an empty repo.
     Repository::create(
-        RepositoryDb::new(pool.clone()),
+        RepositoryDb::test(pool.clone(), &monitor),
         device_id,
         Access::WriteLocked {
             local_read_key: local_key.clone(),
@@ -374,7 +377,7 @@ async fn blind_access_empty_repo() {
         device_id,
         Some(LocalSecret::random()),
         AccessMode::Read,
-        Span::current(),
+        RepositoryMonitor::new(&monitor, "test"),
     )
     .await
     .unwrap();
@@ -388,11 +391,11 @@ async fn read_access_same_replica() {
     init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone()),
+        RepositoryDb::test(pool.clone(), &monitor),
         device_id,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
@@ -409,9 +412,15 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, Span::current())
-        .await
-        .unwrap();
+    let repo = Repository::open_in(
+        pool,
+        device_id,
+        None,
+        AccessMode::Read,
+        RepositoryMonitor::new(&monitor, "test"),
+    )
+    .await
+    .unwrap();
 
     // Reading files is allowed.
     let mut file = repo.open_file("public.txt").await.unwrap();
@@ -447,11 +456,11 @@ async fn read_access_different_replica() {
     init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
     let device_id_a = rand::random();
     let repo = Repository::create(
-        RepositoryDb::new(pool.clone()),
+        RepositoryDb::test(pool.clone(), &monitor),
         device_id_a,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
@@ -468,9 +477,15 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let device_id_b = rand::random();
-    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, Span::current())
-        .await
-        .unwrap();
+    let repo = Repository::open_in(
+        pool,
+        device_id_b,
+        None,
+        AccessMode::Read,
+        RepositoryMonitor::new(&monitor, "test"),
+    )
+    .await
+    .unwrap();
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();

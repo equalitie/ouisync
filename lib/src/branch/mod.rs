@@ -260,7 +260,7 @@ mod tests {
 
     async fn setup() -> (TempDir, Branch) {
         let monitor = StateMonitor::make_root();
-        let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+        let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();

@@ -550,7 +550,7 @@ async fn remove_concurrent_remote_file() {
 
 async fn setup() -> (TempDir, Branch) {
     let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let keys = WriteSecrets::random().into();
     let branch = create_branch(pool, keys);
 
@@ -559,7 +559,7 @@ async fn setup() -> (TempDir, Branch) {
 
 async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
     let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches = [(); N].map(|_| create_branch(pool.clone(), keys.clone()));
 

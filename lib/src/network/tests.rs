@@ -13,7 +13,7 @@ use crate::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
-    repository::{LocalId, RepositoryId},
+    repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
     test_utils,
@@ -363,7 +363,7 @@ async fn create_store<R: Rng + CryptoRng>(
     write_keys: &Keypair,
 ) -> (TempDir, Store, PublicKey) {
     let monitor = StateMonitor::make_root();
-    let (base_dir, db) = db::create_temp(monitor).await.unwrap();
+    let (base_dir, db) = db::create_temp(&monitor).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let (event_tx, _) = broadcast::channel(1);
@@ -376,6 +376,7 @@ async fn create_store<R: Rng + CryptoRng>(
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Greedy,
         local_id: LocalId::new(),
+        monitor: Arc::new(RepositoryMonitor::new(&monitor, "test")),
     };
 
     (base_dir, store, writer_id)

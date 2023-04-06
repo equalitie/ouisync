@@ -1,3 +1,7 @@
+mod duration_ranges;
+
+pub(crate) use duration_ranges::DurationRanges;
+
 use crate::{
     deadlock::{BlockingMutex, BlockingMutexGuard},
     sync::uninitialized_watch,
@@ -38,6 +42,10 @@ impl MonitorId {
             name,
             disambiguator,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -226,6 +234,10 @@ impl StateMonitor {
         }
 
         Self { shared: child }
+    }
+
+    pub fn id(&self) -> &MonitorId {
+        &self.shared.id
     }
 
     pub fn locate<I: IntoIterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {

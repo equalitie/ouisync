@@ -34,7 +34,6 @@ mod joint_entry;
 mod locator;
 mod progress;
 mod repository;
-mod repository_stats;
 mod state_monitor;
 mod store;
 mod sync;

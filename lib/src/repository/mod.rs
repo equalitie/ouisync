@@ -1,5 +1,6 @@
 mod id;
 mod metadata;
+mod monitor;
 mod reopen_token;
 #[cfg(test)]
 mod tests;
@@ -7,7 +8,7 @@ mod worker;
 
 pub use self::{id::RepositoryId, metadata::Metadata, reopen_token::ReopenToken};
 
-pub(crate) use self::id::LocalId;
+pub(crate) use self::{id::LocalId, monitor::RepositoryMonitor};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -30,36 +31,33 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
+    state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
-    StateMonitor,
 };
 use camino::Utf8Path;
 use scoped_task::ScopedJoinHandle;
-use std::{borrow::Cow, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
     time::Duration,
 };
-use tracing::{instrument, instrument::Instrument, Span};
+use tracing::{instrument, instrument::Instrument};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
-    span: Span,
+    monitor: RepositoryMonitor,
 }
 
 impl RepositoryDb {
     pub async fn create(store: impl AsRef<Path>, parent_monitor: &StateMonitor) -> Result<Self> {
-        let label = make_label(store.as_ref());
-        let span = make_span(&label);
-        let monitor = parent_monitor.make_child(label);
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::create(store, monitor.node()).await?;
 
-        let pool = db::create(store, monitor).await?;
-
-        Ok(Self { pool, span })
+        Ok(Self { pool, monitor })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -70,11 +68,9 @@ impl RepositoryDb {
     }
 
     #[cfg(test)]
-    pub(crate) fn new(pool: db::Pool) -> Self {
-        Self {
-            pool,
-            span: Span::current(),
-        }
+    pub(crate) fn test(pool: db::Pool, parent_monitor: &StateMonitor) -> Self {
+        let monitor = RepositoryMonitor::new(parent_monitor, "test");
+        Self { pool, monitor }
     }
 }
 
@@ -96,7 +92,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(db.pool, this_writer_id, access.secrets(), db.span).await
+        Self::new(db.pool, this_writer_id, access.secrets(), db.monitor).await
     }
 
     /// Opens an existing repository.
@@ -130,12 +126,9 @@ impl Repository {
         max_access_mode: AccessMode,
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
-        let label = make_label(store.as_ref());
-        let span = make_span(&label);
-        let monitor = parent_monitor.make_child(label);
-
-        let pool = db::open(store, monitor).await?;
-        Self::open_in(pool, device_id, local_secret, max_access_mode, span).await
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::open(store, monitor.node()).await?;
+        Self::open_in(pool, device_id, local_secret, max_access_mode, monitor).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -146,7 +139,7 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
-        span: Span,
+        monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -178,7 +171,7 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets, span).await
+        Self::new(pool, this_writer_id, access_secrets, monitor).await
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
@@ -187,23 +180,17 @@ impl Repository {
         token: ReopenToken,
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
-        let label = make_label(store.as_ref());
-        let span = make_span(&label);
-        let monitor = parent_monitor.make_child(label);
-
-        let pool = db::open(store, monitor).await?;
-
-        Self::new(pool, token.writer_id, token.secrets, span).await
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::open(store, monitor.node()).await?;
+        Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
-        span: Span,
+        monitor: RepositoryMonitor,
     ) -> Result<Self> {
-        let _enter = span.enter();
-
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
 
@@ -218,9 +205,14 @@ impl Repository {
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
+            monitor: Arc::new(monitor),
         };
 
-        tracing::debug!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
+        tracing::debug!(
+            parent: store.monitor.span(),
+            access = ?secrets.access_mode(),
+            writer_id = ?this_writer_id
+        );
 
         let shared = Arc::new(Shared {
             store,
@@ -236,10 +228,11 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(Span::current()));
+        task::spawn(worker.run().instrument(shared.store.monitor.span().clone()));
 
         let _progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.store.clone()).instrument(Span::current()),
+            report_sync_progress(shared.store.clone())
+                .instrument(shared.store.monitor.span().clone()),
         );
 
         Ok(Self {
@@ -866,48 +859,4 @@ async fn report_sync_progress(store: Store) {
             );
         }
     }
-}
-
-const MAX_SPAN_LABEL_LENGTH: usize = 24;
-
-fn make_label(store: &Path) -> Cow<str> {
-    let store = store.to_string_lossy();
-
-    if store.len() <= MAX_SPAN_LABEL_LENGTH {
-        store
-    } else {
-        let start = store.len() - MAX_SPAN_LABEL_LENGTH + 1; // +1 for the ellipsis character
-        format!("…{}", &store[start..]).into()
-    }
-}
-
-fn make_span(label: &str) -> Span {
-    tracing::info_span!("repo", label)
-}
-
-#[test]
-fn make_label_sanity_check() {
-    // less than 24 bytes
-    assert_eq!(
-        make_label(Path::new("/home/alice/repos/a.db")),
-        "/home/alice/repos/a.db"
-    );
-
-    // Exactly 24 bytes
-    assert_eq!(
-        make_label(Path::new("/home/alice/repos/abc.db")),
-        "/home/alice/repos/abc.db"
-    );
-
-    // One more than 24 bytes
-    assert_eq!(
-        make_label(Path::new("/home/alice/repos/abcd.db")),
-        "…ome/alice/repos/abcd.db"
-    );
-
-    // Lot more than 24 bytes
-    assert_eq!(
-        make_label(Path::new("/home/alice/repos/abcdefghijklmnopqrstuvwxyz.db")),
-        "…ghijklmnopqrstuvwxyz.db"
-    );
 }

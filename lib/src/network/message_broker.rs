@@ -94,9 +94,7 @@ impl MessageBroker {
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repository = ?store.repository_id(),
-            local_id = %store.local_id,
-            state = field::Empty,
+            repo = store.monitor.label(),
             role = field::Empty,
         );
 
