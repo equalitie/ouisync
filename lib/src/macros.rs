@@ -126,12 +126,6 @@ macro_rules! vv {
     }};
 }
 
-macro_rules! state_monitor {
-    ($($token:tt)*) => {
-        tracing::trace!(target: "ouisync::state_monitor", $($token)*)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     define_byte_array_wrapper! {

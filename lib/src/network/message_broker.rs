@@ -223,7 +223,7 @@ async fn maintain_link(
 
         *state.get() = State::AwaitingBarrier;
 
-        match Barrier::new(&mut stream, &sink).run().await {
+        match Barrier::new(&mut stream, &sink, &monitor).run().await {
             Ok(()) => (),
             Err(BarrierError::Failure) => continue,
             Err(BarrierError::ChannelClosed) => break,
