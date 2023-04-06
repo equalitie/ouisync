@@ -15,7 +15,6 @@ use crate::{
 use async_trait::async_trait;
 use futures_util::{ready, stream::SelectAll, Sink, SinkExt, Stream, StreamExt};
 use std::{
-    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -23,7 +22,8 @@ use std::{
 };
 use tokio::{
     runtime, select,
-    sync::{watch, Mutex as AsyncMutex},
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    sync::Mutex as AsyncMutex,
     time::Duration,
 };
 
@@ -42,14 +42,8 @@ pub(super) struct MessageDispatcher {
 
 impl MessageDispatcher {
     pub fn new() -> Self {
-        let (queues_changed_tx, _) = watch::channel(());
-
         Self {
-            recv: Arc::new(RecvState {
-                reader: MultiStream::new(),
-                queues: BlockingMutex::new(HashMap::default()),
-                queues_changed_tx,
-            }),
+            recv: Arc::new(RecvState::new()),
             send: Arc::new(MultiSink::new()),
         }
     }
@@ -60,9 +54,7 @@ impl MessageDispatcher {
         let (reader, writer) = stream.into_split();
         let (reader_permit, writer_permit) = permit.split();
 
-        self.recv
-            .reader
-            .add(PermittedStream::new(reader, reader_permit));
+        self.recv.add(PermittedStream::new(reader, reader_permit));
         self.send.add(PermittedSink::new(writer, writer_permit));
     }
 
@@ -116,83 +108,57 @@ impl Drop for MessageDispatcher {
 pub(super) struct ContentStream {
     channel: MessageChannel,
     state: Arc<RecvState>,
-    queues_changed_rx: watch::Receiver<()>,
     last_transport_id: Option<PermitId>,
 }
 
 impl ContentStream {
     fn new(channel: MessageChannel, state: Arc<RecvState>) -> Self {
-        let queues_changed_rx = state.queues_changed_tx.subscribe();
-
         state.add_channel(channel);
 
         Self {
             channel,
             state,
-            queues_changed_rx,
             last_transport_id: None,
         }
     }
 
     /// Receive the next message content.
     pub async fn recv(&mut self) -> Result<Vec<u8>, ContentStreamError> {
-        let mut closed = false;
+        let arc = match self
+            .state
+            .queues
+            .lock()
+            .unwrap()
+            .get_mut(&self.channel)
+            .map(|queue| queue.rx.clone())
+        {
+            Some(rx) => rx,
+            None => return Err(ContentStreamError::ChannelClosed),
+        };
 
-        loop {
-            {
-                let mut queues = self.state.queues.lock().unwrap();
+        let mut lock = arc.lock().await;
 
-                if let Some(queue) = queues.get_mut(&self.channel).map(|q| &mut q.queue) {
-                    if let Some((transport, _)) = queue.back() {
-                        match self.last_transport_id {
-                            Some(last_transport_id) => {
-                                if transport == &last_transport_id {
-                                    return Ok(queue.pop_back().unwrap().1);
-                                } else {
-                                    self.last_transport_id = Some(*transport);
-                                    return Err(ContentStreamError::TransportChanged);
-                                }
-                            }
-                            None => {
-                                self.last_transport_id = Some(*transport);
-                                return Ok(queue.pop_back().unwrap().1);
-                            }
-                        }
-                    }
-                }
+        if let Some((transport, data)) = lock.0.take() {
+            self.last_transport_id = Some(transport);
+            return Ok(data);
+        }
+
+        let (transport, data) = match self.state.recv(&mut lock.1).await {
+            Some((transport, data)) => (transport, data),
+            None => return Err(ContentStreamError::ChannelClosed),
+        };
+
+        if let Some(last_transport_id) = self.last_transport_id {
+            if last_transport_id == transport {
+                Ok(data)
+            } else {
+                self.last_transport_id = Some(transport);
+                lock.0 = Some((transport, data));
+                Err(ContentStreamError::TransportChanged)
             }
-
-            if closed {
-                return Err(ContentStreamError::ChannelClosed);
-            }
-
-            select! {
-                message = self.state.reader.recv() => {
-                    if let Some((transport, message)) = message {
-                        if message.channel == self.channel {
-                            if let Some(last_transport) = self.last_transport_id {
-                                if transport == last_transport {
-                                    return Ok(message.content);
-                                } else {
-                                    self.last_transport_id = Some(transport);
-                                    self.state.push(transport, message);
-                                    return Err(ContentStreamError::TransportChanged);
-                                }
-                            } else {
-                                self.last_transport_id = Some(transport);
-                                return Ok(message.content);
-                            }
-                        } else {
-                            self.state.push(transport, message)
-                        }
-                    } else {
-                        // If the reader closed we still want to check the queues one more time
-                        // because other streams might have pushed a message in the meantime.
-                        closed = true;
-                    }
-                }
-                _ = self.queues_changed_rx.changed() => ()
-            }
+        } else {
+            self.last_transport_id = Some(transport);
+            Ok(data)
         }
     }
 
@@ -290,31 +256,69 @@ impl LiveConnectionInfoSet {
 
 struct ChannelQueue {
     reference_count: usize,
-    queue: VecDeque<(PermitId, Vec<u8>)>,
+    rx: Arc<
+        AsyncMutex<(
+            Option<(PermitId, Vec<u8>)>,
+            UnboundedReceiver<(PermitId, Vec<u8>)>,
+        )>,
+    >,
+    // TODO: This probably shouldn't be unbounded.
+    tx: UnboundedSender<(PermitId, Vec<u8>)>,
 }
 
 struct RecvState {
-    reader: MultiStream,
-    queues: BlockingMutex<HashMap<MessageChannel, ChannelQueue>>,
-    queues_changed_tx: watch::Sender<()>,
+    reader: Arc<MultiStream>,
+    queues: Arc<BlockingMutex<HashMap<MessageChannel, ChannelQueue>>>,
 }
 
 impl RecvState {
+    fn new() -> Self {
+        Self {
+            reader: Arc::new(MultiStream::new()),
+            queues: Arc::new(BlockingMutex::new(HashMap::default())),
+        }
+    }
+
+    fn add(&self, stream: PermittedStream) {
+        self.reader.add(stream);
+    }
+
     fn add_channel(&self, channel_id: MessageChannel) {
         match self.queues.lock().unwrap().entry(channel_id) {
             hash_map::Entry::Occupied(mut entry) => entry.get_mut().reference_count += 1,
             hash_map::Entry::Vacant(entry) => {
+                let (tx, rx) = mpsc::unbounded_channel();
                 entry.insert(ChannelQueue {
                     reference_count: 1,
-                    queue: Default::default(),
+                    rx: Arc::new(AsyncMutex::new((None, rx))),
+                    tx,
                 });
             }
         }
     }
 
+    async fn recv(
+        &self,
+        queue_rx: &mut UnboundedReceiver<(PermitId, Vec<u8>)>,
+    ) -> Option<(PermitId, Vec<u8>)> {
+        select! {
+            maybe_message = queue_rx.recv() => maybe_message,
+            _ = self.sort_incoming_messages_into_queues() => None,
+        }
+    }
+
+    async fn sort_incoming_messages_into_queues(&self) {
+        while let Some((transport, message)) = self.reader.recv().await {
+            if let Some(queue) = self.queues.lock().unwrap().get_mut(&message.channel) {
+                queue.tx.send((transport, message.content)).unwrap_or(());
+            }
+        }
+    }
+
     fn remove_channel(&self, channel_id: &MessageChannel) {
-        // Unwrap because we shouldn't remove more than we add.
-        match self.queues.lock().unwrap().entry(*channel_id) {
+        let mut queues = self.queues.lock().unwrap();
+
+        match queues.entry(*channel_id) {
             hash_map::Entry::Occupied(mut entry) => {
                 let value = entry.get_mut();
                 assert_ne!(value.reference_count, 0);
@@ -324,27 +328,6 @@ impl RecvState {
                 }
             }
             hash_map::Entry::Vacant(_) => unreachable!(),
-        }
-    }
-
-    //// Pops a message from the corresponding queue.
-    //fn pop(&self, channel: &MessageChannel) -> Option<Vec<u8>> {
-    //    self.queues
-    //        .lock()
-    //        .unwrap()
-    //        .get_mut(channel)?
-    //        .queue
-    //        .pop_back()
-    //}
-
-    // Pushes the message into the corresponding queue. Wakes up any waiting streams so they can
-    // grab the message if it is for them. If there is currently no one waiting on the channel then
-    // the message shall be ignored. Note that it should be OK to miss some of those packets
-    // because the `Barrier` algorithm should take care of syncing the communication exchanges.
-    fn push(&self, permit_id: PermitId, message: Message) {
-        if let Some(value) = self.queues.lock().unwrap().get_mut(&message.channel) {
-            value.queue.push_front((permit_id, message.content));
-            self.queues_changed_tx.send(()).unwrap_or(());
         }
     }
 }
@@ -621,7 +604,7 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use net::tcp::{TcpListener, TcpStream};
-    use std::net::Ipv4Addr;
+    use std::{net::Ipv4Addr, str::from_utf8};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn recv_on_stream() {
@@ -717,7 +700,10 @@ mod tests {
         for mut server_stream in [server_stream0, server_stream1] {
             for i in 0..num_messages {
                 let recv_content = server_stream.recv().await.unwrap();
-                assert_eq!(recv_content, build_message(server_stream.channel, i));
+                assert_eq!(
+                    from_utf8(&recv_content).unwrap(),
+                    from_utf8(&build_message(server_stream.channel, i)).unwrap()
+                );
             }
         }
     }
@@ -746,7 +732,10 @@ mod tests {
         let mut server_stream1 = server.open_recv(channel);
 
         let recv_content = server_stream0.recv().await.unwrap();
-        assert_eq!(recv_content, send_content0);
+        assert_eq!(
+            from_utf8(&recv_content).unwrap(),
+            from_utf8(send_content0).unwrap()
+        );
 
         drop(server_stream0);
 
