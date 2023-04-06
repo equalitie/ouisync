@@ -102,10 +102,10 @@ impl LocalDiscoveryInner {
                     match discovery {
                         Ok(discovery) => {
                             entry.insert(discovery);
-                            tracing::info!("started");
+                            tracing::info!("Local discovery started");
                         }
                         Err(error) => {
-                            tracing::warn!(?error, "failed to start");
+                            tracing::warn!(?error, "Failed to start local discovery");
                         }
                     }
                 }
@@ -270,7 +270,7 @@ impl PerInterfaceLocalDiscovery {
 impl Drop for PerInterfaceLocalDiscovery {
     fn drop(&mut self) {
         let _enter = self.span.enter();
-        tracing::info!("stopped");
+        tracing::info!("Local discovery stopped");
     }
 }
 

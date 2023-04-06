@@ -13,7 +13,7 @@ use tokio::{
     sync::mpsc,
     time::{self, Duration},
 };
-use tracing::Instrument;
+use tracing::{field, Instrument, Span};
 
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
@@ -101,6 +101,7 @@ impl Gateway {
         source: PeerSource,
     ) -> Option<raw::Stream> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
+            tracing::warn!("invalid peer address - discarding");
             return None;
         }
 
@@ -132,12 +133,7 @@ impl Gateway {
                     return Some(socket);
                 }
                 Err(error) => {
-                    tracing::warn!(
-                        "Failed to create {} connection to address {:?}: {:?}",
-                        source,
-                        addr,
-                        error
-                    );
+                    tracing::warn!("connection failed: {:?}", error);
 
                     if error.is_localy_closed() {
                         // Connector locally closed - no point in retrying.
@@ -146,6 +142,7 @@ impl Gateway {
 
                     match backoff.next_backoff() {
                         Some(duration) => {
+                            tracing::debug!("next connection attempt in {:?}", duration);
                             time::sleep(duration).await;
                         }
                         // We set max elapsed time to None above.
@@ -304,31 +301,50 @@ impl Stacks {
 
     fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
         if !addr.is_quic() {
+            tracing::debug!("hole punching not started - not QUIC address");
             return None;
         }
 
         if !ip::is_global(&addr.ip()) {
+            tracing::debug!("hole punching not started - not global address");
             return None;
         }
 
-        let stack = self.quic_stack_for(&addr.ip())?;
-        let sender = stack.hole_puncher.clone();
-        let task = scoped_task::spawn(async move {
-            use rand::Rng;
+        let stack = if let Some(stack) = self.quic_stack_for(&addr.ip()) {
+            stack
+        } else {
+            tracing::warn!("hole punching not started - no QUIC stack");
+            return None;
+        };
 
-            let addr = addr.socket_addr();
-            loop {
-                let duration_ms = rand::thread_rng().gen_range(5_000..15_000);
-                // Sleep first because the `connect` function that is normally called right
-                // after this function will send a SYN packet right a way, so no need to do
-                // double work here.
-                time::sleep(Duration::from_millis(duration_ms)).await;
-                // TODO: Consider using something non-identifiable (random) but something that
-                // won't interfere with (will be ignored by) the quic and btdht protocols.
-                let msg = b"punch";
-                sender.send_to(msg, addr).await.map(|_| ()).unwrap_or(());
+        let sender = stack.hole_puncher.clone();
+        let task = scoped_task::spawn(
+            async move {
+                use rand::Rng;
+
+                tracing::debug!("hole punching started");
+
+                let addr = addr.socket_addr();
+                loop {
+                    let duration = rand::thread_rng().gen_range(5_000..15_000);
+                    let duration = Duration::from_millis(duration);
+                    tracing::debug!("next hole punch in {:?}", duration);
+
+                    // Sleep first because the `connect` function that is normally called right
+                    // after this function will send a SYN packet right a way, so no need to do
+                    // double work here.
+                    time::sleep(duration).await;
+                    // TODO: Consider using something non-identifiable (random) but something that
+                    // won't interfere with (will be ignored by) the quic and btdht protocols.
+                    let msg = b"punch";
+                    match sender.send_to(msg, addr).await {
+                        Ok(()) => tracing::debug!("hole punch sent"),
+                        Err(error) => tracing::warn!("hole punch failed: {:?}", error),
+                    }
+                }
             }
-        });
+            .instrument(Span::current()),
+        );
 
         Some(task)
     }
@@ -360,39 +376,34 @@ struct QuicStack {
 
 impl QuicStack {
     async fn new(
-        preferred_addr: SocketAddr,
+        bind_addr: SocketAddr,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> Option<(Self, quic::SideChannelMaker)> {
-        let family = match preferred_addr {
-            SocketAddr::V4(_) => "IPv4",
-            SocketAddr::V6(_) => "IPv6",
-        };
+        let span = tracing::info_span!("listener", addr = field::Empty);
 
-        let (connector, listener, side_channel_maker) = match quic::configure(preferred_addr).await
-        {
+        let (connector, listener, side_channel_maker) = match quic::configure(bind_addr).await {
             Ok((connector, listener, side_channel_maker)) => {
-                tracing::info!(
-                    "Configured {} QUIC stack on {:?}",
-                    family,
-                    listener.local_addr()
+                span.record(
+                    "addr",
+                    field::display(PeerAddr::Quic(*listener.local_addr())),
                 );
+                tracing::info!(parent: &span, "Listener started");
 
                 (connector, listener, side_channel_maker)
             }
             Err(e) => {
-                tracing::warn!("Failed to configure {} QUIC stack: {}", family, e);
+                tracing::warn!(
+                    parent: &span,
+                    bind_addr = %PeerAddr::Quic(bind_addr),
+                    "Failed to start listener: {:?}", e
+                );
                 return None;
             }
         };
 
         let listener_local_addr = *listener.local_addr();
-        let listener_task = scoped_task::spawn(
-            run_quic_listener(listener, incoming_tx).instrument(tracing::info_span!(
-                "listener",
-                proto = "QUIC",
-                family
-            )),
-        );
+        let listener_task =
+            scoped_task::spawn(run_quic_listener(listener, incoming_tx).instrument(span));
 
         let hole_puncher = side_channel_maker.make().sender();
 
@@ -419,22 +430,18 @@ struct TcpStack {
 
 impl TcpStack {
     async fn new(
-        preferred_addr: SocketAddr,
+        bind_addr: SocketAddr,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> Option<Self> {
-        let family = match preferred_addr {
-            SocketAddr::V4(_) => "IPv4",
-            SocketAddr::V6(_) => "IPv6",
-        };
+        let span = tracing::info_span!("listener", addr = field::Empty);
 
-        let listener = match TcpListener::bind(preferred_addr).await {
+        let listener = match TcpListener::bind(bind_addr).await {
             Ok(listener) => listener,
             Err(err) => {
                 tracing::warn!(
-                    "Failed to bind listener to {} TCP address {:?}: {:?}",
-                    family,
-                    preferred_addr,
-                    err
+                    parent: &span,
+                    bind_addr = %PeerAddr::Tcp(bind_addr),
+                    "Failed to start listener: {:?}", err
                 );
                 return None;
             }
@@ -442,26 +449,24 @@ impl TcpStack {
 
         let listener_local_addr = match listener.local_addr() {
             Ok(addr) => {
-                tracing::info!("Configured {} TCP listener on {:?}", family, addr);
+                span.record("addr", field::display(PeerAddr::Tcp(addr)));
+                tracing::info!("Listener started");
+
                 addr
             }
             Err(err) => {
                 tracing::warn!(
-                    "Failed to get local address of {} TCP listener: {:?}",
-                    family,
+                    parent: &span,
+                    bind_addr = %PeerAddr::Tcp(bind_addr),
+                    "Failed to get listener local address: {:?}",
                     err
                 );
                 return None;
             }
         };
 
-        let listener_task = scoped_task::spawn(
-            run_tcp_listener(listener, incoming_tx).instrument(tracing::info_span!(
-                "listener",
-                proto = "TCP",
-                family
-            )),
-        );
+        let listener_task =
+            scoped_task::spawn(run_tcp_listener(listener, incoming_tx).instrument(span));
 
         Some(Self {
             listener_local_addr,
@@ -484,7 +489,7 @@ async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, 
                     .ok();
             }
             Err(error) => {
-                tracing::error!("Failed to accept incoming TCP connection: {}", error);
+                tracing::error!("Failed to accept incoming connection: {}", error);
                 break;
             }
         }
@@ -509,7 +514,7 @@ async fn run_quic_listener(
                     .ok();
             }
             Err(error) => {
-                tracing::error!("Failed to accept incoming QUIC connection: {}", error);
+                tracing::error!("Failed to accept incoming connection: {}", error);
                 break;
             }
         }

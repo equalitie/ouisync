@@ -692,7 +692,12 @@ impl Inner {
             monitor.mark_as_connecting(permit.id());
             tracing::info!(parent: monitor.span(), "connecting");
 
-            let socket = match self.gateway.connect_with_retries(&peer, source).await {
+            let socket = match self
+                .gateway
+                .connect_with_retries(&peer, source)
+                .instrument(monitor.span().clone())
+                .await
+            {
                 Some(socket) => socket,
                 None => break,
             };
