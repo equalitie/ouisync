@@ -59,6 +59,6 @@ pub use self::{
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
     repository::{Metadata, ReopenToken, Repository, RepositoryDb},
-    state_monitor::{tracing_layer::TracingLayer, MonitorId, MonitoredValue, StateMonitor},
+    state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     store::Store,
 };

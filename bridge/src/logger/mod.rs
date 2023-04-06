@@ -14,7 +14,7 @@ use ouisync_lib::StateMonitor;
 use std::panic;
 
 pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
-    let logger = Logger::new(root_monitor.clone()).map_err(Error::InitializeLogger)?;
+    let logger = Logger::new().map_err(Error::InitializeLogger)?;
 
     // Setup panic counter
     if let Some(root_monitor) = root_monitor {

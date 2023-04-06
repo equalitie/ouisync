@@ -1,5 +1,3 @@
-pub mod tracing_layer;
-
 use crate::{
     deadlock::{BlockingMutex, BlockingMutexGuard},
     sync::uninitialized_watch,
