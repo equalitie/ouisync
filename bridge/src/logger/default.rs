@@ -1,4 +1,3 @@
-use ouisync_lib::{StateMonitor, TracingLayer};
 use std::io;
 use tracing_subscriber::{
     filter::{LevelFilter, Targets},
@@ -11,23 +10,8 @@ use tracing_subscriber::{
 pub struct Logger;
 
 impl Logger {
-    pub(crate) fn new(state_monitor: Option<StateMonitor>) -> Result<Self, io::Error> {
-        let tracing_layer = state_monitor.map(|state_monitor| {
-            let tracing_layer = TracingLayer::new();
-            tracing_layer.set_monitor(Some(state_monitor));
-            tracing_layer
-        });
-
+    pub(crate) fn new() -> Result<Self, io::Error> {
         tracing_subscriber::registry()
-            .with(
-                tracing_layer.with_filter(
-                    Targets::new()
-                        // only events from the ouisync crates
-                        // NOTE: We can further restrict this to just "ouisync::state_monitor" but
-                        // for now we want also regular log events to be sent to the state monitor.
-                        .with_target("ouisync", LevelFilter::TRACE),
-                ),
-            )
             .with(
                 fmt::layer()
                     .pretty()

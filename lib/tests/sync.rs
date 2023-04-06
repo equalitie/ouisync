@@ -5,7 +5,8 @@ mod common;
 use self::common::{actor, Env, NetworkExt, Proto};
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, RepositoryDb, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, RepositoryDb, StateMonitor, BLOB_HEADER_SIZE,
+    BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
@@ -395,8 +396,9 @@ fn recreate_local_branch() {
 
         // 1. Create the repo but don't link it yet.
         let repo_path = actor::make_repo_path();
+        let monitor = StateMonitor::make_root();
         let repo = Repository::create(
-            RepositoryDb::create(&repo_path).await.unwrap(),
+            RepositoryDb::create(&repo_path, &monitor).await.unwrap(),
             actor::device_id(),
             Access::new(None, None, actor::default_secrets()),
         )
@@ -415,10 +417,15 @@ fn recreate_local_branch() {
         repo.close().await.unwrap();
         drop(repo);
 
-        let repo =
-            Repository::open_with_mode(&repo_path, actor::device_id(), None, AccessMode::Read)
-                .await
-                .unwrap();
+        let repo = Repository::open_with_mode(
+            &repo_path,
+            actor::device_id(),
+            None,
+            AccessMode::Read,
+            &monitor,
+        )
+        .await
+        .unwrap();
 
         // 4. Establish link
         let reg = network.register(repo.store().clone()).await;
@@ -431,7 +438,7 @@ fn recreate_local_branch() {
 
         repo.close().await.unwrap();
         drop(repo);
-        let repo = Repository::open(&repo_path, actor::device_id(), None)
+        let repo = Repository::open(&repo_path, actor::device_id(), None, &monitor)
             .await
             .unwrap();
 

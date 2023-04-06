@@ -220,9 +220,10 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
+    use ouisync::StateMonitor;
 
     pub(crate) fn create_unbound_network() -> Network {
-        Network::new()
+        Network::new(StateMonitor::make_root())
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {
@@ -255,13 +256,13 @@ pub(crate) mod actor {
     }
 
     pub(crate) async fn create_repo_with_secrets(secrets: AccessSecrets) -> Repository {
-        Repository::create(
-            RepositoryDb::create(&make_repo_path()).await.unwrap(),
-            device_id(),
-            Access::new(None, None, secrets),
-        )
-        .await
-        .unwrap()
+        let store = make_repo_path();
+        let monitor = StateMonitor::make_root();
+        let db = RepositoryDb::create(&store, &monitor).await.unwrap();
+
+        Repository::create(db, device_id(), Access::new(None, None, secrets))
+            .await
+            .unwrap()
     }
 
     pub(crate) async fn create_repo() -> Repository {

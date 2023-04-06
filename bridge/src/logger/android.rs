@@ -6,7 +6,6 @@ use ndk_sys::{
 };
 use once_cell::sync::Lazy;
 use os_pipe::{PipeReader, PipeWriter};
-use ouisync_lib::{StateMonitor, TracingLayer};
 use std::{
     ffi::{CStr, CString},
     io::{self, BufRead, BufReader, Write},
@@ -25,33 +24,25 @@ use std::{
 // release mode.
 const TAG: &str = "flutter-ouisync";
 
-static TRACING_LAYER: Lazy<TracingLayer> = Lazy::new(TracingLayer::new);
-
 pub struct Logger {
     _stdout: StdRedirect,
     _stderr: StdRedirect,
 }
 
 impl Logger {
-    pub(crate) fn new(trace_monitor: Option<StateMonitor>) -> Result<Self, io::Error> {
+    pub(crate) fn new() -> Result<Self, io::Error> {
         // This should be set up before `setup_logger` is called, otherwise we won't see
         // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
         let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;
         let stderr = StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?;
 
         panic::set_hook(Box::new(panic_hook));
-        setup_logger(trace_monitor);
+        setup_logger();
 
         Ok(Self {
             _stdout: stdout,
             _stderr: stderr,
         })
-    }
-}
-
-impl Drop for Logger {
-    fn drop(&mut self) {
-        TRACING_LAYER.set_monitor(None);
     }
 }
 
@@ -188,7 +179,7 @@ fn print_cstr(priority: LogPriority, message: &CStr) {
     }
 }
 
-fn setup_logger(trace_monitor: Option<StateMonitor>) {
+fn setup_logger() {
     use paranoid_android::{AndroidLogMakeWriter, Buffer};
     use tracing_subscriber::{
         filter::{LevelFilter, Targets},
@@ -198,14 +189,7 @@ fn setup_logger(trace_monitor: Option<StateMonitor>) {
         Layer,
     };
 
-    TRACING_LAYER.set_monitor(trace_monitor);
-
     tracing_subscriber::registry()
-        .with(
-            TRACING_LAYER
-                .clone()
-                .with_filter(Targets::new().with_target("ouisync", LevelFilter::TRACE)),
-        )
         .with(
             fmt::layer()
                 .pretty()

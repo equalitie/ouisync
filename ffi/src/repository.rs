@@ -12,7 +12,6 @@ use ouisync_bridge::{
 };
 use ouisync_lib::{network, path, AccessMode, EntryType, Event, Payload, Progress, ShareToken};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::Instrument;
 
 pub(crate) async fn create(
     state: &State,
@@ -28,8 +27,8 @@ pub(crate) async fn create(
         share_token,
         &state.config,
         &state.network,
+        &state.repos_monitor,
     )
-    .instrument(state.repos_span.clone())
     .await?;
     let handle = state.repositories.insert(holder);
 
@@ -42,9 +41,14 @@ pub(crate) async fn open(
     store: Utf8PathBuf,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let holder = repository::open(store, local_password, &state.config, &state.network)
-        .instrument(state.repos_span.clone())
-        .await?;
+    let holder = repository::open(
+        store,
+        local_password,
+        &state.config,
+        &state.network,
+        &state.repos_monitor,
+    )
+    .await?;
     let handle = state.repositories.insert(holder);
 
     Ok(handle)
@@ -76,9 +80,7 @@ pub(crate) async fn reopen(
     store: Utf8PathBuf,
     token: Vec<u8>,
 ) -> Result<Handle<RepositoryHolder>> {
-    let holder = repository::reopen(store, token, &state.network)
-        .instrument(state.repos_span.clone())
-        .await?;
+    let holder = repository::reopen(store, token, &state.network, &state.repos_monitor).await?;
     let handle = state.repositories.insert(holder);
 
     Ok(handle)

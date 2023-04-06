@@ -1,6 +1,7 @@
 mod barrier;
 mod client;
 mod connection;
+mod connection_monitor;
 mod constants;
 mod crypto;
 mod debug_payload;
@@ -29,6 +30,7 @@ mod upnp;
 
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
+    connection_monitor::ConnectionMonitor,
     dht_discovery::DhtDiscovery,
     gateway::Gateway,
     local_discovery::LocalDiscovery,
@@ -47,12 +49,12 @@ use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
     deadlock::BlockingMutex,
     repository::RepositoryId,
+    state_monitor::StateMonitor,
     store::Store,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use btdht::{self, InfoHash, INFO_HASH_LEN};
-use futures_util::FutureExt;
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use std::{
@@ -68,7 +70,7 @@ use tokio::{
     task::{AbortHandle, JoinSet},
     time::Duration,
 };
-use tracing::{instrument, Instrument, Span};
+use tracing::{Instrument, Span};
 
 const DHT_ENABLED: &str = "dht_enabled";
 const PEX_ENABLED: &str = "pex_enabled";
@@ -82,7 +84,7 @@ pub struct Network {
 
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
-    pub fn new() -> Self {
+    pub fn new(monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
 
@@ -92,9 +94,8 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None);
-
-        let port_forwarder = upnp::PortForwarder::new();
+        let dht_discovery = DhtDiscovery::new(None, None, monitor.make_child("DHT"));
+        let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
@@ -107,9 +108,15 @@ impl Network {
         let user_provided_peers = SeenPeers::new();
 
         let this_runtime_id = SecretRuntimeId::generate();
-        tracing::debug!(this_runtime_id = ?this_runtime_id.public());
+        tracing::debug!(this_runtime_id = ?this_runtime_id.public().as_public_key());
+
+        let connections_monitor = monitor.make_child("Connections");
+        let peers_monitor = monitor.make_child("Peers");
 
         let inner = Arc::new(Inner {
+            main_monitor: monitor,
+            connections_monitor,
+            peers_monitor,
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -240,7 +247,7 @@ impl Network {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub async fn register(&self, store: Store) -> Registration {
-        tracing::trace!(info_hash = ?repository_info_hash(store.index.repository_id()));
+        *store.monitor.info_hash.get() = Some(repository_info_hash(store.index.repository_id()));
 
         let metadata = store.metadata();
         let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
@@ -370,6 +377,9 @@ struct RegistrationHolder {
 }
 
 struct Inner {
+    main_monitor: StateMonitor,
+    connections_monitor: StateMonitor,
+    peers_monitor: StateMonitor,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -516,7 +526,10 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
-        let mut discovery = LocalDiscovery::new(listener_port);
+        let mut discovery = LocalDiscovery::new(
+            listener_port,
+            self.main_monitor.make_child("LocalDiscovery"),
+        );
 
         loop {
             let peer = discovery.recv().await;
@@ -588,13 +601,29 @@ impl Inner {
                     break;
                 }
 
-                self.spawn(self.clone().handle_connection(stream, permit).map(|_| ()));
+                let this = self.clone();
+
+                let monitor = self.span.in_scope(|| {
+                    ConnectionMonitor::new(
+                        &self.connections_monitor,
+                        &permit.addr(),
+                        permit.source(),
+                    )
+                });
+                monitor.mark_as_connecting(permit.id());
+
+                self.spawn(async move {
+                    this.handle_connection(stream, permit, &monitor).await;
+                });
             }
         }
     }
 
-    #[instrument(parent = &self.span, skip_all, fields(?source, addr = ?peer.initial_addr()))]
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
+        let monitor = self.span.in_scope(|| {
+            ConnectionMonitor::new(&self.connections_monitor, peer.initial_addr(), source)
+        });
+
         let mut backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(100))
             .with_max_interval(Duration::from_secs(8))
@@ -604,6 +633,8 @@ impl Inner {
         let mut next_sleep = None;
 
         loop {
+            monitor.start();
+
             // TODO: We should also check whether the user still wants to accept connections from
             // the given `source` (the preference may have changed in the mean time).
 
@@ -622,6 +653,7 @@ impl Inner {
             }
 
             if let Some(sleep) = next_sleep {
+                tracing::debug!(parent: monitor.span(), "next connection attempt in {:?}", sleep);
                 tokio::time::sleep(sleep).await;
             }
 
@@ -635,59 +667,55 @@ impl Inner {
                         return;
                     }
 
-                    state_monitor!(state = "awaiting permit");
-
                     // This is a duplicate from a different source, if the other source releases
                     // it, then we may want to try to keep hold of it.
+                    monitor.mark_as_awaiting_permit();
+                    tracing::debug!(
+                        parent: monitor.span(),
+                        "duplicate from different source - awaiting permit"
+                    );
+
                     on_release.recv().await;
                     continue;
                 }
             };
 
-            tracing::trace!(?addr, ?source, "peer found");
-
             permit.mark_as_connecting();
+            monitor.mark_as_connecting(permit.id());
+            tracing::info!(parent: monitor.span(), "connecting");
 
-            state_monitor!(state = "connecting", permit_id = permit.id());
-
-            let socket = match self.gateway.connect_with_retries(&peer, source).await {
+            let socket = match self
+                .gateway
+                .connect_with_retries(&peer, source)
+                .instrument(monitor.span().clone())
+                .await
+            {
                 Some(socket) => socket,
                 None => break,
             };
 
-            state_monitor!(state = "handling");
-
-            if !self.clone().handle_connection(socket, permit).await {
+            if !self.handle_connection(socket, permit, &monitor).await {
                 break;
             }
         }
     }
 
     /// Return true iff the peer is suitable for reconnection.
-    #[instrument(
-        parent = &self.span,
-        skip_all,
-        fields(
-            addr = ?permit.addr(),
-            source = ?permit.source(),
-            permit_id = permit.id(),
-        )
-    )]
     async fn handle_connection(
-        self: Arc<Self>,
+        &self,
         mut stream: raw::Stream,
         permit: ConnectionPermit,
+        monitor: &ConnectionMonitor,
     ) -> bool {
-        tracing::info!("connection established");
+        tracing::info!(parent: monitor.span(), "connected");
 
         permit.mark_as_handshaking();
-
-        state_monitor!(state = "handshaking");
+        monitor.mark_as_handshaking();
 
         let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
 
         if let Err(error) = &handshake_result {
-            tracing::warn!("Handshake with {:?} failed: {:?}", permit.addr(), error);
+            tracing::warn!(parent: monitor.span(), ?error, "handshake failed");
         }
 
         let that_runtime_id = match handshake_result {
@@ -701,16 +729,16 @@ impl Inner {
             }
         };
 
-        tracing::trace!(that_runtime_id = ?that_runtime_id.as_public_key());
-
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            tracing::debug!("connection from self, discarding");
+            tracing::info!(parent: monitor.span(), "connection from self, discarding");
             self.our_addresses.lock().unwrap().insert(permit.addr());
             return false;
         }
 
         permit.mark_as_active(that_runtime_id);
+        monitor.mark_as_active(that_runtime_id);
+        tracing::info!(parent: monitor.span(), "handshake complete");
 
         let released = permit.released();
 
@@ -727,12 +755,17 @@ impl Inner {
             match brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
+                    let monitor = self
+                        .peers_monitor
+                        .make_child(format!("{:?}", that_runtime_id.as_public_key()));
+
                     let mut broker = self.span.in_scope(|| {
                         MessageBroker::new(
                             self.this_runtime_id.public(),
                             that_runtime_id,
                             stream,
                             permit,
+                            monitor,
                         )
                     });
 
@@ -751,12 +784,10 @@ impl Inner {
         let _remover = MessageBrokerEntryGuard {
             state: &self.state,
             that_runtime_id,
+            monitor,
         };
 
-        state_monitor!(state = "awaiting message broker release");
-
         released.recv().await;
-        tracing::info!("connection lost");
 
         true
     }
@@ -792,7 +823,6 @@ impl Inner {
 //------------------------------------------------------------------------------
 
 // Exchange runtime ids with the peer. Returns their (verified) runtime id.
-#[instrument(skip_all, err(Debug))]
 async fn perform_handshake(
     stream: &mut raw::Stream,
     this_version: Version,
@@ -843,10 +873,13 @@ enum HandshakeError {
 struct MessageBrokerEntryGuard<'a> {
     state: &'a BlockingMutex<State>,
     that_runtime_id: PublicRuntimeId,
+    monitor: &'a ConnectionMonitor,
 }
 
 impl Drop for MessageBrokerEntryGuard<'_> {
     fn drop(&mut self) {
+        tracing::info!(parent: self.monitor.span(), "disconnected");
+
         let mut state = self.state.lock().unwrap();
         if let Some(brokers) = &mut state.message_brokers {
             if let Entry::Occupied(entry) = brokers.entry(self.that_runtime_id) {

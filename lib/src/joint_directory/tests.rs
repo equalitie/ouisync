@@ -6,6 +6,7 @@ use crate::{
     db,
     directory::MissingBlockStrategy,
     index::BranchData,
+    state_monitor::StateMonitor,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -982,7 +983,8 @@ async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
 
 // Useful for debugging non-deterministic failures.
 async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N]) {
-    let (base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let (event_tx, _) = broadcast::channel(1);
     let secrets = WriteSecrets::generate(&mut rng);
     let shared = BranchShared::new(event_tx.clone());

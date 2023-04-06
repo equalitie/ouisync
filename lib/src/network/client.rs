@@ -9,7 +9,7 @@ use crate::{
     crypto::{CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
-    repository_stats::RepositoryStats,
+    repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
 };
 use scoped_task::ScopedJoinHandle;
@@ -38,7 +38,7 @@ impl Client {
         let pool = store.db().clone();
         let block_tracker = Arc::new(store.block_tracker.client());
 
-        let pending_requests = Arc::new(PendingRequests::new(store.stats().clone()));
+        let pending_requests = Arc::new(PendingRequests::new(store.monitor.clone()));
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
@@ -46,7 +46,7 @@ impl Client {
             tx,
             pending_requests.clone(),
             peer_request_limiter,
-            store.stats().clone(),
+            store.monitor.clone(),
         );
 
         Self {
@@ -302,7 +302,7 @@ fn start_sender(
     tx: mpsc::Sender<Content>,
     pending_requests: Arc<PendingRequests>,
     peer_request_limiter: Arc<Semaphore>,
-    stats: Arc<RepositoryStats>,
+    monitor: Arc<RepositoryMonitor>,
 ) -> (
     ScopedJoinHandle<()>,
     mpsc::UnboundedSender<(PendingRequest, Instant)>,
@@ -332,9 +332,9 @@ fn start_sender(
 
                 let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
 
-                stats
-                    .write()
-                    .note_request_queue_duration(Instant::now() - time_created);
+                monitor
+                    .request_queue_durations
+                    .note(Instant::now() - time_created);
 
                 let msg = request.to_message();
 
@@ -343,7 +343,7 @@ fn start_sender(
                     continue;
                 }
 
-                stats.write().total_requests_cummulative += 1;
+                *monitor.total_requests_cummulative.get() += 1;
 
                 tx.send(Content::Request(msg)).await.unwrap_or(());
             }

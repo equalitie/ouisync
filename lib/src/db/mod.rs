@@ -4,10 +4,12 @@ mod macros;
 mod connection;
 mod id;
 mod migrations;
+mod monitor;
 
 pub use id::DatabaseId;
 
-use crate::{deadlock::ExpectShortLifetime, repository_stats::RepositoryStats};
+use self::monitor::DatabaseMonitor;
+use crate::{deadlock::ExpectShortLifetime, state_monitor::StateMonitor};
 use ref_cast::RefCast;
 use sqlx::{
     sqlite::{
@@ -32,7 +34,6 @@ use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
-use tracing::Span;
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
@@ -46,11 +47,14 @@ pub(crate) struct Pool {
     // Pool with a single writable connection.
     write: SqlitePool,
     shared_tx: Arc<AsyncMutex<Option<WriteTransaction>>>,
-    stats: Arc<RepositoryStats>,
+    monitor: Arc<DatabaseMonitor>,
 }
 
 impl Pool {
-    async fn create(connect_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
+    async fn create(
+        connect_options: SqliteConnectOptions,
+        monitor: &StateMonitor,
+    ) -> Result<Self, sqlx::Error> {
         let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
@@ -75,7 +79,7 @@ impl Pool {
             reads,
             write,
             shared_tx: Arc::new(AsyncMutex::new(None)),
-            stats: Arc::new(RepositoryStats::new(Span::current())),
+            monitor: Arc::new(DatabaseMonitor::new(monitor)),
         })
     }
 
@@ -87,7 +91,7 @@ impl Pool {
         async move {
             let start = Instant::now();
             let conn = self.reads.acquire().await?;
-            self.stats.write().note_db_acquire_duration(start.elapsed());
+            self.monitor.acquire_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
@@ -107,9 +111,7 @@ impl Pool {
         async move {
             let start = Instant::now();
             let tx = self.reads.begin().await?;
-            self.stats
-                .write()
-                .note_db_read_begin_duration(start.elapsed());
+            self.monitor.begin_read_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
@@ -145,9 +147,7 @@ impl Pool {
 
             let tx = self.write.begin().await?;
 
-            self.stats
-                .write()
-                .note_db_write_begin_duration(start.elapsed());
+            self.monitor.begin_write_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
@@ -208,10 +208,6 @@ impl Pool {
         self.reads.close().await;
 
         Ok(())
-    }
-
-    pub(crate) fn stats(&self) -> &Arc<RepositoryStats> {
-        &self.stats
     }
 }
 
@@ -337,7 +333,7 @@ impl Drop for SharedWriteTransaction {
 }
 
 /// Creates a new database and opens a connection to it.
-pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
+pub(crate) async fn create(path: impl AsRef<Path>, monitor: &StateMonitor) -> Result<Pool, Error> {
     let path = path.as_ref();
 
     if fs::metadata(path).await.is_ok() {
@@ -350,7 +346,9 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
         .filename(path)
         .create_if_missing(true);
 
-    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
+    let pool = Pool::create(connect_options, monitor)
+        .await
+        .map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 
@@ -359,17 +357,19 @@ pub(crate) async fn create(path: impl AsRef<Path>) -> Result<Pool, Error> {
 
 /// Creates a new database in a temporary directory. Useful for tests.
 #[cfg(test)]
-pub(crate) async fn create_temp() -> Result<(TempDir, Pool), Error> {
+pub(crate) async fn create_temp(monitor: &StateMonitor) -> Result<(TempDir, Pool), Error> {
     let temp_dir = TempDir::new().map_err(Error::CreateDirectory)?;
-    let pool = create(temp_dir.path().join("temp.db")).await?;
+    let pool = create(temp_dir.path().join("temp.db"), monitor).await?;
 
     Ok((temp_dir, pool))
 }
 
 /// Opens a connection to the specified database. Fails if the db doesn't exist.
-pub(crate) async fn open(path: impl AsRef<Path>) -> Result<Pool, Error> {
+pub(crate) async fn open(path: impl AsRef<Path>, monitor: &StateMonitor) -> Result<Pool, Error> {
     let connect_options = SqliteConnectOptions::new().filename(path);
-    let pool = Pool::create(connect_options).await.map_err(Error::Open)?;
+    let pool = Pool::create(connect_options, monitor)
+        .await
+        .map_err(Error::Open)?;
 
     migrations::run(&pool).await?;
 

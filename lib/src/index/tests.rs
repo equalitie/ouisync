@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{
     branch_data::BranchData,
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, Summary, EMPTY_INNER_HASH},
@@ -9,7 +11,8 @@ use crate::{
     block::{self, BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
-    repository::{LocalId, RepositoryId},
+    repository::{LocalId, RepositoryId, RepositoryMonitor},
+    state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
     version_vector::VersionVector,
 };
@@ -440,6 +443,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
+        monitor: Arc::new(RepositoryMonitor::new(&StateMonitor::make_root(), "test")),
     };
 
     let mut rng = rand::thread_rng();
@@ -678,7 +682,8 @@ async fn setup() -> (TempDir, Index, Keypair) {
 }
 
 async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
-    let (base_dir, pool) = db::create_temp().await.unwrap();
+    let monitor = StateMonitor::make_root();
+    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);

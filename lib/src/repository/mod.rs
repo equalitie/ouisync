@@ -1,5 +1,6 @@
 mod id;
 mod metadata;
+mod monitor;
 mod reopen_token;
 #[cfg(test)]
 mod tests;
@@ -7,7 +8,7 @@ mod worker;
 
 pub use self::{id::RepositoryId, metadata::Metadata, reopen_token::ReopenToken};
 
-pub(crate) use self::id::LocalId;
+pub(crate) use self::{id::LocalId, monitor::RepositoryMonitor};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -30,6 +31,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
+    state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
 };
@@ -41,19 +43,21 @@ use tokio::{
     task,
     time::Duration,
 };
-use tracing::{instrument, instrument::Instrument, Span};
+use tracing::{instrument, instrument::Instrument};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
+    monitor: RepositoryMonitor,
 }
 
 impl RepositoryDb {
-    pub async fn create(store: impl AsRef<Path>) -> Result<Self> {
-        let pool = db::create(store).await?;
+    pub async fn create(store: impl AsRef<Path>, parent_monitor: &StateMonitor) -> Result<Self> {
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::create(store, monitor.node()).await?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, monitor })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -64,8 +68,9 @@ impl RepositoryDb {
     }
 
     #[cfg(test)]
-    pub(crate) fn new(pool: db::Pool) -> Self {
-        Self { pool }
+    pub(crate) fn test(pool: db::Pool, parent_monitor: &StateMonitor) -> Self {
+        let monitor = RepositoryMonitor::new(parent_monitor, "test");
+        Self { pool, monitor }
     }
 }
 
@@ -87,7 +92,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(db.pool, this_writer_id, access.secrets()).await
+        Self::new(db.pool, this_writer_id, access.secrets(), db.monitor).await
     }
 
     /// Opens an existing repository.
@@ -100,8 +105,16 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
-        Self::open_with_mode(store, device_id, local_secret, AccessMode::Write).await
+        Self::open_with_mode(
+            store,
+            device_id,
+            local_secret,
+            AccessMode::Write,
+            parent_monitor,
+        )
+        .await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
@@ -111,9 +124,11 @@ impl Repository {
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
-        let pool = db::open(store).await?;
-        Self::open_in(pool, device_id, local_secret, max_access_mode).await
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::open(store, monitor.node()).await?;
+        Self::open_in(pool, device_id, local_secret, max_access_mode, monitor).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -124,6 +139,7 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
+        monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -155,19 +171,25 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets).await
+        Self::new(pool, this_writer_id, access_secrets, monitor).await
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(store: impl AsRef<Path>, token: ReopenToken) -> Result<Self> {
-        let pool = db::open(store).await?;
-        Self::new(pool, token.writer_id, token.secrets).await
+    pub async fn reopen(
+        store: impl AsRef<Path>,
+        token: ReopenToken,
+        parent_monitor: &StateMonitor,
+    ) -> Result<Self> {
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::open(store, monitor.node()).await?;
+        Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
+        monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
@@ -183,9 +205,14 @@ impl Repository {
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
+            monitor: Arc::new(monitor),
         };
 
-        tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
+        tracing::debug!(
+            parent: store.monitor.span(),
+            access = ?secrets.access_mode(),
+            writer_id = ?this_writer_id
+        );
 
         let shared = Arc::new(Shared {
             store,
@@ -201,10 +228,11 @@ impl Repository {
         };
 
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(Span::current()));
+        task::spawn(worker.run().instrument(shared.store.monitor.span().clone()));
 
         let _progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.store.clone()).instrument(Span::current()),
+            report_sync_progress(shared.store.clone())
+                .instrument(shared.store.monitor.span().clone()),
         );
 
         Ok(Self {

@@ -266,6 +266,7 @@ impl LastUsedPorts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ouisync_lib::StateMonitor;
     use std::{net::Ipv4Addr, time::Duration};
     use tempfile::TempDir;
     use tokio::time;
@@ -274,7 +275,7 @@ mod tests {
     async fn network_disable_enable_idle() {
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new();
+        let network = Network::new(StateMonitor::make_root());
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -294,7 +295,7 @@ mod tests {
     async fn network_disable_enable_pending_connection() {
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new();
+        let network = Network::new(StateMonitor::make_root());
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -324,7 +325,7 @@ mod tests {
 
         let config_dir = TempDir::new().unwrap();
         let config = ConfigStore::new(config_dir.path());
-        let network = Network::new();
+        let network = Network::new(StateMonitor::make_root());
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 

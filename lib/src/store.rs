@@ -7,8 +7,7 @@ use crate::{
     event::{Event, Payload},
     index::{self, Index},
     progress::Progress,
-    repository::{LocalId, Metadata, RepositoryId},
-    repository_stats::RepositoryStats,
+    repository::{LocalId, Metadata, RepositoryMonitor},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -21,15 +20,12 @@ pub struct Store {
     pub(crate) block_tracker: BlockTracker,
     pub(crate) block_request_mode: BlockRequestMode,
     pub(crate) local_id: LocalId,
+    pub(crate) monitor: Arc<RepositoryMonitor>,
 }
 
 impl Store {
     pub(crate) fn db(&self) -> &db::Pool {
         &self.index.pool
-    }
-
-    pub(crate) fn stats(&self) -> &Arc<RepositoryStats> {
-        self.index.pool.stats()
     }
 
     pub(crate) async fn count_blocks(&self) -> Result<usize> {
@@ -142,10 +138,6 @@ impl Store {
     pub(crate) fn metadata(&self) -> Metadata {
         Metadata::new(self.db().clone())
     }
-
-    pub(crate) fn repository_id(&self) -> &RepositoryId {
-        self.index.repository_id()
-    }
 }
 
 pub(crate) struct BlockIdsPage {
@@ -222,6 +214,7 @@ mod tests {
         },
         locator::Locator,
         repository::RepositoryId,
+        state_monitor::StateMonitor,
         test_utils,
         version_vector::VersionVector,
     };
@@ -683,7 +676,7 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp().await.unwrap()
+        db::create_temp(&StateMonitor::make_root()).await.unwrap()
     }
 
     fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
@@ -694,6 +687,7 @@ mod tests {
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
+            monitor: Arc::new(RepositoryMonitor::new(&StateMonitor::make_root(), "test")),
         }
     }
 }

@@ -13,7 +13,7 @@ use ouisync_bridge::{
     repository,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, PeerAddr, ShareToken};
+use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
 use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{fs, runtime, time};
@@ -24,16 +24,13 @@ pub(crate) struct State {
     mount_dir: Utf8PathBuf,
     network: Network,
     repositories: DashMap<String, RepositoryHolder>,
+    repositories_monitor: StateMonitor,
 }
 
 impl State {
-    pub async fn new(dirs: &Dirs) -> Self {
+    pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(&dirs.config_dir);
-
-        let network = {
-            let _enter = tracing::info_span!("Network").entered();
-            Network::new()
-        };
+        let network = Network::new(monitor.make_child("Network"));
 
         network::init(
             &network,
@@ -51,6 +48,7 @@ impl State {
             mount_dir: dirs.mount_dir.clone(),
             network,
             repositories: DashMap::new(),
+            repositories_monitor: monitor.make_child("Repositories"),
         }
     }
 
@@ -166,6 +164,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     share_token,
                     &self.state.config,
                     &self.state.network,
+                    &self.state.repositories_monitor,
                 )
                 .await?;
                 let holder = RepositoryHolder::new(holder);
@@ -209,6 +208,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     password,
                     &self.state.config,
                     &self.state.network,
+                    &self.state.repositories_monitor,
                 )
                 .await?;
                 let holder = RepositoryHolder::new(holder);

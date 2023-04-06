@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::Result;
 use ouisync_bridge::transport::Client;
+use ouisync_lib::StateMonitor;
 use std::{io, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -70,7 +71,7 @@ async fn connect(
             Ok(client) => Ok(Box::new(client)),
             Err(error) => match error.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let state = State::new(dirs).await;
+                    let state = State::new(dirs, StateMonitor::make_root()).await;
                     let state = Arc::new(state);
                     let handler = Handler::new(state);
 

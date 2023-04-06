@@ -15,6 +15,7 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     index::Index,
     repository::LocalId,
+    state_monitor::StateMonitor,
     store::Store,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -41,6 +42,7 @@ pub(super) struct MessageBroker {
     dispatcher: MessageDispatcher,
     links: HashMap<LocalId, oneshot::Sender<()>>,
     request_limiter: Arc<Semaphore>,
+    monitor: StateMonitor,
     span: Span,
 }
 
@@ -50,11 +52,14 @@ impl MessageBroker {
         that_runtime_id: PublicRuntimeId,
         stream: raw::Stream,
         permit: ConnectionPermit,
+        monitor: StateMonitor,
     ) -> Self {
         let span = tracing::info_span!(
             "message_broker",
-            that_runtime_id = ?that_runtime_id.as_public_key(),
+            runtime_id = ?that_runtime_id.as_public_key(),
         );
+
+        tracing::info!(parent: &span, "message broker created");
 
         let this = Self {
             this_runtime_id,
@@ -62,17 +67,15 @@ impl MessageBroker {
             dispatcher: MessageDispatcher::new(),
             links: HashMap::default(),
             request_limiter: Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
+            monitor,
             span,
         };
-
-        tracing::debug!(parent: &this.span, "message broker created with connection {:?}", permit);
 
         this.add_connection(stream, permit);
         this
     }
 
     pub fn add_connection(&self, stream: raw::Stream, permit: ConnectionPermit) {
-        tracing::debug!(parent: &self.span, "add connection {:?}", permit);
         self.dispatcher.bind(stream, permit)
     }
 
@@ -85,12 +88,12 @@ impl MessageBroker {
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
     pub fn create_link(&mut self, store: Store, pex: &PexController) {
+        let monitor = self.monitor.make_child(store.monitor.name());
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repository = ?store.repository_id(),
-            local_id = %store.local_id,
-            state = field::Empty
+            repo = store.monitor.name(),
+            role = field::Empty,
         );
 
         let span_enter = span.enter();
@@ -102,7 +105,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    tracing::warn!("not creating link - already exists");
+                    tracing::warn!("link not created - already exists");
                     return;
                 }
             }
@@ -111,13 +114,13 @@ impl MessageBroker {
             }
         }
 
-        tracing::debug!("creating link");
-
         let role = Role::determine(
             store.index.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
+
+        Span::current().record("role", field::debug(role));
 
         let channel_id = MessageChannel::new(
             store.index.repository_id(),
@@ -133,6 +136,8 @@ impl MessageBroker {
         let pex_discovery_tx = pex.discovery_sender();
         let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
 
+        tracing::info!("link created");
+
         drop(span_enter);
 
         let task = async move {
@@ -145,11 +150,12 @@ impl MessageBroker {
                     request_limiter,
                     pex_discovery_tx,
                     pex_announcer,
+                    monitor,
                 ) => (),
                 _ = abort_rx => (),
             }
 
-            tracing::debug!("link destroyed")
+            tracing::info!("link destroyed")
         };
         let task = task.instrument(span);
 
@@ -169,7 +175,7 @@ impl MessageBroker {
 
 impl Drop for MessageBroker {
     fn drop(&mut self) {
-        tracing::debug!(parent: &self.span, "message broker destroyed");
+        tracing::info!(parent: &self.span, "message broker destroyed");
     }
 }
 
@@ -184,7 +190,16 @@ async fn maintain_link(
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
+    monitor: StateMonitor,
 ) {
+    #[derive(Debug)]
+    enum State {
+        Sleeping(Duration),
+        AwaitingBarrier,
+        EstablishingChannel,
+        Running,
+    }
+
     let mut backoff = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
         .with_max_interval(Duration::from_secs(5))
@@ -192,24 +207,25 @@ async fn maintain_link(
         .build();
 
     let mut next_sleep = None;
+    let state = monitor.make_value("state", State::AwaitingBarrier);
 
     loop {
         if let Some(sleep) = next_sleep {
-            state_monitor!(state = format!("sleeping {:?}", sleep));
+            *state.get() = State::Sleeping(sleep);
             tokio::time::sleep(sleep).await;
         }
 
         next_sleep = backoff.next_backoff();
 
-        state_monitor!(state = "awaiting barrier");
+        *state.get() = State::AwaitingBarrier;
 
-        match Barrier::new(&mut stream, &sink).run().await {
+        match Barrier::new(&mut stream, &sink, &monitor).run().await {
             Ok(()) => (),
             Err(BarrierError::Failure) => continue,
             Err(BarrierError::ChannelClosed) => break,
         }
 
-        state_monitor!(state = "establishing channel");
+        *state.get() = State::EstablishingChannel;
 
         let (crypto_stream, crypto_sink) =
             match establish_channel(role, &mut stream, &mut sink, &store.index).await {
@@ -218,7 +234,7 @@ async fn maintain_link(
                 Err(EstablishError::Closed) => break,
             };
 
-        state_monitor!(state = "running");
+        *state.get() = State::Running;
 
         match run_link(
             crypto_stream,
@@ -244,16 +260,11 @@ async fn establish_channel<'a>(
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
         Ok(io) => {
-            tracing::debug!("established encrypted channel as {:?}", role);
-
+            tracing::debug!("established encrypted channel");
             Ok(io)
         }
         Err(error) => {
-            tracing::warn!(
-                "failed to establish encrypted channel as {:?}: {}",
-                role,
-                error
-            );
+            tracing::warn!(?error, "failed to establish encrypted channel");
 
             Err(error)
         }

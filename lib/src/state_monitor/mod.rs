@@ -1,4 +1,6 @@
-pub mod tracing_layer;
+mod duration_ranges;
+
+pub(crate) use duration_ranges::DurationRanges;
 
 use crate::{
     deadlock::{BlockingMutex, BlockingMutexGuard},
@@ -40,6 +42,10 @@ impl MonitorId {
             name,
             disambiguator,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -230,6 +236,10 @@ impl StateMonitor {
         Self { shared: child }
     }
 
+    pub fn id(&self) -> &MonitorId {
+        &self.shared.id
+    }
+
     pub fn locate<I: IntoIterator<Item = MonitorId>>(&self, path: I) -> Option<Self> {
         self.shared.locate(path).map(|shared| {
             shared.increment_refcount();
@@ -243,12 +253,14 @@ impl StateMonitor {
     /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
-    pub fn make_value<T: fmt::Display + Sync + Send + 'static>(
+    pub fn make_value<N: Into<String>, T: fmt::Debug + Sync + Send + 'static>(
         &self,
-        name: String,
+        name: N,
         value: T,
     ) -> MonitoredValue<T> {
         let mut lock = self.shared.lock_inner();
+
+        let name = name.into();
         let value = Arc::new(BlockingMutex::new(value));
 
         match lock.values.entry(name.clone()) {
@@ -321,14 +333,13 @@ impl Drop for StateMonitor {
     }
 }
 
-// FIXME: temporary code, remove
+// These impls are needed only for the tests to compile.
 impl PartialEq for StateMonitor {
     fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
 
-// FIXME: temporary code, remote
 impl Eq for StateMonitor {}
 
 impl StateMonitorShared {
@@ -496,7 +507,7 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<BlockingMutex<dyn fmt::Display + Sync + Send>>,
+    ptr: Arc<BlockingMutex<dyn fmt::Debug + Sync + Send>>,
 }
 
 // --- Serialization
@@ -528,7 +539,8 @@ impl<'a> Serialize for ValuesSerializer<'a> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in self.0.iter() {
-            map.serialize_entry(k, &v.ptr.lock().unwrap().to_string())?;
+            let value = format!("{:?}", &*v.ptr.lock().unwrap());
+            map.serialize_entry(k, &value)?;
         }
         map.end()
     }

@@ -1,4 +1,5 @@
 use super::message_dispatcher::{ChannelClosed, ContentSinkTrait, ContentStreamTrait};
+use crate::state_monitor::{MonitoredValue, StateMonitor};
 use std::{fmt, mem::size_of};
 use tokio::time::{self, Duration};
 
@@ -51,12 +52,13 @@ pub(super) struct Barrier<'a> {
     barrier_id: BarrierId,
     stream: &'a mut (dyn ContentStreamTrait + Send + Sync + 'a),
     sink: &'a (dyn ContentSinkTrait + Send + Sync + 'a),
+    state: MonitoredValue<&'static str>,
     #[cfg(test)]
     marker: Option<tests::StepMarker>,
 }
 
 impl<'a> Barrier<'a> {
-    pub fn new<Stream, Sink>(stream: &'a mut Stream, sink: &'a Sink) -> Self
+    pub fn new<Stream, Sink>(stream: &'a mut Stream, sink: &'a Sink, monitor: &StateMonitor) -> Self
     where
         Stream: ContentStreamTrait + Send + Sync,
         Sink: ContentSinkTrait + Send + Sync,
@@ -65,6 +67,7 @@ impl<'a> Barrier<'a> {
             barrier_id: rand::random(),
             stream,
             sink,
+            state: monitor.make_value("barrier", "idle"),
             #[cfg(test)]
             marker: None,
         }
@@ -79,7 +82,8 @@ impl<'a> Barrier<'a> {
         #[cfg(test)]
         println!("{:x} >> RST", self.barrier_id);
 
-        state_monitor!(barrier = "sending reset");
+        *self.state.get() = "sending reset";
+
         // I think we send this empty message in order to break the encryption on the other side and
         // thus forcing it to start this barrier process again.
         self.sink.send(vec![]).await?;
@@ -106,7 +110,7 @@ impl<'a> Barrier<'a> {
             assert!(round <= their_round);
 
             if round < their_round {
-                state_monitor!(barrier = "catching up on step 0");
+                *self.state.get() = "catching up on step 0";
                 // They are ahead of us, but on the same step. So play along, bump our round to
                 // theirs and pretend we did the step zero with the same round.
                 round = their_round;
@@ -142,7 +146,8 @@ impl<'a> Barrier<'a> {
             break;
         }
 
-        state_monitor!(barrier = "done");
+        *self.state.get() = "done";
+
         Ok(())
     }
 
@@ -154,11 +159,11 @@ impl<'a> Barrier<'a> {
         let our_step = Step::Zero;
 
         loop {
-            state_monitor!(barrier = "step 0 sending");
+            *self.state.get() = "step 0 sending";
             self.send(barrier_id, our_round, our_step).await?;
 
             loop {
-                state_monitor!(barrier = "step 0 receiving");
+                *self.state.get() = "step 0 receiving";
                 let (barrier_id, their_round, their_step) = match self
                     .recv(
                         #[cfg(test)]
@@ -191,12 +196,12 @@ impl<'a> Barrier<'a> {
         barrier_id: BarrierId,
         our_round: Round,
     ) -> Result<Option<Msg>, BarrierError> {
-        state_monitor!(barrier = "step 1 sending");
+        *self.state.get() = "step 1 sending";
         let our_step = Step::One;
         self.send(barrier_id, our_round, our_step).await?;
 
         loop {
-            state_monitor!(barrier = "step 1 receiving");
+            *self.state.get() = "step 1 receiving";
             let recv = self.recv(
                 #[cfg(test)]
                 our_round,
@@ -424,6 +429,7 @@ mod tests {
                     barrier_id,
                     stream: &mut stream,
                     sink: &sink,
+                    state: dummy_value(),
                     marker: Some(StepMarker {
                         pause_tx,
                         resume_rx,
@@ -619,6 +625,7 @@ mod tests {
                 barrier_id: 0xa,
                 stream: &mut a_from_b,
                 sink: &a_to_b,
+                state: dummy_value(),
                 marker: None,
             }
             .run()
@@ -631,6 +638,7 @@ mod tests {
                 barrier_id: 0xb,
                 stream: &mut b_from_a,
                 sink: &b_to_a,
+                state: dummy_value(),
                 marker: None,
             }
             .run()
@@ -673,5 +681,9 @@ mod tests {
         for (a, b) in [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1)] {
             test_drop_from_start_case(a, b).await;
         }
+    }
+
+    fn dummy_value() -> MonitoredValue<&'static str> {
+        StateMonitor::make_root().make_value("dummy", "")
     }
 }

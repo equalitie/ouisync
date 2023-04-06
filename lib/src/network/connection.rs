@@ -175,13 +175,13 @@ struct Peer {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
-pub enum ConnectionDirection {
+pub(super) enum ConnectionDirection {
     Incoming,
     Outgoing,
 }
 
 impl ConnectionDirection {
-    fn from_source(source: PeerSource) -> Self {
+    pub fn from_source(source: PeerSource) -> Self {
         match source {
             PeerSource::Listener => Self::Incoming,
             PeerSource::UserProvided
@@ -316,7 +316,7 @@ impl ConnectionPermitHalf {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ConnectionInfo {
+pub(super) struct ConnectionInfo {
     pub addr: PeerAddr,
     pub dir: ConnectionDirection,
 }
