@@ -111,10 +111,12 @@ impl Network {
         tracing::debug!(this_runtime_id = ?this_runtime_id.public());
 
         let connections_monitor = monitor.make_child("Connections");
+        let peers_monitor = monitor.make_child("Peers");
 
         let inner = Arc::new(Inner {
             main_monitor: monitor,
             connections_monitor,
+            peers_monitor,
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -377,6 +379,7 @@ struct RegistrationHolder {
 struct Inner {
     main_monitor: StateMonitor,
     connections_monitor: StateMonitor,
+    peers_monitor: StateMonitor,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -755,12 +758,17 @@ impl Inner {
             match brokers.entry(that_runtime_id) {
                 Entry::Occupied(entry) => entry.get().add_connection(stream, permit),
                 Entry::Vacant(entry) => {
+                    let monitor = self
+                        .peers_monitor
+                        .make_child(format!("{:?}", that_runtime_id.as_public_key()));
+
                     let mut broker = self.span.in_scope(|| {
                         MessageBroker::new(
                             self.this_runtime_id.public(),
                             that_runtime_id,
                             stream,
                             permit,
+                            monitor,
                         )
                     });
 
