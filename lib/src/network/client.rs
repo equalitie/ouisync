@@ -18,7 +18,7 @@ use tokio::{
     select,
     sync::{mpsc, Semaphore},
 };
-use tracing::instrument;
+use tracing::{instrument, instrument::Instrument, Span};
 
 pub(super) struct Client {
     store: Store,
@@ -71,13 +71,32 @@ impl Client {
         // responses (so we shoulnd't use unbounded_channel).
         let (queued_responses_tx, queued_responses_rx) = mpsc::channel(2 * MAX_PENDING_RESPONSES);
 
-        let mut response_handler = pin!(self.handle_responses(queued_responses_rx));
+        let mut handle_queued_responses = pin!(self.handle_responses(queued_responses_rx));
 
         // NOTE: It is important to keep `remove`ing requests from `pending_requests` in parallel
         // with response handling. It is because response handling may take a long time (e.g. due
         // to acquiring database write transaction if there are other write transactions currently
         // going on - such as when forking) and so waiting for it could cause some requests in
         // `pending_requests` to time out.
+        let mut move_from_pending_into_queued = pin!(async {
+            loop {
+                let response = match rx.recv().await {
+                    Some(response) => response,
+                    None => break,
+                };
+
+                let response = match pending_requests.remove(response) {
+                    Some(response) => response,
+                    // Unsolicited and non-root response.
+                    None => continue,
+                };
+
+                if queued_responses_tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         loop {
             select! {
                 block_promise = block_promise_acceptor.accept() => {
@@ -85,18 +104,8 @@ impl Client {
                     // Unwrap OK because the sending task never returns.
                     request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
                 }
-                response = rx.recv() => {
-                    if let Some(response) = response {
-                        if let Some(response) = pending_requests.remove(response) {
-                            if queued_responses_tx.send(response).await.is_err() {
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                _ = &mut response_handler => break,
+                _ = &mut move_from_pending_into_queued => break,
+                _ = &mut handle_queued_responses => break,
             }
         }
 
@@ -351,6 +360,7 @@ fn start_sender(
             // Don't exist so we don't need to check whether `request_tx.send()` fails or not.
             future::pending::<()>().await;
         }
+        .instrument(Span::current())
     });
 
     (handle, request_tx)
