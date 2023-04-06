@@ -2,6 +2,7 @@ use super::ip;
 use crate::{
     collections::{hash_map, HashMap},
     deadlock::BlockingMutex,
+    state_monitor::StateMonitor,
 };
 use chrono::{offset::Local, DateTime};
 use futures_util::TryStreamExt;
@@ -38,12 +39,12 @@ pub(crate) struct PortForwarder {
     mappings: Arc<BlockingMutex<Mappings>>,
     on_change_tx: Arc<watch::Sender<()>>,
     task: BlockingMutex<Weak<ScopedJoinHandle<()>>>,
+    monitor: StateMonitor,
     span: Span,
 }
 
 impl PortForwarder {
-    pub fn new() -> Self {
-        let span = tracing::info_span!("UPnP");
+    pub fn new(monitor: StateMonitor) -> Self {
         let mappings = Arc::new(BlockingMutex::new(Default::default()));
         let (on_change_tx, _) = watch::channel(());
 
@@ -51,7 +52,8 @@ impl PortForwarder {
             mappings,
             on_change_tx: Arc::new(on_change_tx),
             task: BlockingMutex::new(Weak::new()),
-            span,
+            monitor,
+            span: Span::current(),
         }
     }
 
@@ -69,6 +71,7 @@ impl PortForwarder {
             }
             hash_map::Entry::Vacant(entry) => {
                 tracing::info!(
+                    parent: &self.span,
                     "UPnP starting port forwarding EXT:{} -> INT:{} ({})",
                     external,
                     internal,
@@ -88,9 +91,10 @@ impl PortForwarder {
         } else {
             let mappings = self.mappings.clone();
             let on_change_rx = self.on_change_tx.subscribe();
+            let monitor = self.monitor.clone();
 
             let task = async move {
-                let result = Self::run(mappings, on_change_rx).await;
+                let result = Self::run(mappings, on_change_rx, monitor).await;
                 // Warning, because we don't actually expect this to happen.
                 tracing::warn!("UPnP port forwarding ended ({:?})", result)
             };
@@ -113,12 +117,14 @@ impl PortForwarder {
             on_change_tx: self.on_change_tx.clone(),
             mappings: self.mappings.clone(),
             _task: task,
+            span: self.span.clone(),
         }
     }
 
     async fn run(
         mappings: Arc<BlockingMutex<Mappings>>,
         on_change_rx: watch::Receiver<()>,
+        monitor: StateMonitor,
     ) -> Result<(), rupnp::Error> {
         // Devices may have a timeout period when they don't respond to repeated queries, the
         // DISCOVERY_RUDATION constant should be higher than that. The rupnp project internally
@@ -133,16 +139,14 @@ impl PortForwarder {
 
         let job_handles = Arc::new(BlockingMutex::new(JobHandles::default()));
 
-        let span = tracing::info_span!("devices");
-
-        let mut lookup_counter = 0;
+        let devices_monitor = monitor.make_child("devices");
+        let lookup_counter = monitor.make_value("lookup counter", 0);
         let mut error_logged = false;
 
         // Periodically check for new devices: maybe UPnP was enabled later after the app started,
         // maybe the device was swapped for another one,...
         loop {
-            lookup_counter += 1;
-            state_monitor!(lookup_counter);
+            *lookup_counter.get() += 1;
 
             // Cleanup: remove devices not seen in a while.
             job_handles.lock().unwrap().retain(|_uri, device| {
@@ -185,7 +189,7 @@ impl PortForwarder {
 
                 let on_change_rx = on_change_rx.clone();
                 let mappings = mappings.clone();
-                let span = span.clone();
+                let devices_monitor = devices_monitor.clone();
 
                 Self::spawn_if_not_running(device_url.clone(), &job_handles, move || {
                     async move {
@@ -197,18 +201,16 @@ impl PortForwarder {
                         }
 
                         if let Some(service) = find_connection_service(&device) {
-                            let span = tracing::info_span!("device", name = device.friendly_name());
-                            let url = device.url().clone();
-
                             let per_igd_port_forwarder = PerIGDPortForwarder {
-                                device_url: url.clone(),
+                                device_url: device.url().clone(),
                                 service,
                                 on_change_rx,
                                 mappings,
                                 active_mappings: Default::default(),
+                                monitor: devices_monitor.make_child(device.friendly_name()),
                             };
 
-                            per_igd_port_forwarder.run().instrument(span).await;
+                            per_igd_port_forwarder.run().await;
 
                             // The above is expected to never exit. But even if it does (e.g. if
                             // the code changes), it should be Ok because the device is re-spawned
@@ -224,7 +226,7 @@ impl PortForwarder {
                             ))
                         }
                     }
-                    .instrument(span)
+                    .instrument(Span::current())
                 });
             }
 
@@ -299,11 +301,13 @@ pub(crate) struct Mapping {
     on_change_tx: Arc<watch::Sender<()>>,
     mappings: Arc<BlockingMutex<Mappings>>,
     _task: Arc<ScopedJoinHandle<()>>,
+    span: Span,
 }
 
 impl Drop for Mapping {
     fn drop(&mut self) {
         tracing::info!(
+            parent: &self.span,
             "UPnP stopping port forwarding EXT:{} -> INT:{} ({})",
             self.data.external,
             self.data.internal,
@@ -335,17 +339,19 @@ struct PerIGDPortForwarder {
     on_change_rx: watch::Receiver<()>,
     mappings: Arc<BlockingMutex<Mappings>>,
     active_mappings: BlockingMutex<HashMap<MappingData, ScopedJoinHandle<()>>>,
+    monitor: StateMonitor,
 }
 
 impl PerIGDPortForwarder {
     async fn run(mut self) {
         let _ext_ip_task = self.start_ext_ip_discovery();
 
-        state_monitor!(device_url = ?self.device_url.clone());
+        let _url_monitor = self.monitor.make_value("url", self.device_url.clone());
+        let local_ip_monitor = self.monitor.make_value("local ip", None);
 
         let local_ip = loop {
             let local_ip = local_address_to(&self.device_url).await;
-            state_monitor!(?local_ip);
+            *local_ip_monitor.get() = local_ip.as_ref().ok().copied();
 
             match local_ip {
                 Ok(local_ip) => break local_ip,
@@ -356,12 +362,10 @@ impl PerIGDPortForwarder {
             }
         };
 
-        let mappings_span = tracing::info_span!("Mappings");
+        let mappings_monitor = self.monitor.make_child("Mappings");
 
         while self.on_change_rx.changed().await.is_ok() {
-            let _enter = mappings_span.enter();
             let new_mappings = self.mappings.lock().unwrap();
-
             let mut active_mappings = self.active_mappings.lock().unwrap();
 
             // Remove from `active_mappings` those that are not in in `new_mappings`.
@@ -370,25 +374,28 @@ impl PerIGDPortForwarder {
             // Add to `active_mappings` those that are `active_mappings`.
             for k in new_mappings.keys() {
                 if let hash_map::Entry::Vacant(entry) = active_mappings.entry(*k) {
-                    entry.insert(self.activate_mapping(*k, local_ip));
+                    entry.insert(self.activate_mapping(*k, local_ip, &mappings_monitor));
                 }
             }
         }
     }
 
-    fn activate_mapping(&self, data: MappingData, local_ip: net::IpAddr) -> ScopedJoinHandle<()> {
+    fn activate_mapping(
+        &self,
+        data: MappingData,
+        local_ip: net::IpAddr,
+        mappings_monitor: &StateMonitor,
+    ) -> ScopedJoinHandle<()> {
         let service = self.service.clone();
         let device_uri = self.device_url.clone();
-        let span = tracing::info_span!(
-            "mapping",
-            protocol = %data.protocol,
-            int = data.internal,
-            ext = data.external
-        );
+        let mapping_monitor = mappings_monitor.make_child(format!(
+            "{} EXT:{} -> INT:{}",
+            data.protocol, data.external, data.internal,
+        ));
 
         scoped_task::spawn(async move {
-            Self::run_mapping(data, local_ip, service, device_uri)
-                .instrument(span)
+            Self::run_mapping(data, local_ip, service, device_uri, mapping_monitor)
+                .instrument(Span::current())
                 .await;
             unreachable!();
         })
@@ -397,17 +404,14 @@ impl PerIGDPortForwarder {
     fn start_ext_ip_discovery(&self) -> ScopedJoinHandle<()> {
         let service = self.service.clone();
         let device_url = self.device_url.clone();
+        let external_ip = self.monitor.make_value("external ip", None);
 
-        scoped_task::spawn(
-            async move {
-                loop {
-                    let external_ip = get_external_ip_address(&service, &device_url).await.ok();
-                    state_monitor!(?external_ip);
-                    sleep(Duration::from_secs(4 * 60)).await;
-                }
+        scoped_task::spawn(async move {
+            loop {
+                *external_ip.get() = get_external_ip_address(&service, &device_url).await.ok();
+                sleep(Duration::from_secs(4 * 60)).await;
             }
-            .instrument(Span::current()),
-        )
+        })
     }
 
     async fn run_mapping(
@@ -415,6 +419,7 @@ impl PerIGDPortForwarder {
         local_ip: net::IpAddr,
         service: Service,
         device_url: Uri,
+        monitor: StateMonitor,
     ) {
         let lease_duration = Duration::from_secs(5 * 60);
         let sleep_delta = Duration::from_secs(5);
@@ -424,17 +429,17 @@ impl PerIGDPortForwarder {
         let mut ext_port_reported = false;
 
         // Monitoring
-        let mut iteration = 0;
-        state_monitor!(state = ?State::Start, iteration);
+        let iteration = monitor.make_value("iteration", 0);
+        let state = monitor.make_value("state", State::Start);
 
         loop {
-            iteration += 1;
-            state_monitor!(state = ?State::AddingPortMappingFirstStage, iteration);
+            *iteration.get() += 1;
+            *state.get() = State::AddingPortMappingFirstStage;
 
             if let Err(err) =
                 add_port_mappings(&service, &device_url, &local_ip, lease_duration, &mapping).await
             {
-                state_monitor!(state = ?State::StageOneFailure(err));
+                *state.get() = State::StageOneFailure(err);
                 sleep(error_sleep_duration).await;
                 continue;
             }
@@ -449,10 +454,10 @@ impl PerIGDPortForwarder {
                 );
             }
 
-            state_monitor!(state = ?State::SleepingFirstStage((SystemTime::now() + sleep_duration).into()));
+            *state.get() = State::SleepingFirstStage((SystemTime::now() + sleep_duration).into());
             sleep(sleep_duration).await;
 
-            state_monitor!(state = ?State::AddingPortMappingSecondStage);
+            *state.get() = State::AddingPortMappingSecondStage;
             // We've seen IGD devices that refuse to update the lease if the previous lease has not
             // yet ended. So what we're doing here is that we do attempt to do just that, but we
             // also then wait until we know the previous lease ended and bump the lease again.
@@ -474,12 +479,12 @@ impl PerIGDPortForwarder {
             if let Err(err) =
                 add_port_mappings(&service, &device_url, &local_ip, lease_duration, &mapping).await
             {
-                state_monitor!(state = ?State::StageTwoFailure(err));
+                *state.get() = State::StageTwoFailure(err);
                 sleep(error_sleep_duration).await;
                 continue;
             }
 
-            state_monitor!(state = ?State::SleepingSecondStage((SystemTime::now() + 2 * sleep_delta).into()));
+            *state.get() = State::SleepingSecondStage((SystemTime::now() + 2 * sleep_delta).into());
             sleep(sleep_delta * 2).await;
         }
     }

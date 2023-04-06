@@ -95,8 +95,7 @@ impl Network {
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
         let dht_discovery = DhtDiscovery::new(None, None, monitor.make_child("DHT"));
-
-        let port_forwarder = upnp::PortForwarder::new();
+        let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
 
