@@ -111,7 +111,11 @@ impl Network {
         let this_runtime_id = SecretRuntimeId::generate();
         tracing::debug!(this_runtime_id = ?this_runtime_id.public());
 
+        let connections_monitor = monitor.make_child("Connections");
+
         let inner = Arc::new(Inner {
+            main_monitor: monitor,
+            connections_monitor,
             span: Span::current(),
             gateway,
             this_runtime_id,
@@ -130,7 +134,6 @@ impl Network {
             dht_discovery_tx,
             pex_discovery_tx,
             connection_deduplicator: ConnectionDeduplicator::new(),
-            connections_monitor: monitor.make_child("Connections"),
             on_protocol_mismatch_tx,
             user_provided_peers,
             tasks: Arc::downgrade(&tasks),
@@ -373,6 +376,8 @@ struct RegistrationHolder {
 }
 
 struct Inner {
+    main_monitor: StateMonitor,
+    connections_monitor: StateMonitor,
     span: Span,
     gateway: Gateway,
     this_runtime_id: SecretRuntimeId,
@@ -384,7 +389,6 @@ struct Inner {
     dht_discovery_tx: mpsc::UnboundedSender<SeenPeer>,
     pex_discovery_tx: mpsc::Sender<PexPayload>,
     connection_deduplicator: ConnectionDeduplicator,
-    connections_monitor: StateMonitor,
     on_protocol_mismatch_tx: uninitialized_watch::Sender<()>,
     user_provided_peers: SeenPeers,
     // Note that unwrapping the upgraded weak pointer should be fine because if the underlying Arc
@@ -520,7 +524,10 @@ impl Inner {
     }
 
     async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
-        let mut discovery = LocalDiscovery::new(listener_port);
+        let mut discovery = LocalDiscovery::new(
+            listener_port,
+            self.main_monitor.make_child("LocalDiscovery"),
+        );
 
         loop {
             let peer = discovery.recv().await;
@@ -622,6 +629,7 @@ impl Inner {
             .build();
 
         let mut next_sleep = None;
+        let mut first = true;
 
         loop {
             monitor.start();
@@ -646,18 +654,22 @@ impl Inner {
             if let Some(sleep) = next_sleep {
                 tracing::debug!(parent: monitor.span(), "next connection attempt in {:?}", sleep);
                 tokio::time::sleep(sleep).await;
-            } else {
-                tracing::debug!(parent: monitor.span(), "peer found");
             }
 
             next_sleep = backoff.next_backoff();
 
             let permit = match self.connection_deduplicator.reserve(addr, source) {
-                ReserveResult::Permit(permit) => permit,
+                ReserveResult::Permit(permit) => {
+                    if first {
+                        tracing::info!(parent: monitor.span(), "peer found");
+                        first = false;
+                    }
+
+                    permit
+                }
                 ReserveResult::Occupied(on_release, their_source) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
-                        tracing::debug!(parent: monitor.span(), "duplicate from same source - ignoring");
                         return;
                     }
 
@@ -676,7 +688,7 @@ impl Inner {
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
-            tracing::debug!(parent: monitor.span(), "connecting");
+            tracing::info!(parent: monitor.span(), "connecting");
 
             let socket = match self.gateway.connect_with_retries(&peer, source).await {
                 Some(socket) => socket,

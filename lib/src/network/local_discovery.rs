@@ -3,6 +3,7 @@ use super::{
     peer_addr::{PeerAddr, PeerPort},
     seen_peers::{SeenPeer, SeenPeers},
 };
+use crate::state_monitor::StateMonitor;
 use crate::{
     collections::{HashMap, HashSet},
     deadlock::AsyncMutex,
@@ -21,7 +22,7 @@ use tokio::{
     sync::mpsc,
     time::{sleep, Duration},
 };
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 // Time to wait when an error occurs on a socket.
 const ERROR_DELAY: Duration = Duration::from_secs(3);
@@ -41,9 +42,8 @@ pub(crate) struct LocalDiscovery {
 }
 
 impl LocalDiscovery {
-    pub fn new(listener_port: PeerPort) -> Self {
+    pub fn new(listener_port: PeerPort, monitor: StateMonitor) -> Self {
         let (peer_tx, peer_rx) = mpsc::channel(1);
-        let span = tracing::info_span!("LocalDiscovery");
 
         let work_handle = scoped_task::spawn(
             async move {
@@ -57,12 +57,12 @@ impl LocalDiscovery {
 
                 while let Some(change) = interface_watcher.recv().await {
                     match change {
-                        InterfaceChange::Added(set) => inner.add(set),
+                        InterfaceChange::Added(set) => inner.add(set, &monitor),
                         InterfaceChange::Removed(set) => inner.remove(set),
                     }
                 }
             }
-            .instrument(span),
+            .instrument(Span::current()),
         );
 
         Self {
@@ -85,29 +85,27 @@ struct LocalDiscoveryInner {
 }
 
 impl LocalDiscoveryInner {
-    fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>) {
+    fn add(&mut self, new_interfaces: HashSet<Ipv4Addr>, parent_monitor: &StateMonitor) {
         use crate::collections::hash_map::Entry;
 
         for interface in new_interfaces {
             match self.per_interface_discovery.entry(interface) {
                 Entry::Vacant(entry) => {
+                    let _enter = tracing::info_span!("local_discovery", %interface).entered();
                     let discovery = PerInterfaceLocalDiscovery::new(
                         self.peer_tx.clone(),
                         self.listener_port,
                         interface,
+                        parent_monitor,
                     );
 
                     match discovery {
                         Ok(discovery) => {
                             entry.insert(discovery);
-                            tracing::info!("Started local discovery on interface {:?}", interface);
+                            tracing::info!("started");
                         }
-                        Err(err) => {
-                            tracing::warn!(
-                                "Failed to start local discovery on interface {:?}: {:?}",
-                                interface,
-                                err
-                            );
+                        Err(error) => {
+                            tracing::warn!(?error, "failed to start");
                         }
                     }
                 }
@@ -118,28 +116,15 @@ impl LocalDiscoveryInner {
 
     fn remove(&mut self, removed_interfaces: HashSet<Ipv4Addr>) {
         for interface in removed_interfaces {
-            if self.per_interface_discovery.remove(&interface).is_some() {
-                log_stop(interface);
-            }
+            self.per_interface_discovery.remove(&interface);
         }
     }
-}
-
-impl Drop for LocalDiscoveryInner {
-    fn drop(&mut self) {
-        for interface in self.per_interface_discovery.keys() {
-            log_stop(*interface);
-        }
-    }
-}
-
-fn log_stop(addr: Ipv4Addr) {
-    tracing::info!("Stopped local discovery on interface {:?}", addr);
 }
 
 struct PerInterfaceLocalDiscovery {
     _beacon_handle: ScopedJoinHandle<()>,
     _receiver_handle: ScopedJoinHandle<()>,
+    span: Span,
 }
 
 impl PerInterfaceLocalDiscovery {
@@ -147,12 +132,14 @@ impl PerInterfaceLocalDiscovery {
         peer_tx: mpsc::Sender<SeenPeer>,
         listener_port: PeerPort,
         interface: Ipv4Addr,
+        parent_monitor: &StateMonitor,
     ) -> io::Result<Self> {
         // Only used to filter out multicast packets from self.
         let id = OsRng.gen();
         let socket_provider = Arc::new(SocketProvider::new(interface));
 
-        let span = tracing::info_span!("interface", addr = ?interface);
+        let monitor = parent_monitor.make_child(format!("{interface}"));
+        let span = Span::current();
 
         let seen_peers = SeenPeers::new();
 
@@ -162,19 +149,27 @@ impl PerInterfaceLocalDiscovery {
                 id,
                 listener_port,
                 seen_peers.clone(),
+                monitor.clone(),
             )
             .instrument(span.clone()),
         );
 
-        let receiver_handle = scoped_task::spawn(async move {
-            Self::run_recv_loop(peer_tx, id, listener_port, socket_provider, seen_peers)
-                .instrument(span)
-                .await
-        });
+        let receiver_handle = scoped_task::spawn(
+            Self::run_recv_loop(
+                peer_tx,
+                id,
+                listener_port,
+                socket_provider,
+                seen_peers,
+                monitor,
+            )
+            .instrument(span.clone()),
+        );
 
         Ok(Self {
             _beacon_handle: beacon_handle,
             _receiver_handle: receiver_handle,
+            span,
         })
     }
 
@@ -184,15 +179,13 @@ impl PerInterfaceLocalDiscovery {
         listener_port: PeerPort,
         socket_provider: Arc<SocketProvider>,
         seen_peers: SeenPeers,
+        monitor: StateMonitor,
     ) {
         let mut recv_buffer = [0; 64];
         let mut recv_error_reported = false;
 
-        let mut beacon_requests_received = 0;
-        state_monitor!(beacon_requests_received);
-
-        let mut beacon_responses_received = 0;
-        state_monitor!(beacon_responses_received);
+        let beacon_requests_received = monitor.make_value("beacon requests received", 0);
+        let beacon_responses_received = monitor.make_value("beacon responses received", 0);
 
         loop {
             let socket = socket_provider.provide().await;
@@ -242,8 +235,7 @@ impl PerInterfaceLocalDiscovery {
             };
 
             if is_request {
-                beacon_requests_received += 1;
-                state_monitor!(beacon_requests_received);
+                *beacon_requests_received.get() += 1;
 
                 let msg = Message::Reply {
                     port: listener_port,
@@ -256,8 +248,7 @@ impl PerInterfaceLocalDiscovery {
                     socket_provider.mark_bad(socket).await;
                 }
             } else {
-                beacon_responses_received += 1;
-                state_monitor!(beacon_responses_received);
+                *beacon_responses_received.get() += 1;
             }
 
             let addr = match port {
@@ -276,17 +267,23 @@ impl PerInterfaceLocalDiscovery {
     }
 }
 
+impl Drop for PerInterfaceLocalDiscovery {
+    fn drop(&mut self) {
+        let _enter = self.span.enter();
+        tracing::info!("stopped");
+    }
+}
+
 async fn run_beacon(
     socket_provider: Arc<SocketProvider>,
     id: InsecureRuntimeId,
     listener_port: PeerPort,
     seen_peers: SeenPeers,
+    monitor: StateMonitor,
 ) {
     let multicast_endpoint = SocketAddr::new(MULTICAST_ADDR.into(), MULTICAST_PORT);
 
-    let mut beacons_sent = 0;
-    state_monitor!(beacons_sent);
-
+    let beacons_sent = monitor.make_value("beacons sent", 0);
     let mut error_shown = false;
 
     loop {
@@ -302,8 +299,7 @@ async fn run_beacon(
         match send(&socket, msg, multicast_endpoint).await {
             Ok(()) => {
                 error_shown = false;
-                beacons_sent += 1;
-                state_monitor!(beacons_sent);
+                *beacons_sent.get() += 1;
             }
             Err(error) => {
                 if !error_shown {
