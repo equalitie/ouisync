@@ -7,7 +7,7 @@ use tokio::runtime::Handle;
 pub async fn create_repo(rng: &mut StdRng, store: &Path) -> RepositoryGuard {
     let monitor = StateMonitor::make_root();
     let repository = Repository::create(
-        RepositoryDb::create(store, monitor).await.unwrap(),
+        RepositoryDb::create(store, &monitor).await.unwrap(),
         rng.gen(),
         Access::WriteUnlocked {
             secrets: WriteSecrets::generate(rng),

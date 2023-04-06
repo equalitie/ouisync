@@ -1,5 +1,5 @@
 use crate::{config::ConfigStore, device_id, error::Result};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use ouisync_lib::{
     crypto::Password,
     network::{Network, Registration},
@@ -7,7 +7,6 @@ use ouisync_lib::{
     ShareToken, StateMonitor,
 };
 use std::{borrow::Cow, sync::Arc};
-use tracing::{Instrument, Span};
 
 pub struct RepositoryHolder {
     pub repository: Arc<Repository>,
@@ -43,39 +42,32 @@ pub async fn create(
         AccessSecrets::random_write()
     };
 
-    let span = repo_span(&store);
-    let monitor = repos_monitor.make_child(store.to_string());
+    let device_id = device_id::get_or_create(config).await?;
 
-    async {
-        let device_id = device_id::get_or_create(config).await?;
+    let db = RepositoryDb::create(store.into_std_path_buf(), repos_monitor).await?;
 
-        let db = RepositoryDb::create(store.into_std_path_buf(), monitor).await?;
+    let local_read_key = if let Some(local_read_password) = local_read_password {
+        Some(db.password_to_key(local_read_password).await?)
+    } else {
+        None
+    };
 
-        let local_read_key = if let Some(local_read_password) = local_read_password {
-            Some(db.password_to_key(local_read_password).await?)
-        } else {
-            None
-        };
+    let local_write_key = if let Some(local_write_password) = local_write_password {
+        Some(db.password_to_key(local_write_password).await?)
+    } else {
+        None
+    };
 
-        let local_write_key = if let Some(local_write_password) = local_write_password {
-            Some(db.password_to_key(local_write_password).await?)
-        } else {
-            None
-        };
+    let access = Access::new(local_read_key, local_write_key, access_secrets);
+    let repository = Repository::create(db, device_id, access).await?;
+    let repository = Arc::new(repository);
 
-        let access = Access::new(local_read_key, local_write_key, access_secrets);
-        let repository = Repository::create(db, device_id, access).await?;
-        let repository = Arc::new(repository);
+    let registration = network.register(repository.store().clone()).await;
 
-        let registration = network.register(repository.store().clone()).await;
-
-        Ok(RepositoryHolder {
-            repository,
-            registration,
-        })
-    }
-    .instrument(span)
-    .await
+    Ok(RepositoryHolder {
+        repository,
+        registration,
+    })
 }
 
 /// Opens an existing repository.
@@ -88,30 +80,23 @@ pub async fn open(
 ) -> Result<RepositoryHolder> {
     let local_password = local_password.as_deref().map(Password::new);
 
-    let span = repo_span(&store);
-    let monitor = repos_monitor.make_child(store.to_string());
+    let device_id = device_id::get_or_create(config).await?;
 
-    async {
-        let device_id = device_id::get_or_create(config).await?;
+    let repository = Repository::open(
+        store.into_std_path_buf(),
+        device_id,
+        local_password.map(LocalSecret::Password),
+        repos_monitor,
+    )
+    .await?;
+    let repository = Arc::new(repository);
 
-        let repository = Repository::open(
-            store.into_std_path_buf(),
-            device_id,
-            local_password.map(LocalSecret::Password),
-            monitor,
-        )
-        .await?;
-        let repository = Arc::new(repository);
+    let registration = network.register(repository.store().clone()).await;
 
-        let registration = network.register(repository.store().clone()).await;
-
-        Ok(RepositoryHolder {
-            repository,
-            registration,
-        })
-    }
-    .instrument(span)
-    .await
+    Ok(RepositoryHolder {
+        repository,
+        registration,
+    })
 }
 
 pub async fn reopen(
@@ -121,22 +106,15 @@ pub async fn reopen(
     repos_monitor: &StateMonitor,
 ) -> Result<RepositoryHolder> {
     let token = ReopenToken::decode(&token)?;
-    let span = repo_span(&store);
-    let monitor = repos_monitor.make_child(store.to_string());
+    let repository = Repository::reopen(store.into_std_path_buf(), token, repos_monitor).await?;
+    let repository = Arc::new(repository);
 
-    async {
-        let repository = Repository::reopen(store.into_std_path_buf(), token, monitor).await?;
-        let repository = Arc::new(repository);
+    let registration = network.register(repository.store().clone()).await;
 
-        let registration = network.register(repository.store().clone()).await;
-
-        Ok(RepositoryHolder {
-            repository,
-            registration,
-        })
-    }
-    .instrument(span)
-    .await
+    Ok(RepositoryHolder {
+        repository,
+        registration,
+    })
 }
 
 /// If `share_token` is null, the function will try with the currently active access secrets in the
@@ -243,8 +221,4 @@ pub async fn create_share_token(
     };
 
     Ok(share_token.to_string())
-}
-
-fn repo_span(store: &Utf8Path) -> Span {
-    tracing::info_span!("repo", ?store)
 }

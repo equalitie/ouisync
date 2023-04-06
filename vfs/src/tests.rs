@@ -231,7 +231,7 @@ async fn setup() -> (TempDir, MountGuard) {
 
     let span = tracing::info_span!("test", name = thread::current().name());
     let monitor = StateMonitor::make_root();
-    let db = RepositoryDb::create(base_dir.path().join("repo.db"), monitor)
+    let db = RepositoryDb::create(base_dir.path().join("repo.db"), &monitor)
         .await
         .unwrap();
 

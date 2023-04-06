@@ -398,9 +398,7 @@ fn recreate_local_branch() {
         let repo_path = actor::make_repo_path();
         let monitor = StateMonitor::make_root();
         let repo = Repository::create(
-            RepositoryDb::create(&repo_path, monitor.clone())
-                .await
-                .unwrap(),
+            RepositoryDb::create(&repo_path, &monitor).await.unwrap(),
             actor::device_id(),
             Access::new(None, None, actor::default_secrets()),
         )
@@ -424,7 +422,7 @@ fn recreate_local_branch() {
             actor::device_id(),
             None,
             AccessMode::Read,
-            monitor.clone(),
+            &monitor,
         )
         .await
         .unwrap();
@@ -440,7 +438,7 @@ fn recreate_local_branch() {
 
         repo.close().await.unwrap();
         drop(repo);
-        let repo = Repository::open(&repo_path, actor::device_id(), None, monitor)
+        let repo = Repository::open(&repo_path, actor::device_id(), None, &monitor)
             .await
             .unwrap();
 

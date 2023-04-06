@@ -307,14 +307,20 @@ async fn blind_access_non_empty_repo() {
         (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open_in(pool.clone(), device_id, local_secret.clone(), access_mode)
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Repo should open in blind mode (local_secret.is_some:{:?})",
-                    local_secret.is_some(),
-                )
-            });
+        let repo = Repository::open_in(
+            pool.clone(),
+            device_id,
+            local_secret.clone(),
+            access_mode,
+            Span::current(),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Repo should open in blind mode (local_secret.is_some:{:?})",
+                local_secret.is_some(),
+            )
+        });
 
         // Reading files is not allowed.
         assert_matches!(
@@ -368,6 +374,7 @@ async fn blind_access_empty_repo() {
         device_id,
         Some(LocalSecret::random()),
         AccessMode::Read,
+        Span::current(),
     )
     .await
     .unwrap();
@@ -402,7 +409,7 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read)
+    let repo = Repository::open_in(pool, device_id, None, AccessMode::Read, Span::current())
         .await
         .unwrap();
 
@@ -461,7 +468,7 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let device_id_b = rand::random();
-    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read)
+    let repo = Repository::open_in(pool, device_id_b, None, AccessMode::Read, Span::current())
         .await
         .unwrap();
 
@@ -855,7 +862,7 @@ async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
     let monitor = StateMonitor::make_root();
     let repo = Repository::create(
-        RepositoryDb::create(base_dir.path().join("repo.db"), monitor)
+        RepositoryDb::create(base_dir.path().join("repo.db"), &monitor)
             .await
             .unwrap(),
         rand::random(),

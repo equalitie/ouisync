@@ -66,7 +66,7 @@ impl DurationRanges {
             lt_03000: monitor.make_value("<  3s", 0),
             lt_10000: monitor.make_value("< 10s", 0),
             lt_30000: monitor.make_value("< 30s", 0),
-            ge_30000: monitor.make_value(">= 30s", 0),
+            ge_30000: monitor.make_value("≥ 30s", 0),
         }
     }
 

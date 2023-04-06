@@ -36,7 +36,7 @@ use crate::{
 };
 use camino::Utf8Path;
 use scoped_task::ScopedJoinHandle;
-use std::{path::Path, sync::Arc};
+use std::{borrow::Cow, path::Path, sync::Arc};
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task,
@@ -48,13 +48,18 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct RepositoryDb {
     pool: db::Pool,
+    span: Span,
 }
 
 impl RepositoryDb {
-    pub async fn create(store: impl AsRef<Path>, monitor: StateMonitor) -> Result<Self> {
+    pub async fn create(store: impl AsRef<Path>, parent_monitor: &StateMonitor) -> Result<Self> {
+        let label = make_label(store.as_ref());
+        let span = make_span(&label);
+        let monitor = parent_monitor.make_child(label);
+
         let pool = db::create(store, monitor).await?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, span })
     }
 
     pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
@@ -66,7 +71,10 @@ impl RepositoryDb {
 
     #[cfg(test)]
     pub(crate) fn new(pool: db::Pool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            span: Span::current(),
+        }
     }
 }
 
@@ -88,7 +96,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(db.pool, this_writer_id, access.secrets()).await
+        Self::new(db.pool, this_writer_id, access.secrets(), db.span).await
     }
 
     /// Opens an existing repository.
@@ -101,9 +109,16 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
-        monitor: StateMonitor,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
-        Self::open_with_mode(store, device_id, local_secret, AccessMode::Write, monitor).await
+        Self::open_with_mode(
+            store,
+            device_id,
+            local_secret,
+            AccessMode::Write,
+            parent_monitor,
+        )
+        .await
     }
 
     /// Opens an existing repository with the provided access mode. This allows to reduce the
@@ -113,10 +128,14 @@ impl Repository {
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
-        monitor: StateMonitor,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
+        let label = make_label(store.as_ref());
+        let span = make_span(&label);
+        let monitor = parent_monitor.make_child(label);
+
         let pool = db::open(store, monitor).await?;
-        Self::open_in(pool, device_id, local_secret, max_access_mode).await
+        Self::open_in(pool, device_id, local_secret, max_access_mode, span).await
     }
 
     /// Opens an existing repository in an already opened database.
@@ -127,6 +146,7 @@ impl Repository {
         // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
         // would give us write access otherwise). Currently used only in tests.
         max_access_mode: AccessMode,
+        span: Span,
     ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
 
@@ -158,24 +178,32 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(pool, this_writer_id, access_secrets).await
+        Self::new(pool, this_writer_id, access_secrets, span).await
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
     pub async fn reopen(
         store: impl AsRef<Path>,
         token: ReopenToken,
-        monitor: StateMonitor,
+        parent_monitor: &StateMonitor,
     ) -> Result<Self> {
+        let label = make_label(store.as_ref());
+        let span = make_span(&label);
+        let monitor = parent_monitor.make_child(label);
+
         let pool = db::open(store, monitor).await?;
-        Self::new(pool, token.writer_id, token.secrets).await
+
+        Self::new(pool, token.writer_id, token.secrets, span).await
     }
 
     async fn new(
         pool: db::Pool,
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
+        span: Span,
     ) -> Result<Self> {
+        let _enter = span.enter();
+
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let index = Index::new(pool, *secrets.id(), event_tx.clone());
 
@@ -192,7 +220,7 @@ impl Repository {
             local_id: LocalId::new(),
         };
 
-        tracing::trace!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
+        tracing::debug!(access = ?secrets.access_mode(), writer_id = ?this_writer_id);
 
         let shared = Arc::new(Shared {
             store,
@@ -838,4 +866,48 @@ async fn report_sync_progress(store: Store) {
             );
         }
     }
+}
+
+const MAX_SPAN_LABEL_LENGTH: usize = 24;
+
+fn make_label(store: &Path) -> Cow<str> {
+    let store = store.to_string_lossy();
+
+    if store.len() <= MAX_SPAN_LABEL_LENGTH {
+        store
+    } else {
+        let start = store.len() - MAX_SPAN_LABEL_LENGTH + 1; // +1 for the ellipsis character
+        format!("…{}", &store[start..]).into()
+    }
+}
+
+fn make_span(label: &str) -> Span {
+    tracing::info_span!("repo", label)
+}
+
+#[test]
+fn make_label_sanity_check() {
+    // less than 24 bytes
+    assert_eq!(
+        make_label(Path::new("/home/alice/repos/a.db")),
+        "/home/alice/repos/a.db"
+    );
+
+    // Exactly 24 bytes
+    assert_eq!(
+        make_label(Path::new("/home/alice/repos/abc.db")),
+        "/home/alice/repos/abc.db"
+    );
+
+    // One more than 24 bytes
+    assert_eq!(
+        make_label(Path::new("/home/alice/repos/abcd.db")),
+        "…ome/alice/repos/abcd.db"
+    );
+
+    // Lot more than 24 bytes
+    assert_eq!(
+        make_label(Path::new("/home/alice/repos/abcdefghijklmnopqrstuvwxyz.db")),
+        "…ghijklmnopqrstuvwxyz.db"
+    );
 }

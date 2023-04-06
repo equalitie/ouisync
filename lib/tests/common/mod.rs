@@ -257,7 +257,7 @@ pub(crate) mod actor {
 
     pub(crate) async fn create_repo_with_secrets(secrets: AccessSecrets) -> Repository {
         let monitor = StateMonitor::make_root();
-        let db = RepositoryDb::create(&make_repo_path(), monitor)
+        let db = RepositoryDb::create(&make_repo_path(), &monitor)
             .await
             .unwrap();
 

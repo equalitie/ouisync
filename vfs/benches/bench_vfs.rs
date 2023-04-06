@@ -47,7 +47,7 @@ mod utils {
 
         let monitor = StateMonitor::make_root();
         let repo = Repository::create(
-            RepositoryDb::create(base_dir.path().join("repo.db"), monitor)
+            RepositoryDb::create(base_dir.path().join("repo.db"), &monitor)
                 .await
                 .unwrap(),
             rng.gen(),
