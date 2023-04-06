@@ -34,7 +34,6 @@ use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
 };
-use tracing::Span;
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
@@ -54,7 +53,7 @@ pub(crate) struct Pool {
 impl Pool {
     async fn create(
         connect_options: SqliteConnectOptions,
-        _monitor: StateMonitor,
+        monitor: StateMonitor,
     ) -> Result<Self, sqlx::Error> {
         let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
@@ -80,7 +79,7 @@ impl Pool {
             reads,
             write,
             shared_tx: Arc::new(AsyncMutex::new(None)),
-            stats: Arc::new(RepositoryStats::new(Span::current())),
+            stats: Arc::new(RepositoryStats::new(monitor)),
         })
     }
 
@@ -92,7 +91,7 @@ impl Pool {
         async move {
             let start = Instant::now();
             let conn = self.reads.acquire().await?;
-            self.stats.write().note_db_acquire_duration(start.elapsed());
+            self.stats.db_acquire_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
@@ -112,9 +111,7 @@ impl Pool {
         async move {
             let start = Instant::now();
             let tx = self.reads.begin().await?;
-            self.stats
-                .write()
-                .note_db_read_begin_duration(start.elapsed());
+            self.stats.db_begin_read_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);
@@ -150,9 +147,7 @@ impl Pool {
 
             let tx = self.write.begin().await?;
 
-            self.stats
-                .write()
-                .note_db_write_begin_duration(start.elapsed());
+            self.stats.db_begin_write_durations.note(start.elapsed());
 
             let track_lifetime =
                 ExpectShortLifetime::new_in(WARN_AFTER_TRANSACTION_LIFETIME, location);

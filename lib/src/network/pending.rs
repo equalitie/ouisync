@@ -8,7 +8,7 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
     index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
-    repository_stats::{self, RepositoryStats},
+    repository_stats::RepositoryStats,
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;
@@ -197,12 +197,12 @@ impl PendingRequests {
     }
 
     fn request_added(&self, key: &Key) {
-        stats_request_added(&mut self.stats.write(), key);
+        stats_request_added(&self.stats, key);
         self.notify_tracker_task();
     }
 
     fn request_removed(&self, key: &Key, timestamp: Option<Instant>) {
-        stats_request_removed(&mut self.stats.write(), key, timestamp);
+        stats_request_removed(&self.stats, key, timestamp);
         self.notify_tracker_task();
     }
 
@@ -211,26 +211,24 @@ impl PendingRequests {
     }
 }
 
-fn stats_request_added(stats: &mut repository_stats::Writer, key: &Key) {
-    stats.pending_requests += 1;
+fn stats_request_added(stats: &RepositoryStats, key: &Key) {
+    *stats.pending_requests.get() += 1;
 
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => stats.index_requests_inflight += 1,
-        Key::Block(_) => stats.block_requests_inflight += 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => *stats.index_requests_inflight.get() += 1,
+        Key::Block(_) => *stats.block_requests_inflight.get() += 1,
     }
 }
 
-fn stats_request_removed(
-    stats: &mut repository_stats::Writer,
-    key: &Key,
-    timestamp: Option<Instant>,
-) {
+fn stats_request_removed(stats: &RepositoryStats, key: &Key, timestamp: Option<Instant>) {
     match key {
-        Key::RootNode(_) | Key::ChildNodes { .. } => stats.index_requests_inflight -= 1,
-        Key::Block(_) => stats.block_requests_inflight -= 1,
+        Key::RootNode(_) | Key::ChildNodes { .. } => *stats.index_requests_inflight.get() -= 1,
+        Key::Block(_) => *stats.block_requests_inflight.get() -= 1,
     }
     if let Some(timestamp) = timestamp {
-        stats.note_request_inflight_duration(Instant::now() - timestamp);
+        stats
+            .request_inflight_durations
+            .note(Instant::now() - timestamp);
     }
 }
 
@@ -261,7 +259,7 @@ fn run_tracker(
                     _ = time::sleep_until((timestamp + REQUEST_TIMEOUT).into()) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
                         if let Some(mut data) = request_map.lock().unwrap().get_mut(&key) {
-                            stats.write().request_timeouts += 1;
+                            *stats.request_timeouts.get() += 1;
                             data.block_promise = None;
                         }
                     }
@@ -297,7 +295,7 @@ pub(super) struct ClientPermit(OwnedSemaphorePermit, Arc<RepositoryStats>);
 
 impl Drop for ClientPermit {
     fn drop(&mut self) {
-        self.1.write().pending_requests -= 1;
+        *self.1.pending_requests.get() -= 1;
     }
 }
 

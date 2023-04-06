@@ -333,8 +333,8 @@ fn start_sender(
                 let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
 
                 stats
-                    .write()
-                    .note_request_queue_duration(Instant::now() - time_created);
+                    .request_queue_durations
+                    .note(Instant::now() - time_created);
 
                 let msg = request.to_message();
 
@@ -343,7 +343,7 @@ fn start_sender(
                     continue;
                 }
 
-                stats.write().total_requests_cummulative += 1;
+                *stats.total_requests_cummulative.get() += 1;
 
                 tx.send(Content::Request(msg)).await.unwrap_or(());
             }
