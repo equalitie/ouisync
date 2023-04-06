@@ -1,6 +1,5 @@
 use crate::state_monitor::{DurationRanges, MonitoredValue, StateMonitor};
 use btdht::InfoHash;
-use std::borrow::Cow;
 use tracing::Span;
 
 pub(crate) struct RepositoryMonitor {
@@ -49,7 +48,7 @@ impl RepositoryMonitor {
         &self.node
     }
 
-    pub fn label(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.node.id().name()
     }
 }

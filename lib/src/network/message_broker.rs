@@ -55,7 +55,7 @@ impl MessageBroker {
         monitor: StateMonitor,
     ) -> Self {
         let span = tracing::info_span!(
-            "peer",
+            "message_broker",
             runtime_id = ?that_runtime_id.as_public_key(),
         );
 
@@ -88,13 +88,11 @@ impl MessageBroker {
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
     pub fn create_link(&mut self, store: Store, pex: &PexController) {
-        let monitor = self
-            .monitor
-            .make_child(format!("{:?}", store.repository_id()));
+        let monitor = self.monitor.make_child(store.monitor.name());
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repo = store.monitor.label(),
+            repo = store.monitor.name(),
             role = field::Empty,
         );
 
@@ -138,7 +136,7 @@ impl MessageBroker {
         let pex_discovery_tx = pex.discovery_sender();
         let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
 
-        tracing::debug!("link created");
+        tracing::info!("link created");
 
         drop(span_enter);
 
@@ -157,7 +155,7 @@ impl MessageBroker {
                 _ = abort_rx => (),
             }
 
-            tracing::debug!("link destroyed")
+            tracing::info!("link destroyed")
         };
         let task = task.instrument(span);
 
@@ -177,7 +175,7 @@ impl MessageBroker {
 
 impl Drop for MessageBroker {
     fn drop(&mut self) {
-        tracing::debug!(parent: &self.span, "message broker destroyed");
+        tracing::info!(parent: &self.span, "message broker destroyed");
     }
 }
 

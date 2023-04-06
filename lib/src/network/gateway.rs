@@ -324,11 +324,21 @@ impl Stacks {
 
                 tracing::debug!("hole punching started");
 
+                // Using RAII to log the message even when the task is aborted.
+                struct Guard(Span);
+
+                impl Drop for Guard {
+                    fn drop(&mut self) {
+                        tracing::debug!(parent: &self.0, "hole punching stopped");
+                    }
+                }
+
+                let _guard = Guard(Span::current());
+
                 let addr = addr.socket_addr();
                 loop {
                     let duration = rand::thread_rng().gen_range(5_000..15_000);
                     let duration = Duration::from_millis(duration);
-                    tracing::debug!("next hole punch in {:?}", duration);
 
                     // Sleep first because the `connect` function that is normally called right
                     // after this function will send a SYN packet right a way, so no need to do
@@ -338,7 +348,7 @@ impl Stacks {
                     // won't interfere with (will be ignored by) the quic and btdht protocols.
                     let msg = b"punch";
                     match sender.send_to(msg, addr).await {
-                        Ok(()) => tracing::debug!("hole punch sent"),
+                        Ok(()) => (),
                         Err(error) => tracing::warn!("hole punch failed: {:?}", error),
                     }
                 }

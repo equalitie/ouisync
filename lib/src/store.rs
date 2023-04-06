@@ -7,7 +7,7 @@ use crate::{
     event::{Event, Payload},
     index::{self, Index},
     progress::Progress,
-    repository::{LocalId, Metadata, RepositoryId, RepositoryMonitor},
+    repository::{LocalId, Metadata, RepositoryMonitor},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -137,10 +137,6 @@ impl Store {
 
     pub(crate) fn metadata(&self) -> Metadata {
         Metadata::new(self.db().clone())
-    }
-
-    pub(crate) fn repository_id(&self) -> &RepositoryId {
-        self.index.repository_id()
     }
 }
 

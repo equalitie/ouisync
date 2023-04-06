@@ -108,7 +108,7 @@ impl Network {
         let user_provided_peers = SeenPeers::new();
 
         let this_runtime_id = SecretRuntimeId::generate();
-        tracing::debug!(this_runtime_id = ?this_runtime_id.public());
+        tracing::debug!(this_runtime_id = ?this_runtime_id.public().as_public_key());
 
         let connections_monitor = monitor.make_child("Connections");
         let peers_monitor = monitor.make_child("Peers");
@@ -631,7 +631,6 @@ impl Inner {
             .build();
 
         let mut next_sleep = None;
-        let mut first = true;
 
         loop {
             monitor.start();
@@ -661,14 +660,7 @@ impl Inner {
             next_sleep = backoff.next_backoff();
 
             let permit = match self.connection_deduplicator.reserve(addr, source) {
-                ReserveResult::Permit(permit) => {
-                    if first {
-                        tracing::info!(parent: monitor.span(), "peer found");
-                        first = false;
-                    }
-
-                    permit
-                }
+                ReserveResult::Permit(permit) => permit,
                 ReserveResult::Occupied(on_release, their_source) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
