@@ -55,28 +55,38 @@ impl<'a> Responder<'a> {
     }
 
     async fn run(self, rx: &'a mut Receiver) -> Result<()> {
-        let mut handlers = FuturesUnordered::new();
+        //let mut handlers = FuturesUnordered::new();
 
         loop {
             // The `select!` is used so we can handle multiple requests at once.
             // TODO: Do we need to limit the number of concurrent handlers? We have a limit on the
             // number of read DB transactions, so that might be enough, but perhaps we also want to
             // limit per peer?
-            select! {
-                request = rx.recv() => {
-                    match request {
-                        Some(request) => {
-                            handlers.push(self.handle_request(request));
-                        },
-                        None => break,
-                    }
-                },
-                Some(result) = handlers.next() => {
-                    if result.is_err() {
+            //select! {
+            //    request = rx.recv() => {
+            //        match request {
+            //            Some(request) => {
+            //                tracing::debug!("Server received request {:?}", request);
+            //                handlers.push(self.handle_request(request));
+            //            },
+            //            None => break,
+            //        }
+            //    },
+            //    Some(result) = handlers.next() => {
+            //        if result.is_err() {
+            //            break;
+            //        }
+            //    },
+            //}
+            match rx.recv().await {
+                Some(request) => {
+                    tracing::debug!("Server received request {:?}", request);
+                    if self.handle_request(request).await.is_err() {
                         break;
                     }
-                },
-            }
+                }
+                None => break,
+            };
         }
 
         Ok(())
@@ -113,19 +123,17 @@ impl<'a> Responder<'a> {
                     debug: debug.send(),
                 };
 
-                self.tx.send(response).await;
+                self.send(response).await;
                 Ok(())
             }
             Err(Error::EntryNotFound) => {
                 tracing::warn!("root node not found");
-                self.tx
-                    .send(Response::RootNodeError(branch_id, debug.send()))
+                self.send(Response::RootNodeError(branch_id, debug.send()))
                     .await;
                 Ok(())
             }
             Err(error) => {
-                self.tx
-                    .send(Response::RootNodeError(branch_id, debug.send()))
+                self.send(Response::RootNodeError(branch_id, debug.send()))
                     .await;
                 Err(error)
             }
@@ -152,30 +160,27 @@ impl<'a> Responder<'a> {
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
                 tracing::trace!("inner nodes found");
-                self.tx
-                    .send(Response::InnerNodes(
-                        inner_nodes,
-                        disambiguator,
-                        debug.send(),
-                    ))
-                    .await;
-            }
-
-            if !leaf_nodes.is_empty() {
-                tracing::trace!("leaf nodes found");
-                self.tx
-                    .send(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
-                    .await;
-            }
-        } else {
-            tracing::warn!("child nodes not found");
-            self.tx
-                .send(Response::ChildNodesError(
-                    parent_hash,
+                self.send(Response::InnerNodes(
+                    inner_nodes,
                     disambiguator,
                     debug.send(),
                 ))
                 .await;
+            }
+
+            if !leaf_nodes.is_empty() {
+                tracing::trace!("leaf nodes found");
+                self.send(Response::LeafNodes(leaf_nodes, disambiguator, debug.send()))
+                    .await;
+            }
+        } else {
+            tracing::warn!("child nodes not found");
+            self.send(Response::ChildNodesError(
+                parent_hash,
+                disambiguator,
+                debug.send(),
+            ))
+            .await;
         }
 
         Ok(())
@@ -192,25 +197,29 @@ impl<'a> Responder<'a> {
         match result {
             Ok(nonce) => {
                 tracing::trace!("block found");
-                self.tx
-                    .send(Response::Block {
-                        content,
-                        nonce,
-                        debug: debug.send(),
-                    })
-                    .await;
+                self.send(Response::Block {
+                    content,
+                    nonce,
+                    debug: debug.send(),
+                })
+                .await;
                 Ok(())
             }
             Err(Error::BlockNotFound(_)) => {
                 tracing::warn!("block not found");
-                self.tx.send(Response::BlockError(id, debug.send())).await;
+                self.send(Response::BlockError(id, debug.send())).await;
                 Ok(())
             }
             Err(error) => {
-                self.tx.send(Response::BlockError(id, debug.send())).await;
+                self.send(Response::BlockError(id, debug.send())).await;
                 Err(error)
             }
         }
+    }
+
+    async fn send(&self, response: Response) {
+        tracing::debug!("Server sending {:?}", response);
+        self.tx.send(response).await;
     }
 }
 
@@ -296,6 +305,7 @@ impl<'a> Monitor<'a> {
             debug: DebugResponsePayload::unsolicited(),
         };
 
+        tracing::debug!("Server sending {:?} (monitor)", response);
         self.tx.send(response).await;
 
         Ok(())

@@ -33,7 +33,7 @@ impl ResponseDisambiguator {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) enum Response {
     /// Send the latest root node of this replica to another replica.
     /// NOTE: This is both a response and notification - the server sends this as a response to
@@ -75,11 +75,13 @@ impl fmt::Debug for Response {
             }
             Self::InnerNodes(nodes, disambiguator, _) => f
                 .debug_tuple("InnerNodes")
+                .field(&nodes.hash())
                 .field(nodes)
                 .field(disambiguator)
                 .finish(),
             Self::LeafNodes(nodes, disambiguator, _) => f
                 .debug_tuple("LeafNodes")
+                .field(&nodes.hash())
                 .field(nodes)
                 .field(disambiguator)
                 .finish(),
@@ -90,6 +92,7 @@ impl fmt::Debug for Response {
                 .finish(),
             Self::Block { content, .. } => f
                 .debug_struct("Block")
+                .field("id", &BlockId::from_content(&content))
                 .field("content", &format_args!("{:6x}", Hex(content)))
                 .finish_non_exhaustive(),
             Self::BlockError(id, _) => f.debug_tuple("BlockError").field(id).finish(),

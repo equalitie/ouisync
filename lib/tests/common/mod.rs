@@ -402,14 +402,30 @@ where
     Fut: Future<Output = bool>,
 {
     let mut rx = repo.subscribe();
+    let mut skip_next_test = false;
 
     time::timeout(TEST_TIMEOUT, async {
         loop {
-            if f().await {
+            if !skip_next_test && f().await {
                 break;
             }
 
-            wait(&mut rx).await
+            skip_next_test = false;
+
+            tokio::select! {
+                _ = wait(&mut rx) => (),
+                _ = time::sleep(Duration::from_secs(1)) => {
+                    if f().await {
+                        time::timeout(Duration::from_secs(5), wait(&mut rx))
+                            .await
+                            .expect("Condition `f` was met, but the receiver `rx` did not fire");
+
+                        break;
+                    } else {
+                        skip_next_test = true;
+                    }
+                }
+            }
         }
     })
     .await

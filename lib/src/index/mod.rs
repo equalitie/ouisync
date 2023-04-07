@@ -209,6 +209,38 @@ impl Index {
         Ok((updated_blocks, completed_branches))
     }
 
+    pub async fn receive_leaf_nodes_(
+        &self,
+        nodes: CacheHash<LeafNodeSet>,
+        line: &mut u32,
+        log: &mut String,
+    ) -> Result<(Vec<BlockId>, Vec<PublicKey>), ReceiveError> {
+        *line = line!();
+        let mut tx = self.pool.begin_write().await?;
+        let parent_hash = nodes.hash();
+
+        *line = line!();
+        self.check_parent_node_exists(&mut tx, &parent_hash).await?;
+
+        *line = line!();
+        let updated_blocks = self
+            .find_leaf_nodes_with_new_blocks_(&mut tx, &nodes, log)
+            .await?;
+        *line = line!();
+
+        nodes
+            .into_inner()
+            .into_missing()
+            .save(&mut tx, &parent_hash)
+            .await?;
+
+        *line = line!();
+        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+
+        *line = line!();
+        Ok((updated_blocks, completed_branches))
+    }
+
     // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
     //
     // Assumes (but does not enforce) that `parent_hash` is the parent hash of all nodes in
@@ -263,6 +295,28 @@ impl Index {
                 output.push(remote_node.block_id);
             }
         }
+
+        Ok(output)
+    }
+
+    async fn find_leaf_nodes_with_new_blocks_(
+        &self,
+        conn: &mut db::Connection,
+        remote_nodes: &LeafNodeSet,
+        log: &mut String,
+    ) -> Result<Vec<BlockId>> {
+        use std::fmt::Write;
+        let mut output = Vec::new();
+
+        write!(log, "start").unwrap();
+        for remote_node in remote_nodes.present() {
+            write!(log, ";1:{:?}", remote_node).unwrap();
+            if !LeafNode::is_present(conn, &remote_node.block_id).await? {
+                write!(log, ";2:added").unwrap();
+                output.push(remote_node.block_id);
+            }
+        }
+        write!(log, ";end").unwrap();
 
         Ok(output)
     }

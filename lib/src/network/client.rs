@@ -85,10 +85,18 @@ impl Client {
                     None => break,
                 };
 
+                let r = response.clone();
+
                 let response = match pending_requests.remove(response) {
-                    Some(response) => response,
+                    Some(response) => {
+                        tracing::debug!("Received {:?}", r);
+                        response
+                    }
                     // Unsolicited and non-root response.
-                    None => continue,
+                    None => {
+                        tracing::debug!("Received {:?} (ignored)", r);
+                        continue;
+                    }
                 };
 
                 if queued_responses_tx.send(response).await.is_err() {
@@ -101,8 +109,10 @@ impl Client {
             select! {
                 block_promise = block_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
+                    let request = PendingRequest::Block(block_promise, debug);
                     // Unwrap OK because the sending task never returns.
-                    request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
+                    tracing::debug!("Sending block request {:?}", request);
+                    request_tx.send((request, Instant::now())).unwrap();
                 }
                 _ = &mut move_from_pending_into_queued => break,
                 _ = &mut handle_queued_responses => break,
@@ -114,6 +124,7 @@ impl Client {
 
     fn enqueue_request(&self, request: PendingRequest) {
         // Unwrap OK because the sending task never returns.
+        tracing::debug!("Sending request {:?}", request);
         self.request_tx.send((request, Instant::now())).unwrap();
     }
 
@@ -244,22 +255,41 @@ impl Client {
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
+        let hash = nodes.hash();
         let total = nodes.len();
-        let (updated_blocks, completed_branches) =
-            self.store.index.receive_leaf_nodes(nodes).await?;
+        let mut line = 0;
+        let nodes_ = (*nodes).clone();
+        let mut log = String::new();
+        let (updated_blocks, completed_branches) = self
+            .store
+            .index
+            .receive_leaf_nodes_(nodes, &mut line, &mut log)
+            .await?;
 
-        tracing::trace!("received {}/{} leaf nodes", updated_blocks.len(), total);
+        tracing::debug!(
+            "received {}/{} leaf nodes hash:{:?} line:{} {:?} log:{:?}",
+            updated_blocks.len(),
+            total,
+            hash,
+            line,
+            nodes_,
+            log
+        );
 
         match self.store.block_request_mode {
             BlockRequestMode::Lazy => {
                 for block_id in updated_blocks {
+                    tracing::debug!("Offering block {:?}", block_id);
                     self.block_tracker.offer(block_id);
                 }
             }
             BlockRequestMode::Greedy => {
                 for block_id in updated_blocks {
                     if self.block_tracker.offer(block_id) {
+                        tracing::debug!("Requiring block {:?}", block_id);
                         self.store.require_missing_block(block_id).await?;
+                    } else {
+                        tracing::debug!("NOT Requiring block {:?}", block_id);
                     }
                 }
             }

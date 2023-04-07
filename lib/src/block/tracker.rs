@@ -138,6 +138,8 @@ impl BlockTrackerClient {
 
         missing_block.clients.insert(self.client_id);
 
+        self.shared.notify();
+
         true
     }
 
