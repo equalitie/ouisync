@@ -10,19 +10,22 @@ temp_dir_prefix="ouisync-stress-test"
 build_args="--release"
 
 concurrency=1
-timeout=70s
+timeout=
 log_open=""
 log_dump=""
 package="ouisync"
 test=""
 
-while getopts "dohp:t:n:" arg; do
+while getopts "dohp:t:T:n:" arg; do
     case $arg in
         p)
             package=$OPTARG
             ;;
         t)
             test=$OPTARG
+            ;;
+        T)
+            timeout=$OPTARG
             ;;
         n)
             concurrency=$OPTARG
@@ -40,6 +43,7 @@ while getopts "dohp:t:n:" arg; do
             echo "  -n NUMBER    Number of processes to run concurrently (default: $concurrency)"
             echo "  -p PACKAGE   Package to build (default: $package)"
             echo "  -t TEST      If specified, runs integration test TEST, otherwise runs unit tests"
+            echo "  -T TIMEOUT   Timeout for a single invocation of a test process (default: no timeout, example: 10s)"
             echo "  -d           Dump log to stdout"
             echo "  -o           Open log in \$EDITOR"
             echo "  -h           Show this help"
@@ -76,6 +80,10 @@ cargo test $build_args --no-run
 # This next one will not compile again, we need it to get the executable name.
 exe=$(cargo test $build_args --no-run 2>&1 | grep "Executable" | sed "s/^.*Executable.*(\(.*\)).*$/\1/")
 
+if [ -n "$timeout" ]; then
+    exe="timeout $timeout $exe"
+fi
+
 dir=`mktemp --tmpdir -d $temp_dir_prefix-XXXXXX`
 
 pipe="$dir/pipe"
@@ -92,7 +100,7 @@ for process in $(seq $concurrency); do
         local_iteration=0
 
         while true; do
-            if timeout $timeout $exe $args > $dir/test-$process.log 2>&1; then
+            if $exe $args > $dir/test-$process.log 2>&1; then
                 ((local_iteration=local_iteration+1))
 
                 if ! echo "$process $local_iteration ok" > $pipe; then
