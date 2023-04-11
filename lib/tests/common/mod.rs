@@ -1,3 +1,5 @@
+mod wait_map;
+
 use camino::Utf8Path;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -9,8 +11,9 @@ use rand::Rng;
 use std::{
     cell::Cell,
     future::Future,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
+    sync::Arc,
     thread,
 };
 use tokio::{
@@ -21,6 +24,7 @@ use tokio::{
 use tracing::{instrument, Instrument, Span};
 
 pub(crate) use self::env::*;
+use self::wait_map::WaitMap;
 
 // Timeout for running a whole test case
 pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -32,8 +36,6 @@ pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) mod env {
     use super::*;
     use futures_util::future;
-    use ouisync::deadlock::BlockingMutex;
-    use std::{collections::HashMap, sync::Arc};
     use tokio::{
         runtime::{self, Runtime},
         task::JoinHandle,
@@ -41,11 +43,9 @@ pub(crate) mod env {
 
     /// Test environment that uses real network (localhost)
     pub(crate) struct Env {
-        context: Context,
+        context: Arc<Context>,
         runtime: Runtime,
         tasks: Vec<JoinHandle<()>>,
-        default_port: u16,
-        dns: Arc<BlockingMutex<Dns>>,
     }
 
     impl Env {
@@ -58,11 +58,9 @@ pub(crate) mod env {
                 .unwrap();
 
             Self {
-                context,
+                context: Arc::new(context),
                 runtime,
                 tasks: Vec::new(),
-                default_port: next_default_port(),
-                dns: Arc::new(BlockingMutex::new(Dns::new())),
             }
         }
 
@@ -70,16 +68,10 @@ pub(crate) mod env {
         where
             Fut: Future<Output = ()> + Send + 'static,
         {
-            let actor = Actor::new(self.context.base_dir.path().join(name));
+            let actor = Actor::new(name.to_owned(), self.context.clone());
             let span = tracing::info_span!("actor", name);
 
-            self.dns.lock().unwrap().register(name);
-
-            let f = DNS.scope(self.dns.clone(), f);
-            let f = DEFAULT_PORT.scope(self.default_port, f);
-            let f = DEFAULT_SECRETS.scope(self.context.default_secrets.clone(), f);
             let f = ACTOR.scope(actor, f);
-            let f = ACTOR_NAME.scope(name.to_owned(), f);
             let f = f.instrument(span);
 
             self.tasks.push(self.runtime.spawn(f));
@@ -93,67 +85,6 @@ pub(crate) mod env {
                 .unwrap();
         }
     }
-
-    pub(super) fn bind_ip() -> IpAddr {
-        let name = ACTOR_NAME.with(|name| name.clone());
-        lookup_ip(&name)
-    }
-
-    pub(super) fn lookup_ip(target: &str) -> IpAddr {
-        DNS.with(|dns| dns.lock().unwrap().lookup(target))
-    }
-
-    pub(super) fn default_port() -> u16 {
-        DEFAULT_PORT.with(|port| *port)
-    }
-
-    fn next_default_port() -> u16 {
-        use std::sync::atomic::{AtomicU16, Ordering};
-
-        static NEXT: AtomicU16 = AtomicU16::new(7000);
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    }
-
-    struct Dns {
-        next_last_octet: u8,
-        addrs: HashMap<String, IpAddr>,
-    }
-
-    impl Dns {
-        fn new() -> Self {
-            Self {
-                next_last_octet: 1,
-                addrs: HashMap::default(),
-            }
-        }
-
-        fn register(&mut self, name: &str) -> IpAddr {
-            let last_octet = self.next_last_octet;
-            self.next_last_octet = self
-                .next_last_octet
-                .checked_add(1)
-                .expect("too many dns records");
-
-            let addr = Ipv4Addr::new(127, 0, 0, last_octet).into();
-
-            assert!(
-                self.addrs.insert(name.to_owned(), addr).is_none(),
-                "dns record already exists"
-            );
-
-            addr
-        }
-
-        fn lookup(&self, name: &str) -> IpAddr {
-            self.addrs.get(name).copied().unwrap()
-        }
-    }
-
-    task_local! {
-        static DNS: Arc<BlockingMutex<Dns>>;
-        static DEFAULT_PORT: u16;
-        static ACTOR_NAME: String;
-    }
 }
 
 #[cfg(feature = "simulation")]
@@ -162,7 +93,7 @@ pub(crate) mod env {
 
     /// Test environment that uses simulated network
     pub(crate) struct Env<'a> {
-        context: Context,
+        context: Arc<Context>,
         runner: turmoil::Sim<'a>,
     }
 
@@ -173,14 +104,17 @@ pub(crate) mod env {
                 .simulation_duration(Duration::from_secs(90))
                 .build_with_rng(Box::new(rand::thread_rng()));
 
-            Self { context, runner }
+            Self {
+                context: Arc::new(context),
+                runner,
+            }
         }
 
         pub fn actor<Fut>(&mut self, name: &str, f: Fut)
         where
             Fut: Future<Output = ()> + 'static,
         {
-            let actor = Actor::new(self.context.base_dir.path().join(name));
+            let actor = Actor::new(name.to_owned(), self.context.clone());
             let span = tracing::info_span!("actor", name);
 
             let f = async move {
@@ -188,7 +122,6 @@ pub(crate) mod env {
                 Ok(())
             };
             let f = ACTOR.scope(actor, f);
-            let f = DEFAULT_SECRETS.scope(self.context.default_secrets.clone(), f);
             let f = f.instrument(span);
 
             self.runner.client(name, f);
@@ -199,20 +132,6 @@ pub(crate) mod env {
         fn drop(&mut self) {
             self.runner.run().unwrap()
         }
-    }
-
-    pub(super) fn bind_ip() -> IpAddr {
-        Ipv4Addr::UNSPECIFIED.into()
-    }
-
-    pub(super) fn lookup_ip(target: &str) -> IpAddr {
-        turmoil::lookup(target)
-    }
-
-    pub(super) const fn default_port() -> u16 {
-        // The simulated network is isolated from other tests that might be running in parallel so
-        // using a constant port is ok as it can't clash with those other tests.
-        7000
     }
 }
 
@@ -228,19 +147,47 @@ pub(crate) mod actor {
 
     pub(crate) async fn create_network(proto: Proto) -> Network {
         let network = create_unbound_network();
-
-        let bind_addr = default_bind_addr(proto);
-        network.bind(&[bind_addr]).await;
-
+        bind(&network, proto).await;
         network
     }
 
-    pub(crate) fn default_bind_addr(proto: Proto) -> PeerAddr {
-        proto.wrap(SocketAddr::new(env::bind_ip(), env::default_port()))
+    pub(crate) async fn bind(network: &Network, proto: Proto) {
+        let bind_addr = proto.wrap((Ipv4Addr::UNSPECIFIED, 0));
+        network.bind(&[bind_addr]).await;
+
+        let bind_addr = network
+            .listener_local_addrs()
+            .into_iter()
+            .find(|addr| Proto::of(addr) == proto)
+            .unwrap();
+        register_addr(bind_addr);
     }
 
-    pub(crate) fn lookup(name: &str) -> SocketAddr {
-        SocketAddr::new(env::lookup_ip(name), env::default_port())
+    pub(crate) fn register_addr(addr: PeerAddr) {
+        ACTOR.with(|actor| {
+            actor.context.addr_map.insert(actor.name.clone(), addr);
+        })
+    }
+
+    pub(crate) async fn lookup_addr(name: &str) -> PeerAddr {
+        let context = ACTOR.with(|actor| actor.context.clone());
+        let addr = context.addr_map.get(name).await;
+
+        fn unspecified_to_localhost(addr: SocketAddr) -> SocketAddr {
+            let ip = addr.ip();
+            let ip = match ip {
+                IpAddr::V4(addr) if addr.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(addr) if addr.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+                IpAddr::V4(_) | IpAddr::V6(_) => ip,
+            };
+
+            SocketAddr::new(ip, addr.port())
+        }
+
+        match addr {
+            PeerAddr::Quic(addr) => PeerAddr::Quic(unspecified_to_localhost(addr)),
+            PeerAddr::Tcp(addr) => PeerAddr::Tcp(unspecified_to_localhost(addr)),
+        }
     }
 
     pub(crate) fn make_repo_path() -> PathBuf {
@@ -252,7 +199,7 @@ pub(crate) mod actor {
     }
 
     pub(crate) fn default_secrets() -> AccessSecrets {
-        DEFAULT_SECRETS.with(|secrets| secrets.clone())
+        ACTOR.with(|actor| actor.context.default_secrets.clone())
     }
 
     pub(crate) async fn create_repo_with_secrets(secrets: AccessSecrets) -> Repository {
@@ -287,11 +234,11 @@ pub(crate) mod actor {
 
 task_local! {
     static ACTOR: Actor;
-    static DEFAULT_SECRETS: AccessSecrets;
 }
 
 struct Context {
     base_dir: TempDir,
+    addr_map: WaitMap<String, PeerAddr>,
     default_secrets: AccessSecrets,
 }
 
@@ -301,20 +248,27 @@ impl Context {
 
         Self {
             base_dir: TempDir::new(),
+            addr_map: WaitMap::new(),
             default_secrets: AccessSecrets::random_write(),
         }
     }
 }
 
 struct Actor {
+    name: String,
+    context: Arc<Context>,
     base_dir: PathBuf,
     device_id: DeviceId,
     repo_counter: Cell<u32>,
 }
 
 impl Actor {
-    fn new(base_dir: PathBuf) -> Self {
+    fn new(name: String, context: Arc<Context>) -> Self {
+        let base_dir = context.base_dir.path().join(&name);
+
         Actor {
+            name,
+            context,
             base_dir,
             device_id: rand::random(),
             repo_counter: Cell::new(0),
@@ -326,16 +280,6 @@ impl Actor {
         self.repo_counter.set(num + 1);
 
         self.base_dir.join(format!("repo-{num}.db"))
-    }
-}
-
-pub(crate) trait NetworkExt {
-    fn connect(&self, to: &str);
-}
-
-impl NetworkExt for Network {
-    fn connect(&self, to: &str) {
-        self.add_user_provided_peer(&Proto::detect(self).wrap(actor::lookup(to)))
     }
 }
 
@@ -363,7 +307,7 @@ impl Drop for TempDir {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Proto {
     #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     Tcp,
@@ -379,19 +323,11 @@ impl Proto {
         }
     }
 
-    #[track_caller]
-    pub fn detect(network: &Network) -> Self {
-        let addrs = network.listener_local_addrs();
-
-        if addrs.iter().any(|addr| addr.is_quic()) {
-            return Self::Quic;
+    pub fn of(addr: &PeerAddr) -> Self {
+        match addr {
+            PeerAddr::Quic(_) => Self::Quic,
+            PeerAddr::Tcp(_) => Self::Tcp,
         }
-
-        if addrs.iter().any(|addr| addr.is_tcp()) {
-            return Self::Tcp;
-        }
-
-        panic!("no protocol")
     }
 }
 

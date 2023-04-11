@@ -27,7 +27,7 @@ impl BranchPinner {
         Self {
             shared: Arc::new(BlockingMutex::new(Shared {
                 loads: 0,
-                branches: HashMap::new(),
+                branches: HashMap::default(),
             })),
         }
     }

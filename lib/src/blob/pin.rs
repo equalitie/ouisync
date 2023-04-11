@@ -68,7 +68,7 @@ type Shared = HashMap<PublicKey, HashMap<BlobId, usize>>;
 impl BlobPinner {
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(BlockingMutex::new(HashMap::new())),
+            shared: Arc::new(BlockingMutex::new(HashMap::default())),
         }
     }
 
