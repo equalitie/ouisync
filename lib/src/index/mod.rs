@@ -151,7 +151,7 @@ impl Index {
 
             match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
                 Ok(node) => {
-                    tracing::debug!(vv = ?node.proof.version_vector, "snapshot started");
+                    tracing::debug!(vv = ?node.proof.version_vector, ?hash, "snapshot started");
 
                     // This also commits the transaction.
                     self.update_summaries(tx, hash).await?;
@@ -302,8 +302,12 @@ impl Index {
 
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
-                    let vv = branch.load_version_vector(&mut conn).await?;
-                    tracing::debug!(?vv, "snapshot complete");
+                    let snapshot = branch.load_snapshot(&mut conn).await?;
+                    tracing::debug!(
+                        vv = ?snapshot.version_vector(),
+                        hash = ?snapshot.root_hash(),
+                        "snapshot complete"
+                    );
                 }
 
                 branch.notify();

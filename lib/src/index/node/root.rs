@@ -314,20 +314,21 @@ impl RootNode {
         Ok(())
     }
 
-    /// Updates the summaries of all nodes with the specified hash. Returns whether the nodes
-    /// became complete.
+    /// Updates the summaries of all nodes with the specified hash. Returns whether at least one
+    /// nodes became complete.
     pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<bool> {
         let summary = InnerNode::compute_summary(tx, hash).await?;
 
-        // Multiple nodes with the same hash should have the same `is_complete` which is why it's
-        // enough to fetch just one.
-        let was_complete: bool =
-            sqlx::query("SELECT is_complete FROM snapshot_root_nodes WHERE hash = ?")
+        // Multiple nodes with the same hash can have different `is_complete`. This happens on
+        // receiving a node with the same hash as a complete node we already have but with a
+        // different (greater) version vector. In that case the old node is complete but the new
+        // one is not (because nodes are always initially inserted with `is_complete = false`).
+        let was_incomplete: bool =
+            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 0")
                 .bind(hash)
                 .fetch_optional(&mut *tx)
                 .await?
-                .map(|row| row.get(0))
-                .unwrap_or(false);
+                .is_some();
 
         sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -340,7 +341,7 @@ impl RootNode {
         .execute(tx)
         .await?;
 
-        Ok(!was_complete && summary.is_complete)
+        Ok(was_incomplete && summary.is_complete)
     }
 
     /// Removes this node including its snapshot.

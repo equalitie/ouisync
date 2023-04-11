@@ -299,14 +299,9 @@ mod prune {
                 .branch_pinner
                 .prune(*snapshot.branch_id())
             {
-                tracing::trace!(
-                    id = ?snapshot.branch_id(),
-                    vv = ?snapshot.version_vector(),
-                    "removing outdated branch"
-                );
                 guard
             } else {
-                tracing::trace!(id = ?snapshot.branch_id(), "not removing outdated branch - in use");
+                tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;
             };
 
@@ -314,6 +309,13 @@ mod prune {
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
+
+            tracing::trace!(
+                id = ?snapshot.branch_id(),
+                vv = ?snapshot.version_vector(),
+                hash = ?snapshot.root_hash(),
+                "outdated branch removed"
+            );
         }
 
         // Remove outdated snapshots.

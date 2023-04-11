@@ -204,6 +204,11 @@ impl SnapshotData {
         &self.root_node.proof.writer_id
     }
 
+    /// Returns the root node hash of this snapshot.
+    pub fn root_hash(&self) -> &Hash {
+        &self.root_node.proof.hash
+    }
+
     pub fn to_branch_data(&self) -> BranchData {
         BranchData {
             writer_id: self.root_node.proof.writer_id,
@@ -344,26 +349,26 @@ impl SnapshotData {
                     branch.id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
-                    "not removing outdated snapshot - possible fallback"
+                    "outdated snapshot not removed - possible fallback"
                 );
 
                 maybe_old = old.load_prev(&mut conn).await?;
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
                 // including all its predecessors.
-                tracing::trace!(
-                    branch.id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
-                    hash = ?old.proof.hash,
-                    "removing outdated snapshot"
-                );
-
                 drop(conn);
 
                 let mut tx = db.begin_write().await?;
                 old.remove_recursively(&mut tx).await?;
                 old.remove_recursively_all_older(&mut tx).await?;
                 tx.commit().await?;
+
+                tracing::trace!(
+                    branch.id = ?old.proof.writer_id,
+                    vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
+                    "outdated snapshot removed"
+                );
 
                 break;
             }
