@@ -30,7 +30,7 @@ pub(crate) struct FileWriteLocker {
 impl FileWriteLocker {
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(BlockingMutex::new(HashSet::new())),
+            shared: Arc::new(BlockingMutex::new(HashSet::default())),
         }
     }
 

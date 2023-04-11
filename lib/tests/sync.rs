@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{actor, Env, NetworkExt, Proto};
+use self::common::{actor, Env, Proto};
 use assert_matches::assert_matches;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, RepositoryDb, StateMonitor, BLOB_HEADER_SIZE,
@@ -50,7 +50,9 @@ fn relink_repository() {
 
     env.actor("reader", async move {
         let (network, repo, reg) = actor::setup().await;
-        network.connect("writer");
+
+        let peer_addr = actor::lookup_addr("writer").await;
+        network.add_user_provided_peer(&peer_addr);
 
         // Wait until we see the original file
         common::expect_file_content(&repo, "test.txt", b"first").await;
@@ -92,7 +94,9 @@ fn remove_remote_file() {
 
     env.actor("remover", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("creator");
+
+        let peer_addr = actor::lookup_addr("creator").await;
+        network.add_user_provided_peer(&peer_addr);
 
         common::expect_file_content(&repo, "test.txt", &[]).await;
 
@@ -143,8 +147,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
 
         async move {
             let (network, repo, _reg) = actor::setup().await;
-
-            network.connect("relay");
+            network.add_user_provided_peer(&actor::lookup_addr("relay").await);
 
             let mut file = repo.create_file("test.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content, 4096).await;
@@ -157,8 +160,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
     env.actor("reader", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-
-            network.connect("relay");
+            network.add_user_provided_peer(&actor::lookup_addr("relay").await);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
 
@@ -192,7 +194,7 @@ fn transfer_large_file() {
     env.actor("reader", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("writer");
+            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
 
@@ -242,7 +244,7 @@ fn transfer_many_files() {
     env.actor("reader", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("writer");
+            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
             for (index, content) in files.iter().enumerate() {
                 let name = format!("file-{index}.dat");
@@ -296,7 +298,7 @@ fn sync_during_file_write() {
     env.actor("bob", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("alice");
+            network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
             let id_bob = *repo.local_branch().unwrap().id();
 
@@ -365,7 +367,7 @@ fn concurrent_modify_open_file() {
     env.actor("bob", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("alice");
+            network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
             let id_b = *repo.local_branch().unwrap().id();
 
@@ -460,7 +462,7 @@ fn recreate_local_branch() {
 
     env.actor("bob", async move {
         let (network, repo, _sreg) = actor::setup().await;
-        network.connect("alice");
+        network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
         let id_b = *repo.local_branch().unwrap().id();
 
@@ -497,7 +499,7 @@ fn transfer_directory_with_file() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "food/pizza.jpg", EntryType::File).await;
 
@@ -521,7 +523,7 @@ fn transfer_directory_with_subdirectory() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "food/mediterranean", EntryType::Directory).await;
 
@@ -550,7 +552,7 @@ fn remote_rename_file() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "foo.txt", EntryType::File).await;
         tx.send(()).await.unwrap();
@@ -580,7 +582,7 @@ fn remote_rename_empty_directory() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "foo", EntryType::Directory).await;
         tx.send(()).await.unwrap();
@@ -611,7 +613,7 @@ fn remote_rename_non_empty_directory() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "foo/data.txt", EntryType::File).await;
         tx.send(()).await.unwrap();
@@ -648,7 +650,7 @@ fn remote_rename_directory_during_conflict() {
         let network = actor::create_network(proto).await;
         let repo = actor::create_repo().await;
 
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         // Create file before linking the repo to ensure we create conflict.
         // This prevents the remote branch from being pruned.
@@ -688,7 +690,7 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
 
     env.actor("reader", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("writer");
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
         common::expect_entry_exists(&repo, "data.txt", EntryType::File).await;
         tx.send(()).await.unwrap();
@@ -752,7 +754,7 @@ fn concurrent_update_and_delete_during_conflict() {
     env.actor("bob", {
         async move {
             let network = actor::create_network(proto).await;
-            network.connect("alice");
+            network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
             let repo = actor::create_repo().await;
 
@@ -836,7 +838,7 @@ fn content_stays_available_during_sync() {
             )
             .await;
             let _reg = network.register(repo.store().clone()).await;
-            network.connect("alice");
+            network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
             // 2. Sync "b/c.dat"
             common::expect_file_content(&repo, "b/c.dat", &content0).await;

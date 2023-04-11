@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{actor, Env, NetworkExt};
+use self::common::{actor, Env};
 use ouisync::{File, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
 
@@ -52,7 +52,8 @@ fn local_delete_remote_file() {
     env.actor("local", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("remote");
+            let peer_addr = actor::lookup_addr("remote").await;
+            network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
             repo.force_work().await.unwrap();
@@ -89,7 +90,8 @@ fn remote_delete_remote_file() {
 
     env.actor("local", async move {
         let (network, repo, _reg) = actor::setup().await;
-        network.connect("remote");
+        let peer_addr = actor::lookup_addr("remote").await;
+        network.add_user_provided_peer(&peer_addr);
 
         common::expect_file_content(&repo, "test.dat", &[]).await;
         repo.force_work().await.unwrap();
@@ -157,7 +159,9 @@ fn local_truncate_remote_file() {
     env.actor("local", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("remote");
+
+            let peer_addr = actor::lookup_addr("remote").await;
+            network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
             repo.force_work().await.unwrap();
@@ -209,7 +213,9 @@ fn remote_truncate_remote_file() {
     env.actor("local", {
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.connect("remote");
+
+            let peer_addr = actor::lookup_addr("remote").await;
+            network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
             repo.force_work().await.unwrap();

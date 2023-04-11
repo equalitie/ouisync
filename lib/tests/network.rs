@@ -5,7 +5,7 @@
 
 mod common;
 
-use self::common::{actor, Env, NetworkExt, Proto, TEST_TIMEOUT};
+use self::common::{actor, Env, Proto, TEST_TIMEOUT};
 use ouisync::network::{Network, PeerState};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::{sync::Barrier, time};
@@ -38,10 +38,13 @@ fn peer_exchange() {
         async move {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
-            network.connect("alice");
+
+            let peer_addr = actor::lookup_addr("alice").await;
+            network.add_user_provided_peer(&peer_addr);
+
             reg.set_pex_enabled(true).await;
 
-            expect_peer_known(&network, proto, "carol").await;
+            expect_peer_known(&network, "carol").await;
             barrier.wait().await;
         }
     });
@@ -50,10 +53,13 @@ fn peer_exchange() {
         async move {
             let network = actor::create_network(proto).await;
             let (_repo, reg) = actor::create_linked_repo(&network).await;
-            network.connect("alice");
+
+            let peer_addr = actor::lookup_addr("alice").await;
+            network.add_user_provided_peer(&peer_addr);
+
             reg.set_pex_enabled(true).await;
 
-            expect_peer_known(&network, proto, "bob").await;
+            expect_peer_known(&network, "bob").await;
             barrier.wait().await;
         }
     });
@@ -117,7 +123,7 @@ fn add_peer_before_bind() {
 
         async move {
             let network = actor::create_network(proto).await;
-            expect_peer_active(&network, proto, "bob").await;
+            expect_peer_active(&network, "bob").await;
 
             barrier.wait().await;
         }
@@ -127,41 +133,36 @@ fn add_peer_before_bind() {
         async move {
             let network = actor::create_unbound_network();
 
-            // NOTE: Can't use `NetworkExt::connect` here because it requires the network to be
-            // bound.
-            network.add_user_provided_peer(&proto.wrap(actor::lookup("alice")));
-            expect_peer_known(&network, proto, "alice").await;
+            let peer_addr = actor::lookup_addr("alice").await;
+            network.add_user_provided_peer(&peer_addr);
+            expect_peer_known(&network, "alice").await;
 
-            network.bind(&[actor::default_bind_addr(proto)]).await;
-            expect_peer_active(&network, proto, "alice").await;
+            actor::bind(&network, proto).await;
+            expect_peer_active(&network, "alice").await;
 
             barrier.wait().await;
         }
     });
 }
 
-async fn expect_peer_known(network: &Network, peer_proto: Proto, peer_name: &str) {
-    expect_peer_state(network, peer_proto, peer_name, |_| true).await
+async fn expect_peer_known(network: &Network, peer_name: &str) {
+    expect_peer_state(network, peer_name, |_| true).await
 }
 
-async fn expect_peer_active(network: &Network, peer_proto: Proto, peer_name: &str) {
-    expect_peer_state(network, peer_proto, peer_name, |state| {
+async fn expect_peer_active(network: &Network, peer_name: &str) {
+    expect_peer_state(network, peer_name, |state| {
         matches!(state, PeerState::Active(_))
     })
     .await
 }
 
-async fn expect_peer_state<F>(
-    network: &Network,
-    peer_proto: Proto,
-    peer_name: &str,
-    expected_state_fn: F,
-) where
+async fn expect_peer_state<F>(network: &Network, peer_name: &str, expected_state_fn: F)
+where
     F: Fn(&PeerState) -> bool,
 {
     time::timeout(TEST_TIMEOUT, async move {
         let mut rx = network.on_peer_set_change();
-        let peer_addr = peer_proto.wrap(actor::lookup(peer_name));
+        let peer_addr = actor::lookup_addr(peer_name).await;
 
         loop {
             if let Some(info) = network.get_peer_info(peer_addr) {
