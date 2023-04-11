@@ -460,7 +460,7 @@ impl TcpStack {
         let listener_local_addr = match listener.local_addr() {
             Ok(addr) => {
                 span.record("addr", field::display(PeerAddr::Tcp(addr)));
-                tracing::info!("Listener started");
+                tracing::info!(parent: &span, "Listener started");
 
                 addr
             }
