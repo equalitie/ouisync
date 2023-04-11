@@ -138,6 +138,8 @@ impl BlockTrackerClient {
 
         missing_block.clients.insert(self.client_id);
 
+        self.shared.notify();
+
         true
     }
 
@@ -389,8 +391,9 @@ mod tests {
     use crate::{collections::HashSet, test_utils};
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use std::{pin::pin, time::Duration};
     use test_strategy::proptest;
-    use tokio::{sync::Barrier, task};
+    use tokio::{select, sync::mpsc, sync::Barrier, task, time};
 
     #[test]
     fn simple() {
@@ -424,6 +427,44 @@ mod tests {
 
         // ...but only once.
         assert!(client.acceptor().try_accept().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn simple_async() {
+        let tracker = BlockTracker::new();
+
+        let block = make_block();
+        let client = tracker.client();
+        let mut acceptor = client.acceptor();
+
+        tracker.begin_require(block.id).commit();
+
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let handle = tokio::task::spawn(async move {
+            let mut accept_task = pin!(acceptor.accept());
+
+            loop {
+                select! {
+                    block_promise = &mut accept_task => {
+                        return *block_promise.block_id();
+                    },
+                    _ = tx.send(()) => {}
+                }
+            }
+        });
+
+        // Make sure acceptor started accepting.
+        rx.recv().await.unwrap();
+
+        client.offer(block.id);
+
+        let accepted_block_id = time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("timeout")
+            .unwrap();
+
+        assert_eq!(block.id, accepted_block_id);
     }
 
     #[test]
