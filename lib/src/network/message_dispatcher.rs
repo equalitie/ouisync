@@ -256,15 +256,17 @@ impl LiveConnectionInfoSet {
 
 struct ChannelQueue {
     reference_count: usize,
-    rx: Arc<
-        AsyncMutex<(
-            Option<(PermitId, Vec<u8>)>,
-            UnboundedReceiver<(PermitId, Vec<u8>)>,
-        )>,
-    >,
+    rx: Arc<AsyncMutex<ChannelQueueReceiver>>,
     // TODO: This probably shouldn't be unbounded.
-    tx: UnboundedSender<(PermitId, Vec<u8>)>,
+    tx: ChannelQueueSender,
 }
+
+type ChannelQueueReceiver = (
+    Option<(PermitId, Vec<u8>)>,
+    UnboundedReceiver<(PermitId, Vec<u8>)>,
+);
+
+type ChannelQueueSender = UnboundedSender<(PermitId, Vec<u8>)>;
 
 struct RecvState {
     reader: Arc<MultiStream>,
