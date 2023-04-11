@@ -26,7 +26,7 @@ use tokio::{
     task,
     time::Duration,
 };
-use tracing::{field, instrument::Instrument, Span};
+use tracing::{instrument::Instrument, Span};
 
 /// Maintains one or more connections to a peer, listening on all of them at the same time. Note
 /// that at the present all the connections are TCP based and so dropping some of them would make
@@ -93,7 +93,6 @@ impl MessageBroker {
             parent: &self.span,
             "link",
             repo = store.monitor.name(),
-            role = field::Empty,
         );
 
         let span_enter = span.enter();
@@ -120,8 +119,6 @@ impl MessageBroker {
             &self.that_runtime_id,
         );
 
-        Span::current().record("role", field::debug(role));
-
         let channel_id = MessageChannel::new(
             store.index.repository_id(),
             &self.this_runtime_id,
@@ -136,7 +133,7 @@ impl MessageBroker {
         let pex_discovery_tx = pex.discovery_sender();
         let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
 
-        tracing::info!("link created");
+        tracing::info!(?role, "link created");
 
         drop(span_enter);
 
