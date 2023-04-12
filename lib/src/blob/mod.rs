@@ -23,7 +23,7 @@ use crate::{
     locator::Locator,
 };
 use std::{io::SeekFrom, mem};
-use tracing::{field, instrument, Span};
+use tracing::{field, instrument, Instrument, Span};
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -511,6 +511,11 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
                     block_presence,
                     write_keys,
                 )
+                .instrument(tracing::info_span!(
+                    "fork_block",
+                    num = locator.number(),
+                    id = ?block_id
+                ))
                 .await?;
         }
 

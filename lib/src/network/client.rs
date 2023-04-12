@@ -248,7 +248,12 @@ impl Client {
         let (updated_blocks, completed_branches) =
             self.store.index.receive_leaf_nodes(nodes).await?;
 
-        tracing::trace!("received {}/{} leaf nodes", updated_blocks.len(), total);
+        tracing::trace!(
+            "received {}/{} leaf nodes: {:?}",
+            updated_blocks.len(),
+            total,
+            updated_blocks
+        );
 
         match self.store.block_request_mode {
             BlockRequestMode::Lazy => {

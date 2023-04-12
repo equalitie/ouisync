@@ -253,7 +253,7 @@ impl ErrorHandling {
 mod merge {
     use super::*;
 
-    #[instrument(skip_all, err(Debug))]
+    #[instrument(name = "merge", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
@@ -281,7 +281,7 @@ mod prune {
     use super::*;
     use crate::joint_directory::versioned;
 
-    #[instrument(skip_all, err(Debug))]
+    #[instrument(name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
@@ -369,7 +369,7 @@ mod scan {
         }
     }
 
-    #[instrument(skip(shared), err(Debug))]
+    #[instrument(name = "scan", skip(shared), err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable

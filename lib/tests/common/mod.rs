@@ -529,6 +529,7 @@ pub(crate) fn init_log() {
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
+        .with_target(false)
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
         .with_test_writer();

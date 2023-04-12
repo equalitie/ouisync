@@ -256,12 +256,13 @@ impl JointDirectory {
         let old_version_vector = local_version.version_vector().await?;
         let new_version_vector = self.merge_version_vectors().await?;
 
-        tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "started");
-
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             // unwrap is ok because we ensured the local version exists by calling `fork` above.
+            tracing::trace!("merge not started - already up to date");
             return Ok(self.local_version().unwrap().clone());
+        } else {
+            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "merge started");
         }
 
         let mut conflict = false;
@@ -332,7 +333,7 @@ impl JointDirectory {
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let vv = local_version.version_vector().await?;
-            tracing::trace!(?vv, ?conflict, "completed");
+            tracing::trace!(?vv, ?conflict, "merge completed");
         }
 
         if conflict {

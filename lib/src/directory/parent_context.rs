@@ -10,7 +10,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use tracing::instrument;
+use tracing::{field, instrument, Span};
 
 /// Info about an entry in the context of its parent directory.
 #[derive(Clone)]
@@ -65,13 +65,17 @@ impl ParentContext {
             name = self.entry_name,
             parent_id = ?self.directory_id,
             src_branch.id = ?src_branch.id(),
-            dst_branch.id = ?dst_branch.id()),
+            dst_branch.id = ?dst_branch.id(),
+            blob_id,
+        ),
         err(Debug)
     )]
     pub async fn fork(&self, src_branch: &Branch, dst_branch: &Branch) -> Result<Self> {
         let directory = self.open(src_branch.clone()).await?;
         let src_entry_data = directory.lookup(&self.entry_name)?.clone_data();
+
         let blob_id = *src_entry_data.blob_id().ok_or(Error::EntryNotFound)?;
+        Span::current().record("blob_id", field::debug(&blob_id));
 
         // Fork the parent directory first.
         let mut directory = directory.fork(dst_branch).await?;
