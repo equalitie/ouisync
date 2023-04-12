@@ -107,12 +107,7 @@ impl Directory {
             .initial_version_vector(&name)
             .incremented(*self.branch().id());
         let data = EntryData::file(blob_id, version_vector);
-        let parent = ParentContext::new(
-            *self.locator().blob_id(),
-            self.pin.clone(),
-            name.clone(),
-            self.parent.clone(),
-        );
+        let parent = self.create_parent_context(name.clone());
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
@@ -417,13 +412,7 @@ impl Directory {
                 EntryData::File(file_data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(
-                        *self.locator().blob_id(),
-                        self.pin.clone(),
-                        name.into(),
-                        self.parent.clone(),
-                    );
-
+                    let parent_context = self.create_parent_context(name.into());
                     let file = File::open(
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
@@ -458,13 +447,7 @@ impl Directory {
                 EntryData::Directory(data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(
-                        *self.locator().blob_id(),
-                        self.pin.clone(),
-                        name.into(),
-                        self.parent.clone(),
-                    );
-
+                    let parent_context = self.create_parent_context(name.into());
                     let dir = Directory::open(
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
