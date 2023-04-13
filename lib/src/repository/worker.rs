@@ -574,7 +574,18 @@ mod scan {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
             for blob_id in blob_ids {
-                let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
+                let mut blob_block_ids =
+                    BlockIds::open(branch.clone(), blob_id)
+                        .await
+                        .map_err(|error| {
+                            tracing::error!(
+                                ?branch_id,
+                                ?blob_id,
+                                ?error,
+                                "failed to open BlockIds"
+                            );
+                            error
+                        })?;
 
                 while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);

@@ -2,21 +2,12 @@
 
 # Filter log records matching a pattern.
 
-file=
-pattern=
-
-if [ $# -gt 1 ]; then
-    file="$1"
-    pattern="$2"
-elif [ $# -gt 0 ]; then
-    pattern="$1"
-else
-    echo "Usage"
-    echo ""
-    echo "    $(basename $0) PATTERN"
-    echo "    $(basename $0) FILE PATTERN"
-
+if [ -z "$1" ]; then
+    echo "Usage $(basename $0) PATTERN [FILE]"
     exit -1
 fi
+
+pattern="$1"
+file="$2"
 
 awk "/$pattern/" RS="\n\n" ORS="\n\n" "$file" | grep --color -E "$pattern|$"

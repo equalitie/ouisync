@@ -93,12 +93,12 @@ impl Drop for BranchPin {
         let mut shared = self.shared.lock().unwrap();
 
         let Entry::Occupied(mut entry) = shared.branches.entry(self.id) else {
-                unreachable!()
-            };
+            unreachable!()
+        };
 
         let State::Pinned(count) = entry.get_mut() else {
-                unreachable!()
-            };
+            unreachable!()
+        };
 
         *count -= 1;
 
