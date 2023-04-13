@@ -665,21 +665,30 @@ impl Repository {
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
 
-        let branches = {
-            let _load_guard = self.shared.branch_shared.branch_pinner.load();
+        // IMPORTANT: Make sure the load guard lives at least until all the branches are pinned
+        // (that is, until the `branches` iterator is fully consumed).
+        //
+        // Not doing so allows the pruner to run after the load guard is dropped but before all
+        // branches are pinned and so it can prune an already loaded branch.
+        //
+        // By extending the lifetime of the load guard to after all the branches are pinned we make
+        // sure the pruning can happen only either before the branches are loaded (and so the
+        // pruned branches are not loaded) or after all branches are pinned (and so no loaded
+        // branch can be pruned).
+        let _load_guard = self.shared.branch_shared.branch_pinner.load();
 
-            self.shared
-                .load_branches()
-                .await?
-                .into_iter()
-                .filter_map(|branch| {
-                    self.shared
-                        .branch_shared
-                        .branch_pinner
-                        .pin(*branch.id())
-                        .map(|pin| branch.pin(pin))
-                })
-        };
+        let branches = self
+            .shared
+            .load_branches()
+            .await?
+            .into_iter()
+            .filter_map(|branch| {
+                self.shared
+                    .branch_shared
+                    .branch_pinner
+                    .pin(*branch.id())
+                    .map(|pin| branch.pin(pin))
+            });
 
         let mut dirs = Vec::new();
 
