@@ -24,6 +24,7 @@ pub(crate) use self::{
 use self::proof::ProofError;
 use crate::{
     block::BlockId,
+    collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug::DebugPrinter,
@@ -81,6 +82,17 @@ impl Index {
         SnapshotData::load_all(&mut conn, self.notify_tx.clone())
             .try_collect()
             .await
+    }
+
+    /// Load ids of all branches.
+    pub async fn load_branch_ids(&self) -> Result<HashSet<PublicKey>> {
+        // TODO: load only the ids directly, avoid constructing the snapshots.
+        Ok(self
+            .load_snapshots()
+            .await?
+            .into_iter()
+            .map(|snapshot| *snapshot.branch_id())
+            .collect())
     }
 
     /// Subscribe to change notification from all current and future branches.

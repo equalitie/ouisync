@@ -664,32 +664,7 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-
-        // IMPORTANT: Make sure the load guard lives at least until all the branches are pinned
-        // (that is, until the `branches` iterator is fully consumed).
-        //
-        // Not doing so allows the pruner to run after the load guard is dropped but before all
-        // branches are pinned and so it can prune an already loaded branch.
-        //
-        // By extending the lifetime of the load guard to after all the branches are pinned we make
-        // sure the pruning can happen only either before the branches are loaded (and so the
-        // pruned branches are not loaded) or after all branches are pinned (and so no loaded
-        // branch can be pruned).
-        let _load_guard = self.shared.branch_shared.branch_pinner.load();
-
-        let branches = self
-            .shared
-            .load_branches()
-            .await?
-            .into_iter()
-            .filter_map(|branch| {
-                self.shared
-                    .branch_shared
-                    .branch_pinner
-                    .pin(*branch.id())
-                    .map(|pin| branch.pin(pin))
-            });
-
+        let branches = self.shared.load_pinned_branches().await?;
         let mut dirs = Vec::new();
 
         for branch in branches {
@@ -801,6 +776,30 @@ impl Shared {
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()
+    }
+
+    async fn load_pinned_branches(&self) -> Result<Vec<Branch>> {
+        let branches = self.load_branches().await?;
+        let branches: Vec<_> = branches
+            .into_iter()
+            .filter_map(|branch| {
+                self.branch_shared
+                    .branch_pinner
+                    .pin(*branch.id())
+                    .map(|pin| branch.pin(pin))
+            })
+            .collect();
+
+        // Filter out branches that were pruned in the meantime. This is necessary to prevent race
+        // condition because a branch can be pruned after it's been loaded and before it's been
+        // pinned.
+        let ids = self.store.index.load_branch_ids().await?;
+        let branches = branches
+            .into_iter()
+            .filter(|branch| ids.contains(branch.id()))
+            .collect();
+
+        Ok(branches)
     }
 
     // Create `Branch` wrapping the given `data`.

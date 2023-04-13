@@ -13,7 +13,6 @@ pub(crate) struct BranchPinner {
 }
 
 struct Shared {
-    loads: usize,
     branches: HashMap<PublicKey, State>,
 }
 
@@ -26,7 +25,6 @@ impl BranchPinner {
     pub fn new() -> Self {
         Self {
             shared: Arc::new(BlockingMutex::new(Shared {
-                loads: 0,
                 branches: HashMap::default(),
             })),
         }
@@ -51,26 +49,11 @@ impl BranchPinner {
         }
     }
 
-    /// Acquire the load guard. Do this before loading branches from the db to prevent any branch
-    /// from being pruned after being loaded but before being pinned.
-    pub fn load(&self) -> LoadGuard {
-        self.shared.lock().unwrap().loads += 1;
-
-        LoadGuard {
-            shared: self.shared.clone(),
-        }
-    }
-
     /// Mark the given branch as being pruned. If this returns `Some` then any subsequent call
     /// to `pin` for the same branch id returns `None` until the `PruneGuard` goes out of
-    /// scope. Returns `None` if the given branch has already been pinned or if a load guard
-    /// has been acquired.
+    /// scope. Returns `None` if the given branch has already been pinned.
     pub fn prune(&self, id: PublicKey) -> Option<PruneGuard> {
         let mut shared = self.shared.lock().unwrap();
-
-        if shared.loads > 0 {
-            return None;
-        }
 
         match shared.branches.entry(id).or_insert(State::Pruned) {
             State::Pruned => Some(PruneGuard {
@@ -122,16 +105,6 @@ impl Drop for BranchPin {
         if *count == 0 {
             entry.remove();
         }
-    }
-}
-
-pub(crate) struct LoadGuard {
-    shared: Arc<BlockingMutex<Shared>>,
-}
-
-impl Drop for LoadGuard {
-    fn drop(&mut self) {
-        self.shared.lock().unwrap().loads -= 1;
     }
 }
 
