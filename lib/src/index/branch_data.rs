@@ -315,6 +315,36 @@ impl SnapshotData {
             .await
     }
 
+    pub async fn fork(
+        &self,
+        tx: &mut db::WriteTransaction,
+        dst_id: PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<Self> {
+        let new_proof = Proof::new(
+            dst_id,
+            self.root_node.proof.version_vector.clone(),
+            self.root_node.proof.hash,
+            write_keys,
+        );
+
+        tracing::trace!(
+            vv = ?new_proof.version_vector,
+            hash = ?new_proof.hash,
+            fork_src = ?self.root_node.proof.writer_id,
+            "create local snapshot"
+        );
+
+        // We are not using `self.create_root_node` because we don't want to remove the older
+        // snapshots just yet (we leave that up to the pruner).
+        let root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
+
+        Ok(Self {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
+    }
+
     /// Remove this snapshot
     pub async fn remove(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         self.root_node.remove_recursively(tx).await

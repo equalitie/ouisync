@@ -27,7 +27,7 @@ use crate::{
     error::{Error, Result},
     event::Event,
     file::File,
-    index::{BranchData, Index},
+    index::{BranchData, Index, SnapshotData},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -351,7 +351,7 @@ impl Repository {
             return Err(Error::PermissionDenied);
         }
 
-        let write_key = match secrets.write_key() {
+        let write_secrets = match secrets.write_secrets() {
             Some(write_key) => write_key,
             None => return Err(Error::PermissionDenied),
         };
@@ -371,7 +371,7 @@ impl Repository {
 
         metadata::set_write_key(
             tx,
-            write_key,
+            write_secrets,
             // Option<Cow<SecretKey>> -> Option<&SecretKey>
             local_new_write_key.as_ref().map(|k| k.as_ref()),
         )
@@ -800,6 +800,10 @@ impl Shared {
             .collect();
 
         Ok(branches)
+    }
+
+    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
+        self.store.index.load_snapshots().await
     }
 
     // Create `Branch` wrapping the given `data`.

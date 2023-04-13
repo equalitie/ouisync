@@ -252,10 +252,27 @@ impl ErrorHandling {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
+    use crate::{
+        index::SnapshotData,
+        joint_directory::versioned::{self, TiebreakStrategy},
+    };
 
     #[instrument(name = "merge", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let branches = shared.load_branches().await?;
+        let snapshots = shared.load_snapshots().await?;
+        let snapshots = versioned::keep_maximal(snapshots, TiebreakStrategy::Global);
+
+        // If there is only one branch which is newer than all the other branches, then fork it
+        // into the local branch (unless it's already the local one) and we are done.
+        if snapshots.len() <= 1 {
+            if let Some(snapshot) = snapshots.first() {
+                fork(shared, snapshot).await?;
+                return Ok(());
+            }
+        }
+
+        // Otherwise we need to proceed with deep merge.
+        let branches = inflate_all(shared, snapshots)?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -273,6 +290,34 @@ mod merge {
             Ok(_) | Err(Error::AmbiguousEntry) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    async fn fork(shared: &Shared, snapshot: &SnapshotData) -> Result<()> {
+        if snapshot.branch_id() == &shared.this_writer_id {
+            return Ok(());
+        }
+
+        let write_keys = shared
+            .secrets
+            .write_secrets()
+            .map(|secrets| &secrets.write_keys)
+            .ok_or(Error::PermissionDenied)?;
+
+        let mut tx = shared.store.db().begin_write().await?;
+        snapshot
+            .fork(&mut tx, shared.this_writer_id, write_keys)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    fn inflate_all(shared: &Shared, snapshots: Vec<SnapshotData>) -> Result<Vec<Branch>> {
+        snapshots
+            .into_iter()
+            .map(|snapshot| snapshot.to_branch_data())
+            .map(|data| shared.inflate(data))
+            .collect()
     }
 }
 

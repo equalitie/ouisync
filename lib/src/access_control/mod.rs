@@ -86,7 +86,7 @@ impl AccessSecrets {
         }
     }
 
-    pub(crate) fn write_key(&self) -> Option<&WriteSecrets> {
+    pub(crate) fn write_secrets(&self) -> Option<&WriteSecrets> {
         match self {
             Self::Blind { .. } => None,
             Self::Read { .. } => None,
