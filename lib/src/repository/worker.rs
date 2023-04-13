@@ -328,8 +328,8 @@ mod merge {
     impl Versioned for Wrapper {
         type Tiebreaker<'a> = ();
 
-        // If the vvs are equal, break ties by comparing by the root hash so that all replicas get
-        // the same result.
+        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
+        // eventually end up having the same root hash of their local branch.
         fn compare_versions(&self, other: &Self, _: ()) -> Option<Ordering> {
             self.0
                 .version_vector()

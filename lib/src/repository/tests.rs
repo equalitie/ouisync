@@ -510,10 +510,9 @@ async fn attempt_to_modify_remote_file() {
     init_log();
     let (_base_dir, repo) = setup().await;
     let remote_id = PublicKey::random();
+    let remote_branch = repo.get_branch(remote_id).unwrap();
 
     create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
-
-    let remote_branch = repo.get_branch(remote_id).unwrap();
 
     let mut file = remote_branch
         .open_root(MissingBlockStrategy::Fail)
