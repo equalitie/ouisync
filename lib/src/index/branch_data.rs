@@ -454,8 +454,8 @@ impl SnapshotData {
 }
 
 impl Versioned for SnapshotData {
-    fn compare_versions(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.version_vector().partial_cmp(other.version_vector())
+    fn version_vector(&self) -> &VersionVector {
+        SnapshotData::version_vector(self)
     }
 
     fn branch_id(&self) -> &PublicKey {

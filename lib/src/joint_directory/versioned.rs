@@ -3,17 +3,18 @@
 use crate::{
     crypto::sign::PublicKey,
     directory::{EntryRef, FileRef},
+    version_vector::VersionVector,
 };
 use std::cmp::Ordering;
 
 pub trait Versioned {
-    fn compare_versions(&self, other: &Self) -> Option<Ordering>;
+    fn version_vector(&self) -> &VersionVector;
     fn branch_id(&self) -> &PublicKey;
 }
 
 impl Versioned for EntryRef<'_> {
-    fn compare_versions(&self, other: &Self) -> Option<Ordering> {
-        self.version_vector().partial_cmp(other.version_vector())
+    fn version_vector(&self) -> &VersionVector {
+        EntryRef::version_vector(self)
     }
 
     fn branch_id(&self) -> &PublicKey {
@@ -22,8 +23,8 @@ impl Versioned for EntryRef<'_> {
 }
 
 impl Versioned for FileRef<'_> {
-    fn compare_versions(&self, other: &Self) -> Option<Ordering> {
-        self.version_vector().partial_cmp(other.version_vector())
+    fn version_vector(&self) -> &VersionVector {
+        FileRef::version_vector(self)
     }
 
     fn branch_id(&self) -> &PublicKey {
@@ -64,7 +65,12 @@ where
         let mut push = true;
 
         while index < max.len() {
-            match (max[index].compare_versions(&new), new_is_local) {
+            let old = &max[index];
+
+            match (
+                old.version_vector().partial_cmp(new.version_vector()),
+                new_is_local,
+            ) {
                 // If both have identical versions, prefer the local one
                 (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
                     // Note: using `Vec::remove` to maintain the original order. Is there a more
@@ -165,8 +171,8 @@ mod tests {
     }
 
     impl Versioned for TestEntry {
-        fn compare_versions(&self, other: &Self) -> Option<Ordering> {
-            self.version_vector.partial_cmp(&other.version_vector)
+        fn version_vector(&self) -> &VersionVector {
+            &self.version_vector
         }
 
         fn branch_id(&self) -> &PublicKey {
