@@ -1,10 +1,6 @@
 //! Utilities for working with versioned entries.
 
-use crate::{
-    crypto::sign::PublicKey,
-    directory::{EntryRef, FileRef},
-    version_vector::VersionVector,
-};
+use crate::{crypto::sign::PublicKey, directory::EntryRef};
 use std::cmp::Ordering;
 
 pub(crate) trait Versioned {
@@ -17,50 +13,25 @@ impl Versioned for EntryRef<'_> {
     type Tiebreaker<'a> = Option<&'a PublicKey>;
 
     fn compare_versions(&self, other: &Self, tiebreaker: Self::Tiebreaker<'_>) -> Option<Ordering> {
-        compare_entry_versions(
-            self.version_vector(),
-            self.branch_id(),
-            other.version_vector(),
-            other.branch_id(),
-            tiebreaker,
-        )
+        self.version_vector()
+            .partial_cmp(other.version_vector())
+            .map(|ord| {
+                ord.then_with(|| {
+                    if let Some(tiebreaker) = tiebreaker {
+                        match (
+                            self.branch_id() == tiebreaker,
+                            other.branch_id() == tiebreaker,
+                        ) {
+                            (true, false) => Ordering::Greater,
+                            (false, true) => Ordering::Less,
+                            (true, true) | (false, false) => Ordering::Equal,
+                        }
+                    } else {
+                        self.branch_id().cmp(other.branch_id())
+                    }
+                })
+            })
     }
-}
-
-impl Versioned for FileRef<'_> {
-    type Tiebreaker<'a> = Option<&'a PublicKey>;
-
-    fn compare_versions(&self, other: &Self, tiebreaker: Self::Tiebreaker<'_>) -> Option<Ordering> {
-        compare_entry_versions(
-            self.version_vector(),
-            self.branch().id(),
-            other.version_vector(),
-            other.branch().id(),
-            tiebreaker,
-        )
-    }
-}
-
-fn compare_entry_versions(
-    lhs_vv: &VersionVector,
-    lhs_branch_id: &PublicKey,
-    rhs_vv: &VersionVector,
-    rhs_branch_id: &PublicKey,
-    tiebreaker: Option<&PublicKey>,
-) -> Option<Ordering> {
-    lhs_vv.partial_cmp(rhs_vv).map(|ord| {
-        ord.then_with(|| {
-            if let Some(tiebreaker) = tiebreaker {
-                match (lhs_branch_id == tiebreaker, rhs_branch_id == tiebreaker) {
-                    (true, false) => Ordering::Greater,
-                    (false, true) => Ordering::Less,
-                    (true, true) | (false, false) => Ordering::Equal,
-                }
-            } else {
-                lhs_branch_id.cmp(rhs_branch_id)
-            }
-        })
-    })
 }
 
 pub(crate) trait Container<E>: Default {
