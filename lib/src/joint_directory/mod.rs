@@ -160,7 +160,6 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    #[instrument(skip_all, fields(path = %path.as_ref()))]
     pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
         let mut curr = Cow::Borrowed(self);
 

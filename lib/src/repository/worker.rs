@@ -356,7 +356,7 @@ mod prune {
             tx.commit().await?;
 
             tracing::trace!(
-                id = ?snapshot.branch_id(),
+                branch_id = ?snapshot.branch_id(),
                 vv = ?snapshot.version_vector(),
                 hash = ?snapshot.root_hash(),
                 "outdated branch removed"

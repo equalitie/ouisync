@@ -306,6 +306,7 @@ impl Index {
                     tracing::debug!(
                         vv = ?snapshot.version_vector(),
                         hash = ?snapshot.root_hash(),
+                        branch_id = ?snapshot.branch_id(),
                         "snapshot complete"
                     );
                 }
