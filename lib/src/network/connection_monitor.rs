@@ -3,6 +3,7 @@ use crate::{
     crypto::sign::PublicKey,
     state_monitor::{MonitoredValue, StateMonitor},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{field, Span};
 
 /// State monitor node for monitoring a network connection.
@@ -27,7 +28,13 @@ impl ConnectionMonitor {
             ConnectionDirection::Incoming => '↓',
             ConnectionDirection::Outgoing => '↑',
         };
-        let name = format!("{} {}", direction_glyph, addr);
+
+        // We need to ID the StateMonitor node because it is created prior to `addr` being
+        // deduplicated and so we'd get an ambiguous entry otherwise.
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+        let name = format!("id:{} {} {}", id, direction_glyph, addr);
         let node = parent.make_child(name);
 
         let source = node.make_value("source", source);
