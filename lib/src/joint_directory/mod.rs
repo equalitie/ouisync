@@ -25,8 +25,6 @@ use std::{
 };
 use tracing::{instrument, Instrument};
 
-use self::versioned::TiebreakStrategy;
-
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]
 pub struct JointDirectory {
@@ -681,13 +679,7 @@ impl<'a> Merge<'a> {
         let mut tombstone: Option<EntryTombstoneData> = None;
 
         // Note that doing this will remove files that have been removed by tombstones as well.
-        let entries = versioned::keep_maximal(
-            entries,
-            match local_branch {
-                Some(branch) => TiebreakStrategy::Local(branch.id()),
-                None => TiebreakStrategy::Global,
-            },
-        );
+        let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
 
         for entry in entries {
             match entry {
