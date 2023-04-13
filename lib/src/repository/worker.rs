@@ -279,13 +279,13 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
-    use crate::joint_directory::versioned;
+    use crate::joint_directory::versioned::{self, TiebreakStrategy};
 
     #[instrument(name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, Some(&shared.this_writer_id));
+            versioned::partition(all, TiebreakStrategy::Local(&shared.this_writer_id));
 
         // Remove outdated branches
         for snapshot in outdated {

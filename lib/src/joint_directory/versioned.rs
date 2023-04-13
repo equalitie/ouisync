@@ -7,7 +7,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-pub trait Versioned {
+pub(crate) trait Versioned {
     fn version_vector(&self) -> &VersionVector;
     fn branch_id(&self) -> &PublicKey;
 }
@@ -32,7 +32,7 @@ impl Versioned for FileRef<'_> {
     }
 }
 
-pub trait Container<E>: Default {
+pub(crate) trait Container<E>: Default {
     fn insert(&mut self, item: E);
 }
 
@@ -43,14 +43,33 @@ impl<E> Container<E> for Vec<E> {
 }
 
 #[derive(Default)]
-pub struct Discard;
+pub(crate) struct Discard;
 
 impl<E> Container<E> for Discard {
     fn insert(&mut self, _: E) {}
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum TiebreakStrategy<'a> {
+    Local(&'a PublicKey),
+    Global,
+}
+
+impl TiebreakStrategy<'_> {
+    fn apply(self, lhs: &PublicKey, rhs: &PublicKey) -> Ordering {
+        match self {
+            Self::Local(key) => match (lhs == key, rhs == key) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (true, true) | (false, false) => Ordering::Equal,
+            },
+            Self::Global => lhs.cmp(rhs),
+        }
+    }
+}
+
 // Partition the entries into those with the maximal versions and the rest.
-pub(crate) fn partition<I, M>(entries: I, local_branch_id: Option<&PublicKey>) -> (Vec<I::Item>, M)
+pub(crate) fn partition<I, M>(entries: I, tiebreak: TiebreakStrategy<'_>) -> (Vec<I::Item>, M)
 where
     I: IntoIterator,
     I::Item: Versioned,
@@ -60,28 +79,27 @@ where
     let mut min = M::default();
 
     for new in entries {
-        let new_is_local = local_branch_id == Some(new.branch_id());
         let mut index = 0;
         let mut push = true;
 
         while index < max.len() {
             let old = &max[index];
 
-            match (
-                old.version_vector().partial_cmp(new.version_vector()),
-                new_is_local,
-            ) {
-                // If both have identical versions, prefer the local one
-                (Some(Ordering::Less), _) | (Some(Ordering::Equal), true) => {
+            match old
+                .version_vector()
+                .partial_cmp(new.version_vector())
+                .map(|ord| ord.then_with(|| tiebreak.apply(old.branch_id(), new.branch_id())))
+            {
+                Some(Ordering::Less) => {
                     // Note: using `Vec::remove` to maintain the original order. Is there a more
                     // efficient way?
                     min.insert(max.remove(index));
                 }
-                (Some(Ordering::Greater), _) | (Some(Ordering::Equal), false) => {
+                Some(Ordering::Greater) => {
                     push = false;
                     break;
                 }
-                (None, _) => {
+                Some(Ordering::Equal) | None => {
                     index += 1;
                 }
             }
@@ -98,12 +116,12 @@ where
 }
 
 // Returns the entries with the maximal version vectors.
-pub(crate) fn keep_maximal<I>(entries: I, local_branch_id: Option<&PublicKey>) -> Vec<I::Item>
+pub(crate) fn keep_maximal<I>(entries: I, tiebreak: TiebreakStrategy<'_>) -> Vec<I::Item>
 where
     I: IntoIterator,
     I::Item: Versioned,
 {
-    let (max, Discard) = partition(entries, local_branch_id);
+    let (max, Discard) = partition(entries, tiebreak);
     max
 }
 
@@ -125,7 +143,7 @@ mod tests {
     }
 
     fn partition_test_case(entries: Vec<TestEntry>) {
-        let (max, min): (_, Vec<_>) = partition(entries.iter().cloned(), None);
+        let (max, min): (_, Vec<_>) = partition(entries.iter().cloned(), TiebreakStrategy::Global);
 
         // Every input entry must end up either in `max` or `min`.
         assert_eq!(entries.len(), max.len() + min.len());
@@ -147,20 +165,73 @@ mod tests {
             assert!(found);
         }
 
-        // Any two entries in `max` must be concurrent and have different branch ids.
+        // Any two entries in `max` must either be concurrent and have different branch ids or be
+        // equal and have the same branch ids.
         for (a, b) in PairCombinations::new(&max) {
-            assert_matches!(
-                a.version_vector.partial_cmp(&b.version_vector),
-                None,
-                "{:?}, {:?} must be concurrent",
-                a,
-                b
-            );
-            assert_ne!(a.branch_id, b.branch_id);
+            if a.branch_id == b.branch_id {
+                assert_eq!(a.version_vector, b.version_vector)
+            } else {
+                assert_matches!(
+                    a.version_vector.partial_cmp(&b.version_vector),
+                    None,
+                    "{:?}, {:?} must be concurrent",
+                    a,
+                    b
+                )
+            }
         }
 
         // `max` must preserve original order.
         assert!(iterator::is_sorted_by_key(&max, |entry| entry.index));
+    }
+
+    #[test]
+    fn tiebreak() {
+        let id0 = PublicKey::random();
+        let id1 = PublicKey::random();
+        let vv = VersionVector::new().incremented(id0).incremented(id1);
+
+        let entries = [
+            TestEntry {
+                version_vector: vv.clone(),
+                branch_id: id0,
+                index: 0,
+            },
+            TestEntry {
+                version_vector: vv,
+                branch_id: id1,
+                index: 1,
+            },
+        ];
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), TiebreakStrategy::Local(&id0));
+        assert_eq!(max.len(), 1);
+        assert_eq!(max[0], entries[0]);
+        assert_eq!(min.len(), 1);
+        assert_eq!(min[0], entries[1]);
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), TiebreakStrategy::Local(&id1));
+        assert_eq!(max.len(), 1);
+        assert_eq!(max[0], entries[1]);
+        assert_eq!(min.len(), 1);
+        assert_eq!(min[0], entries[0]);
+
+        let id2 = PublicKey::random();
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), TiebreakStrategy::Local(&id2));
+        assert_eq!(max, entries);
+        assert!(min.is_empty());
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), TiebreakStrategy::Global);
+        assert_eq!(max.len(), 1);
+        assert_eq!(min.len(), 1);
+
+        if id0 > id1 {
+            assert_eq!(max[0], entries[0]);
+            assert_eq!(min[0], entries[1]);
+        } else {
+            assert_eq!(max[0], entries[1]);
+            assert_eq!(min[0], entries[0]);
+        }
     }
 
     #[derive(Clone, Eq, PartialEq, Debug)]
