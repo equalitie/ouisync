@@ -6,19 +6,16 @@ mod receive_filter;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
 pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
         MultiBlockPresence, RootNode, SingleBlockPresence, Summary,
     },
-    proof::UntrustedProof,
+    proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
-};
-#[cfg(test)]
-pub(crate) use self::{
-    node::{test_utils as node_test_utils, EMPTY_INNER_HASH},
-    proof::Proof,
 };
 
 use self::proof::ProofError;
@@ -131,41 +128,16 @@ impl Index {
         // be happens-after any node inserted earlier in the same branch.
         let mut tx = self.pool.begin_write().await?;
 
-        // If the received node is outdated relative to any branch we have, ignore it.
-        let nodes: Vec<_> = RootNode::load_all_latest(&mut tx).try_collect().await?;
+        // Determine further actions by comparing the incoming node against the existing nodes:
+        let action = decide_root_node_action(&mut tx, &proof, &summary).await?;
 
-        let uptodate = nodes.iter().all(|old_node| {
-            match proof
-                .version_vector
-                .partial_cmp(&old_node.proof.version_vector)
-            {
-                Some(Ordering::Greater) => true,
-                Some(Ordering::Equal) => old_node.summary.is_outdated(&summary),
-                Some(Ordering::Less) => false,
-                None => proof.writer_id != old_node.proof.writer_id,
-            }
-        });
-
-        if uptodate {
-            let hash = proof.hash;
-
-            match RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await {
-                Ok(node) => {
-                    tracing::debug!(vv = ?node.proof.version_vector, ?hash, "snapshot started");
-
-                    // This also commits the transaction.
-                    self.update_summaries(tx, hash).await?;
-                }
-                Err(Error::EntryExists) => (), // ignore duplicate/outdated nodes but don't fail.
-                Err(error) => return Err(error.into()),
-            }
-
-            Ok(true)
-        } else {
-            // The transaction is silently rolled back here which is ok because we haven't written
-            // anything to the db.
-            Ok(false)
+        if action.insert {
+            let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
+            tracing::debug!(vv = ?node.proof.version_vector, ?node.proof.hash, "snapshot started");
+            self.update_summaries(tx, node.proof.hash).await?;
         }
+
+        Ok(action.request_children)
     }
 
     /// Receive inner nodes from other replica and store them into the db.
@@ -371,4 +343,74 @@ impl VersionVectorOp<'_> {
             }
         }
     }
+}
+
+// Decide what to do with an incoming root node.
+struct RootNodeAction {
+    // Should we insert the incoming node to the db?
+    insert: bool,
+    // Should we request the children of the incoming node?
+    request_children: bool,
+}
+
+async fn decide_root_node_action(
+    tx: &mut db::WriteTransaction,
+    new_proof: &Proof,
+    new_summary: &Summary,
+) -> Result<RootNodeAction> {
+    let mut action = RootNodeAction {
+        insert: true,
+        request_children: true,
+    };
+
+    let mut old_nodes = RootNode::load_all_latest(tx);
+    while let Some(old_node) = old_nodes.try_next().await? {
+        match new_proof
+            .version_vector
+            .partial_cmp(&old_node.proof.version_vector)
+        {
+            Some(Ordering::Less) => {
+                // The incoming node is outdated compared to at least one existing node - discard
+                // it.
+                action.insert = false;
+                action.request_children = false;
+            }
+            Some(Ordering::Equal) => {
+                // The incoming node has the same version vector as one of the existing nodes.
+                // If the hashes are also equal, there is no point inserting it but if the incoming
+                // summary is more up-to-date than the exising one, we still want to potentially
+                // request the children. Otherwise we discard it.
+
+                if new_proof.hash == old_node.proof.hash {
+                    action.insert = false;
+                }
+
+                // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
+                // with `new_summary.is_outdated(&old_node.summary)`.
+                if !old_node.summary.is_outdated(new_summary) {
+                    action.request_children = false;
+                }
+            }
+            Some(Ordering::Greater) => (),
+            None => {
+                if new_proof.writer_id == old_node.proof.writer_id {
+                    tracing::warn!(
+                        old_vv = ?old_node.proof.version_vector,
+                        new_vv = ?new_proof.version_vector,
+                        writer_id = ?new_proof.writer_id,
+                        "received root node invalid: broken invariant - concurrency within branch is not allowed"
+                    );
+
+                    action.insert = false;
+                    action.request_children = false;
+                }
+            }
+        }
+
+        if !action.insert && !action.request_children {
+            break;
+        }
+    }
+
+    Ok(action)
 }

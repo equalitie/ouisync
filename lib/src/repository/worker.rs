@@ -252,6 +252,8 @@ impl ErrorHandling {
 
 /// Merge remote branches into the local one.
 mod merge {
+    use crate::version_vector::VersionVector;
+
     use super::*;
 
     #[instrument(name = "merge", skip_all, err(Debug))]
@@ -265,7 +267,7 @@ mod merge {
         // into the local branch (unless it's already the local one) and we are done.
         if snapshots.len() <= 1 {
             if let Some(snapshot) = snapshots.first() {
-                fork(shared, snapshot).await?;
+                fork(shared, snapshot, &local_branch.version_vector().await?).await?;
                 return Ok(());
             }
         }
@@ -291,10 +293,34 @@ mod merge {
         }
     }
 
-    async fn fork(shared: &Shared, snapshot: &SnapshotData) -> Result<()> {
+    async fn fork(
+        shared: &Shared,
+        snapshot: &SnapshotData,
+        local_vv: &VersionVector,
+    ) -> Result<()> {
         if snapshot.branch_id() == &shared.this_writer_id {
+            tracing::trace!("local branch already newest");
             return Ok(());
         }
+
+        tracing::trace!(
+            ?local_vv,
+            remote_vv = ?snapshot.version_vector(),
+            "unique newest branch - attempting fork"
+        );
+
+        // Note if the local and remote branches have the same version vector we still want to fork
+        // the remote one to resolve the ambiguity but we need to bump the version vector to make
+        // it happens-after the local one otherwise the fork would fail. Note we only bump it once
+        // so if the local branch progressed in the meantime it would still fail but that's OK
+        // because that means the local branch became happens-after the remote one and so we can't
+        // fork anyway. We propagate the errors and try again next time `merge` is run.
+        let dst_vv = snapshot.version_vector().clone();
+        let dst_vv = if dst_vv == *local_vv {
+            dst_vv.incremented(shared.this_writer_id)
+        } else {
+            dst_vv
+        };
 
         let write_keys = shared
             .secrets
@@ -304,7 +330,7 @@ mod merge {
 
         let mut tx = shared.store.db().begin_write().await?;
         snapshot
-            .fork(&mut tx, shared.this_writer_id, write_keys)
+            .fork(&mut tx, shared.this_writer_id, dst_vv, write_keys)
             .await?;
         tx.commit().await?;
 

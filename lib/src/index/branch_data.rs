@@ -319,11 +319,12 @@ impl SnapshotData {
         &self,
         tx: &mut db::WriteTransaction,
         dst_id: PublicKey,
+        dst_version_vector: VersionVector,
         write_keys: &Keypair,
     ) -> Result<Self> {
         let new_proof = Proof::new(
             dst_id,
-            self.root_node.proof.version_vector.clone(),
+            dst_version_vector,
             self.root_node.proof.hash,
             write_keys,
         );

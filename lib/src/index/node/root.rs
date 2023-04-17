@@ -73,7 +73,14 @@ impl RootNode {
 
         match proof.version_vector.partial_cmp(&old_vv) {
             Some(Ordering::Greater) => (),
-            Some(Ordering::Equal | Ordering::Less) => return Err(Error::EntryExists),
+            Some(Ordering::Equal | Ordering::Less) => {
+                tracing::warn!(
+                    ?old_vv,
+                    new_vv = ?proof.version_vector,
+                    "attempt to create outdated root node"
+                );
+                return Err(Error::EntryExists);
+            }
             None => {
                 tracing::warn!("attempt to create concurrent root node in the same branch");
                 return Err(Error::OperationNotSupported);
