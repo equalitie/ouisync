@@ -1,26 +1,33 @@
 //! Utilities for working with versioned entries.
 
-use crate::{crypto::sign::PublicKey, directory::EntryRef, version_vector::VersionVector};
+use crate::{crypto::sign::PublicKey, version_vector::VersionVector};
 use std::cmp::Ordering;
 
+/// Trait for things that have associated version vector.
 pub(crate) trait Versioned {
     fn version_vector(&self) -> &VersionVector;
 }
 
+/// Trait for algorithms used to break ties when two distinct `Versioned`s have the same version
+/// vector (NOT when they are concurrent though - concurrency is always preserved).
 pub(crate) trait Tiebreaker<T: Versioned> {
     fn break_tie(&self, lhs: &T, rhs: &T) -> Ordering;
 }
 
+/// Default tiebreaker that doesn't break any ties.
 impl<T: Versioned> Tiebreaker<T> for () {
     fn break_tie(&self, _lhs: &T, _rhs: &T) -> Ordering {
         Ordering::Equal
     }
 }
 
+/// Trait for things that belong to a branch.
 pub(crate) trait BranchItem {
     fn branch_id(&self) -> &PublicKey;
 }
 
+/// Tiebreaker that prefers the item that belongs to the given branch. If not item belongs to it or
+/// if no branch specified, arbitrarily prefers the one whose branch id is greater.
 pub(crate) struct PreferBranch<'a>(pub Option<&'a PublicKey>);
 
 impl<T: Versioned + BranchItem> Tiebreaker<T> for PreferBranch<'_> {
@@ -37,6 +44,7 @@ impl<T: Versioned + BranchItem> Tiebreaker<T> for PreferBranch<'_> {
     }
 }
 
+/// Trait for containers for collecting outdated items.
 pub(crate) trait Container<E>: Default {
     fn insert(&mut self, item: E);
 }
@@ -47,24 +55,12 @@ impl<E> Container<E> for Vec<E> {
     }
 }
 
+/// Container for outdated items that discards them.
 #[derive(Default)]
 pub(crate) struct Discard;
 
 impl<E> Container<E> for Discard {
     fn insert(&mut self, _: E) {}
-}
-
-// TODO: Move these impls to src/directory/entry.rs
-impl Versioned for EntryRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        EntryRef::version_vector(self)
-    }
-}
-
-impl BranchItem for EntryRef<'_> {
-    fn branch_id(&self) -> &PublicKey {
-        EntryRef::branch_id(self)
-    }
 }
 
 // Partition the entries into those with the maximal versions and the rest.
