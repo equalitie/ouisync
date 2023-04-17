@@ -1,36 +1,39 @@
 //! Utilities for working with versioned entries.
 
-use crate::{crypto::sign::PublicKey, directory::EntryRef};
+use crate::{crypto::sign::PublicKey, directory::EntryRef, version_vector::VersionVector};
 use std::cmp::Ordering;
 
 pub(crate) trait Versioned {
-    type Tiebreaker<'a>: Copy;
-
-    fn compare_versions(&self, other: &Self, tiebreaker: Self::Tiebreaker<'_>) -> Option<Ordering>;
+    fn version_vector(&self) -> &VersionVector;
 }
 
-impl Versioned for EntryRef<'_> {
-    type Tiebreaker<'a> = Option<&'a PublicKey>;
+pub(crate) trait Tiebreaker<T: Versioned> {
+    fn break_tie(&self, lhs: &T, rhs: &T) -> Ordering;
+}
 
-    fn compare_versions(&self, other: &Self, tiebreaker: Self::Tiebreaker<'_>) -> Option<Ordering> {
-        self.version_vector()
-            .partial_cmp(other.version_vector())
-            .map(|ord| {
-                ord.then_with(|| {
-                    if let Some(tiebreaker) = tiebreaker {
-                        match (
-                            self.branch_id() == tiebreaker,
-                            other.branch_id() == tiebreaker,
-                        ) {
-                            (true, false) => Ordering::Greater,
-                            (false, true) => Ordering::Less,
-                            (true, true) | (false, false) => Ordering::Equal,
-                        }
-                    } else {
-                        self.branch_id().cmp(other.branch_id())
-                    }
-                })
-            })
+impl<T: Versioned> Tiebreaker<T> for () {
+    fn break_tie(&self, _lhs: &T, _rhs: &T) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+pub(crate) trait BranchItem {
+    fn branch_id(&self) -> &PublicKey;
+}
+
+pub(crate) struct PreferBranch<'a>(pub Option<&'a PublicKey>);
+
+impl<T: Versioned + BranchItem> Tiebreaker<T> for PreferBranch<'_> {
+    fn break_tie(&self, lhs: &T, rhs: &T) -> Ordering {
+        if let Some(preferred) = self.0 {
+            match (lhs.branch_id() == preferred, rhs.branch_id() == preferred) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (true, true) | (false, false) => lhs.branch_id().cmp(rhs.branch_id()),
+            }
+        } else {
+            lhs.branch_id().cmp(rhs.branch_id())
+        }
     }
 }
 
@@ -51,14 +54,25 @@ impl<E> Container<E> for Discard {
     fn insert(&mut self, _: E) {}
 }
 
+// TODO: Move these impls to src/directory/entry.rs
+impl Versioned for EntryRef<'_> {
+    fn version_vector(&self) -> &VersionVector {
+        EntryRef::version_vector(self)
+    }
+}
+
+impl BranchItem for EntryRef<'_> {
+    fn branch_id(&self) -> &PublicKey {
+        EntryRef::branch_id(self)
+    }
+}
+
 // Partition the entries into those with the maximal versions and the rest.
-pub(crate) fn partition<I, M>(
-    entries: I,
-    tiebreaker: <I::Item as Versioned>::Tiebreaker<'_>,
-) -> (Vec<I::Item>, M)
+pub(crate) fn partition<I, T, M>(entries: I, tiebreaker: T) -> (Vec<I::Item>, M)
 where
     I: IntoIterator,
     I::Item: Versioned,
+    T: Tiebreaker<I::Item>,
     M: Container<I::Item>,
 {
     let mut max: Vec<I::Item> = Vec::new();
@@ -71,7 +85,11 @@ where
         while index < max.len() {
             let old = &max[index];
 
-            match old.compare_versions(&new, tiebreaker) {
+            match old
+                .version_vector()
+                .partial_cmp(new.version_vector())
+                .map(|cmp| cmp.then_with(|| tiebreaker.break_tie(old, &new)))
+            {
                 Some(Ordering::Less) => {
                     // Note: using `Vec::remove` to maintain the original order. Is there a more
                     // efficient way?
@@ -98,13 +116,11 @@ where
 }
 
 // Returns the entries with the maximal version vectors.
-pub(crate) fn keep_maximal<I>(
-    entries: I,
-    tiebreaker: <I::Item as Versioned>::Tiebreaker<'_>,
-) -> Vec<I::Item>
+pub(crate) fn keep_maximal<I, T>(entries: I, tiebreaker: T) -> Vec<I::Item>
 where
     I: IntoIterator,
     I::Item: Versioned,
+    T: Tiebreaker<I::Item>,
 {
     let (max, Discard) = partition(entries, tiebreaker);
     max
@@ -190,6 +206,10 @@ mod tests {
         ];
 
         let (max, min): (_, Vec<_>) = partition(entries.clone(), ());
+        assert_eq!(max, entries);
+        assert!(min.is_empty());
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), PreferBranch(None));
         assert_eq!(max.len(), 1);
         assert_eq!(min.len(), 1);
 
@@ -200,6 +220,18 @@ mod tests {
             assert_eq!(max[0], entries[1]);
             assert_eq!(min[0], entries[0]);
         }
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), PreferBranch(Some(&id0)));
+        assert_eq!(max.len(), 1);
+        assert_eq!(min.len(), 1);
+        assert_eq!(max[0], entries[0]);
+        assert_eq!(min[0], entries[1]);
+
+        let (max, min): (_, Vec<_>) = partition(entries.clone(), PreferBranch(Some(&id1)));
+        assert_eq!(max.len(), 1);
+        assert_eq!(min.len(), 1);
+        assert_eq!(max[0], entries[1]);
+        assert_eq!(min[0], entries[0]);
     }
 
     #[derive(Clone, Eq, PartialEq, Debug)]
@@ -210,12 +242,14 @@ mod tests {
     }
 
     impl Versioned for TestEntry {
-        type Tiebreaker<'a> = ();
+        fn version_vector(&self) -> &VersionVector {
+            &self.version_vector
+        }
+    }
 
-        fn compare_versions(&self, other: &Self, _: ()) -> Option<Ordering> {
-            self.version_vector
-                .partial_cmp(&other.version_vector)
-                .map(|ord| ord.then_with(|| self.branch_id.cmp(&other.branch_id)))
+    impl BranchItem for TestEntry {
+        fn branch_id(&self) -> &PublicKey {
+            &self.branch_id
         }
     }
 

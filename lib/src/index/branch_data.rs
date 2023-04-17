@@ -13,6 +13,7 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
+    joint_directory::versioned::{BranchItem, Versioned},
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -481,6 +482,18 @@ impl SnapshotData {
         );
 
         Ok(())
+    }
+}
+
+impl Versioned for SnapshotData {
+    fn version_vector(&self) -> &VersionVector {
+        SnapshotData::version_vector(self)
+    }
+}
+
+impl BranchItem for SnapshotData {
+    fn branch_id(&self) -> &PublicKey {
+        SnapshotData::branch_id(self)
     }
 }
 

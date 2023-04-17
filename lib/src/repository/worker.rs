@@ -6,7 +6,7 @@ use crate::{
     event::{EventScope, IgnoreScopeReceiver, Payload},
     index::SnapshotData,
     joint_directory::{
-        versioned::{self, Versioned},
+        versioned::{self, PreferBranch, Tiebreaker},
         JointDirectory,
     },
 };
@@ -259,20 +259,21 @@ mod merge {
     #[instrument(name = "merge", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let snapshots = shared.load_snapshots().await?;
-        let snapshots = snapshots.into_iter().map(Wrapper);
-        let snapshots = versioned::keep_maximal(snapshots, ());
+        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
+        // eventually end up having the same root hash of their local branch.
+        let snapshots = versioned::keep_maximal(snapshots, CompareRootHash);
 
         // If there is only one branch which is newer than all the other branches, then fork it
         // into the local branch (unless it's already the local one) and we are done.
         if snapshots.len() <= 1 {
             if let Some(snapshot) = snapshots.first() {
-                fork(shared, &snapshot.0).await?;
+                fork(shared, snapshot).await?;
                 return Ok(());
             }
         }
 
         // Otherwise we need to proceed with deep merge.
-        let branches = inflate_all(shared, snapshots.into_iter().map(|w| w.0))?;
+        let branches = inflate_all(shared, snapshots)?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -323,18 +324,11 @@ mod merge {
             .collect()
     }
 
-    struct Wrapper(SnapshotData);
+    struct CompareRootHash;
 
-    impl Versioned for Wrapper {
-        type Tiebreaker<'a> = ();
-
-        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
-        // eventually end up having the same root hash of their local branch.
-        fn compare_versions(&self, other: &Self, _: ()) -> Option<Ordering> {
-            self.0
-                .version_vector()
-                .partial_cmp(other.0.version_vector())
-                .map(|ord| ord.then_with(|| self.0.root_hash().cmp(other.0.root_hash())))
+    impl Tiebreaker<SnapshotData> for CompareRootHash {
+        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
+            lhs.root_hash().cmp(rhs.root_hash())
         }
     }
 }
@@ -342,17 +336,18 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
-    use crate::crypto::sign::PublicKey;
 
     #[instrument(name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
-        let all = all.into_iter().map(Wrapper);
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, &shared.this_writer_id);
+            // If the vvs are equal, break ties by preferring the one from the local branch (if
+            // any). This way if the local branch and some remote branch have the same vvs, we
+            // always prune the remote one.
+            versioned::partition(all, PreferBranch(Some(&shared.this_writer_id)));
 
         // Remove outdated branches
-        for Wrapper(snapshot) in outdated {
+        for snapshot in outdated {
             // Never remove local branch
             if snapshot.branch_id() == &shared.this_writer_id {
                 continue;
@@ -383,42 +378,11 @@ mod prune {
         }
 
         // Remove outdated snapshots.
-        for Wrapper(snapshot) in uptodate {
+        for snapshot in uptodate {
             snapshot.prune(shared.store.db()).await?;
         }
 
         Ok(())
-    }
-
-    struct Wrapper(SnapshotData);
-
-    impl Versioned for Wrapper {
-        type Tiebreaker<'a> = &'a PublicKey;
-
-        // If the vvs are equal, break ties by preferring the one from the local branch (if any).
-        // This way if the local branch and some remote branch have the same vvs, we always prune
-        // the remote one.
-        fn compare_versions(
-            &self,
-            other: &Self,
-            tiebreaker: Self::Tiebreaker<'_>,
-        ) -> Option<Ordering> {
-            self.0
-                .version_vector()
-                .partial_cmp(other.0.version_vector())
-                .map(|ord| {
-                    ord.then_with(|| {
-                        match (
-                            self.0.branch_id() == tiebreaker,
-                            other.0.branch_id() == tiebreaker,
-                        ) {
-                            (true, false) => Ordering::Greater,
-                            (false, true) => Ordering::Less,
-                            (true, true) | (false, false) => Ordering::Equal,
-                        }
-                    })
-                })
-        }
     }
 }
 
