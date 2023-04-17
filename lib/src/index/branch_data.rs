@@ -13,8 +13,8 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
-    joint_directory::versioned::{BranchItem, Versioned},
     version_vector::VersionVector,
+    versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::broadcast;

@@ -5,10 +5,8 @@ use crate::{
     error::{Error, Result},
     event::{EventScope, IgnoreScopeReceiver, Payload},
     index::SnapshotData,
-    joint_directory::{
-        versioned::{self, PreferBranch, Tiebreaker},
-        JointDirectory,
-    },
+    joint_directory::JointDirectory,
+    versioned::{self, PreferBranch, Tiebreaker},
 };
 use std::{cmp::Ordering, sync::Arc};
 use tokio::{

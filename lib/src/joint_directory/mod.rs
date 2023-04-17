@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests;
-pub(crate) mod versioned;
 
 use crate::{
     branch::Branch,
@@ -14,6 +13,7 @@ use crate::{
     file::File,
     iterator::{Accumulate, SortedUnion},
     version_vector::VersionVector,
+    versioned::{self, PreferBranch},
 };
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
@@ -24,8 +24,6 @@ use std::{
     fmt, iter, mem,
 };
 use tracing::{instrument, Instrument};
-
-use self::versioned::PreferBranch;
 
 /// Unified view over multiple concurrent versions of a directory.
 #[derive(Clone)]

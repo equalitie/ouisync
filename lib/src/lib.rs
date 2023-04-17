@@ -41,6 +41,7 @@ mod sync;
 mod test_utils;
 #[cfg_attr(test, macro_use)]
 mod version_vector;
+mod versioned;
 
 pub use self::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
