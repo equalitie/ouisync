@@ -156,14 +156,16 @@ fn check_replace(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<()
     // Replace entries only if the new version is more up to date than the old version.
     // Additionally, if the old entry is `File`, overwrite it only if it's not currently pinned.
 
-    if let EntryData::File(old_data) = old {
-        if branch.is_blob_pinned_for_replace(&old_data.blob_id) {
-            return Err(EntryExists::Open);
-        }
-    }
-
     match new.version_vector().partial_cmp(old.version_vector()) {
-        Some(Ordering::Greater) => Ok(()),
+        Some(Ordering::Greater) => {
+            if let EntryData::File(old_data) = old {
+                if branch.is_blob_pinned_for_replace(&old_data.blob_id) {
+                    return Err(EntryExists::Open);
+                }
+            }
+
+            Ok(())
+        }
         Some(Ordering::Equal | Ordering::Less) => {
             if new.blob_id() == old.blob_id() {
                 Err(EntryExists::Same)
