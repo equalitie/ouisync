@@ -1,5 +1,6 @@
 use crate::{
     blob_id::BlobId,
+    branch::BranchPin,
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
     deadlock::BlockingMutex,
@@ -9,7 +10,7 @@ use std::sync::Arc;
 /// Protects blob from being garbage collected.
 pub(crate) struct BlobPin {
     shared: Arc<BlockingMutex<Shared>>,
-    branch_id: PublicKey,
+    branch_pin: BranchPin,
     blob_id: BlobId,
 }
 
@@ -19,14 +20,14 @@ impl Clone for BlobPin {
 
         // unwraps are ok because the entries exist as long as self exists.
         *shared
-            .get_mut(&self.branch_id)
+            .get_mut(self.branch_pin.id())
             .unwrap()
             .get_mut(&self.blob_id)
             .unwrap() += 1;
 
         Self {
             shared: self.shared.clone(),
-            branch_id: self.branch_id,
+            branch_pin: self.branch_pin.clone(),
             blob_id: self.blob_id,
         }
     }
@@ -36,7 +37,7 @@ impl Drop for BlobPin {
     fn drop(&mut self) {
         let mut shared = self.shared.lock().unwrap();
 
-        match shared.entry(self.branch_id) {
+        match shared.entry(*self.branch_pin.id()) {
             Entry::Occupied(mut branch_entry) => {
                 match branch_entry.get_mut().entry(self.blob_id) {
                     Entry::Occupied(mut blob_entry) => {
@@ -73,15 +74,15 @@ impl BlobPinner {
     }
 
     /// Creates pin for the blob with the given id. The pin is released when dropped.
-    pub fn pin(&self, branch_id: PublicKey, blob_id: BlobId) -> BlobPin {
+    pub fn pin(&self, branch_pin: BranchPin, blob_id: BlobId) -> BlobPin {
         let mut shared = self.shared.lock().unwrap();
 
-        let blobs = shared.entry(branch_id).or_default();
+        let blobs = shared.entry(*branch_pin.id()).or_default();
         *blobs.entry(blob_id).or_insert(0) += 1;
 
         BlobPin {
             shared: self.shared.clone(),
-            branch_id,
+            branch_pin,
             blob_id,
         }
     }

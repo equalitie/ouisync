@@ -70,6 +70,12 @@ pub(crate) struct BranchPin {
     id: PublicKey,
 }
 
+impl BranchPin {
+    pub fn id(&self) -> &PublicKey {
+        &self.id
+    }
+}
+
 impl Clone for BranchPin {
     fn clone(&self) -> Self {
         let mut shared = self.shared.lock().unwrap();

@@ -31,7 +31,7 @@ pub struct Branch {
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
-    _pin: BranchPin,
+    pin: BranchPin,
 }
 
 impl Branch {
@@ -47,7 +47,7 @@ impl Branch {
             branch_data,
             keys,
             shared,
-            _pin: pin,
+            pin,
         }
     }
 
@@ -141,11 +141,15 @@ impl Branch {
     }
 
     pub(crate) fn pin_blob_for_collect(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_collect_pinner.pin(*self.id(), blob_id)
+        self.shared
+            .blob_collect_pinner
+            .pin(self.pin.clone(), blob_id)
     }
 
     pub(crate) fn pin_blob_for_replace(&self, blob_id: BlobId) -> BlobPin {
-        self.shared.blob_replace_pinner.pin(*self.id(), blob_id)
+        self.shared
+            .blob_replace_pinner
+            .pin(self.pin.clone(), blob_id)
     }
 
     pub(crate) fn is_blob_pinned_for_replace(&self, blob_id: &BlobId) -> bool {
