@@ -568,6 +568,9 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (event_tx, _) = broadcast::channel(1);
-    let branch_data = BranchData::new(PublicKey::random(), event_tx.clone());
-    Branch::new(pool, branch_data, keys, BranchShared::new(event_tx))
+    let shared = BranchShared::new(event_tx.clone());
+    let id = PublicKey::random();
+    let pin = shared.branch_pinner.pin(id).unwrap();
+    let branch_data = BranchData::new(id, event_tx);
+    Branch::new(pool, branch_data, keys, shared, pin)
 }

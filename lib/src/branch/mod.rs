@@ -31,7 +31,7 @@ pub struct Branch {
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
-    _pin: Option<BranchPin>,
+    _pin: BranchPin,
 }
 
 impl Branch {
@@ -40,13 +40,14 @@ impl Branch {
         branch_data: BranchData,
         keys: AccessKeys,
         shared: BranchShared,
+        pin: BranchPin,
     ) -> Self {
         Self {
             pool,
             branch_data,
             keys,
             shared,
-            _pin: None,
+            _pin: pin,
         }
     }
 
@@ -157,13 +158,6 @@ impl Branch {
         &self.shared.uncommitted_block_counter
     }
 
-    pub(crate) fn pin(self, pin: BranchPin) -> Self {
-        Self {
-            _pin: Some(pin),
-            ..self
-        }
-    }
-
     pub async fn debug_print(&self, print: DebugPrinter) {
         match self.open_root(MissingBlockStrategy::Fail).await {
             Ok(root) => root.debug_print(print).await,
@@ -269,8 +263,10 @@ mod tests {
 
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
-        let branch = index.get_branch(writer_id);
-        let branch = Branch::new(pool, branch, secrets.into(), BranchShared::new(event_tx));
+        let shared = BranchShared::new(event_tx);
+        let pin = shared.branch_pinner.pin(writer_id).unwrap();
+        let data = index.get_branch(writer_id);
+        let branch = Branch::new(pool, data, secrets.into(), shared, pin);
 
         (base_dir, branch)
     }

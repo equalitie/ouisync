@@ -343,8 +343,14 @@ mod merge {
     ) -> Result<Vec<Branch>> {
         snapshots
             .into_iter()
-            .map(|snapshot| snapshot.to_branch_data())
-            .map(|data| shared.inflate(data))
+            .filter_map(|snapshot| {
+                shared
+                    .branch_shared
+                    .branch_pinner
+                    .pin(*snapshot.branch_id())
+                    .map(|pin| (snapshot, pin))
+            })
+            .map(|(snapshot, pin)| shared.inflate(snapshot.to_branch_data(), pin))
             .collect()
     }
 

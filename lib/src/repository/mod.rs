@@ -14,7 +14,7 @@ use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
-    branch::{Branch, BranchShared},
+    branch::{Branch, BranchPin, BranchShared},
     crypto::{
         cipher,
         sign::{self, PublicKey},
@@ -624,17 +624,7 @@ impl Repository {
     // Currently test only.
     #[cfg(test)]
     pub(crate) fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        let pin = match self.shared.branch_shared.branch_pinner.pin(id) {
-            Some(pin) => pin,
-            None => {
-                tracing::warn!(?id, "branch is being pruned");
-                return Err(Error::EntryNotFound);
-            }
-        };
-
-        let branch = self.shared.get_branch(id)?.pin(pin);
-
-        Ok(branch)
+        self.shared.get_branch(id)
     }
 
     /// Subscribe to event notifications.
@@ -664,7 +654,7 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-        let branches = self.shared.load_pinned_branches().await?;
+        let branches = self.shared.load_branches().await?;
         let mut dirs = Vec::new();
 
         for branch in branches {
@@ -761,34 +751,37 @@ struct Shared {
 
 impl Shared {
     pub fn local_branch(&self) -> Result<Branch> {
-        self.get_branch(self.this_writer_id)
+        match self.get_branch(self.this_writer_id) {
+            Ok(branch) => Ok(branch),
+            Err(Error::EntryNotFound) => unreachable!(),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        self.inflate(self.store.index.get_branch(id))
+        let pin = self
+            .branch_shared
+            .branch_pinner
+            .pin(id)
+            .ok_or(Error::EntryNotFound)?;
+        self.inflate(self.store.index.get_branch(id), pin)
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.store
+        let branches = self
+            .store
             .index
             .load_branches()
             .await?
             .into_iter()
-            .map(|data| self.inflate(data))
-            .collect()
-    }
-
-    async fn load_pinned_branches(&self) -> Result<Vec<Branch>> {
-        let branches = self.load_branches().await?;
-        let branches: Vec<_> = branches
-            .into_iter()
-            .filter_map(|branch| {
+            .filter_map(|data| {
                 self.branch_shared
                     .branch_pinner
-                    .pin(*branch.id())
-                    .map(|pin| branch.pin(pin))
+                    .pin(*data.id())
+                    .map(|pin| (data, pin))
             })
-            .collect();
+            .map(|(data, pin)| self.inflate(data, pin))
+            .collect::<Result<Vec<_>>>()?;
 
         // Filter out branches that were pruned in the meantime. This is necessary to prevent race
         // condition because a branch can be pruned after it's been loaded and before it's been
@@ -807,7 +800,7 @@ impl Shared {
     }
 
     // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: BranchData) -> Result<Branch> {
+    fn inflate(&self, data: BranchData, pin: BranchPin) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.
@@ -822,6 +815,7 @@ impl Shared {
             data,
             keys,
             self.branch_shared.clone(),
+            pin,
         ))
     }
 }

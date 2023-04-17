@@ -384,8 +384,10 @@ mod tests {
         keys: AccessKeys,
         shared: BranchShared,
     ) -> Branch {
-        let branch_data = BranchData::new(PublicKey::random(), event_tx);
-        Branch::new(pool, branch_data, keys, shared)
+        let id = PublicKey::random();
+        let pin = shared.branch_pinner.pin(id).unwrap();
+        let branch_data = BranchData::new(id, event_tx);
+        Branch::new(pool, branch_data, keys, shared, pin)
     }
 }
 
