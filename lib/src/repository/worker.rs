@@ -223,7 +223,7 @@ impl Inner {
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared).await;
+            let result = self.event_scope.apply(scan::run(&self.shared)).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
