@@ -363,7 +363,14 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
             | Ok(Err(RecvError::Lagged(_))) => return,
             Ok(Ok(Event { .. })) => continue,
             Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
-            Err(_) => panic!("timeout waiting for notification"),
+            Err(_) => {
+                const MESSAGE: &str = "timeout waiting for notification";
+
+                // NOTE: in release mode backtrace is useless so this trace helps us to locate the
+                // source of the panic:
+                tracing::error!("{}", MESSAGE);
+                panic!("{}", MESSAGE);
+            }
         }
     }
 }

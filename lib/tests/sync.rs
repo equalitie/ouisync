@@ -713,10 +713,22 @@ fn concurrent_update_and_delete_during_conflict() {
     let (alice_tx, mut alice_rx) = mpsc::channel(1);
     let (bob_tx, mut bob_rx) = mpsc::channel(1);
 
-    let content = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE); // exactly 2 blocks
+    // Initial file content
+    let content_v0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE); // exactly 2 blocks
+
+    // Content later edited by overwriting its end with this (shorter than 1 block so that the
+    // first block remains unchanged)
+    let chunk = common::random_content(64);
+
+    // Expected file content after the edit
+    let content_v1 = {
+        let mut content = content_v0.clone();
+        content[content_v0.len() - chunk.len()..].copy_from_slice(&chunk);
+        content
+    };
 
     env.actor("alice", {
-        let content = content.clone();
+        let content_v0 = content_v0.clone();
 
         async move {
             let network = actor::create_network(proto).await;
@@ -732,7 +744,7 @@ fn concurrent_update_and_delete_during_conflict() {
             let reg = network.register(repo.store().clone()).await;
 
             // 3. Wait until the file gets merged
-            common::expect_file_version_content(&repo, "data.txt", Some(&id_a), &content).await;
+            common::expect_file_version_content(&repo, "data.txt", Some(&id_a), &content_v0).await;
             alice_tx.send(()).await.unwrap();
 
             // 4a. Unlink to allow concurrent operations on the file
@@ -745,7 +757,7 @@ fn concurrent_update_and_delete_during_conflict() {
             let _reg = network.register(repo.store().clone()).await;
 
             // 7. We are able to read the whole file again including the previously gc-ed blocks.
-            common::expect_file_version_content(&repo, "data.txt", Some(&id_b), &content).await;
+            common::expect_file_version_content(&repo, "data.txt", Some(&id_b), &content_v1).await;
 
             alice_tx.send(()).await.unwrap();
         }
@@ -771,7 +783,7 @@ fn concurrent_update_and_delete_during_conflict() {
 
             // 2. Create the file and wait until alice sees it
             let mut file = repo.create_file("data.txt").await.unwrap();
-            file.write(&content).await.unwrap();
+            file.write(&content_v0).await.unwrap();
             file.flush().await.unwrap();
 
             alice_rx.recv().await.unwrap();
@@ -780,7 +792,6 @@ fn concurrent_update_and_delete_during_conflict() {
             drop(reg);
 
             // 5b. Writes to the file in such a way that the first block remains unchanged
-            let chunk = common::random_content(64);
             file.seek(SeekFrom::End(-(chunk.len() as i64)))
                 .await
                 .unwrap();
