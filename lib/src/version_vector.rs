@@ -119,6 +119,19 @@ impl PartialEq for VersionVector {
 
 impl Eq for VersionVector {}
 
+impl FromIterator<(PublicKey, u64)> for VersionVector {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (PublicKey, u64)>,
+    {
+        iter.into_iter()
+            .fold(Self::new(), |mut vv, (key, version)| {
+                vv.insert(key, version);
+                vv
+            })
+    }
+}
+
 // Support reading/writing `VersionVector` directly from/to the db:
 
 impl Type<Sqlite> for VersionVector {

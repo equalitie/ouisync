@@ -130,7 +130,12 @@ mod tests {
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
-    use proptest::{arbitrary::any, collection::vec, sample::Index, strategy::Strategy};
+    use proptest::{
+        arbitrary::any,
+        collection::vec,
+        sample::select,
+        strategy::{Just, Strategy},
+    };
     use std::ops::Range;
     use test_strategy::proptest;
 
@@ -288,24 +293,21 @@ mod tests {
         public_keys: Vec<PublicKey>,
         max_version: u64,
     ) -> impl Strategy<Value = TestEntry> {
-        let branch_id = 0..public_keys.len();
-        let versions = vec((any::<Index>(), 0..max_version), 1..=public_keys.len());
+        let max_len = public_keys.len();
+        vec((select(public_keys), 0..max_version), 1..=max_len)
+            .prop_flat_map(|entries| {
+                let branch_id_index = 0..entries.len();
+                (Just(entries), branch_id_index)
+            })
+            .prop_map(|(entries, branch_id_index)| {
+                let branch_id = entries[branch_id_index].0;
+                let version_vector = entries.into_iter().collect();
 
-        (branch_id, versions).prop_map(move |(branch_id, versions)| {
-            let version_vector =
-                versions
-                    .into_iter()
-                    .fold(VersionVector::new(), |mut vv, (index, version)| {
-                        vv.insert(*index.get(&public_keys), version);
-                        vv
-                    });
-            let branch_id = public_keys[branch_id];
-
-            TestEntry {
-                version_vector,
-                branch_id,
-                index: 0,
-            }
-        })
+                TestEntry {
+                    version_vector,
+                    branch_id,
+                    index: 0,
+                }
+            })
     }
 }
