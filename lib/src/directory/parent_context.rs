@@ -1,4 +1,4 @@
-use super::{content::InsertError, Error, MissingBlockStrategy};
+use super::{content::InsertError, DirectoryFallback, Error};
 use crate::{
     blob::{self, lock::ReadLock},
     blob_id::BlobId,
@@ -19,7 +19,7 @@ pub(crate) struct ParentContext {
     directory_id: BlobId,
     // ReadLock of the parent directory to protect it from being garbage collected while this
     // `ParentContext` exists.
-    directory_lock: ReadLock,
+    directory_lock: Option<ReadLock>,
     // The name of the entry in its parent directory.
     entry_name: String,
     // ParentContext of the parent directory ("grandparent context")
@@ -29,7 +29,7 @@ pub(crate) struct ParentContext {
 impl ParentContext {
     pub(super) fn new(
         directory_id: BlobId,
-        directory_lock: ReadLock,
+        directory_lock: Option<ReadLock>,
         entry_name: String,
         parent: Option<Self>,
     ) -> Self {
@@ -196,24 +196,19 @@ impl ParentContext {
 
     /// Opens the parent directory of this entry.
     pub async fn open(&self, branch: Branch) -> Result<Directory> {
-        Directory::open(
-            branch,
-            Locator::head(self.directory_id),
-            self.parent.as_deref().cloned(),
-            MissingBlockStrategy::Fail,
-        )
-        .await
+        let mut tx = branch.db().begin_read().await?;
+        self.open_in(&mut tx, branch).await
     }
 
     /// Opens the parent directory of this entry.
     async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
         Directory::open_in(
-            self.directory_lock.clone(),
+            self.directory_lock.as_ref().cloned(),
             tx,
             branch,
             Locator::head(self.directory_id),
             self.parent.as_deref().cloned(),
-            MissingBlockStrategy::Fail,
+            DirectoryFallback::Disabled,
         )
         .await
     }

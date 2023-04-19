@@ -6,8 +6,8 @@ use crate::{
     conflict,
     crypto::sign::PublicKey,
     directory::{
-        Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef,
-        MissingBlockStrategy,
+        Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
+        FileRef,
     },
     error::{Error, Result},
     file::File,
@@ -230,7 +230,7 @@ impl JointDirectory {
     async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
             let mut dir = entry
-                .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                .open_with(MissingVersionStrategy::Skip, DirectoryFallback::Disabled)
                 .await?;
             dir.remove_entries_recursively(Pattern::All).await?;
         }
@@ -289,7 +289,7 @@ impl JointDirectory {
                                 let mut dir = entry
                                     .open_with(
                                         MissingVersionStrategy::Fail,
-                                        MissingBlockStrategy::Fail,
+                                        DirectoryFallback::Disabled,
                                     )
                                     .await?;
                                 match dir
@@ -548,18 +548,18 @@ impl<'a> JointDirectoryRef<'a> {
     }
 
     pub async fn open(&self) -> Result<JointDirectory> {
-        self.open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fallback)
+        self.open_with(MissingVersionStrategy::Skip, DirectoryFallback::Enabled)
             .await
     }
 
     pub(crate) async fn open_with(
         &self,
         missing_version_strategy: MissingVersionStrategy,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<JointDirectory> {
         let mut versions = Vec::new();
         for version in &self.versions {
-            match version.open(missing_block_strategy).await {
+            match version.open(fallback).await {
                 Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self

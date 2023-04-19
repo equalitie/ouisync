@@ -27,7 +27,10 @@ async fn create_and_list_entries() {
     file_cat.flush().await.unwrap();
 
     // Reopen the dir and try to read the files.
-    let dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     let expected_names: BTreeSet<_> = ["dog.txt", "cat.txt"].into_iter().collect();
     let actual_names: BTreeSet<_> = dir.entries().map(|entry| entry.name()).collect();
@@ -57,11 +60,17 @@ async fn add_entry_to_existing_directory() {
     dir.create_file("one.txt".into()).await.unwrap();
 
     // Reopen it and add another file to it.
-    let mut dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let mut dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     dir.create_file("two.txt".into()).await.unwrap();
 
     // Reopen it again and check boths files are still there.
-    let dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     assert!(dir.lookup("one.txt").is_ok());
     assert!(dir.lookup("two.txt").is_ok());
 }
@@ -81,20 +90,29 @@ async fn remove_file() {
     drop(file);
 
     // Reopen and remove the file
-    let mut parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let mut parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     parent_dir
         .remove_entry(name, branch.id(), EntryTombstoneData::removed(file_vv))
         .await
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
     assert_eq!(parent_dir.entries().count(), 1);
 
     // Try re-creating the file again
-    let mut parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let mut parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     let mut file = parent_dir.create_file(name.into()).await.unwrap();
     file.flush().await.unwrap();
@@ -120,7 +138,10 @@ async fn rename_file() {
     drop(file);
 
     // Reopen and move the file
-    let mut parent_dir_src = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let mut parent_dir_src = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     let mut parent_dir_dst = parent_dir_src.clone();
 
     let entry_to_move = parent_dir_src.lookup(src_name).unwrap().clone_data();
@@ -137,7 +158,10 @@ async fn rename_file() {
         .unwrap();
 
     // Reopen again and check the file entry was removed.
-    let parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     let mut dst_file = parent_dir
         .lookup(dst_name)
@@ -194,14 +218,14 @@ async fn move_file_within_branch() {
         .unwrap();
 
     let mut file = branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("aux")
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup(file_name)
@@ -295,21 +319,21 @@ async fn move_non_empty_directory() {
         .unwrap();
 
     let file = branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup(dst_dir_name)
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup(dir_name)
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup(file_name)
@@ -336,14 +360,20 @@ async fn remove_subdirectory() {
     drop(dir);
 
     // Reopen and remove the subdirectory
-    let mut parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let mut parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     parent_dir
         .remove_entry(name, branch.id(), EntryTombstoneData::removed(dir_vv))
         .await
         .unwrap();
 
     // Reopen again and check the subdirectory entry was removed.
-    let parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let parent_dir = branch
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     assert_matches!(parent_dir.lookup(name), Ok(EntryRef::Tombstone(_)));
 }
 
@@ -358,14 +388,14 @@ async fn fork() {
     // Fork it by branch 1 and modify it
     let dir0 = {
         branches[0]
-            .open_root(MissingBlockStrategy::Fail)
+            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
             .await
             .unwrap()
             .lookup("dir")
             .unwrap()
             .directory()
             .unwrap()
-            .open(MissingBlockStrategy::Fail)
+            .open(DirectoryFallback::Disabled)
             .await
             .unwrap()
     };
@@ -378,14 +408,14 @@ async fn fork() {
 
     // Reopen orig dir and verify it's unchanged
     let dir = branches[0]
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("dir")
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
 
@@ -393,14 +423,14 @@ async fn fork() {
 
     // Reopen forked dir and verify it contains the new file
     let dir = branches[1]
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("dir")
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
 
@@ -411,7 +441,7 @@ async fn fork() {
 
     // Verify the root dir got forked as well
     branches[1]
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap();
 }
@@ -436,7 +466,7 @@ async fn fork_over_tombstone() {
 
     // Open it by branch 0 and fork it.
     let root1_on_0 = branches[1]
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap();
     let dir1 = root1_on_0
@@ -444,7 +474,7 @@ async fn fork_over_tombstone() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
 
@@ -469,7 +499,7 @@ async fn modify_directory_concurrently() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
 

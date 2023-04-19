@@ -40,7 +40,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
-    lock: ReadLock,
+    lock: Option<ReadLock>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -49,9 +49,10 @@ impl Directory {
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(
         branch: Branch,
-        missing_block_strategy: MissingBlockStrategy,
+        locking: DirectoryLocking,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        Self::open(branch, Locator::ROOT, None, missing_block_strategy).await
+        Self::open(branch, Locator::ROOT, None, locking, fallback).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
@@ -60,7 +61,15 @@ impl Directory {
         // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(branch.clone(), locator, None, MissingBlockStrategy::Fail).await {
+        match Self::open(
+            branch.clone(),
+            locator,
+            None,
+            DirectoryLocking::Enabled,
+            DirectoryFallback::Disabled,
+        )
+        .await
+        {
             Ok(dir) => Ok(dir),
             Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
             Err(error) => Err(error),
@@ -74,7 +83,7 @@ impl Directory {
             &mut tx,
             self.branch().clone(),
             *self.locator(),
-            MissingBlockStrategy::Fail,
+            DirectoryFallback::Disabled,
         )
         .await?;
 
@@ -174,7 +183,7 @@ impl Directory {
             };
 
             if let Some(entry) = entry {
-                match entry.open(MissingBlockStrategy::Fail).await {
+                match entry.open(DirectoryFallback::Disabled).await {
                     Ok(mut dir) => {
                         dir.merge_version_vector(merge_vv).await?;
                         return Ok(dir);
@@ -348,14 +357,14 @@ impl Directory {
     }
 
     async fn open_in(
-        lock: ReadLock,
+        lock: Option<ReadLock>,
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        let (blob, entries) = load(tx, branch, locator, fallback).await?;
 
         Ok(Self {
             blob,
@@ -369,9 +378,9 @@ impl Directory {
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Content> {
-        let (_, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        let (_, entries) = load(tx, branch, locator, fallback).await?;
         Ok(entries)
     }
 
@@ -379,22 +388,21 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
-        missing_block_strategy: MissingBlockStrategy,
+        locking: DirectoryLocking,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let lock = branch
-            .locker()
-            .read(*locator.blob_id())
-            .ok_or(Error::EntryNotFound)?;
+        let lock = match locking {
+            DirectoryLocking::Enabled => Some(
+                branch
+                    .locker()
+                    .read(*locator.blob_id())
+                    .ok_or(Error::EntryNotFound)?,
+            ),
+            DirectoryLocking::Disabled => None,
+        };
+
         let mut tx = branch.db().begin_read().await?;
-        Self::open_in(
-            lock,
-            &mut tx,
-            branch,
-            locator,
-            parent,
-            missing_block_strategy,
-        )
-        .await
+        Self::open_in(lock, &mut tx, branch, locator, parent, fallback).await
     }
 
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
@@ -408,7 +416,7 @@ impl Directory {
             blob,
             parent,
             entries: Content::empty(),
-            lock,
+            lock: Some(lock),
         }
     }
 
@@ -461,7 +469,8 @@ impl Directory {
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
-                        MissingBlockStrategy::Fail,
+                        DirectoryLocking::Disabled,
+                        DirectoryFallback::Disabled,
                     )
                     .await;
 
@@ -516,7 +525,7 @@ impl Directory {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_snapshot(tx, MissingBlockStrategy::Fail)
+                        .open_snapshot(tx, DirectoryFallback::Disabled)
                         .await?
                         .iter()
                         .any(|(_, data)| !matches!(data, EntryData::Tombstone(_)))
@@ -576,7 +585,7 @@ impl Directory {
                 tx,
                 self.branch().clone(),
                 *self.locator(),
-                MissingBlockStrategy::Fail,
+                DirectoryFallback::Disabled,
             )
             .await?;
             self.blob = blob;
@@ -657,13 +666,18 @@ impl fmt::Debug for Directory {
     }
 }
 
-/// What to do when opening a directory with a missing block.
+/// Enable/disable fallback to previous snapshots in case of missing blocks.
 #[derive(Clone, Copy)]
-pub enum MissingBlockStrategy {
-    /// Attempt to fallback to the previous snapshot
-    Fallback,
-    /// Fail the whole open operation
-    Fail,
+pub(crate) enum DirectoryFallback {
+    Enabled,
+    Disabled,
+}
+
+/// Enable/disable acquiring read lock before creating/opening the directory.
+#[derive(Clone, Copy)]
+pub(crate) enum DirectoryLocking {
+    Enabled,
+    Disabled,
 }
 
 // Load directory content. On missing block, fallback to previous snapshot (if any).
@@ -671,7 +685,7 @@ async fn load(
     tx: &mut db::ReadTransaction,
     branch: Branch,
     locator: Locator,
-    missing_block_strategy: MissingBlockStrategy,
+    fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
     let mut snapshot = branch.data().load_snapshot(tx).await?;
 
@@ -682,9 +696,9 @@ async fn load(
             Err(error) => return Err(error),
         };
 
-        match missing_block_strategy {
-            MissingBlockStrategy::Fallback => (),
-            MissingBlockStrategy::Fail => return Err(error),
+        match fallback {
+            DirectoryFallback::Enabled => (),
+            DirectoryFallback::Disabled => return Err(error),
         }
 
         if let Some(prev_snapshot) = snapshot.load_prev(tx).await? {

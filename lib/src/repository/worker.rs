@@ -1,7 +1,7 @@
 use super::Shared;
 use crate::{
     branch::Branch,
-    directory::MissingBlockStrategy,
+    directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
     event::{EventScope, IgnoreScopeReceiver, Payload},
     index::SnapshotData,
@@ -277,7 +277,10 @@ mod merge {
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            match branch.open_root(MissingBlockStrategy::Fail).await {
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await
+            {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
@@ -498,7 +501,10 @@ mod scan {
         for branch in branches {
             entries.push((branch.clone(), BlobId::ROOT));
 
-            match branch.open_root(MissingBlockStrategy::Fail).await {
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await
+            {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
@@ -551,7 +557,7 @@ mod scan {
                     }
 
                     match entry
-                        .open_with(MissingVersionStrategy::Fail, MissingBlockStrategy::Fail)
+                        .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
                         .await
                     {
                         Ok(dir) => subdirs.push(dir),

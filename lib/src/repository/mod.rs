@@ -23,7 +23,7 @@ use crate::{
     db::{self, DatabaseId},
     debug::DebugPrinter,
     device_id::DeviceId,
-    directory::{Directory, EntryType, MissingBlockStrategy},
+    directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
     error::{Error, Result},
     event::Event,
     file::File,
@@ -567,7 +567,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry
-                    .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                    .open_with(MissingVersionStrategy::Skip, DirectoryFallback::Disabled)
                     .await?;
                 let dir_to_move = dir_to_move.merge().await?;
 
@@ -658,7 +658,10 @@ impl Repository {
         let mut dirs = Vec::new();
 
         for branch in branches {
-            let dir = match branch.open_root(MissingBlockStrategy::Fallback).await {
+            let dir = match branch
+                .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+                .await
+            {
                 Ok(dir) => dir,
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
                     // Some branch roots may not have been loaded across the network yet. We'll

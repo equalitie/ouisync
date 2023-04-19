@@ -5,7 +5,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     debug::DebugPrinter,
-    directory::{Directory, EntryRef, MissingBlockStrategy},
+    directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
     event::Event,
     file::File,
@@ -67,9 +67,10 @@ impl Branch {
 
     pub(crate) async fn open_root(
         &self,
-        missing_block_strategy: MissingBlockStrategy,
+        locking: DirectoryLocking,
+        fallback: DirectoryFallback,
     ) -> Result<Directory> {
-        Directory::open_root(self.clone(), missing_block_strategy).await
+        Directory::open_root(self.clone(), locking, fallback).await
     }
 
     pub(crate) async fn open_or_create_root(&self) -> Result<Directory> {
@@ -88,7 +89,7 @@ impl Branch {
                 Utf8Component::Normal(name) => {
                     let next = match curr.lookup(name) {
                         Ok(EntryRef::Directory(entry)) => {
-                            Some(entry.open(MissingBlockStrategy::Fail).await?)
+                            Some(entry.open(DirectoryFallback::Disabled).await?)
                         }
                         Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
                         Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
@@ -138,7 +139,10 @@ impl Branch {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        match self.open_root(MissingBlockStrategy::Fail).await {
+        match self
+            .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+            .await
+        {
             Ok(root) => root.debug_print(print).await,
             Err(error) => {
                 print.display(&format_args!("failed to open root directory: {:?}", error))

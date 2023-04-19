@@ -515,7 +515,7 @@ async fn attempt_to_modify_remote_file() {
     create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
 
     let mut file = remote_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("test.txt")
@@ -659,7 +659,7 @@ async fn version_vector_fork() {
     assert_eq!(local_file_vv_0, remote_file_vv);
 
     let local_parent_vv_0 = local_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("parent")
@@ -694,7 +694,7 @@ async fn version_vector_fork() {
     assert!(local_file_vv_1 > local_file_vv_0);
 
     let local_parent_vv_1 = local_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("parent")
@@ -729,7 +729,7 @@ async fn version_vector_moved_non_empty_directory() {
     let vv_0 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("foo")
@@ -742,7 +742,7 @@ async fn version_vector_moved_non_empty_directory() {
     let vv_1 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("bar")
@@ -779,7 +779,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let vv_2 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("old.txt")

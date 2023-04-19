@@ -2,7 +2,7 @@ use super::{
     content::Content,
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
-    Directory, MissingBlockStrategy,
+    Directory, DirectoryFallback, DirectoryLocking,
 };
 use crate::{
     blob_id::BlobId,
@@ -202,15 +202,17 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(
-        &self,
-        missing_block_strategy: MissingBlockStrategy,
-    ) -> Result<Directory> {
+    pub(crate) async fn open(&self, fallback: DirectoryFallback) -> Result<Directory> {
         Directory::open(
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),
-            missing_block_strategy,
+            if self.inner.parent.lock.is_some() {
+                DirectoryLocking::Enabled
+            } else {
+                DirectoryLocking::Disabled
+            },
+            fallback,
         )
         .await
     }
@@ -218,15 +220,9 @@ impl<'a> DirectoryRef<'a> {
     pub(super) async fn open_snapshot(
         &self,
         tx: &mut db::ReadTransaction,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Content> {
-        Directory::open_snapshot(
-            tx,
-            self.branch().clone(),
-            self.locator(),
-            missing_block_strategy,
-        )
-        .await
+        Directory::open_snapshot(tx, self.branch().clone(), self.locator(), fallback).await
     }
 
     pub fn branch(&self) -> &'a Branch {

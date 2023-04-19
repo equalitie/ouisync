@@ -4,7 +4,7 @@ use crate::{
     branch::{Branch, BranchShared},
     crypto::sign::PublicKey,
     db,
-    directory::MissingBlockStrategy,
+    directory::{DirectoryFallback, DirectoryLocking},
     index::BranchData,
     state_monitor::StateMonitor,
     version_vector::VersionVector,
@@ -126,7 +126,10 @@ async fn conflict_forked_files() {
     root0.refresh().await.unwrap();
 
     // Open branch 1's root dir which should have been created in the process.
-    let root1 = branch1.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let root1 = branch1
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     let root = JointDirectory::new(Some(branch1.clone()), [root0, root1]);
 
@@ -278,7 +281,10 @@ async fn conflict_identical_versions() {
     let mut file1 = open_file(&root0, "file.txt").await;
     file1.fork(branch1.clone()).await.unwrap();
 
-    let root1 = branch1.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let root1 = branch1
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
 
     // Create joint directory using branch 1 as the local branch.
     let root = JointDirectory::new(Some(branch1.clone()), [root0, root1]);
@@ -736,7 +742,10 @@ async fn merge_remote_only() {
         .await
         .unwrap();
 
-    let local_root = branch0.open_root(MissingBlockStrategy::Fail).await.unwrap();
+    let local_root = branch0
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+        .await
+        .unwrap();
     local_root.lookup("cat.jpg").unwrap();
 }
 
@@ -825,7 +834,7 @@ async fn merge_concurrent_directories() {
     let dir = entry
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
     assert_eq!(dir.entries().count(), 2);
@@ -931,7 +940,7 @@ async fn merge_moved_file() {
         .unwrap()
         .directory()
         .unwrap()
-        .open(MissingBlockStrategy::Fail)
+        .open(DirectoryFallback::Disabled)
         .await
         .unwrap();
     let mut file = dir

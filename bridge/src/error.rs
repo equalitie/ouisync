@@ -45,13 +45,11 @@ impl Error {
                     EntryNotFound => ErrorCode::EntryNotFound,
                     AmbiguousEntry => ErrorCode::AmbiguousEntry,
                     DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
-                    OperationNotSupported | ConcurrentWriteNotSupported => {
-                        ErrorCode::OperationNotSupported
-                    }
+                    OperationNotSupported => ErrorCode::OperationNotSupported,
                     NonUtf8FileName | OffsetOutOfRange => ErrorCode::InvalidArgument,
                     StorageVersionMismatch => ErrorCode::StorageVersionMismatch,
                     BlockNotFound(_) | BlockNotReferenced | WrongBlockLength(_) | EntryIsFile
-                    | EntryIsDirectory | Writer(_) | RequestTimeout => ErrorCode::Other,
+                    | EntryIsDirectory | Writer(_) | RequestTimeout | Locked => ErrorCode::Other,
                 }
             }
             Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Io(_) => {
