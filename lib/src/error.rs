@@ -48,9 +48,8 @@ pub enum Error {
     RequestTimeout,
     #[error("storage version mismatch")]
     StorageVersionMismatch,
-    // TODO: remove this error variant when we implement proper write concurrency
-    #[error("concurrent write is not supported")]
-    ConcurrentWriteNotSupported,
+    #[error("file or directory is locked")]
+    Locked,
 }
 
 impl Error {

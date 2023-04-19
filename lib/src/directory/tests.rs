@@ -271,11 +271,10 @@ async fn move_non_empty_directory() {
     let mut file = dir.create_file(file_name.into()).await.unwrap();
     file.write(content).await.unwrap();
     file.flush().await.unwrap();
-
-    dir.refresh().await.unwrap();
-    root_dir.refresh().await.unwrap();
-
     let file_locator = *file.locator();
+
+    drop(file);
+    drop(dir);
 
     let mut dst_dir = root_dir
         .create_directory(dst_dir_name.into())
@@ -334,6 +333,7 @@ async fn remove_subdirectory() {
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
     let dir = parent_dir.create_directory(name.into()).await.unwrap();
     let dir_vv = dir.version_vector().await.unwrap();
+    drop(dir);
 
     // Reopen and remove the subdirectory
     let mut parent_dir = branch.open_root(MissingBlockStrategy::Fail).await.unwrap();

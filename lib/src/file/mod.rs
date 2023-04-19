@@ -213,10 +213,7 @@ impl File {
     }
 
     fn acquire_write_lock(&mut self) -> Result<()> {
-        self.lock
-            .upgrade()
-            .then_some(())
-            .ok_or(Error::ConcurrentWriteNotSupported)
+        self.lock.upgrade().then_some(()).ok_or(Error::Locked)
     }
 }
 
@@ -346,14 +343,8 @@ mod tests {
             .unwrap();
 
         file0.write(b"yip-yap").await.unwrap();
-        assert_matches!(
-            file1.write(b"ring-ding-ding").await,
-            Err(Error::ConcurrentWriteNotSupported)
-        );
-        assert_matches!(
-            file1.truncate(0).await,
-            Err(Error::ConcurrentWriteNotSupported)
-        );
+        assert_matches!(file1.write(b"ring-ding-ding").await, Err(Error::Locked));
+        assert_matches!(file1.truncate(0).await, Err(Error::Locked));
     }
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {

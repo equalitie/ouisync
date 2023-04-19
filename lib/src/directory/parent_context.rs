@@ -1,4 +1,4 @@
-use super::{Error, MissingBlockStrategy};
+use super::{content::InsertError, Error, MissingBlockStrategy};
 use crate::{
     blob::{self, lock::ReadLock},
     blob_id::BlobId,
@@ -116,7 +116,7 @@ impl ParentContext {
                     .locker()
                     .remove_wait(old_blob_id)
                     .await
-                    .ok_or(Error::EntryExists)?,
+                    .ok_or(Error::Locked)?,
             )
         } else {
             None
@@ -142,12 +142,7 @@ impl ParentContext {
         // If the new and old blob ids are different, create a separate (read) lock for the new one
         // as well so that it's not garbage collected prematurely.
         let _new_lock = if Some(new_blob_id) != old_blob_id {
-            Some(
-                dst_branch
-                    .locker()
-                    .read(new_blob_id)
-                    .ok_or(Error::EntryExists)?,
-            )
+            Some(dst_branch.locker().read(new_blob_id).ok_or(Error::Locked)?)
         } else {
             None
         };
@@ -180,8 +175,8 @@ impl ParentContext {
 
                 Ok(new_context)
             }
-            Err(EntryExists::Same) => Ok(new_context),
-            Err(EntryExists::Different) => Err(Error::EntryExists),
+            Err(InsertError::Exists(EntryExists::Same)) => Ok(new_context),
+            Err(error) => Err(error.into()),
         }
     }
 

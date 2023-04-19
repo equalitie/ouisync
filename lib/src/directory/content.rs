@@ -72,7 +72,7 @@ impl Content {
         name: String,
         new_data: EntryData,
         lock: Option<RemoveLock>,
-    ) -> Result<Option<RemoveLock>, EntryExists> {
+    ) -> Result<Option<RemoveLock>, InsertError> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 assert!(lock.is_none());
@@ -80,7 +80,8 @@ impl Content {
                 Ok(None)
             }
             Entry::Occupied(mut entry) => {
-                let old_id = check_replace(entry.get(), &new_data)?;
+                let old_id = check_replace(entry.get(), &new_data).map_err(InsertError::Exists)?;
+
                 let lock = match (old_id, lock) {
                     (Some(old_id), Some(lock)) => {
                         assert_eq!(lock.blob_id(), &old_id);
@@ -88,13 +89,7 @@ impl Content {
                         Some(lock)
                     }
                     (Some(old_id), None) => {
-                        // Treat locked entries as if they were different.
-                        Some(
-                            branch
-                                .locker()
-                                .remove(old_id)
-                                .ok_or(EntryExists::Different)?,
-                        )
+                        Some(branch.locker().remove(old_id).ok_or(InsertError::Locked)?)
                     }
                     (None, None) => None,
                     (None, Some(_)) => panic!("unexpected lock for non-existing entry"),
@@ -150,9 +145,19 @@ pub(crate) enum EntryExists {
     Different,
 }
 
-impl From<EntryExists> for Error {
-    fn from(_error: EntryExists) -> Self {
-        Error::EntryExists
+pub(crate) enum InsertError {
+    /// The entry exists
+    Exists(EntryExists),
+    /// The existing entry is locked
+    Locked,
+}
+
+impl From<InsertError> for Error {
+    fn from(error: InsertError) -> Self {
+        match error {
+            InsertError::Exists(_) => Self::EntryExists,
+            InsertError::Locked => Self::Locked,
+        }
     }
 }
 

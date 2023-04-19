@@ -955,12 +955,14 @@ async fn remove_non_empty_subdirectory() {
     let mut local_root = branch0.open_or_create_root().await.unwrap();
     let mut local_dir = local_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut local_dir, "foo.txt", &[]).await;
+    drop(local_dir);
 
     local_root.create_directory("dir1".into()).await.unwrap();
 
     let mut remote_root = branch1.open_or_create_root().await.unwrap();
     let mut remote_dir = remote_root.create_directory("dir0".into()).await.unwrap();
     create_file(&mut remote_dir, "bar.txt", &[]).await;
+    drop(remote_dir);
 
     remote_root.create_directory("dir2".into()).await.unwrap();
 
