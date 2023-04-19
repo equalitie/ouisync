@@ -625,9 +625,8 @@ async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, db::Pool, [Br
 
     let branches = [(); N].map(|_| {
         let id = PublicKey::random();
-        let pin = shared.branch_pinner.pin(id).unwrap();
         let data = BranchData::new(id, event_tx.clone());
-        Branch::new(pool.clone(), data, keys.clone(), shared.clone(), pin)
+        Branch::new(pool.clone(), data, keys.clone(), shared.clone())
     });
 
     (rng, base_dir, pool, branches)

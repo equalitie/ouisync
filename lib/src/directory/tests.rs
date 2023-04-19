@@ -549,11 +549,7 @@ async fn remove_concurrent_remote_file() {
 }
 
 async fn setup() -> (TempDir, Branch) {
-    let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
-    let keys = WriteSecrets::random().into();
-    let branch = create_branch(pool, keys);
-
+    let (base_dir, [branch]) = setup_multiple().await;
     (base_dir, branch)
 }
 
@@ -570,7 +566,6 @@ fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let (event_tx, _) = broadcast::channel(1);
     let shared = BranchShared::new(event_tx.clone());
     let id = PublicKey::random();
-    let pin = shared.branch_pinner.pin(id).unwrap();
     let branch_data = BranchData::new(id, event_tx);
-    Branch::new(pool, branch_data, keys, shared, pin)
+    Branch::new(pool, branch_data, keys, shared)
 }

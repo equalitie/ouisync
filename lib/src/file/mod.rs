@@ -1,9 +1,5 @@
-mod lock;
-
-pub(crate) use self::lock::{FileWriteLock, FileWriteLocker};
-
 use crate::{
-    blob::{Blob, BlobPin},
+    blob::{lock::UpgradableLock, Blob},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -24,11 +20,7 @@ const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
 pub struct File {
     blob: Blob,
     parent: ParentContext,
-    write_lock: Option<FileWriteLock>,
-    // Pin that protects the file from being garbage collected
-    _collect_pin: BlobPin,
-    // Pin that protects the file from being replaced (forked over, moved over or deleted)
-    _replace_pin: BlobPin,
+    lock: UpgradableLock,
 }
 
 impl File {
@@ -38,31 +30,37 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
-        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
+        let lock = branch
+            .locker()
+            .read(*locator.blob_id())
+            .ok_or(Error::EntryNotFound)?;
+        let lock = UpgradableLock::Read(lock);
 
         let mut tx = branch.db().begin_read().await?;
 
         Ok(Self {
             blob: Blob::open(&mut tx, branch, locator).await?,
             parent,
-            write_lock: None,
-            _collect_pin: collect_pin,
-            _replace_pin: replace_pin,
+            lock,
         })
     }
 
     /// Creates a new file.
     pub(crate) fn create(branch: Branch, locator: Locator, parent: ParentContext) -> Self {
-        let collect_pin = branch.pin_blob_for_collect(*locator.blob_id());
-        let replace_pin = branch.pin_blob_for_replace(*locator.blob_id());
+        // The only way this could fail is if there is already another locked blob with the same id
+        // in the same branch. But the blob id is randomly generated so this would imply we
+        // generated the same id more than once which is so astronomically unlikely that we might
+        // as well panic.
+        let lock = branch
+            .locker()
+            .read(*locator.blob_id())
+            .expect("blob_id collision");
+        let lock = UpgradableLock::Read(lock);
 
         Self {
             blob: Blob::create(branch, locator),
             parent,
-            write_lock: None,
-            _collect_pin: collect_pin,
-            _replace_pin: replace_pin,
+            lock,
         }
     }
 
@@ -182,24 +180,22 @@ impl File {
             return Ok(());
         }
 
-        let new_parent = self.parent.fork(self.branch(), &dst_branch).await?;
+        let parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
-        // Need to re-pin because the branch changed
-        let collect_pin = dst_branch.pin_blob_for_collect(*self.blob.locator().blob_id());
-        let replace_pin = dst_branch.pin_blob_for_replace(*self.blob.locator().blob_id());
+        // NOTE: This can fail only if someone removed/replaced the file immediatelly after it was
+        // forked. Unlikely but not impossible.
+        let lock = dst_branch
+            .locker()
+            .read(*self.blob.locator().blob_id())
+            .ok_or(Error::EntryNotFound)?;
+        let lock = UpgradableLock::Read(lock);
 
-        let new_blob = {
+        let blob = {
             let mut tx = dst_branch.db().begin_read().await?;
-            Blob::open(&mut tx, dst_branch.clone(), *self.blob.locator()).await?
+            Blob::open(&mut tx, dst_branch, *self.blob.locator()).await?
         };
 
-        *self = Self {
-            blob: new_blob,
-            parent: new_parent,
-            write_lock: None,
-            _collect_pin: collect_pin,
-            _replace_pin: replace_pin,
-        };
+        *self = Self { blob, parent, lock };
 
         Ok(())
     }
@@ -217,15 +213,10 @@ impl File {
     }
 
     fn acquire_write_lock(&mut self) -> Result<()> {
-        if self.write_lock.is_none() {
-            self.write_lock = Some(
-                self.branch()
-                    .lock_file_for_write(*self.blob.locator().blob_id())
-                    .ok_or(Error::ConcurrentWriteNotSupported)?,
-            );
-        }
-
-        Ok(())
+        self.lock
+            .upgrade()
+            .then_some(())
+            .ok_or(Error::ConcurrentWriteNotSupported)
     }
 }
 
@@ -385,9 +376,8 @@ mod tests {
         shared: BranchShared,
     ) -> Branch {
         let id = PublicKey::random();
-        let pin = shared.branch_pinner.pin(id).unwrap();
         let branch_data = BranchData::new(id, event_tx);
-        Branch::new(pool, branch_data, keys, shared, pin)
+        Branch::new(pool, branch_data, keys, shared)
     }
 }
 

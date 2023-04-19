@@ -2,6 +2,8 @@
 
 use super::entry_data::EntryData;
 use crate::{
+    blob::lock::RemoveLock,
+    blob_id::BlobId,
     branch::Branch,
     error::{Error, Result},
     index::VersionVectorOp,
@@ -69,31 +71,51 @@ impl Content {
         branch: &Branch,
         name: String,
         new_data: EntryData,
-    ) -> Result<(), EntryExists> {
+        lock: Option<RemoveLock>,
+    ) -> Result<Option<RemoveLock>, EntryExists> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
+                assert!(lock.is_none());
                 entry.insert(new_data);
+                Ok(None)
             }
             Entry::Occupied(mut entry) => {
-                check_replace(branch, entry.get(), &new_data)?;
+                let old_id = check_replace(entry.get(), &new_data)?;
+                let lock = match (old_id, lock) {
+                    (Some(old_id), Some(lock)) => {
+                        assert_eq!(lock.blob_id(), &old_id);
+                        assert_eq!(lock.branch_id(), branch.id());
+                        Some(lock)
+                    }
+                    (Some(old_id), None) => {
+                        // Treat locked entries as if they were different.
+                        Some(
+                            branch
+                                .locker()
+                                .remove(old_id)
+                                .ok_or(EntryExists::Different)?,
+                        )
+                    }
+                    (None, None) => None,
+                    (None, Some(_)) => panic!("unexpected lock for non-existing entry"),
+                };
+
                 entry.insert(new_data);
+                Ok(lock)
             }
         }
-
-        Ok(())
     }
 
     /// Check whether an entry can be inserted into this directory without actually inserting it.
     pub fn check_insert(
         &self,
-        branch: &Branch,
         name: &str,
         new_data: &EntryData,
-    ) -> Result<(), EntryExists> {
+    ) -> Result<Option<BlobId>, EntryExists> {
         if let Some(old_data) = self.entries.get(name) {
-            check_replace(branch, old_data, new_data)
+            check_replace(old_data, new_data)
         } else {
-            Ok(())
+            Ok(None)
         }
     }
 
@@ -124,13 +146,8 @@ pub(crate) enum EntryExists {
     /// The existing entry is more up-to-date and points to the same blob than the one being
     /// inserted
     Same,
-    /// The existing entry is more up-to-date and points to a different blob than the one being
-    /// inserted
+    /// The existing entry is either points to a different blob or is concurrent
     Different,
-    /// The existing entry and the one being inserted are concurrent
-    Concurrent,
-    /// The existing entry is open
-    Open,
 }
 
 impl From<EntryExists> for Error {
@@ -152,20 +169,11 @@ fn deserialize_entries<'a, T: Deserialize<'a>>(input: &'a [u8]) -> Result<T, Err
     bincode::deserialize(input).map_err(|_| Error::MalformedDirectory)
 }
 
-fn check_replace(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<(), EntryExists> {
+fn check_replace(old: &EntryData, new: &EntryData) -> Result<Option<BlobId>, EntryExists> {
     // Replace entries only if the new version is more up to date than the old version.
-    // Additionally, if the old entry is `File`, overwrite it only if it's not currently pinned.
 
     match new.version_vector().partial_cmp(old.version_vector()) {
-        Some(Ordering::Greater) => {
-            if let EntryData::File(old_data) = old {
-                if branch.is_blob_pinned_for_replace(&old_data.blob_id) {
-                    return Err(EntryExists::Open);
-                }
-            }
-
-            Ok(())
-        }
+        Some(Ordering::Greater) => Ok(old.blob_id().copied()),
         Some(Ordering::Equal | Ordering::Less) => {
             if new.blob_id() == old.blob_id() {
                 Err(EntryExists::Same)
@@ -173,7 +181,7 @@ fn check_replace(branch: &Branch, old: &EntryData, new: &EntryData) -> Result<()
                 Err(EntryExists::Different)
             }
         }
-        None => Err(EntryExists::Concurrent),
+        None => Err(EntryExists::Different),
     }
 }
 

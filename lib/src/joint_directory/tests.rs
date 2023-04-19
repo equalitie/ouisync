@@ -994,10 +994,8 @@ async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N
         let event_tx = event_tx.clone();
         let secrets = secrets.clone();
         let shared = shared.clone();
-        let pin = shared.branch_pinner.pin(id).unwrap();
-
         let data = BranchData::new(id, event_tx);
-        Branch::new(pool.clone(), data, secrets.into(), shared, pin)
+        Branch::new(pool.clone(), data, secrets.into(), shared)
     });
 
     (base_dir, branches)

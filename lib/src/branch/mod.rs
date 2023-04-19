@@ -1,10 +1,6 @@
-mod pin;
-
-pub(crate) use self::pin::{BranchPin, BranchPinner};
 use crate::{
     access_control::AccessKeys,
-    blob::{BlobPin, BlobPinner},
-    blob_id::BlobId,
+    blob::lock::{BranchLocker, Locker},
     block::BlockId,
     crypto::sign::PublicKey,
     db,
@@ -12,7 +8,7 @@ use crate::{
     directory::{Directory, EntryRef, MissingBlockStrategy},
     error::{Error, Result},
     event::Event,
-    file::{File, FileWriteLock, FileWriteLocker},
+    file::File,
     index::BranchData,
     locator::Locator,
     path,
@@ -31,7 +27,6 @@ pub struct Branch {
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
-    pin: BranchPin,
 }
 
 impl Branch {
@@ -40,14 +35,12 @@ impl Branch {
         branch_data: BranchData,
         keys: AccessKeys,
         shared: BranchShared,
-        pin: BranchPin,
     ) -> Self {
         Self {
             pool,
             branch_data,
             keys,
             shared,
-            pin,
         }
     }
 
@@ -136,26 +129,8 @@ impl Branch {
         Ok(block_id)
     }
 
-    pub(crate) fn lock_file_for_write(&self, blob_id: BlobId) -> Option<FileWriteLock> {
-        self.shared.file_write_locker.lock(blob_id)
-    }
-
-    pub(crate) fn pin_blob_for_collect(&self, blob_id: BlobId) -> BlobPin {
-        self.shared
-            .blob_collect_pinner
-            .pin(self.pin.clone(), blob_id)
-    }
-
-    pub(crate) fn pin_blob_for_replace(&self, blob_id: BlobId) -> BlobPin {
-        self.shared
-            .blob_replace_pinner
-            .pin(self.pin.clone(), blob_id)
-    }
-
-    pub(crate) fn is_blob_pinned_for_replace(&self, blob_id: &BlobId) -> bool {
-        self.shared
-            .blob_replace_pinner
-            .is_pinned(self.id(), blob_id)
+    pub(crate) fn locker(&self) -> BranchLocker {
+        self.shared.locker.branch(*self.id())
     }
 
     pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
@@ -180,12 +155,7 @@ impl Branch {
 /// State shared among all branches.
 #[derive(Clone)]
 pub(crate) struct BranchShared {
-    pub branch_pinner: BranchPinner,
-    // Pins that protect against garbage collection
-    pub blob_collect_pinner: BlobPinner,
-    // Pins that protect blobs against being replaced (that is, overwritten)
-    pub blob_replace_pinner: BlobPinner,
-    pub file_write_locker: FileWriteLocker,
+    pub locker: Locker,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
 }
@@ -194,10 +164,7 @@ impl BranchShared {
     // TODO: event_tx
     pub fn new(_event_tx: broadcast::Sender<Event>) -> Self {
         Self {
-            branch_pinner: BranchPinner::new(),
-            blob_collect_pinner: BlobPinner::new(),
-            blob_replace_pinner: BlobPinner::new(),
-            file_write_locker: FileWriteLocker::new(),
+            locker: Locker::new(),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
         }
     }
@@ -268,9 +235,8 @@ mod tests {
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
         let shared = BranchShared::new(event_tx);
-        let pin = shared.branch_pinner.pin(writer_id).unwrap();
         let data = index.get_branch(writer_id);
-        let branch = Branch::new(pool, data, secrets.into(), shared, pin);
+        let branch = Branch::new(pool, data, secrets.into(), shared);
 
         (base_dir, branch)
     }

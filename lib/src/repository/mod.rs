@@ -14,7 +14,7 @@ use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
-    branch::{Branch, BranchPin, BranchShared},
+    branch::{Branch, BranchShared},
     crypto::{
         cipher,
         sign::{self, PublicKey},
@@ -751,48 +751,21 @@ struct Shared {
 
 impl Shared {
     pub fn local_branch(&self) -> Result<Branch> {
-        match self.get_branch(self.this_writer_id) {
-            Ok(branch) => Ok(branch),
-            Err(Error::EntryNotFound) => unreachable!(),
-            Err(error) => Err(error),
-        }
+        self.get_branch(self.this_writer_id)
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        let pin = self
-            .branch_shared
-            .branch_pinner
-            .pin(id)
-            .ok_or(Error::EntryNotFound)?;
-        self.inflate(self.store.index.get_branch(id), pin)
+        self.inflate(self.store.index.get_branch(id))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        let branches = self
-            .store
+        self.store
             .index
             .load_branches()
             .await?
             .into_iter()
-            .filter_map(|data| {
-                self.branch_shared
-                    .branch_pinner
-                    .pin(*data.id())
-                    .map(|pin| (data, pin))
-            })
-            .map(|(data, pin)| self.inflate(data, pin))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Filter out branches that were pruned in the meantime. This is necessary to prevent race
-        // condition because a branch can be pruned after it's been loaded and before it's been
-        // pinned.
-        let ids = self.store.index.load_branch_ids().await?;
-        let branches = branches
-            .into_iter()
-            .filter(|branch| ids.contains(branch.id()))
-            .collect();
-
-        Ok(branches)
+            .map(|data| self.inflate(data))
+            .collect()
     }
 
     pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
@@ -800,7 +773,7 @@ impl Shared {
     }
 
     // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: BranchData, pin: BranchPin) -> Result<Branch> {
+    fn inflate(&self, data: BranchData) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.
@@ -815,7 +788,6 @@ impl Shared {
             data,
             keys,
             self.branch_shared.clone(),
-            pin,
         ))
     }
 }

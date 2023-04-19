@@ -343,14 +343,7 @@ mod merge {
     ) -> Result<Vec<Branch>> {
         snapshots
             .into_iter()
-            .filter_map(|snapshot| {
-                shared
-                    .branch_shared
-                    .branch_pinner
-                    .pin(*snapshot.branch_id())
-                    .map(|pin| (snapshot, pin))
-            })
-            .map(|(snapshot, pin)| shared.inflate(snapshot.to_branch_data(), pin))
+            .map(|snapshot| shared.inflate(snapshot.to_branch_data()))
             .collect()
     }
 
@@ -366,6 +359,7 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
+    use crate::blob_id::BlobId;
 
     #[instrument(name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
@@ -383,13 +377,15 @@ mod prune {
                 continue;
             }
 
-            let _guard = if let Some(guard) = shared
+            // Try to acquire a remove lock on the root directory of the branch. If any file or
+            // directory from the branch is locked, the root will be locked as well and so this
+            // acquire will fail, preventing us from pruning a branch that's still being used.
+            let Some(_lock) = shared
                 .branch_shared
-                .branch_pinner
-                .prune(*snapshot.branch_id())
-            {
-                guard
-            } else {
+                .locker
+                .branch(*snapshot.branch_id())
+                .remove(BlobId::ROOT)
+            else {
                 tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;
             };
@@ -474,7 +470,7 @@ mod scan {
                 break;
             }
 
-            process_pinned_blocks(shared, &mut unreachable_block_ids).await?;
+            process_locked_blocks(shared, &mut unreachable_block_ids).await?;
 
             mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
@@ -604,17 +600,17 @@ mod scan {
         Ok(())
     }
 
-    /// Remove blocks of pinned blobs from the `unreachable_block_ids` set.
-    async fn process_pinned_blocks(
+    /// Remove blocks of locked blobs from the `unreachable_block_ids` set.
+    async fn process_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
-        let pins = shared.branch_shared.blob_collect_pinner.all();
-        if pins.is_empty() {
+        let locks = shared.branch_shared.locker.all();
+        if locks.is_empty() {
             return Ok(());
         }
 
-        for (branch_id, blob_ids) in pins {
+        for (branch_id, blob_ids) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
             for blob_id in blob_ids {

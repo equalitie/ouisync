@@ -1,14 +1,12 @@
+pub(crate) mod lock;
+
 mod block_ids;
 mod open_block;
-mod pin;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
-pub(crate) use self::{
-    block_ids::BlockIds,
-    pin::{BlobPin, BlobPinner},
-};
 use crate::{
     blob_id::BlobId,
     block::{self, BlockId, BlockNonce, BLOCK_SIZE},

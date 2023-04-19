@@ -17,7 +17,10 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{Blob, BlobPin},
+    blob::{
+        lock::{ReadLock, RemoveLock},
+        Blob,
+    },
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -37,7 +40,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
-    pin: BlobPin,
+    lock: ReadLock,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -111,7 +114,7 @@ impl Directory {
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
-        content.insert(self.branch(), name, data)?;
+        let _old_lock = content.insert(self.branch(), name, data, None)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
         self.commit(tx, content, VersionVectorOp::IncrementLocal)
@@ -146,7 +149,7 @@ impl Directory {
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
-        content.insert(self.branch(), name, data)?;
+        let _old_lock = content.insert(self.branch(), name, data, None)?;
         dir.save(&mut tx, &Content::empty()).await?;
         self.save(&mut tx, &content).await?;
         self.commit(tx, content, op).await?;
@@ -205,7 +208,7 @@ impl Directory {
     fn create_parent_context(&self, entry_name: String) -> ParentContext {
         ParentContext::new(
             *self.locator().blob_id(),
-            self.pin.clone(),
+            self.lock.clone(),
             entry_name,
             self.parent.clone(),
         )
@@ -226,7 +229,7 @@ impl Directory {
     ) -> Result<()> {
         let mut tx = self.branch().db().begin_write().await?;
 
-        let content = match self
+        let (content, _old_lock) = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
             .await
         {
@@ -275,12 +278,12 @@ impl Directory {
 
         let mut tx = self.branch().db().begin_write().await?;
 
-        let dst_content = dst_dir
+        let (dst_content, _old_dst_lock) = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
             .await?;
 
         let branch_id = *self.branch().id();
-        let src_content = self
+        let (src_content, _old_src_lock) = self
             .begin_remove_entry(
                 &mut tx,
                 src_name,
@@ -345,7 +348,7 @@ impl Directory {
     }
 
     async fn open_in(
-        pin: BlobPin,
+        lock: ReadLock,
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
@@ -358,7 +361,7 @@ impl Directory {
             blob,
             parent,
             entries,
-            pin,
+            lock,
         })
     }
 
@@ -378,10 +381,13 @@ impl Directory {
         parent: Option<ParentContext>,
         missing_block_strategy: MissingBlockStrategy,
     ) -> Result<Self> {
-        let pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let lock = branch
+            .locker()
+            .read(*locator.blob_id())
+            .ok_or(Error::EntryNotFound)?;
         let mut tx = branch.db().begin_read().await?;
         Self::open_in(
-            pin,
+            lock,
             &mut tx,
             branch,
             locator,
@@ -392,14 +398,17 @@ impl Directory {
     }
 
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let lock = branch
+            .locker()
+            .read(*locator.blob_id())
+            .expect("blob_id collision");
         let blob = Blob::create(branch, locator);
 
         Directory {
             blob,
             parent,
             entries: Content::empty(),
-            pin,
+            lock,
         }
     }
 
@@ -500,7 +509,7 @@ impl Directory {
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
-    ) -> Result<Content> {
+    ) -> Result<(Content, Option<RemoveLock>)> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         if matches!(tombstone.cause, TombstoneCause::Removed) {
@@ -550,13 +559,13 @@ impl Directory {
         tx: &mut db::WriteTransaction,
         name: String,
         data: EntryData,
-    ) -> Result<Content> {
+    ) -> Result<(Content, Option<RemoveLock>)> {
         let mut content = self.load(tx).await?;
-        content.insert(self.branch(), name, data)?;
+        let old_lock = content.insert(self.branch(), name, data, None)?;
         self.save(tx, &content).await?;
         self.bump(tx, VersionVectorOp::IncrementLocal).await?;
 
-        Ok(content)
+        Ok((content, old_lock))
     }
 
     async fn load(&mut self, tx: &mut db::ReadTransaction) -> Result<Content> {
