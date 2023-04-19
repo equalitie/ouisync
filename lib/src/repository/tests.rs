@@ -497,7 +497,10 @@ async fn truncate_forked_remote_file() {
     test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
-    create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
+    let remote_id = PublicKey::random();
+    tracing::info!(local_id = ?repo.local_branch().unwrap().id(), ?remote_id);
+
+    create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
 
     let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();

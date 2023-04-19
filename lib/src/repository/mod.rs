@@ -646,7 +646,7 @@ impl Repository {
     /// Force the background worker to run one job and wait for it to complete, returning its result.
     ///
     /// It's usually not necessary to call this method because the worker runs automatically in the
-    /// background. It might still e.g. be usefull for testing/debugging.
+    /// background. It might still e.g. be useful for testing/debugging.
     pub async fn force_work(&self) -> Result<()> {
         self.worker_handle.work().await
     }
@@ -654,7 +654,23 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
+
         let branches = self.shared.load_branches().await?;
+
+        // If the local branch doesn't exist yet in the db we include it anyway. This fixes a race
+        // condition when the local branch doesn't exist yet at the moment we load the branches but
+        // is subsequently created by merging a remote branch and the remote branch is then pruned.
+        let branches = if branches
+            .iter()
+            .any(|branch| branch.id() == local_branch.id())
+        {
+            branches
+        } else {
+            let mut branches = branches;
+            branches.push(local_branch.clone());
+            branches
+        };
+
         let mut dirs = Vec::new();
 
         for branch in branches {
@@ -663,16 +679,21 @@ impl Repository {
                 .await
             {
                 Ok(dir) => dir,
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+                    tracing::warn!(
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory"
+                    );
                     // Some branch roots may not have been loaded across the network yet. We'll
                     // ignore those.
                     continue;
                 }
                 Err(error) => {
                     tracing::error!(
-                        "failed to open root directory in branch {:?}: {:?}",
-                        branch.id(),
-                        error
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory"
                     );
                     return Err(error);
                 }

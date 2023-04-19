@@ -393,6 +393,8 @@ mod prune {
                 continue;
             };
 
+            tracing::trace!(id = ?snapshot.branch_id(), "outdated branch will be removed");
+
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
