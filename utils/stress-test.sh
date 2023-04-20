@@ -1,10 +1,31 @@
 #!/bin/bash
 
-set -eu
+set -eEu
+
+self_pid=$$
 
 function date_tag {
     date +"%Y-%m-%dT%H:%M:%S"
 }
+
+function descendant_pids() {
+    pids=$(pgrep -P $1)
+    echo $pids
+    for pid in $pids; do
+        descendant_pids $pid
+    done
+}
+
+function cleanup() {
+    echo "Stopping all tests"
+
+    # Kill all descendants (not just children) of this script
+    for pid in $(descendant_pids $self_pid); do
+        kill $pid 2>/dev/null || true
+    done
+}
+
+trap cleanup EXIT
 
 temp_dir_prefix="ouisync-stress-test"
 build_args="--release"
@@ -70,8 +91,6 @@ else
     build_args="$build_args --lib"
 fi
 
-trap "pkill -P $$" EXIT
-
 rm -rf "/tmp/$temp_dir_prefix-*"
 
 echo "$(date_tag) Compiling the test with '$build_args'"
@@ -90,7 +109,7 @@ pipe="$dir/pipe"
 mkfifo $pipe
 
 echo "$(date_tag) Working in directory $dir"
-echo "$(date_tag) Starting $concurrency tests ('$exe')"
+echo "$(date_tag) Starting $concurrency tests ('$exe $args')"
 
 export RUST_BACKTRACE=full
 export PROPTEST_CASES=32
@@ -142,6 +161,9 @@ done
 new_log_name="/tmp/ouisync-log-$(date_tag).txt"
 mv $dir/test-$aborted_process.log $new_log_name
 echo "$(date_tag) Log saved to $new_log_name"
+
+# HACK: This should be called by trap but sometimes for some reason isn't...
+cleanup
 
 if [ -n "$log_open" -a -n "$EDITOR" ]; then
     $EDITOR $new_log_name
