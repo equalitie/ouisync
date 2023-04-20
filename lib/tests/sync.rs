@@ -606,6 +606,9 @@ fn remote_rename_non_empty_directory() {
         dir.create_file("data.txt".into()).await.unwrap();
         rx.recv().await;
 
+        // Drop the dir otherwise the subsequent `move_entry` fails with `Error::Locked`.
+        drop(dir);
+
         // Rename the directory and wait until reader is done
         repo.move_entry("/", "foo", "/", "bar").await.unwrap();
         rx.recv().await;
@@ -812,8 +815,8 @@ fn content_stays_available_during_sync() {
     let mut env = Env::new();
     let (tx, mut rx) = mpsc::channel(1);
 
-    let content0 = Arc::new(common::random_content(32));
-    let content1 = Arc::new(common::random_content(128 * 1024));
+    let content0 = common::random_content(32);
+    let content1 = common::random_content(128 * 1024);
 
     env.actor("alice", {
         let content0 = content0.clone();
