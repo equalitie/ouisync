@@ -29,7 +29,11 @@ use tracing::{instrument::Instrument, Span};
 
 // Hardcoded DHT routers to bootstrap the DHT against.
 // TODO: add this to `NetworkOptions` so it can be overriden by the user.
-pub const DHT_ROUTERS: &[&str] = &["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"];
+pub const DHT_ROUTERS: &[&str] = &[
+    "dht.ouisync.net:6881",
+    "router.bittorrent.com:6881",
+    "dht.transmissionbt.com:6881",
+];
 
 // Interval for the delay before a repository is re-announced on the DHT. The actual delay is an
 // uniformly random value from this interval.
