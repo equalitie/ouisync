@@ -149,8 +149,6 @@ impl<'a> FileRef<'a> {
     }
 
     /// Fork the file without opening it.
-    /// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
-    /// write concurrency is implemented.
     pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         let parent_context = self.inner.parent_context();
         let src_branch = self.branch();

@@ -33,7 +33,15 @@ impl File {
         let lock = branch
             .locker()
             .read(*locator.blob_id())
-            .ok_or(Error::EntryNotFound)?;
+            .ok_or(Error::EntryNotFound)
+            .map_err(|error| {
+                tracing::debug!(
+                    branch_id = ?branch.id(),
+                    blob_id = ?locator.blob_id(),
+                    "failed to acquire read lock"
+                );
+                error
+            })?;
         let lock = UpgradableLock::Read(lock);
 
         let mut tx = branch.db().begin_read().await?;
@@ -182,12 +190,10 @@ impl File {
 
         let parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
-        // NOTE: This can fail only if someone removed/replaced the file immediatelly after it was
-        // forked. Unlikely but not impossible.
         let lock = dst_branch
             .locker()
-            .read(*self.blob.locator().blob_id())
-            .ok_or(Error::EntryNotFound)?;
+            .read_wait(*self.blob.locator().blob_id())
+            .await;
         let lock = UpgradableLock::Read(lock);
 
         let blob = {
@@ -229,6 +235,7 @@ mod tests {
         event::Event,
         index::BranchData,
         state_monitor::StateMonitor,
+        test_utils,
     };
     use assert_matches::assert_matches;
     use tempfile::TempDir;
@@ -236,6 +243,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
+        test_utils::init_log();
         let (_base_dir, [branch0, branch1]) = setup().await;
 
         // Create a file owned by branch 0

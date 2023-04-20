@@ -412,7 +412,15 @@ impl Directory {
                 branch
                     .locker()
                     .read(*locator.blob_id())
-                    .ok_or(Error::EntryNotFound)?,
+                    .ok_or(Error::EntryNotFound)
+                    .map_err(|error| {
+                        tracing::debug!(
+                            branch_id = ?branch.id(),
+                            blob_id = ?locator.blob_id(),
+                            "failed to acquire read lock"
+                        );
+                        error
+                    })?,
             ),
             DirectoryLocking::Disabled => None,
         };

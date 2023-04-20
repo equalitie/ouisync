@@ -17,8 +17,6 @@ function descendant_pids() {
 }
 
 function cleanup() {
-    echo "Stopping all tests"
-
     # Kill all descendants (not just children) of this script
     for pid in $(descendant_pids $self_pid); do
         kill $pid 2>/dev/null || true
@@ -161,6 +159,8 @@ done
 new_log_name="/tmp/ouisync-log-$(date_tag).txt"
 mv $dir/test-$aborted_process.log $new_log_name
 echo "$(date_tag) Log saved to $new_log_name"
+
+echo "Stopping all tests"
 
 # HACK: This should be called by trap but sometimes for some reason isn't...
 cleanup

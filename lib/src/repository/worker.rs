@@ -613,6 +613,11 @@ mod scan {
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
+        // This can sometimes include pruned branches. It happens when a branch is first loaded,
+        // then pruned, then in an attempt to open the root directory, it's read lock is acquired
+        // but before the open fails and the lock is dropped, we already return the lock here.
+        // When this happens then the subsequent `BlockIds::open` might fail with `EntryNotFound`
+        // but we ignore it because it's harmless.
         let locks = shared.branch_shared.locker.all();
         if locks.is_empty() {
             return Ok(());
@@ -622,18 +627,15 @@ mod scan {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
             for blob_id in blob_ids {
-                let mut blob_block_ids =
-                    BlockIds::open(branch.clone(), blob_id)
-                        .await
-                        .map_err(|error| {
-                            tracing::error!(
-                                ?branch_id,
-                                ?blob_id,
-                                ?error,
-                                "failed to open BlockIds"
-                            );
-                            error
-                        })?;
+                let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {
+                    Ok(block_ids) => block_ids,
+                    Err(Error::EntryNotFound) => {
+                        // See the comment above.
+                        tracing::warn!(?branch_id, ?blob_id, "failed to open BlockIds");
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
 
                 while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);

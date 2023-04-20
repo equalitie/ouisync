@@ -642,11 +642,12 @@ async fn version_vector_fork() {
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
-
     let remote_branch = repo
         .get_branch(PublicKey::random())
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
+
+    tracing::info!(local_id = ?local_branch.id(), remote_id = ?remote_branch.id());
 
     let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
     let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();

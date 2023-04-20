@@ -1,4 +1,4 @@
-//! Locks for coordinating concurent operations on blobs.
+//! Locks for coordinating concurrent operations on blobs.
 
 use crate::{
     blob_id::BlobId,
@@ -58,6 +58,19 @@ impl BranchLocker {
     /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
     /// given blob.
     pub fn read(&self, blob_id: BlobId) -> Option<ReadLock> {
+        self.try_read(blob_id).ok()
+    }
+
+    pub async fn read_wait(&self, blob_id: BlobId) -> ReadLock {
+        loop {
+            match self.try_read(blob_id) {
+                Ok(lock) => return lock,
+                Err(notify) => notify.notified().await,
+            }
+        }
+    }
+
+    fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, Arc<Notify>> {
         let mut shared = self.shared.lock().unwrap();
 
         match shared
@@ -69,13 +82,13 @@ impl BranchLocker {
             State::Read(count) | State::Write(count) => {
                 *count = count.checked_add(1).expect("lock limit reached");
 
-                Some(ReadLock {
+                Ok(ReadLock {
                     shared: self.shared.clone(),
                     branch_id: self.branch_id,
                     blob_id,
                 })
             }
-            State::Unique(_) => None,
+            State::Unique(notify) => Err(notify.clone()),
         }
     }
 
@@ -241,7 +254,8 @@ impl Drop for WriteLock {
     }
 }
 
-/// TODO: doc
+/// Lock that expresses unique (exclusive) access to a blob. No one else except the owner of the
+/// lock can access the blob in any way while this lock is held.
 pub(crate) struct UniqueLock {
     shared: Arc<Shared>,
     branch_id: PublicKey,

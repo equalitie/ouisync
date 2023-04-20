@@ -856,6 +856,7 @@ async fn merge_file_and_tombstone() {
     // Fork the file into the remote branch.
     let mut remote_root = branch1.open_or_create_root().await.unwrap();
     file.fork(branch1.clone()).await.unwrap();
+    drop(file);
 
     // Remove the file in the remote branch.
     remote_root

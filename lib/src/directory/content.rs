@@ -137,6 +137,7 @@ impl Content {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum EntryExists {
     /// The existing entry is more up-to-date and points to the same blob than the one being
     /// inserted
@@ -145,6 +146,7 @@ pub(crate) enum EntryExists {
     Different,
 }
 
+#[derive(Debug)]
 pub(crate) enum InsertError {
     /// The entry exists
     Exists(EntryExists),

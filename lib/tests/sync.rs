@@ -11,7 +11,7 @@ use ouisync::{
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
 use tokio::sync::{broadcast, mpsc};
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 
 // Some tests used to fail only on sufficiently large files
 // const LARGE_SIZE: usize = 4 * 1024 * 1024;
@@ -786,8 +786,12 @@ fn concurrent_update_and_delete_during_conflict() {
 
             // 2. Create the file and wait until alice sees it
             let mut file = repo.create_file("data.txt").await.unwrap();
-            file.write(&content_v0).await.unwrap();
-            file.flush().await.unwrap();
+            async {
+                file.write(&content_v0).await.unwrap();
+                file.flush().await.unwrap();
+            }
+            .instrument(tracing::info_span!("write", name = "data.txt", step = 1))
+            .await;
 
             alice_rx.recv().await.unwrap();
 
@@ -795,11 +799,15 @@ fn concurrent_update_and_delete_during_conflict() {
             drop(reg);
 
             // 5b. Writes to the file in such a way that the first block remains unchanged
-            file.seek(SeekFrom::End(-(chunk.len() as i64)))
-                .await
-                .unwrap();
-            file.write(&chunk).await.unwrap();
-            file.flush().await.unwrap();
+            async {
+                file.seek(SeekFrom::End(-(chunk.len() as i64)))
+                    .await
+                    .unwrap();
+                file.write(&chunk).await.unwrap();
+                file.flush().await.unwrap();
+            }
+            .instrument(tracing::info_span!("write", name = "data.txt", step = 2))
+            .await;
 
             // 6b. Relink
             let _reg = network.register(repo.store().clone()).await;
