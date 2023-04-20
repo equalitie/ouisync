@@ -654,20 +654,21 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-
         let branches = self.shared.load_branches().await?;
 
-        // If the local branch doesn't exist yet in the db we include it anyway. This fixes a race
-        // condition when the local branch doesn't exist yet at the moment we load the branches but
-        // is subsequently created by merging a remote branch and the remote branch is then pruned.
-        let branches = if branches
-            .iter()
-            .any(|branch| branch.id() == local_branch.id())
+        // If we are writer and the local branch doesn't exist yet in the db we include it anyway.
+        // This fixes a race condition when the local branch doesn't exist yet at the moment we
+        // load the branches but is subsequently created by merging a remote branch and the remote
+        // branch is then pruned.
+        let branches = if local_branch.keys().write().is_some()
+            && branches
+                .iter()
+                .all(|branch| branch.id() != local_branch.id())
         {
-            branches
-        } else {
             let mut branches = branches;
             branches.push(local_branch.clone());
+            branches
+        } else {
             branches
         };
 
@@ -675,7 +676,7 @@ impl Repository {
 
         for branch in branches {
             let dir = match branch
-                .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+                .open_root(DirectoryLocking::Enabled, DirectoryFallback::Enabled)
                 .await
             {
                 Ok(dir) => dir,
