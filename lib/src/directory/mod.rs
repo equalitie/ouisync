@@ -58,22 +58,38 @@ impl Directory {
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
-        // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(
+        let lock = branch.locker().read_wait(*locator.blob_id()).await;
+        let mut tx = branch.db().begin_write().await?;
+
+        let dir = match Self::open_in(
+            Some(lock),
+            &mut tx,
             branch.clone(),
             locator,
             None,
-            DirectoryLocking::Enabled,
             DirectoryFallback::Disabled,
         )
         .await
         {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
-            Err(error) => Err(error),
-        }
+            Ok(dir) => Some(dir),
+            Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
+
+        let dir = if let Some(dir) = dir {
+            dir
+        } else {
+            let mut dir = Self::create(branch, locator, None);
+            let content = Content::empty();
+            dir.save(&mut tx, &content).await?;
+            dir.commit(tx, content, VersionVectorOp::IncrementLocal)
+                .await?;
+            dir
+        };
+
+        Ok(dir)
     }
 
     /// Reloads this directory from the db.
