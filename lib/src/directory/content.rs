@@ -2,7 +2,7 @@
 
 use super::entry_data::EntryData;
 use crate::{
-    blob::lock::RemoveLock,
+    blob::lock::UniqueLock,
     blob_id::BlobId,
     branch::Branch,
     error::{Error, Result},
@@ -71,8 +71,8 @@ impl Content {
         branch: &Branch,
         name: String,
         new_data: EntryData,
-        lock: Option<RemoveLock>,
-    ) -> Result<Option<RemoveLock>, InsertError> {
+        lock: Option<UniqueLock>,
+    ) -> Result<Option<UniqueLock>, InsertError> {
         match self.entries.entry(name) {
             Entry::Vacant(entry) => {
                 assert!(lock.is_none());
@@ -89,7 +89,7 @@ impl Content {
                         Some(lock)
                     }
                     (Some(old_id), None) => {
-                        Some(branch.locker().remove(old_id).ok_or(InsertError::Locked)?)
+                        Some(branch.locker().unique(old_id).ok_or(InsertError::Locked)?)
                     }
                     (None, None) => None,
                     (None, Some(_)) => panic!("unexpected lock for non-existing entry"),

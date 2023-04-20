@@ -18,7 +18,7 @@ pub(crate) use self::{
 use self::content::Content;
 use crate::{
     blob::{
-        lock::{ReadLock, RemoveLock},
+        lock::{ReadLock, UniqueLock},
         Blob,
     },
     branch::Branch,
@@ -518,7 +518,7 @@ impl Directory {
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
-    ) -> Result<(Content, Option<RemoveLock>)> {
+    ) -> Result<(Content, Option<UniqueLock>)> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         if matches!(tombstone.cause, TombstoneCause::Removed) {
@@ -568,7 +568,7 @@ impl Directory {
         tx: &mut db::WriteTransaction,
         name: String,
         data: EntryData,
-    ) -> Result<(Content, Option<RemoveLock>)> {
+    ) -> Result<(Content, Option<UniqueLock>)> {
         let mut content = self.load(tx).await?;
         let old_lock = content.insert(self.branch(), name, data, None)?;
         self.save(tx, &content).await?;

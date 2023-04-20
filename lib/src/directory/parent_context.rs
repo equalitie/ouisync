@@ -104,7 +104,7 @@ impl ParentContext {
             }
         };
 
-        // Try to acquire a remove lock for the old entry (if any). If no one is currently accessing
+        // Try to acquire a unique lock for the old entry (if any). If no one is currently accessing
         // the old entry, this will succeeds and no one will be able to access it more until this
         // function completes or is cancelled. If the old blob id is the same as the new one, this
         // also protects the new blob from being garbage collected until it's inserted into the
@@ -114,7 +114,21 @@ impl ParentContext {
             Some(
                 dst_branch
                     .locker()
-                    .remove_wait(old_blob_id)
+                    .unique(old_blob_id)
+                    .ok_or(Error::Locked)?,
+            )
+        } else {
+            None
+        };
+
+        // If the new and old blob ids are different, create a separate (unique) lock for the new
+        // one as well so that it's not garbage collected prematurely. Note this time we await the
+        // lock to serialize multiple concurrent forks of the same blob.
+        let _new_lock = if Some(new_blob_id) != old_blob_id {
+            Some(
+                dst_branch
+                    .locker()
+                    .unique_wait(new_blob_id)
                     .await
                     .ok_or(Error::Locked)?,
             )
@@ -138,14 +152,6 @@ impl ParentContext {
                 Err(EntryExists::Different) => return Err(Error::EntryExists),
             }
         }
-
-        // If the new and old blob ids are different, create a separate (read) lock for the new one
-        // as well so that it's not garbage collected prematurely.
-        let _new_lock = if Some(new_blob_id) != old_blob_id {
-            Some(dst_branch.locker().read(new_blob_id).ok_or(Error::Locked)?)
-        } else {
-            None
-        };
 
         // Fork the blob first without inserting it into the dst directory. This is because
         // `blob::fork` is not atomic and in case it's interrupted, we don't want overwrite the dst

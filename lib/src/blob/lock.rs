@@ -17,10 +17,11 @@ pub(crate) struct Locker {
 
 type Shared = BlockingMutex<HashMap<PublicKey, HashMap<BlobId, State>>>;
 
+#[derive(Clone)]
 enum State {
     Read(usize),
     Write(usize),
-    Remove(Arc<Notify>),
+    Unique(Arc<Notify>),
 }
 
 impl Locker {
@@ -54,8 +55,8 @@ pub(crate) struct BranchLocker {
 }
 
 impl BranchLocker {
-    /// Try to acquire a read lock. Fails is a remove lock is currently being held by the given
-    /// blob.
+    /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
+    /// given blob.
     pub fn read(&self, blob_id: BlobId) -> Option<ReadLock> {
         let mut shared = self.shared.lock().unwrap();
 
@@ -74,57 +75,42 @@ impl BranchLocker {
                     blob_id,
                 })
             }
-            State::Remove(_) => None,
+            State::Unique(_) => None,
         }
     }
 
-    /// Try to acquire a remove lock. Fails if any kind of lock is currently held for the given
+    /// Try to acquire a unique lock. Fails if any kind of lock is currently held for the given
     /// blob.
-    pub fn remove(&self, blob_id: BlobId) -> Option<RemoveLock> {
+    pub fn unique(&self, blob_id: BlobId) -> Option<UniqueLock> {
+        self.try_unique(blob_id).ok()
+    }
+
+    /// Try to acquire a unique lock. If another unique lock is currently held for the given blob,
+    /// asynchronously waits until it's released. Fails if any other kind of lock is held.
+    pub async fn unique_wait(&self, blob_id: BlobId) -> Option<UniqueLock> {
+        loop {
+            match self.try_unique(blob_id) {
+                Ok(lock) => return Some(lock),
+                Err(State::Unique(notify)) => notify.notified().await,
+                Err(State::Read(_) | State::Write(_)) => return None,
+            }
+        }
+    }
+
+    fn try_unique(&self, blob_id: BlobId) -> Result<UniqueLock, State> {
         let mut shared = self.shared.lock().unwrap();
 
         match shared.entry(self.branch_id).or_default().entry(blob_id) {
             Entry::Vacant(entry) => {
-                entry.insert(State::Remove(Arc::new(Notify::new())));
+                entry.insert(State::Unique(Arc::new(Notify::new())));
 
-                Some(RemoveLock {
+                Ok(UniqueLock {
                     shared: self.shared.clone(),
                     branch_id: self.branch_id,
                     blob_id,
                 })
             }
-            Entry::Occupied(_) => None,
-        }
-    }
-
-    /// Try to acquire a remove lock. If another remove lock is currently held for the given blob,
-    /// asynchronously waits until it's released. Fails if any other kind of lock is held.
-    pub async fn remove_wait(&self, blob_id: BlobId) -> Option<RemoveLock> {
-        loop {
-            let notify = {
-                let mut shared = self.shared.lock().unwrap();
-
-                match shared.entry(self.branch_id).or_default().entry(blob_id) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(State::Remove(Arc::new(Notify::new())));
-
-                        return Some(RemoveLock {
-                            shared: self.shared.clone(),
-                            branch_id: self.branch_id,
-                            blob_id,
-                        });
-                    }
-                    Entry::Occupied(entry) => {
-                        if let State::Remove(notify) = entry.get() {
-                            notify.clone()
-                        } else {
-                            return None;
-                        }
-                    }
-                }
-            };
-
-            notify.notified().await;
+            Entry::Occupied(entry) => Err(entry.get().clone()),
         }
     }
 }
@@ -157,7 +143,7 @@ impl ReadLock {
                 })
             }
             State::Write(_) => None,
-            State::Remove(_) => unreachable!(),
+            State::Unique(_) => unreachable!(),
         }
     }
 }
@@ -182,7 +168,7 @@ impl Clone for ReadLock {
                     blob_id: self.blob_id,
                 }
             }
-            State::Remove(_) => unreachable!(),
+            State::Unique(_) => unreachable!(),
         }
     }
 }
@@ -207,7 +193,7 @@ impl Drop for ReadLock {
                     state_entry.remove();
                 }
             }
-            State::Remove(_) => unreachable!(),
+            State::Unique(_) => unreachable!(),
         }
 
         if states_entry.get().is_empty() {
@@ -246,7 +232,7 @@ impl Drop for WriteLock {
                     state_entry.remove();
                 }
             }
-            State::Read(_) | State::Remove(_) => unreachable!(),
+            State::Read(_) | State::Unique(_) => unreachable!(),
         }
 
         if states_entry.get().is_empty() {
@@ -255,15 +241,14 @@ impl Drop for WriteLock {
     }
 }
 
-/// Lock that signals that the blob is about to be removed. It prevents the blob from being read or
-/// written.
-pub(crate) struct RemoveLock {
+/// TODO: doc
+pub(crate) struct UniqueLock {
     shared: Arc<Shared>,
     branch_id: PublicKey,
     blob_id: BlobId,
 }
 
-impl RemoveLock {
+impl UniqueLock {
     pub fn blob_id(&self) -> &BlobId {
         &self.blob_id
     }
@@ -273,7 +258,7 @@ impl RemoveLock {
     }
 }
 
-impl Drop for RemoveLock {
+impl Drop for UniqueLock {
     fn drop(&mut self) {
         let mut shared = self.shared.lock().unwrap();
 
@@ -286,7 +271,7 @@ impl Drop for RemoveLock {
         };
 
         match state_entry.get_mut() {
-            State::Remove(notify) => {
+            State::Unique(notify) => {
                 notify.notify_waiters();
                 state_entry.remove();
             }
@@ -343,25 +328,25 @@ mod tests {
         drop(write0);
         let write1 = read0.upgrade().unwrap();
 
-        assert!(locker.remove(blob_id).is_none());
+        assert!(locker.unique(blob_id).is_none());
 
         drop(write1);
-        assert!(locker.remove(blob_id).is_none());
+        assert!(locker.unique(blob_id).is_none());
 
         drop(read2);
-        assert!(locker.remove(blob_id).is_none());
+        assert!(locker.unique(blob_id).is_none());
 
         drop(read1);
-        assert!(locker.remove(blob_id).is_none());
+        assert!(locker.unique(blob_id).is_none());
 
         drop(read0);
-        let remove0 = locker.remove(blob_id).unwrap();
+        let remove0 = locker.unique(blob_id).unwrap();
 
         assert!(locker.read(blob_id).is_none());
-        assert!(locker.remove(blob_id).is_none());
+        assert!(locker.unique(blob_id).is_none());
 
         drop(remove0);
-        let remove1 = locker.remove(blob_id).unwrap();
+        let remove1 = locker.unique(blob_id).unwrap();
 
         drop(remove1);
         let _read3 = locker.read(blob_id).unwrap();

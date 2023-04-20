@@ -380,14 +380,14 @@ mod prune {
                 continue;
             }
 
-            // Try to acquire a remove lock on the root directory of the branch. If any file or
+            // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.
             let Some(_lock) = shared
                 .branch_shared
                 .locker
                 .branch(*snapshot.branch_id())
-                .remove(BlobId::ROOT)
+                .unique(BlobId::ROOT)
             else {
                 tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;
