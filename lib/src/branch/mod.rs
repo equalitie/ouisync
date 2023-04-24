@@ -202,6 +202,7 @@ mod tests {
         access_control::WriteSecrets, db, index::Index, locator::Locator,
         state_monitor::StateMonitor,
     };
+    use assert_matches::assert_matches;
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 
@@ -225,6 +226,43 @@ mod tests {
 
         root.refresh().await.unwrap();
         let _ = root.lookup("dir").unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_modify_file_on_read_only_branch() {
+        let (_base_dir, branch) = setup().await;
+
+        let mut file = branch
+            .open_or_create_root()
+            .await
+            .unwrap()
+            .create_file("test.txt".into())
+            .await
+            .unwrap();
+        file.write(b"foo").await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+
+        let keys = branch.keys().clone().read_only();
+        let branch = branch.reopen(keys);
+
+        let mut file = branch
+            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+            .await
+            .unwrap()
+            .lookup("test.txt")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+
+        file.truncate(0).await.unwrap();
+        assert_matches!(file.flush().await, Err(Error::PermissionDenied));
+
+        file.write(b"bar").await.unwrap();
+        assert_matches!(file.flush().await, Err(Error::PermissionDenied));
     }
 
     async fn setup() -> (TempDir, Branch) {

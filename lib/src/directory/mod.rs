@@ -57,6 +57,7 @@ impl Directory {
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
+    #[instrument(skip_all, fields(branch_id = ?branch.id()))]
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         let locator = Locator::ROOT;
 

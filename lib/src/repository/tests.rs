@@ -7,7 +7,10 @@ use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
 use tempfile::TempDir;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::{
+    sync::broadcast::Receiver,
+    time::{timeout, Duration},
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
@@ -180,19 +183,12 @@ async fn concurrent_read_and_create_dir() {
                 return;
             }
 
-            match rx.recv().await {
-                Ok(_) | Err(RecvError::Lagged(_)) => (),
-                Err(RecvError::Closed) => panic!("Event channel unexpectedly closed"),
-            }
+            wait_for_notification(&mut rx).await;
         }
     });
 
-    timeout(Duration::from_secs(5), async {
-        create_dir.await.unwrap();
-        open_dir.await.unwrap();
-    })
-    .await
-    .unwrap();
+    create_dir.await.unwrap();
+    open_dir.await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -204,7 +200,7 @@ async fn concurrent_write_and_read_file() {
     let chunk_size = 1024;
     let chunk_count = 100;
 
-    let write_file = scoped_task::spawn({
+    let write = scoped_task::spawn({
         let repo = repo.clone();
 
         async move {
@@ -220,8 +216,9 @@ async fn concurrent_write_and_read_file() {
         }
     });
 
-    let open_dir = scoped_task::spawn({
+    let read = scoped_task::spawn({
         let repo = repo.clone();
+        let mut rx = repo.subscribe();
 
         async move {
             loop {
@@ -238,17 +235,13 @@ async fn concurrent_write_and_read_file() {
                     Err(error) => panic!("unexpected error: {:?}", error),
                 };
 
-                sleep(Duration::from_millis(10)).await;
+                wait_for_notification(&mut rx).await;
             }
         }
     });
 
-    timeout(Duration::from_secs(5), async {
-        write_file.await.unwrap();
-        open_dir.await.unwrap();
-    })
-    .await
-    .unwrap();
+    write.await.unwrap();
+    read.await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -506,34 +499,6 @@ async fn truncate_forked_remote_file() {
     let mut file = repo.open_file("test.txt").await.unwrap();
     file.fork(local_branch).await.unwrap();
     file.truncate(0).await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn attempt_to_modify_remote_file() {
-    test_utils::init_log();
-    let (_base_dir, repo) = setup().await;
-    let remote_id = PublicKey::random();
-    let remote_branch = repo.get_branch(remote_id).unwrap();
-
-    create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
-
-    let mut file = remote_branch
-        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-        .await
-        .unwrap()
-        .lookup("test.txt")
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
-
-    file.truncate(0).await.unwrap();
-    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
-
-    file.write(b"bar").await.unwrap();
-    assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -929,4 +894,15 @@ fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
     rand::thread_rng().fill(&mut buffer[..]);
     buffer
+}
+
+async fn wait_for_notification(rx: &mut Receiver<Event>) {
+    match timeout(Duration::from_secs(5), rx.recv()).await {
+        Ok(Ok(_)) => (),
+        Ok(Err(RecvError::Lagged(_))) => (),
+        Ok(Err(RecvError::Closed)) => {
+            panic!("notification channel unexpectedly closed")
+        }
+        Err(_) => panic!("timeout waiting for notification"),
+    }
 }
