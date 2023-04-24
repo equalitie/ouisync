@@ -76,6 +76,9 @@ impl Summary {
     /// Checks whether the subtree at `self` is outdated compared to the subtree at `other` in
     /// terms of present blocks. That is, whether `other` has some blocks present that `self` is
     /// missing.
+    ///
+    /// NOTE: This function is NOT antisymetric, that is, `is_outdated(A, B)` does not imply
+    /// !is_outdated(B, A)` (and vice-versa).
     pub fn is_outdated(&self, other: &Self) -> bool {
         self.block_presence.is_outdated(&other.block_presence)
     }

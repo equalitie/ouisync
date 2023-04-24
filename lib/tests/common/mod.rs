@@ -363,7 +363,14 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
             | Ok(Err(RecvError::Lagged(_))) => return,
             Ok(Ok(Event { .. })) => continue,
             Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
-            Err(_) => panic!("timeout waiting for notification"),
+            Err(_) => {
+                const MESSAGE: &str = "timeout waiting for notification";
+
+                // NOTE: in release mode backtrace is useless so this trace helps us to locate the
+                // source of the panic:
+                tracing::error!("{}", MESSAGE);
+                panic!("{}", MESSAGE);
+            }
         }
     }
 }
@@ -529,6 +536,7 @@ pub(crate) fn init_log() {
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
+        .with_target(false)
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
         .with_test_writer();

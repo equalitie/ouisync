@@ -241,7 +241,7 @@ impl LeafNodeSet {
         self
     }
 
-    /// Returns all nodes from this set whose `is_missing` flag is `false`.
+    /// Returns all nodes from this set whose `block_presence` is `Present`.
     pub fn present(&self) -> impl Iterator<Item = &LeafNode> {
         self.iter()
             .filter(|node| node.block_presence == SingleBlockPresence::Present)

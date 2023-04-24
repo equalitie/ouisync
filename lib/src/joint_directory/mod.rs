@@ -1,19 +1,19 @@
 #[cfg(test)]
 mod tests;
-pub(crate) mod versioned;
 
 use crate::{
     branch::Branch,
     conflict,
     crypto::sign::PublicKey,
     directory::{
-        Directory, DirectoryRef, EntryRef, EntryTombstoneData, EntryType, FileRef,
-        MissingBlockStrategy,
+        Directory, DirectoryFallback, DirectoryRef, EntryRef, EntryTombstoneData, EntryType,
+        FileRef,
     },
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
     version_vector::VersionVector,
+    versioned::{self, PreferBranch},
 };
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
@@ -158,7 +158,6 @@ impl JointDirectory {
     /// Descends into an arbitrarily nested subdirectory of this directory at the specified path.
     /// Note: non-normalized paths (i.e. containing "..") or Windows-style drive prefixes
     /// (e.g. "C:") are not supported.
-    #[instrument(skip_all, fields(path = %path.as_ref()))]
     pub async fn cd(&self, path: impl AsRef<Utf8Path>) -> Result<Self> {
         let mut curr = Cow::Borrowed(self);
 
@@ -231,7 +230,7 @@ impl JointDirectory {
     async fn remove_entries_recursively<'a>(&'a mut self, pattern: Pattern<'a>) -> Result<()> {
         for entry in pattern.apply(self)?.filter_map(|e| e.directory().ok()) {
             let mut dir = entry
-                .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                .open_with(MissingVersionStrategy::Skip, DirectoryFallback::Disabled)
                 .await?;
             dir.remove_entries_recursively(Pattern::All).await?;
         }
@@ -256,12 +255,13 @@ impl JointDirectory {
         let old_version_vector = local_version.version_vector().await?;
         let new_version_vector = self.merge_version_vectors().await?;
 
-        tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "started");
-
         if old_version_vector >= new_version_vector {
             // Local version already up to date, nothing to do.
             // unwrap is ok because we ensured the local version exists by calling `fork` above.
+            tracing::trace!("merge not started - already up to date");
             return Ok(self.local_version().unwrap().clone());
+        } else {
+            tracing::trace!(old = ?old_version_vector, new = ?new_version_vector, "merge started");
         }
 
         let mut conflict = false;
@@ -289,7 +289,7 @@ impl JointDirectory {
                                 let mut dir = entry
                                     .open_with(
                                         MissingVersionStrategy::Fail,
-                                        MissingBlockStrategy::Fail,
+                                        DirectoryFallback::Disabled,
                                     )
                                     .await?;
                                 match dir
@@ -332,7 +332,7 @@ impl JointDirectory {
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let vv = local_version.version_vector().await?;
-            tracing::trace!(?vv, ?conflict, "completed");
+            tracing::trace!(?vv, ?conflict, "merge completed");
         }
 
         if conflict {
@@ -548,18 +548,18 @@ impl<'a> JointDirectoryRef<'a> {
     }
 
     pub async fn open(&self) -> Result<JointDirectory> {
-        self.open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fallback)
+        self.open_with(MissingVersionStrategy::Skip, DirectoryFallback::Enabled)
             .await
     }
 
     pub(crate) async fn open_with(
         &self,
         missing_version_strategy: MissingVersionStrategy,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<JointDirectory> {
         let mut versions = Vec::new();
         for version in &self.versions {
-            match version.open(missing_block_strategy).await {
+            match version.open(fallback).await {
                 Ok(open_dir) => versions.push(open_dir),
                 Err(e)
                     if self
@@ -679,7 +679,7 @@ impl<'a> Merge<'a> {
         let mut tombstone: Option<EntryTombstoneData> = None;
 
         // Note that doing this will remove files that have been removed by tombstones as well.
-        let entries = versioned::keep_maximal(entries, local_branch.map(Branch::id));
+        let entries = versioned::keep_maximal(entries, PreferBranch(local_branch.map(Branch::id)));
 
         for entry in entries {
             match entry {

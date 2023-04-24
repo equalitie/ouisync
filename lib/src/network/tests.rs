@@ -141,12 +141,14 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 .write_received_block(&block.data, &block.nonce)
                 .await
                 .unwrap();
+            tracing::info!(?id, "write block");
 
             // Then wait until replica B receives and writes it too.
             wait_until_block_exists(&b_store.index, id).await;
         }
     };
 
+    tracing::info!("start");
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     drop(client);
@@ -536,11 +538,16 @@ async fn simulate_connection(server: &mut ServerData, client: &mut ClientData) {
         recv_tx: server_recv_tx,
     };
 
+    let server_run = server.run().instrument(tracing::info_span!("server"));
+    let client_run = client
+        .run(client_recv_rx)
+        .instrument(tracing::info_span!("client"));
+
     select! {
         biased; // deterministic poll order for repeatable tests
 
-        result = server.run() => result.unwrap(),
-        result = client.run(client_recv_rx) => result.unwrap(),
+        result = server_run => result.unwrap(),
+        result = client_run => result.unwrap(),
         _ = server_conn.run() => panic!("connection closed prematurely"),
         _ = client_conn.run() => panic!("connection closed prematurely"),
     }

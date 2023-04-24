@@ -13,8 +13,8 @@ use crate::{
     db,
     error::{Error, Result},
     event::{Event, Payload},
-    joint_directory::versioned::Versioned,
     version_vector::VersionVector,
+    versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::broadcast;
@@ -204,6 +204,11 @@ impl SnapshotData {
         &self.root_node.proof.writer_id
     }
 
+    /// Returns the root node hash of this snapshot.
+    pub fn root_hash(&self) -> &Hash {
+        &self.root_node.proof.hash
+    }
+
     pub fn to_branch_data(&self) -> BranchData {
         BranchData {
             writer_id: self.root_node.proof.writer_id,
@@ -310,6 +315,38 @@ impl SnapshotData {
             .await
     }
 
+    pub async fn fork(
+        &self,
+        tx: &mut db::WriteTransaction,
+        dst_id: PublicKey,
+        dst_version_vector: VersionVector,
+        write_keys: &Keypair,
+    ) -> Result<Self> {
+        let new_proof = Proof::new(
+            dst_id,
+            dst_version_vector,
+            self.root_node.proof.hash,
+            write_keys,
+        );
+
+        // We are not using `self.create_root_node` because we don't want to remove the older
+        // snapshots just yet (we leave that up to the pruner).
+        let root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
+
+        tracing::trace!(
+            vv = ?root_node.proof.version_vector,
+            hash = ?root_node.proof.hash,
+            branch_id = ?root_node.proof.writer_id,
+            src_branch_id = ?self.root_node.proof.writer_id,
+            "create local snapshot (fork)"
+        );
+
+        Ok(Self {
+            root_node,
+            notify_tx: self.notify_tx.clone(),
+        })
+    }
+
     /// Remove this snapshot
     pub async fn remove(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         self.root_node.remove_recursively(tx).await
@@ -341,29 +378,29 @@ impl SnapshotData {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
-                    branch.id = ?old.proof.writer_id,
+                    branch_id = ?old.proof.writer_id,
                     vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
-                    "not removing outdated snapshot - possible fallback"
+                    "outdated snapshot not removed - possible fallback"
                 );
 
                 maybe_old = old.load_prev(&mut conn).await?;
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
                 // including all its predecessors.
-                tracing::trace!(
-                    branch.id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
-                    hash = ?old.proof.hash,
-                    "removing outdated snapshot"
-                );
-
                 drop(conn);
 
                 let mut tx = db.begin_write().await?;
                 old.remove_recursively(&mut tx).await?;
                 old.remove_recursively_all_older(&mut tx).await?;
                 tx.commit().await?;
+
+                tracing::trace!(
+                    branch_id = ?old.proof.writer_id,
+                    vv = ?old.proof.version_vector,
+                    hash = ?old.proof.hash,
+                    "outdated snapshot removed"
+                );
 
                 break;
             }
@@ -435,26 +472,29 @@ impl SnapshotData {
         new_proof: Proof,
         new_summary: Summary,
     ) -> Result<()> {
-        tracing::trace!(
-            vv = ?new_proof.version_vector,
-            hash = ?new_proof.hash,
-            "create local snapshot"
-        );
-
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
         self.remove_all_older(tx).await?;
+
+        tracing::trace!(
+            vv = ?self.root_node.proof.version_vector,
+            hash = ?self.root_node.proof.hash,
+            branch_id = ?self.root_node.proof.writer_id,
+            "create local snapshot"
+        );
 
         Ok(())
     }
 }
 
 impl Versioned for SnapshotData {
-    fn compare_versions(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.version_vector().partial_cmp(other.version_vector())
+    fn version_vector(&self) -> &VersionVector {
+        SnapshotData::version_vector(self)
     }
+}
 
+impl BranchItem for SnapshotData {
     fn branch_id(&self) -> &PublicKey {
-        self.branch_id()
+        SnapshotData::branch_id(self)
     }
 }
 

@@ -1,13 +1,14 @@
 use super::Shared;
 use crate::{
     branch::Branch,
-    directory::MissingBlockStrategy,
+    directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
-    event::Payload,
-    event::{EventScope, IgnoreScopeReceiver},
+    event::{EventScope, IgnoreScopeReceiver, Payload},
+    index::SnapshotData,
     joint_directory::JointDirectory,
+    versioned::{self, PreferBranch, Tiebreaker},
 };
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc, oneshot},
@@ -222,7 +223,7 @@ impl Inner {
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared).await;
+            let result = self.event_scope.apply(scan::run(&self.shared)).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
@@ -251,15 +252,35 @@ impl ErrorHandling {
 
 /// Merge remote branches into the local one.
 mod merge {
+    use crate::version_vector::VersionVector;
+
     use super::*;
 
-    #[instrument(skip_all, err(Debug))]
+    #[instrument(name = "merge", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let branches = shared.load_branches().await?;
+        let snapshots = shared.load_snapshots().await?;
+        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
+        // eventually end up having the same root hash of their local branch.
+        let snapshots = versioned::keep_maximal(snapshots, CompareRootHash);
+
+        // If there is only one branch which is newer than all the other branches, then fork it
+        // into the local branch (unless it's already the local one) and we are done.
+        if snapshots.len() <= 1 {
+            if let Some(snapshot) = snapshots.first() {
+                fork(shared, snapshot, &local_branch.version_vector().await?).await?;
+                return Ok(());
+            }
+        }
+
+        // Otherwise we need to proceed with deep merge.
+        let branches = inflate_all(shared, snapshots)?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            match branch.open_root(MissingBlockStrategy::Fail).await {
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await
+            {
                 Ok(dir) => roots.push(dir),
                 Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
                 Err(error) => return Err(error),
@@ -274,18 +295,83 @@ mod merge {
             Err(error) => Err(error),
         }
     }
+
+    async fn fork(
+        shared: &Shared,
+        snapshot: &SnapshotData,
+        local_vv: &VersionVector,
+    ) -> Result<()> {
+        if snapshot.branch_id() == &shared.this_writer_id {
+            tracing::trace!("local branch already newest");
+            return Ok(());
+        }
+
+        tracing::trace!(
+            ?local_vv,
+            remote_vv = ?snapshot.version_vector(),
+            "unique newest branch - attempting fork"
+        );
+
+        // Note if the local and remote branches have the same version vector we still want to fork
+        // the remote one to resolve the ambiguity but we need to bump the version vector to make
+        // it happens-after the local one otherwise the fork would fail. Note we only bump it once
+        // so if the local branch progressed in the meantime it would still fail but that's OK
+        // because that means the local branch became happens-after the remote one and so we can't
+        // fork anyway. We propagate the errors and try again next time `merge` is run.
+        let dst_vv = snapshot.version_vector().clone();
+        let dst_vv = if dst_vv == *local_vv {
+            dst_vv.incremented(shared.this_writer_id)
+        } else {
+            dst_vv
+        };
+
+        let write_keys = shared
+            .secrets
+            .write_secrets()
+            .map(|secrets| &secrets.write_keys)
+            .ok_or(Error::PermissionDenied)?;
+
+        let mut tx = shared.store.db().begin_write().await?;
+        snapshot
+            .fork(&mut tx, shared.this_writer_id, dst_vv, write_keys)
+            .await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    fn inflate_all(
+        shared: &Shared,
+        snapshots: impl IntoIterator<Item = SnapshotData>,
+    ) -> Result<Vec<Branch>> {
+        snapshots
+            .into_iter()
+            .map(|snapshot| shared.inflate(snapshot.to_branch_data()))
+            .collect()
+    }
+
+    struct CompareRootHash;
+
+    impl Tiebreaker<SnapshotData> for CompareRootHash {
+        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
+            lhs.root_hash().cmp(rhs.root_hash())
+        }
+    }
 }
 
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
-    use crate::joint_directory::versioned;
+    use crate::blob_id::BlobId;
 
-    #[instrument(skip_all, err(Debug))]
+    #[instrument(name = "prune", skip_all, err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, Some(&shared.this_writer_id));
+            // If the vvs are equal, break ties by preferring the one from the local branch (if
+            // any). This way if the local branch and some remote branch have the same vvs, we
+            // always prune the remote one.
+            versioned::partition(all, PreferBranch(Some(&shared.this_writer_id)));
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -294,26 +380,32 @@ mod prune {
                 continue;
             }
 
-            let _guard = if let Some(guard) = shared
+            // Try to acquire a unique lock on the root directory of the branch. If any file or
+            // directory from the branch is locked, the root will be locked as well and so this
+            // acquire will fail, preventing us from pruning a branch that's still being used.
+            let Some(_lock) = shared
                 .branch_shared
-                .branch_pinner
-                .prune(*snapshot.branch_id())
-            {
-                tracing::trace!(
-                    id = ?snapshot.branch_id(),
-                    vv = ?snapshot.version_vector(),
-                    "removing outdated branch"
-                );
-                guard
-            } else {
-                tracing::trace!(id = ?snapshot.branch_id(), "not removing outdated branch - in use");
+                .locker
+                .branch(*snapshot.branch_id())
+                .unique(BlobId::ROOT)
+            else {
+                tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;
             };
+
+            tracing::trace!(id = ?snapshot.branch_id(), "outdated branch will be removed");
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
+
+            tracing::trace!(
+                branch_id = ?snapshot.branch_id(),
+                vv = ?snapshot.version_vector(),
+                hash = ?snapshot.root_hash(),
+                "outdated branch removed"
+            );
         }
 
         // Remove outdated snapshots.
@@ -367,7 +459,7 @@ mod scan {
         }
     }
 
-    #[instrument(skip(shared), err(Debug))]
+    #[instrument(name = "scan", skip(shared), err(Debug))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
@@ -383,7 +475,7 @@ mod scan {
                 break;
             }
 
-            process_pinned_blocks(shared, &mut unreachable_block_ids).await?;
+            process_locked_blocks(shared, &mut unreachable_block_ids).await?;
 
             mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
@@ -411,7 +503,10 @@ mod scan {
         for branch in branches {
             entries.push((branch.clone(), BlobId::ROOT));
 
-            match branch.open_root(MissingBlockStrategy::Fail).await {
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await
+            {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
                     // `EntryNotFound` here just means this is a newly created branch with no
@@ -464,7 +559,7 @@ mod scan {
                     }
 
                     match entry
-                        .open_with(MissingVersionStrategy::Fail, MissingBlockStrategy::Fail)
+                        .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
                         .await
                     {
                         Ok(dir) => subdirs.push(dir),
@@ -513,21 +608,34 @@ mod scan {
         Ok(())
     }
 
-    /// Remove blocks of pinned blobs from the `unreachable_block_ids` set.
-    async fn process_pinned_blocks(
+    /// Remove blocks of locked blobs from the `unreachable_block_ids` set.
+    async fn process_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<()> {
-        let pins = shared.branch_shared.blob_collect_pinner.all();
-        if pins.is_empty() {
+        // This can sometimes include pruned branches. It happens when a branch is first loaded,
+        // then pruned, then in an attempt to open the root directory, it's read lock is acquired
+        // but before the open fails and the lock is dropped, we already return the lock here.
+        // When this happens then the subsequent `BlockIds::open` might fail with `EntryNotFound`
+        // but we ignore it because it's harmless.
+        let locks = shared.branch_shared.locker.all();
+        if locks.is_empty() {
             return Ok(());
         }
 
-        for (branch_id, blob_ids) in pins {
+        for (branch_id, blob_ids) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
             for blob_id in blob_ids {
-                let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
+                let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {
+                    Ok(block_ids) => block_ids,
+                    Err(Error::EntryNotFound) => {
+                        // See the comment above.
+                        tracing::warn!(?branch_id, ?blob_id, "failed to open BlockIds");
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
 
                 while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);

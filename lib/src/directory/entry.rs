@@ -2,7 +2,7 @@ use super::{
     content::Content,
     entry_data::{EntryData, EntryDirectoryData, EntryFileData, EntryTombstoneData},
     parent_context::ParentContext,
-    Directory, MissingBlockStrategy,
+    Directory, DirectoryFallback, DirectoryLocking,
 };
 use crate::{
     blob_id::BlobId,
@@ -13,6 +13,7 @@ use crate::{
     file::File,
     locator::Locator,
     version_vector::VersionVector,
+    versioned::{BranchItem, Versioned},
 };
 use std::fmt;
 
@@ -104,6 +105,18 @@ impl<'a> EntryRef<'a> {
     }
 }
 
+impl Versioned for EntryRef<'_> {
+    fn version_vector(&self) -> &VersionVector {
+        EntryRef::version_vector(self)
+    }
+}
+
+impl BranchItem for EntryRef<'_> {
+    fn branch_id(&self) -> &PublicKey {
+        EntryRef::branch_id(self)
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct FileRef<'a> {
     entry_data: &'a EntryFileData,
@@ -136,8 +149,6 @@ impl<'a> FileRef<'a> {
     }
 
     /// Fork the file without opening it.
-    /// This is a HACK to prevent `Worker` from extending write locks. It can be removed when proper
-    /// write concurrency is implemented.
     pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
         let parent_context = self.inner.parent_context();
         let src_branch = self.branch();
@@ -189,15 +200,17 @@ impl<'a> DirectoryRef<'a> {
         &self.entry_data.blob_id
     }
 
-    pub(crate) async fn open(
-        &self,
-        missing_block_strategy: MissingBlockStrategy,
-    ) -> Result<Directory> {
+    pub(crate) async fn open(&self, fallback: DirectoryFallback) -> Result<Directory> {
         Directory::open(
             self.branch().clone(),
             self.locator(),
             Some(self.inner.parent_context()),
-            missing_block_strategy,
+            if self.inner.parent.lock.is_some() {
+                DirectoryLocking::Enabled
+            } else {
+                DirectoryLocking::Disabled
+            },
+            fallback,
         )
         .await
     }
@@ -205,15 +218,9 @@ impl<'a> DirectoryRef<'a> {
     pub(super) async fn open_snapshot(
         &self,
         tx: &mut db::ReadTransaction,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Content> {
-        Directory::open_snapshot(
-            tx,
-            self.branch().clone(),
-            self.locator(),
-            missing_block_strategy,
-        )
-        .await
+        Directory::open_snapshot(tx, self.branch().clone(), self.locator(), fallback).await
     }
 
     pub fn branch(&self) -> &'a Branch {

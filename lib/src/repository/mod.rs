@@ -23,11 +23,11 @@ use crate::{
     db::{self, DatabaseId},
     debug::DebugPrinter,
     device_id::DeviceId,
-    directory::{Directory, EntryType, MissingBlockStrategy},
+    directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
     error::{Error, Result},
     event::Event,
     file::File,
-    index::{BranchData, Index},
+    index::{BranchData, Index, SnapshotData},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -351,7 +351,7 @@ impl Repository {
             return Err(Error::PermissionDenied);
         }
 
-        let write_key = match secrets.write_key() {
+        let write_secrets = match secrets.write_secrets() {
             Some(write_key) => write_key,
             None => return Err(Error::PermissionDenied),
         };
@@ -371,7 +371,7 @@ impl Repository {
 
         metadata::set_write_key(
             tx,
-            write_key,
+            write_secrets,
             // Option<Cow<SecretKey>> -> Option<&SecretKey>
             local_new_write_key.as_ref().map(|k| k.as_ref()),
         )
@@ -567,7 +567,7 @@ impl Repository {
             }
             JointEntryRef::Directory(entry) => {
                 let mut dir_to_move = entry
-                    .open_with(MissingVersionStrategy::Skip, MissingBlockStrategy::Fail)
+                    .open_with(MissingVersionStrategy::Skip, DirectoryFallback::Disabled)
                     .await?;
                 let dir_to_move = dir_to_move.merge().await?;
 
@@ -624,17 +624,7 @@ impl Repository {
     // Currently test only.
     #[cfg(test)]
     pub(crate) fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        let pin = match self.shared.branch_shared.branch_pinner.pin(id) {
-            Some(pin) => pin,
-            None => {
-                tracing::warn!(?id, "branch is being pruned");
-                return Err(Error::EntryNotFound);
-            }
-        };
-
-        let branch = self.shared.get_branch(id)?.pin(pin);
-
-        Ok(branch)
+        self.shared.get_branch(id)
     }
 
     /// Subscribe to event notifications.
@@ -656,7 +646,7 @@ impl Repository {
     /// Force the background worker to run one job and wait for it to complete, returning its result.
     ///
     /// It's usually not necessary to call this method because the worker runs automatically in the
-    /// background. It might still e.g. be usefull for testing/debugging.
+    /// background. It might still e.g. be useful for testing/debugging.
     pub async fn force_work(&self) -> Result<()> {
         self.worker_handle.work().await
     }
@@ -664,22 +654,47 @@ impl Repository {
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
-        let branches = self.shared.load_pinned_branches().await?;
+        let branches = self.shared.load_branches().await?;
+
+        // If we are writer and the local branch doesn't exist yet in the db we include it anyway.
+        // This fixes a race condition when the local branch doesn't exist yet at the moment we
+        // load the branches but is subsequently created by merging a remote branch and the remote
+        // branch is then pruned.
+        let branches = if local_branch.keys().write().is_some()
+            && branches
+                .iter()
+                .all(|branch| branch.id() != local_branch.id())
+        {
+            let mut branches = branches;
+            branches.push(local_branch.clone());
+            branches
+        } else {
+            branches
+        };
+
         let mut dirs = Vec::new();
 
         for branch in branches {
-            let dir = match branch.open_root(MissingBlockStrategy::Fallback).await {
+            let dir = match branch
+                .open_root(DirectoryLocking::Enabled, DirectoryFallback::Enabled)
+                .await
+            {
                 Ok(dir) => dir,
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
+                Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+                    tracing::warn!(
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory"
+                    );
                     // Some branch roots may not have been loaded across the network yet. We'll
                     // ignore those.
                     continue;
                 }
                 Err(error) => {
                     tracing::error!(
-                        "failed to open root directory in branch {:?}: {:?}",
-                        branch.id(),
-                        error
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory"
                     );
                     return Err(error);
                 }
@@ -778,28 +793,8 @@ impl Shared {
             .collect()
     }
 
-    async fn load_pinned_branches(&self) -> Result<Vec<Branch>> {
-        let branches = self.load_branches().await?;
-        let branches: Vec<_> = branches
-            .into_iter()
-            .filter_map(|branch| {
-                self.branch_shared
-                    .branch_pinner
-                    .pin(*branch.id())
-                    .map(|pin| branch.pin(pin))
-            })
-            .collect();
-
-        // Filter out branches that were pruned in the meantime. This is necessary to prevent race
-        // condition because a branch can be pruned after it's been loaded and before it's been
-        // pinned.
-        let ids = self.store.index.load_branch_ids().await?;
-        let branches = branches
-            .into_iter()
-            .filter(|branch| ids.contains(branch.id()))
-            .collect();
-
-        Ok(branches)
+    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
+        self.store.index.load_snapshots().await
     }
 
     // Create `Branch` wrapping the given `data`.

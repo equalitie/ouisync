@@ -17,7 +17,10 @@ pub(crate) use self::{
 
 use self::content::Content;
 use crate::{
-    blob::{Blob, BlobPin},
+    blob::{
+        lock::{ReadLock, UniqueLock},
+        Blob,
+    },
     branch::Branch,
     crypto::sign::PublicKey,
     db,
@@ -37,7 +40,7 @@ pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
     entries: Content,
-    pin: BlobPin,
+    lock: Option<ReadLock>,
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -46,22 +49,47 @@ impl Directory {
     /// For internal use only. Use [`Branch::open_root`] instead.
     pub(crate) async fn open_root(
         branch: Branch,
-        missing_block_strategy: MissingBlockStrategy,
+        locking: DirectoryLocking,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        Self::open(branch, Locator::ROOT, None, missing_block_strategy).await
+        Self::open(branch, Locator::ROOT, None, locking, fallback).await
     }
 
     /// Opens the root directory or creates it if it doesn't exist.
     /// For internal use only. Use [`Branch::open_or_create_root`] instead.
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
-        // TODO: make sure this is atomic
         let locator = Locator::ROOT;
 
-        match Self::open(branch.clone(), locator, None, MissingBlockStrategy::Fail).await {
-            Ok(dir) => Ok(dir),
-            Err(Error::EntryNotFound) => Ok(Self::create(branch, locator, None)),
-            Err(error) => Err(error),
-        }
+        let lock = branch.locker().read_wait(*locator.blob_id()).await;
+        let mut tx = branch.db().begin_write().await?;
+
+        let dir = match Self::open_in(
+            Some(lock),
+            &mut tx,
+            branch.clone(),
+            locator,
+            None,
+            DirectoryFallback::Disabled,
+        )
+        .await
+        {
+            Ok(dir) => Some(dir),
+            Err(Error::EntryNotFound) => None,
+            Err(error) => return Err(error),
+        };
+
+        let dir = if let Some(dir) = dir {
+            dir
+        } else {
+            let mut dir = Self::create(branch, locator, None);
+            let content = Content::empty();
+            dir.save(&mut tx, &content).await?;
+            dir.commit(tx, content, VersionVectorOp::IncrementLocal)
+                .await?;
+            dir
+        };
+
+        Ok(dir)
     }
 
     /// Reloads this directory from the db.
@@ -71,7 +99,7 @@ impl Directory {
             &mut tx,
             self.branch().clone(),
             *self.locator(),
-            MissingBlockStrategy::Fail,
+            DirectoryFallback::Disabled,
         )
         .await?;
 
@@ -107,16 +135,11 @@ impl Directory {
             .initial_version_vector(&name)
             .incremented(*self.branch().id());
         let data = EntryData::file(blob_id, version_vector);
-        let parent = ParentContext::new(
-            *self.locator().blob_id(),
-            self.pin.clone(),
-            name.clone(),
-            self.parent.clone(),
-        );
+        let parent = self.create_parent_context(name.clone());
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
 
-        content.insert(self.branch(), name, data)?;
+        let _old_lock = content.insert(self.branch(), name, data, None)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
         self.commit(tx, content, VersionVectorOp::IncrementLocal)
@@ -151,7 +174,7 @@ impl Directory {
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
 
-        content.insert(self.branch(), name, data)?;
+        let _old_lock = content.insert(self.branch(), name, data, None)?;
         dir.save(&mut tx, &Content::empty()).await?;
         self.save(&mut tx, &content).await?;
         self.commit(tx, content, op).await?;
@@ -176,7 +199,7 @@ impl Directory {
             };
 
             if let Some(entry) = entry {
-                match entry.open(MissingBlockStrategy::Fail).await {
+                match entry.open(DirectoryFallback::Disabled).await {
                     Ok(mut dir) => {
                         dir.merge_version_vector(merge_vv).await?;
                         return Ok(dir);
@@ -210,7 +233,7 @@ impl Directory {
     fn create_parent_context(&self, entry_name: String) -> ParentContext {
         ParentContext::new(
             *self.locator().blob_id(),
-            self.pin.clone(),
+            self.lock.clone(),
             entry_name,
             self.parent.clone(),
         )
@@ -231,7 +254,7 @@ impl Directory {
     ) -> Result<()> {
         let mut tx = self.branch().db().begin_write().await?;
 
-        let content = match self
+        let (content, _old_lock) = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
             .await
         {
@@ -280,12 +303,12 @@ impl Directory {
 
         let mut tx = self.branch().db().begin_write().await?;
 
-        let dst_content = dst_dir
+        let (dst_content, _old_dst_lock) = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
             .await?;
 
         let branch_id = *self.branch().id();
-        let src_content = self
+        let (src_content, _old_src_lock) = self
             .begin_remove_entry(
                 &mut tx,
                 src_name,
@@ -350,20 +373,20 @@ impl Directory {
     }
 
     async fn open_in(
-        pin: BlobPin,
+        lock: Option<ReadLock>,
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        let (blob, entries) = load(tx, branch, locator, fallback).await?;
 
         Ok(Self {
             blob,
             parent,
             entries,
-            pin,
+            lock,
         })
     }
 
@@ -371,9 +394,9 @@ impl Directory {
         tx: &mut db::ReadTransaction,
         branch: Branch,
         locator: Locator,
-        missing_block_strategy: MissingBlockStrategy,
+        fallback: DirectoryFallback,
     ) -> Result<Content> {
-        let (_, entries) = load(tx, branch, locator, missing_block_strategy).await?;
+        let (_, entries) = load(tx, branch, locator, fallback).await?;
         Ok(entries)
     }
 
@@ -381,30 +404,43 @@ impl Directory {
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
-        missing_block_strategy: MissingBlockStrategy,
+        locking: DirectoryLocking,
+        fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let lock = match locking {
+            DirectoryLocking::Enabled => Some(
+                branch
+                    .locker()
+                    .read(*locator.blob_id())
+                    .ok_or(Error::EntryNotFound)
+                    .map_err(|error| {
+                        tracing::debug!(
+                            branch_id = ?branch.id(),
+                            blob_id = ?locator.blob_id(),
+                            "failed to acquire read lock"
+                        );
+                        error
+                    })?,
+            ),
+            DirectoryLocking::Disabled => None,
+        };
+
         let mut tx = branch.db().begin_read().await?;
-        Self::open_in(
-            pin,
-            &mut tx,
-            branch,
-            locator,
-            parent,
-            missing_block_strategy,
-        )
-        .await
+        Self::open_in(lock, &mut tx, branch, locator, parent, fallback).await
     }
 
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
-        let pin = branch.pin_blob_for_collect(*locator.blob_id());
+        let lock = branch
+            .locker()
+            .read(*locator.blob_id())
+            .expect("blob_id collision");
         let blob = Blob::create(branch, locator);
 
         Directory {
             blob,
             parent,
             entries: Content::empty(),
-            pin,
+            lock: Some(lock),
         }
     }
 
@@ -417,13 +453,7 @@ impl Directory {
                 EntryData::File(file_data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(
-                        *self.locator().blob_id(),
-                        self.pin.clone(),
-                        name.into(),
-                        self.parent.clone(),
-                    );
-
+                    let parent_context = self.create_parent_context(name.into());
                     let file = File::open(
                         self.blob.branch().clone(),
                         Locator::head(file_data.blob_id),
@@ -458,18 +488,13 @@ impl Directory {
                 EntryData::Directory(data) => {
                     let print = print.indent();
 
-                    let parent_context = ParentContext::new(
-                        *self.locator().blob_id(),
-                        self.pin.clone(),
-                        name.into(),
-                        self.parent.clone(),
-                    );
-
+                    let parent_context = self.create_parent_context(name.into());
                     let dir = Directory::open(
                         self.blob.branch().clone(),
                         Locator::head(data.blob_id),
                         Some(parent_context),
-                        MissingBlockStrategy::Fail,
+                        DirectoryLocking::Disabled,
+                        DirectoryFallback::Disabled,
                     )
                     .await;
 
@@ -517,14 +542,14 @@ impl Directory {
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
-    ) -> Result<Content> {
+    ) -> Result<(Content, Option<UniqueLock>)> {
         // If we are removing a directory, ensure it's empty (recursive removal can still be
         // implemented at the upper layers).
         if matches!(tombstone.cause, TombstoneCause::Removed) {
             match self.lookup(name) {
                 Ok(EntryRef::Directory(entry)) => {
                     if entry
-                        .open_snapshot(tx, MissingBlockStrategy::Fail)
+                        .open_snapshot(tx, DirectoryFallback::Disabled)
                         .await?
                         .iter()
                         .any(|(_, data)| !matches!(data, EntryData::Tombstone(_)))
@@ -567,13 +592,13 @@ impl Directory {
         tx: &mut db::WriteTransaction,
         name: String,
         data: EntryData,
-    ) -> Result<Content> {
+    ) -> Result<(Content, Option<UniqueLock>)> {
         let mut content = self.load(tx).await?;
-        content.insert(self.branch(), name, data)?;
+        let old_lock = content.insert(self.branch(), name, data, None)?;
         self.save(tx, &content).await?;
         self.bump(tx, VersionVectorOp::IncrementLocal).await?;
 
-        Ok(content)
+        Ok((content, old_lock))
     }
 
     async fn load(&mut self, tx: &mut db::ReadTransaction) -> Result<Content> {
@@ -584,7 +609,7 @@ impl Directory {
                 tx,
                 self.branch().clone(),
                 *self.locator(),
-                MissingBlockStrategy::Fail,
+                DirectoryFallback::Disabled,
             )
             .await?;
             self.blob = blob;
@@ -665,13 +690,18 @@ impl fmt::Debug for Directory {
     }
 }
 
-/// What to do when opening a directory with a missing block.
+/// Enable/disable fallback to previous snapshots in case of missing blocks.
 #[derive(Clone, Copy)]
-pub enum MissingBlockStrategy {
-    /// Attempt to fallback to the previous snapshot
-    Fallback,
-    /// Fail the whole open operation
-    Fail,
+pub(crate) enum DirectoryFallback {
+    Enabled,
+    Disabled,
+}
+
+/// Enable/disable acquiring read lock before creating/opening the directory.
+#[derive(Clone, Copy)]
+pub(crate) enum DirectoryLocking {
+    Enabled,
+    Disabled,
 }
 
 // Load directory content. On missing block, fallback to previous snapshot (if any).
@@ -679,7 +709,7 @@ async fn load(
     tx: &mut db::ReadTransaction,
     branch: Branch,
     locator: Locator,
-    missing_block_strategy: MissingBlockStrategy,
+    fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
     let mut snapshot = branch.data().load_snapshot(tx).await?;
 
@@ -690,9 +720,9 @@ async fn load(
             Err(error) => return Err(error),
         };
 
-        match missing_block_strategy {
-            MissingBlockStrategy::Fallback => (),
-            MissingBlockStrategy::Fail => return Err(error),
+        match fallback {
+            DirectoryFallback::Enabled => (),
+            DirectoryFallback::Disabled => return Err(error),
         }
 
         if let Some(prev_snapshot) = snapshot.load_prev(tx).await? {

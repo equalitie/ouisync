@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, state_monitor::StateMonitor,
-    WriteSecrets,
+    test_utils, WriteSecrets,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
@@ -11,7 +11,7 @@ use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_directory_always_exists() {
-    init_log();
+    test_utils::init_log();
 
     let (_base_dir, repo) = setup().await;
     let _ = repo.open_directory("/").await.unwrap();
@@ -19,7 +19,7 @@ async fn root_directory_always_exists() {
 
 // Count leaf nodes in the index of the local branch.
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
-    init_log();
+    test_utils::init_log();
 
     let store = repo.store();
     let branch = repo.local_branch().unwrap();
@@ -29,7 +29,7 @@ async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn count_leaf_nodes_sanity_checks() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let file_name = "test.txt";
@@ -70,7 +70,7 @@ async fn count_leaf_nodes_sanity_checks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn merge() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create remote branch and create a file in it.
@@ -100,7 +100,7 @@ async fn merge() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create file
@@ -130,7 +130,7 @@ async fn recreate_previously_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recreate_previously_deleted_directory() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     // Create dir
@@ -153,7 +153,7 @@ async fn recreate_previously_deleted_directory() {
 // This one used to deadlock
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_read_and_create_dir() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let path = "/dir";
@@ -197,7 +197,7 @@ async fn concurrent_read_and_create_dir() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_write_and_read_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let repo = Arc::new(repo);
 
@@ -253,7 +253,7 @@ async fn concurrent_write_and_read_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_to_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
@@ -276,7 +276,7 @@ async fn append_to_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_non_empty_repo() {
-    init_log();
+    test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
@@ -350,7 +350,7 @@ async fn blind_access_non_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blind_access_empty_repo() {
-    init_log();
+    test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
@@ -388,7 +388,7 @@ async fn blind_access_empty_repo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_same_replica() {
-    init_log();
+    test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
@@ -453,7 +453,7 @@ async fn read_access_same_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_access_different_replica() {
-    init_log();
+    test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
@@ -494,10 +494,13 @@ async fn read_access_different_replica() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_forked_remote_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
-    create_remote_file(&repo, PublicKey::random(), "test.txt", b"foo").await;
+    let remote_id = PublicKey::random();
+    tracing::info!(local_id = ?repo.local_branch().unwrap().id(), ?remote_id);
+
+    create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
 
     let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
@@ -507,16 +510,15 @@ async fn truncate_forked_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn attempt_to_modify_remote_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let remote_id = PublicKey::random();
+    let remote_branch = repo.get_branch(remote_id).unwrap();
 
     create_remote_file(&repo, remote_id, "test.txt", b"foo").await;
 
-    let remote_branch = repo.get_branch(remote_id).unwrap();
-
     let mut file = remote_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("test.txt")
@@ -536,7 +538,7 @@ async fn attempt_to_modify_remote_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_create_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let local_branch = repo.local_branch().unwrap();
 
@@ -584,7 +586,7 @@ async fn version_vector_create_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_deep_hierarchy() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
     let local_branch = repo.local_branch().unwrap();
     let local_id = *local_branch.id();
@@ -614,7 +616,7 @@ async fn version_vector_deep_hierarchy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_recreate_deleted_file() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_id = *repo.local_branch().unwrap().id();
@@ -636,15 +638,16 @@ async fn version_vector_fork() {
     // TODO: this test would be more precise without merger. Consider converting it to a
     // joint_directory test.
 
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
-
     let remote_branch = repo
         .get_branch(PublicKey::random())
         .unwrap()
         .reopen(repo.secrets().keys().unwrap());
+
+    tracing::info!(local_id = ?local_branch.id(), remote_id = ?remote_branch.id());
 
     let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
     let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
@@ -660,7 +663,7 @@ async fn version_vector_fork() {
     assert_eq!(local_file_vv_0, remote_file_vv);
 
     let local_parent_vv_0 = local_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("parent")
@@ -695,7 +698,7 @@ async fn version_vector_fork() {
     assert!(local_file_vv_1 > local_file_vv_0);
 
     let local_parent_vv_1 = local_branch
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("parent")
@@ -709,7 +712,7 @@ async fn version_vector_fork() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_empty_directory() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -721,7 +724,7 @@ async fn version_vector_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_moved_non_empty_directory() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     repo.create_directory("foo").await.unwrap();
@@ -730,7 +733,7 @@ async fn version_vector_moved_non_empty_directory() {
     let vv_0 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("foo")
@@ -743,7 +746,7 @@ async fn version_vector_moved_non_empty_directory() {
     let vv_1 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("bar")
@@ -756,7 +759,7 @@ async fn version_vector_moved_non_empty_directory() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_file_moved_over_tombstone() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("old.txt").await.unwrap();
@@ -780,7 +783,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let vv_2 = repo
         .local_branch()
         .unwrap()
-        .open_root(MissingBlockStrategy::Fail)
+        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await
         .unwrap()
         .lookup("old.txt")
@@ -793,7 +796,7 @@ async fn version_vector_file_moved_over_tombstone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_modify_local() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -847,7 +850,7 @@ async fn file_conflict_modify_local() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn file_conflict_attempt_to_fork_and_modify_remote() {
-    init_log();
+    test_utils::init_log();
     let (_base_dir, repo) = setup().await;
 
     let local_branch = repo.local_branch().unwrap();
@@ -926,20 +929,4 @@ fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
     rand::thread_rng().fill(&mut buffer[..]);
     buffer
-}
-
-#[allow(unused)]
-fn init_log() {
-    use tracing::metadata::LevelFilter;
-
-    tracing_subscriber::fmt()
-        .pretty()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::OFF.into())
-                .from_env_lossy(),
-        )
-        .with_test_writer()
-        .try_init()
-        .ok();
 }
