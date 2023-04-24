@@ -121,7 +121,14 @@ impl Index {
 
         if action.insert {
             let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
-            tracing::debug!(vv = ?node.proof.version_vector, ?node.proof.hash, "snapshot started");
+
+            tracing::debug!(
+                vv = ?node.proof.version_vector,
+                hash = ?node.proof.hash,
+                branch_id = ?node.proof.writer_id,
+                "snapshot started"
+            );
+
             self.update_summaries(tx, node.proof.hash).await?;
         }
 

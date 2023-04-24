@@ -426,12 +426,13 @@ mod scan {
         block::{self, BlockId},
         crypto::sign::Keypair,
         db,
-        index::{self, LeafNode, SnapshotData},
+        index::{self, BranchData, LeafNode, SnapshotData},
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
+    use tokio::task;
     use tracing::Instrument;
 
     #[derive(Copy, Clone, Debug)]
@@ -684,12 +685,20 @@ mod scan {
 
             remove_blocks(&mut tx, &batch).await?;
 
-            tx.commit().await?;
-
-            // If we modified the local branch (by removing nodes from it), we need to notify, to
-            // let other replicas know about the change.
-            if let Some((local_branch, _)) = &local_branch_and_write_keys {
-                local_branch.data().notify();
+            if let Some((branch, _)) = local_branch_and_write_keys {
+                // If we modified the local branch (by removing nodes from it), we need to notify,
+                // to let other replicas know about the change.
+                //
+                // NOTE: We do it in a spawned task to make sure `commit` is not cancelled. This is
+                // because we need to send the notification ALWAYS AFTER the commit completes but
+                // commit can sometimes complete even when cancelled.
+                let branch = branch.data().clone();
+                task::spawn(async move { tx.commit().await.map(|()| branch.notify()) })
+                    .await
+                    .unwrap()?;
+            } else {
+                // If there is nothing to notify then we don't care about cancellation.
+                tx.commit().await?;
             }
         }
 
@@ -743,5 +752,13 @@ mod scan {
         }
 
         Ok(())
+    }
+
+    struct NotifyGuard<'a>(&'a BranchData);
+
+    impl Drop for NotifyGuard<'_> {
+        fn drop(&mut self) {
+            self.0.notify();
+        }
     }
 }

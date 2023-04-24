@@ -270,6 +270,11 @@ impl_executor_by_deref!(ReadTransaction);
 pub(crate) struct WriteTransaction(ReadTransaction);
 
 impl WriteTransaction {
+    /// # Cancel safety
+    ///
+    /// If the future returned by this function is cancelled before completion, there is
+    /// NO GUARANTEE that the COMMIT command is NOT executed. That is, the COMMIT might get
+    /// executed regardless of whether the future completes or not.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.inner.commit().await
     }
