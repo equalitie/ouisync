@@ -165,7 +165,7 @@ echo "Stopping all tests"
 # HACK: This should be called by trap but sometimes for some reason isn't...
 cleanup
 
-if [ -n "$log_open" -a -n "$EDITOR" ]; then
+if [ -n "$log_open" -a -n "${EDITOR-}" ]; then
     $EDITOR $new_log_name
 fi
 

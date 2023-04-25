@@ -160,7 +160,7 @@ async fn expect_peer_state<F>(network: &Network, peer_name: &str, expected_state
 where
     F: Fn(&PeerState) -> bool,
 {
-    time::timeout(TEST_TIMEOUT, async move {
+    time::timeout(*TEST_TIMEOUT, async move {
         let mut rx = network.on_peer_set_change();
         let peer_addr = actor::lookup_addr(peer_name).await;
 
@@ -179,7 +179,7 @@ where
 }
 
 async fn expect_knows_port(network: &Network, peer_port: u16) {
-    time::timeout(TEST_TIMEOUT, async move {
+    time::timeout(*TEST_TIMEOUT, async move {
         let mut rx = network.on_peer_set_change();
 
         loop {

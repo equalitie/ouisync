@@ -1,6 +1,7 @@
 mod wait_map;
 
 use camino::Utf8Path;
+use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
     network::{Network, Registration},
@@ -26,11 +27,18 @@ use tracing::{instrument, Instrument, Span};
 pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 
-// Timeout for running a whole test case
-pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
+// (in seconds).
+pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
+    Duration::from_secs(
+        std::env::var("TEST_EVENT_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60),
+    )
+});
 
-// Timeout for waiting for an event
-pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -340,7 +348,7 @@ where
 {
     let mut rx = repo.subscribe();
 
-    time::timeout(TEST_TIMEOUT, async {
+    time::timeout(*TEST_TIMEOUT, async {
         loop {
             if f().await {
                 break;
@@ -355,7 +363,7 @@ where
 
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
-        match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
+        match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
             Ok(Ok(Event {
                 payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
                 ..
