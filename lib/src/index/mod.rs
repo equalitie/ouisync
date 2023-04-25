@@ -373,17 +373,16 @@ async fn decide_root_node_action(
             Some(Ordering::Equal) => {
                 // The incoming node has the same version vector as one of the existing nodes.
                 // If the hashes are also equal, there is no point inserting it but if the incoming
-                // summary is more up-to-date than the exising one, we still want to potentially
+                // summary is potentially more up-to-date than the exising one, we still want to
                 // request the children. Otherwise we discard it.
-
                 if new_proof.hash == old_node.proof.hash {
                     action.insert = false;
-                }
 
-                // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
-                // with `new_summary.is_outdated(&old_node.summary)`.
-                if !old_node.summary.is_outdated(new_summary) {
-                    action.request_children = false;
+                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
+                    // with `new_summary.is_outdated(&old_node.summary)`.
+                    if !old_node.summary.is_outdated(new_summary) {
+                        action.request_children = false;
+                    }
                 }
             }
             Some(Ordering::Greater) => (),

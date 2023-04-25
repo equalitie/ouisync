@@ -409,20 +409,7 @@ impl Directory {
         fallback: DirectoryFallback,
     ) -> Result<Self> {
         let lock = match locking {
-            DirectoryLocking::Enabled => Some(
-                branch
-                    .locker()
-                    .read(*locator.blob_id())
-                    .ok_or(Error::EntryNotFound)
-                    .map_err(|error| {
-                        tracing::debug!(
-                            branch_id = ?branch.id(),
-                            blob_id = ?locator.blob_id(),
-                            "failed to acquire read lock"
-                        );
-                        error
-                    })?,
-            ),
+            DirectoryLocking::Enabled => Some(branch.locker().read_wait(*locator.blob_id()).await),
             DirectoryLocking::Disabled => None,
         };
 

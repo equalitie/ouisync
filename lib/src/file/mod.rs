@@ -35,7 +35,7 @@ impl File {
             .read(*locator.blob_id())
             .ok_or(Error::EntryNotFound)
             .map_err(|error| {
-                tracing::debug!(
+                tracing::warn!(
                     branch_id = ?branch.id(),
                     blob_id = ?locator.blob_id(),
                     "failed to acquire read lock"
