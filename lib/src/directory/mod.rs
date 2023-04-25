@@ -637,6 +637,10 @@ impl Directory {
         op: VersionVectorOp<'_>,
     ) -> Result<()> {
         self.bump(&mut tx, op).await?;
+
+        // FIXME: If this function gets cancelled the transaction might still get committed but
+        // `finalize` won't be called. This may or might not be a problem is practice. We can't use
+        // `commit_and_then` here because the closure needs to be `'static`.
         tx.commit().await?;
         self.finalize(content);
 

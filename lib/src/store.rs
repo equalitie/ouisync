@@ -12,7 +12,6 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
-use tokio::task;
 
 #[derive(Clone)]
 pub struct Store {
@@ -93,19 +92,9 @@ impl Store {
 
         let data_id = data.id;
         let index = self.index.clone();
+        let block_tracker = self.block_tracker.clone();
 
-        // HACK: This function may run in a future that can get destroyed. If that happens during
-        // the commit phase, the committed data may or may not be written into the database. If
-        // they are, we _must_ notify the index about the fact. Therefore we do the commit in a
-        // separately spawned task so that it can still finish and we do the notification.
-        //
-        // Note that it would not be enough to execute the notification in some kind of local
-        // destructor and without spawning the task. It is because we can only do the notification
-        // _after the commit finishes_ which is not guaranteed to be the case if the local
-        // destructor is executed while the commit is still being awaited.
-        let handle: task::JoinHandle<Result<()>> = task::spawn(async move {
-            tx.commit().await?;
-
+        tx.commit_and_then(move || {
             // Notify affected branches.
             for writer_id in writer_ids {
                 index.notify(Event::new(Payload::BlockReceived {
@@ -114,13 +103,9 @@ impl Store {
                 }));
             }
 
-            Ok(())
-        });
-
-        // Unwrap is OK because nothing is `abort`ing the task.
-        handle.await.unwrap()?;
-
-        self.block_tracker.complete(&data.id);
+            block_tracker.complete(&data_id);
+        })
+        .await?;
 
         Ok(())
     }

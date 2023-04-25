@@ -432,7 +432,6 @@ mod scan {
     use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
-    use tokio::task;
     use tracing::Instrument;
 
     #[derive(Copy, Clone, Debug)]
@@ -687,17 +686,13 @@ mod scan {
 
             if let Some((branch, _)) = local_branch_and_write_keys {
                 // If we modified the local branch (by removing nodes from it), we need to notify,
-                // to let other replicas know about the change.
-                //
-                // NOTE: We do it in a spawned task to make sure `commit` is not cancelled. This is
-                // because we need to send the notification ALWAYS AFTER the commit completes but
-                // commit can sometimes complete even when cancelled.
+                // to let other replicas know about the change. Using `commit_and_then` to handle
+                // possible cancellation.
                 let branch = branch.data().clone();
-                task::spawn(async move { tx.commit().await.map(|()| branch.notify()) })
-                    .await
-                    .unwrap()?;
+                tx.commit_and_then(move || branch.notify()).await?
             } else {
-                // If there is nothing to notify then we don't care about cancellation.
+                // Using regular `commit` here because if there is nothing to notify then we don't
+                // care about cancellation.
                 tx.commit().await?;
             }
         }
