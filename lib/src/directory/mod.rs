@@ -83,10 +83,9 @@ impl Directory {
             dir
         } else {
             let mut dir = Self::create(branch, locator, None);
-            let content = Content::empty();
-            dir.save(&mut tx, &content).await?;
-            dir.commit(tx, content, VersionVectorOp::IncrementLocal)
-                .await?;
+            dir.save(&mut tx, &Content::empty()).await?;
+            dir.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
+            dir.commit(tx).await?;
             dir
         };
 
@@ -143,8 +142,9 @@ impl Directory {
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
-        self.commit(tx, content, VersionVectorOp::IncrementLocal)
-            .await?;
+        self.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
+        self.commit(tx).await?;
+        self.finalize(content);
 
         Ok(file)
     }
@@ -178,7 +178,9 @@ impl Directory {
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         dir.save(&mut tx, &Content::empty()).await?;
         self.save(&mut tx, &content).await?;
-        self.commit(tx, content, op).await?;
+        self.bump(&mut tx, op).await?;
+        self.commit(tx).await?;
+        self.finalize(content);
 
         Ok(dir)
     }
@@ -266,7 +268,7 @@ impl Directory {
             Err(error) => return Err(error),
         };
 
-        tx.commit().await?;
+        self.commit(tx).await?;
         self.finalize(content);
 
         Ok(())
@@ -318,8 +320,7 @@ impl Directory {
             )
             .await?;
 
-        tx.commit().await?;
-
+        self.commit(tx).await?;
         self.finalize(src_content);
         dst_dir.finalize(dst_content);
 
@@ -360,9 +361,9 @@ impl Directory {
     /// Updates the version vector of this directory by merging it with `vv`.
     #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
-        let tx = self.branch().db().begin_write().await?;
-        self.commit(tx, Content::empty(), VersionVectorOp::Merge(vv))
-            .await
+        let mut tx = self.branch().db().begin_write().await?;
+        self.bump(&mut tx, VersionVectorOp::Merge(vv)).await?;
+        self.commit(tx).await
     }
 
     pub async fn parent(&self) -> Result<Option<Directory>> {
@@ -628,22 +629,10 @@ impl Directory {
         Ok(())
     }
 
-    /// Atomically commits any pending changes in this directory and updates the version vectors of
-    /// it and all its ancestors.
-    async fn commit(
-        &mut self,
-        mut tx: db::WriteTransaction,
-        content: Content,
-        op: VersionVectorOp<'_>,
-    ) -> Result<()> {
-        self.bump(&mut tx, op).await?;
-
-        // FIXME: If this function gets cancelled the transaction might still get committed but
-        // `finalize` won't be called. This may or might not be a problem is practice. We can't use
-        // `commit_and_then` here because the closure needs to be `'static`.
-        tx.commit().await?;
-        self.finalize(content);
-
+    /// Atomically commits the transaction and sends notification event.
+    async fn commit(&mut self, tx: db::WriteTransaction) -> Result<()> {
+        let branch = self.branch().data().clone();
+        tx.commit_and_then(move || branch.notify()).await?;
         Ok(())
     }
 
@@ -668,13 +657,9 @@ impl Directory {
         }
     }
 
-    /// Finalize pending modifications. Call this only after the db transaction is committed.
+    /// Finalize pending modifications. Call this only after the db transaction has been committed.
     fn finalize(&mut self, content: Content) {
-        if !content.is_empty() {
-            self.entries = content;
-        }
-
-        self.branch().data().notify();
+        self.entries = content;
     }
 }
 

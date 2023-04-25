@@ -53,10 +53,6 @@ impl Content {
         output
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn iter(&self) -> btree_map::Iter<String, EntryData> {
         self.entries.iter()
     }

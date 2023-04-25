@@ -174,8 +174,10 @@ impl ParentContext {
             Ok(_lock) => {
                 directory.save(&mut tx, &content).await?;
                 directory
-                    .commit(tx, content, VersionVectorOp::Merge(&src_vv))
+                    .bump(&mut tx, VersionVectorOp::Merge(&src_vv))
                     .await?;
+                directory.commit(tx).await?;
+                directory.finalize(content);
                 tracing::trace!("fork complete");
                 Ok(new_context)
             }
