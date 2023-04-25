@@ -125,7 +125,6 @@ impl Directory {
     }
 
     /// Creates a new file inside this directory.
-    #[instrument(skip(self))]
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let mut tx = self.branch().db().begin_write().await?;
         let mut content = self.load(&mut tx).await?;

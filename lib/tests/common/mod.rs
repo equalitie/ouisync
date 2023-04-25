@@ -11,6 +11,7 @@ use ouisync::{
 use rand::Rng;
 use std::{
     cell::Cell,
+    fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -531,6 +532,48 @@ pub(crate) fn random_content(size: usize) -> Vec<u8> {
 
 fn to_megabytes(bytes: usize) -> usize {
     bytes / 1024 / 1024
+}
+
+/// Helper to assert two byte slices are equal which prints useful info if they are not.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+#[track_caller]
+pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
+    let Some(snip_start) = lhs.iter().zip(rhs).position(|(lhs, rhs)| lhs != rhs) else {
+        return;
+    };
+
+    let snip_len = 32;
+    let snip_end = snip_start + snip_len;
+
+    let lhs_snip = &lhs[snip_start..snip_end.min(lhs.len())];
+    let rhs_snip = &rhs[snip_start..snip_end.min(rhs.len())];
+
+    let ellipsis_start = if snip_start > 0 { "…" } else { "" };
+    let lhs_ellipsis_end = if snip_end < lhs.len() { "…" } else { "" };
+    let rhs_ellipsis_end = if snip_end < rhs.len() { "…" } else { "" };
+
+    panic!(
+        "content not equal (differing offset: {})\n    lhs: {}{:x}{}\n    rhs: {}{:x}{}",
+        snip_start,
+        ellipsis_start,
+        HexFmt(lhs_snip),
+        lhs_ellipsis_end,
+        ellipsis_start,
+        HexFmt(rhs_snip),
+        rhs_ellipsis_end,
+    );
+
+    struct HexFmt<'a>(&'a [u8]);
+
+    impl fmt::LowerHex for HexFmt<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for byte in self.0 {
+                write!(f, "{:02x}", byte)?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 pub(crate) fn init_log() {
