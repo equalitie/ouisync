@@ -75,14 +75,10 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
-        contacts_store: Option<impl DhtContactsStoreTrait>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
         monitor: StateMonitor,
     ) -> Self {
-        let contacts_store: Option<Arc<dyn DhtContactsStoreTrait>> =
-            contacts_store.map(|cs| Arc::new(cs) as _);
-
         let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts_store.clone()));
-
         let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, contacts_store));
 
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));

@@ -19,12 +19,17 @@ use tracing::instrument;
 #[derive(Clone)]
 pub struct ConfigStore {
     dir: Arc<Path>,
+    dht_contacts_store: Arc<dht_contacts::Store>,
 }
 
 impl ConfigStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into().into_boxed_path().into();
+        let dht_contacts_store = Arc::new(dht_contacts::Store::new(&dir));
+
         Self {
-            dir: dir.into().into_boxed_path().into(),
+            dir,
+            dht_contacts_store,
         }
     }
 
@@ -36,8 +41,8 @@ impl ConfigStore {
         }
     }
 
-    pub fn dht_contacts_store(&self) -> dht_contacts::Store {
-        dht_contacts::Store::new(&self.dir)
+    pub fn dht_contacts_store(&self) -> Arc<dht_contacts::Store> {
+        self.dht_contacts_store.clone()
     }
 }
 
