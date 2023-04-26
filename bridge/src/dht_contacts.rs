@@ -84,8 +84,8 @@ impl DhtContactsStoreTrait for Store {
             .await?;
 
         for contact in contacts {
-            file.write(contact.to_string().as_bytes()).await?;
-            file.write(b"\n").await?;
+            file.write_all(contact.to_string().as_bytes()).await?;
+            file.write_all(b"\n").await?;
         }
 
         Ok(())
@@ -99,10 +99,9 @@ impl DhtContactsStoreTrait for Store {
             .open(&self.path_v6)
             .await?;
 
-        println!("Storing {contacts:?}");
         for contact in contacts {
-            file.write(contact.to_string().as_bytes()).await?;
-            file.write(b"\n").await?;
+            file.write_all(contact.to_string().as_bytes()).await?;
+            file.write_all(b"\n").await?;
         }
 
         Ok(())
