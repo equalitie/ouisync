@@ -30,18 +30,15 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let lock = branch
-            .locker()
-            .read(*locator.blob_id())
-            .ok_or(Error::EntryNotFound)
-            .map_err(|error| {
-                tracing::warn!(
-                    branch_id = ?branch.id(),
-                    blob_id = ?locator.blob_id(),
-                    "failed to acquire read lock"
-                );
-                error
-            })?;
+        let lock = branch.locker().try_read(*locator.blob_id()).map_err(|_| {
+            tracing::warn!(
+                branch_id = ?branch.id(),
+                blob_id = ?locator.blob_id(),
+                "failed to acquire read lock"
+            );
+
+            Error::EntryNotFound
+        })?;
         let lock = UpgradableLock::Read(lock);
 
         let mut tx = branch.db().begin_read().await?;
@@ -61,7 +58,8 @@ impl File {
         // as well panic.
         let lock = branch
             .locker()
-            .read(*locator.blob_id())
+            .try_read(*locator.blob_id())
+            .ok()
             .expect("blob_id collision");
         let lock = UpgradableLock::Read(lock);
 
@@ -192,7 +190,7 @@ impl File {
 
         let lock = dst_branch
             .locker()
-            .read_wait(*self.blob.locator().blob_id())
+            .read(*self.blob.locator().blob_id())
             .await;
         let lock = UpgradableLock::Read(lock);
 

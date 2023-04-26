@@ -84,9 +84,12 @@ impl Content {
                         assert_eq!(lock.branch_id(), branch.id());
                         Some(lock)
                     }
-                    (Some(old_id), None) => {
-                        Some(branch.locker().unique(old_id).ok_or(InsertError::Locked)?)
-                    }
+                    (Some(old_id), None) => Some(
+                        branch
+                            .locker()
+                            .try_unique(old_id)
+                            .map_err(|_| InsertError::Locked)?,
+                    ),
                     (None, None) => None,
                     (None, Some(_)) => panic!("unexpected lock for non-existing entry"),
                 };

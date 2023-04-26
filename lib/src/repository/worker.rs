@@ -323,7 +323,7 @@ mod merge {
         // which does not reference all blocks of B. If we forked the remote branch then
         // some blocks of B would become unreachable because there would be no more
         // branches referencing them.
-        let Some(_lock) = local_branch.locker().unique(BlobId::ROOT) else {
+        let Ok(_lock) = local_branch.locker().try_unique(BlobId::ROOT) else {
             tracing::trace!("failed to acquire unique lock");
             return Ok(false);
         };
@@ -387,11 +387,11 @@ mod prune {
             // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.
-            let Some(_lock) = shared
+            let Ok(_lock) = shared
                 .branch_shared
                 .locker
                 .branch(*snapshot.branch_id())
-                .unique(BlobId::ROOT)
+                .try_unique(BlobId::ROOT)
             else {
                 tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;

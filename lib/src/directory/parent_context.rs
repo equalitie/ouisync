@@ -1,6 +1,9 @@
 use super::{content::InsertError, DirectoryFallback, Error};
 use crate::{
-    blob::{self, lock::ReadLock},
+    blob::{
+        self,
+        lock::{LockKind, ReadLock},
+    },
     blob_id::BlobId,
     branch::Branch,
     db,
@@ -107,17 +110,24 @@ impl ParentContext {
         // Acquire unique lock for the destination blob. This prevents us from overwriting it in
         // case it's currently being accessed and it also coordinates multiple concurrent fork of
         // the same blob.
-        let new_lock = dst_branch
-            .locker()
-            .unique_wait(new_blob_id)
-            .await
-            .ok_or(Error::Locked);
+        let new_lock = loop {
+            match dst_branch.locker().try_unique(new_blob_id) {
+                Ok(lock) => break Ok(lock),
+                Err((notify, LockKind::Unique)) => notify.unlocked().await,
+                Err((_, LockKind::Read | LockKind::Write)) => break Err(Error::Locked),
+            }
+        };
 
         // If the destination blob already exists and is different from the one we are about to
         // create, acquire a unique lock for it as well.
         let old_lock = old_blob_id
             .filter(|old_blob_id| old_blob_id != &new_blob_id)
-            .map(|old_blob_id| dst_branch.locker().unique(old_blob_id).ok_or(Error::Locked))
+            .map(|old_blob_id| {
+                dst_branch
+                    .locker()
+                    .try_unique(old_blob_id)
+                    .map_err(|_| Error::Locked)
+            })
             .transpose()?;
 
         // We need to reload the directory and check again. This prevents race condition where the

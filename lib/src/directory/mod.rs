@@ -61,7 +61,7 @@ impl Directory {
     pub(crate) async fn open_or_create_root(branch: Branch) -> Result<Self> {
         let locator = Locator::ROOT;
 
-        let lock = branch.locker().read_wait(*locator.blob_id()).await;
+        let lock = branch.locker().read(*locator.blob_id()).await;
         let mut tx = branch.db().begin_write().await?;
 
         let dir = match Self::open_in(
@@ -409,7 +409,7 @@ impl Directory {
         fallback: DirectoryFallback,
     ) -> Result<Self> {
         let lock = match locking {
-            DirectoryLocking::Enabled => Some(branch.locker().read_wait(*locator.blob_id()).await),
+            DirectoryLocking::Enabled => Some(branch.locker().read(*locator.blob_id()).await),
             DirectoryLocking::Disabled => None,
         };
 
@@ -420,7 +420,8 @@ impl Directory {
     fn create(branch: Branch, locator: Locator, parent: Option<ParentContext>) -> Self {
         let lock = branch
             .locker()
-            .read(*locator.blob_id())
+            .try_read(*locator.blob_id())
+            .ok()
             .expect("blob_id collision");
         let blob = Blob::create(branch, locator);
 

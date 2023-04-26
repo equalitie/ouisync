@@ -17,13 +17,6 @@ pub(crate) struct Locker {
 
 type Shared = BlockingMutex<HashMap<PublicKey, HashMap<BlobId, State>>>;
 
-#[derive(Clone)]
-enum State {
-    Read(usize),
-    Write(usize),
-    Unique(Arc<Notify>),
-}
-
 impl Locker {
     pub fn new() -> Self {
         Self::default()
@@ -56,30 +49,19 @@ pub(crate) struct BranchLocker {
 
 impl BranchLocker {
     /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
-    /// given blob.
-    pub fn read(&self, blob_id: BlobId) -> Option<ReadLock> {
-        self.try_read(blob_id).ok()
-    }
-
-    pub async fn read_wait(&self, blob_id: BlobId) -> ReadLock {
-        loop {
-            match self.try_read(blob_id) {
-                Ok(lock) => return lock,
-                Err(notify) => notify.notified().await,
-            }
-        }
-    }
-
-    fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, Arc<Notify>> {
+    /// given blob. The error contains an unlock notifier so the caller can decide whether to wait
+    /// for the lock to be released or fail immediately.
+    pub fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, UnlockNotify> {
         let mut shared = self.shared.lock().unwrap();
 
-        match shared
+        let state = shared
             .entry(self.branch_id)
             .or_default()
             .entry(blob_id)
-            .or_insert(State::Read(0))
-        {
-            State::Read(count) | State::Write(count) => {
+            .or_insert(State::new(Kind::Read(0)));
+
+        match &mut state.kind {
+            Kind::Read(count) | Kind::Write(count) => {
                 *count = count.checked_add(1).expect("lock limit reached");
 
                 Ok(ReadLock {
@@ -88,34 +70,30 @@ impl BranchLocker {
                     blob_id,
                 })
             }
-            State::Unique(notify) => Err(notify.clone()),
+            Kind::Unique => Err(state.notify.subscribe()),
         }
     }
 
-    /// Try to acquire a unique lock. Fails if any kind of lock is currently held for the given
-    /// blob.
-    pub fn unique(&self, blob_id: BlobId) -> Option<UniqueLock> {
-        self.try_unique(blob_id).ok()
-    }
-
-    /// Try to acquire a unique lock. If another unique lock is currently held for the given blob,
-    /// asynchronously waits until it's released. Fails if any other kind of lock is held.
-    pub async fn unique_wait(&self, blob_id: BlobId) -> Option<UniqueLock> {
+    /// Acquire a read lock, waiting for a unique lock (if any) to be released first.
+    pub async fn read(&self, blob_id: BlobId) -> ReadLock {
         loop {
-            match self.try_unique(blob_id) {
-                Ok(lock) => return Some(lock),
-                Err(State::Unique(notify)) => notify.notified().await,
-                Err(State::Read(_) | State::Write(_)) => return None,
+            match self.try_read(blob_id) {
+                Ok(lock) => return lock,
+                Err(notify) => notify.unlocked().await,
             }
         }
     }
 
-    fn try_unique(&self, blob_id: BlobId) -> Result<UniqueLock, State> {
+    /// Try to acquire a unique lock. Fails if any lock is currently being held by the given blob.
+    /// The error contains an unlock notifier and the kind of lock currently being held. The caller
+    /// can use them to decide whether they want to wait for the lock to be unlocked or fail
+    /// immediately.
+    pub fn try_unique(&self, blob_id: BlobId) -> Result<UniqueLock, (UnlockNotify, LockKind)> {
         let mut shared = self.shared.lock().unwrap();
 
         match shared.entry(self.branch_id).or_default().entry(blob_id) {
             Entry::Vacant(entry) => {
-                entry.insert(State::Unique(Arc::new(Notify::new())));
+                entry.insert(State::new(Kind::Unique));
 
                 Ok(UniqueLock {
                     shared: self.shared.clone(),
@@ -123,7 +101,17 @@ impl BranchLocker {
                     blob_id,
                 })
             }
-            Entry::Occupied(entry) => Err(entry.get().clone()),
+            Entry::Occupied(mut entry) => {
+                let kind = match entry.get().kind {
+                    Kind::Read(_) => LockKind::Read,
+                    Kind::Write(_) => LockKind::Write,
+                    Kind::Unique => LockKind::Unique,
+                };
+
+                let notify = entry.get_mut().notify.subscribe();
+
+                Err((notify, kind))
+            }
         }
     }
 }
@@ -145,9 +133,9 @@ impl ReadLock {
             unreachable!();
         };
 
-        match state {
-            State::Read(count) => {
-                *state = State::Write(count.checked_add(1).expect("lock count limit exceeded"));
+        match &mut state.kind {
+            Kind::Read(count) => {
+                state.kind = Kind::Write(count.checked_add(1).expect("lock count limit exceeded"));
 
                 Some(WriteLock {
                     shared: self.shared.clone(),
@@ -155,8 +143,8 @@ impl ReadLock {
                     blob_id: self.blob_id,
                 })
             }
-            State::Write(_) => None,
-            State::Unique(_) => unreachable!(),
+            Kind::Write(_) => None,
+            Kind::Unique => unreachable!(),
         }
     }
 }
@@ -171,8 +159,8 @@ impl Clone for ReadLock {
             unreachable!();
         };
 
-        match state {
-            State::Read(count) | State::Write(count) => {
+        match &mut state.kind {
+            Kind::Read(count) | Kind::Write(count) => {
                 *count = count.checked_add(1).expect("lock count limit exceeded");
 
                 Self {
@@ -181,7 +169,7 @@ impl Clone for ReadLock {
                     blob_id: self.blob_id,
                 }
             }
-            State::Unique(_) => unreachable!(),
+            Kind::Unique => unreachable!(),
         }
     }
 }
@@ -198,15 +186,15 @@ impl Drop for ReadLock {
             unreachable!();
         };
 
-        match state_entry.get_mut() {
-            State::Read(count) | State::Write(count) => {
+        match &mut state_entry.get_mut().kind {
+            Kind::Read(count) | Kind::Write(count) => {
                 *count = count.checked_sub(1).expect("lock count cannot be zero");
 
                 if *count == 0 {
                     state_entry.remove();
                 }
             }
-            State::Unique(_) => unreachable!(),
+            Kind::Unique => unreachable!(),
         }
 
         if states_entry.get().is_empty() {
@@ -235,17 +223,17 @@ impl Drop for WriteLock {
             unreachable!();
         };
 
-        match state_entry.get_mut() {
-            State::Write(count) => {
+        match &mut state_entry.get_mut().kind {
+            Kind::Write(count) => {
                 *count = count.checked_sub(1).expect("lock count cannot be zero");
 
                 if *count > 0 {
-                    *state_entry.get_mut() = State::Read(*count);
+                    state_entry.get_mut().kind = Kind::Read(*count);
                 } else {
                     state_entry.remove();
                 }
             }
-            State::Read(_) | State::Unique(_) => unreachable!(),
+            Kind::Read(_) | Kind::Unique => unreachable!(),
         }
 
         if states_entry.get().is_empty() {
@@ -284,12 +272,11 @@ impl Drop for UniqueLock {
             unreachable!();
         };
 
-        match state_entry.get_mut() {
-            State::Unique(notify) => {
-                notify.notify_waiters();
+        match &mut state_entry.get_mut().kind {
+            Kind::Unique => {
                 state_entry.remove();
             }
-            State::Read(_) | State::Write(_) => unreachable!(),
+            Kind::Read(_) | Kind::Write(_) => unreachable!(),
         }
 
         if states_entry.get().is_empty() {
@@ -320,6 +307,61 @@ impl UpgradableLock {
     }
 }
 
+/// Type of the lock currently being held for some blob.
+pub(crate) enum LockKind {
+    Read,
+    Write,
+    Unique,
+}
+
+/// Notifies about a lock being released.
+pub(crate) struct UnlockNotify(Arc<Notify>);
+
+impl UnlockNotify {
+    pub async fn unlocked(self) {
+        self.0.notified().await
+    }
+}
+
+struct UnlockSender(Arc<Notify>);
+
+impl UnlockSender {
+    fn new() -> Self {
+        Self(Arc::new(Notify::new()))
+    }
+
+    fn subscribe(&self) -> UnlockNotify {
+        UnlockNotify(self.0.clone())
+    }
+}
+
+impl Drop for UnlockSender {
+    fn drop(&mut self) {
+        self.0.notify_waiters()
+    }
+}
+
+struct State {
+    kind: Kind,
+    notify: UnlockSender,
+}
+
+impl State {
+    fn new(kind: Kind) -> Self {
+        Self {
+            kind,
+            notify: UnlockSender::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Kind {
+    Read(usize),
+    Write(usize),
+    Unique,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,8 +374,8 @@ mod tests {
         let locker = Locker::new();
         let locker = locker.branch(branch_id);
 
-        let read0 = locker.read(blob_id).unwrap();
-        let read1 = locker.read(blob_id).unwrap();
+        let read0 = locker.try_read(blob_id).ok().unwrap();
+        let read1 = locker.try_read(blob_id).ok().unwrap();
         let read2 = read0.clone();
 
         let write0 = read0.upgrade().unwrap();
@@ -342,27 +384,27 @@ mod tests {
         drop(write0);
         let write1 = read0.upgrade().unwrap();
 
-        assert!(locker.unique(blob_id).is_none());
+        assert!(locker.try_unique(blob_id).is_err());
 
         drop(write1);
-        assert!(locker.unique(blob_id).is_none());
+        assert!(locker.try_unique(blob_id).is_err());
 
         drop(read2);
-        assert!(locker.unique(blob_id).is_none());
+        assert!(locker.try_unique(blob_id).is_err());
 
         drop(read1);
-        assert!(locker.unique(blob_id).is_none());
+        assert!(locker.try_unique(blob_id).is_err());
 
         drop(read0);
-        let remove0 = locker.unique(blob_id).unwrap();
+        let remove0 = locker.try_unique(blob_id).ok().unwrap();
 
-        assert!(locker.read(blob_id).is_none());
-        assert!(locker.unique(blob_id).is_none());
+        assert!(locker.try_read(blob_id).is_err());
+        assert!(locker.try_unique(blob_id).is_err());
 
         drop(remove0);
-        let remove1 = locker.unique(blob_id).unwrap();
+        let remove1 = locker.try_unique(blob_id).ok().unwrap();
 
         drop(remove1);
-        let _read3 = locker.read(blob_id).unwrap();
+        let _read3 = locker.try_read(blob_id).ok().unwrap();
     }
 }
