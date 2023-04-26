@@ -540,9 +540,12 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     #[instrument(
-        skip(self, src_dir_path, dst_dir_path),
-        fields(src_dir_path = %src_dir_path.as_ref(), dst_dir_path = %dst_dir_path.as_ref()),
-        err
+        skip_all,
+        fields(
+            src = %src_dir_path.as_ref().join(src_name),
+            dst = %dst_dir_path.as_ref().join(dst_name),
+        ),
+        err(Debug)
     )]
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,

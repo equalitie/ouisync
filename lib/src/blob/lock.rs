@@ -5,9 +5,9 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
     deadlock::BlockingMutex,
+    sync::{AwaitDrop, DropAwaitable},
 };
 use std::sync::Arc;
-use tokio::sync::Notify;
 
 /// Container for blob locks in all branches.
 #[derive(Default, Clone)]
@@ -49,8 +49,8 @@ pub(crate) struct BranchLocker {
 
 impl BranchLocker {
     /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
-    /// given blob. The error contains an unlock notifier so the caller can decide whether to wait
-    /// for the lock to be released or fail immediately.
+    /// given blob. The error contains a notifier so the caller can decide whether to wait for the
+    /// lock to be released or fail immediately.
     pub fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, UnlockNotify> {
         let mut shared = self.shared.lock().unwrap();
 
@@ -70,7 +70,7 @@ impl BranchLocker {
                     blob_id,
                 })
             }
-            Kind::Unique => Err(state.notify.subscribe()),
+            Kind::Unique => Err(UnlockNotify(state.notify.subscribe())),
         }
     }
 
@@ -108,7 +108,7 @@ impl BranchLocker {
                     Kind::Unique => LockKind::Unique,
                 };
 
-                let notify = entry.get_mut().notify.subscribe();
+                let notify = UnlockNotify(entry.get_mut().notify.subscribe());
 
                 Err((notify, kind))
             }
@@ -307,6 +307,14 @@ impl UpgradableLock {
     }
 }
 
+pub(crate) struct UnlockNotify(AwaitDrop);
+
+impl UnlockNotify {
+    pub async fn unlocked(self) {
+        self.0.recv().await
+    }
+}
+
 /// Type of the lock currently being held for some blob.
 pub(crate) enum LockKind {
     Read,
@@ -314,43 +322,16 @@ pub(crate) enum LockKind {
     Unique,
 }
 
-/// Notifies about a lock being released.
-pub(crate) struct UnlockNotify(Arc<Notify>);
-
-impl UnlockNotify {
-    pub async fn unlocked(self) {
-        self.0.notified().await
-    }
-}
-
-struct UnlockSender(Arc<Notify>);
-
-impl UnlockSender {
-    fn new() -> Self {
-        Self(Arc::new(Notify::new()))
-    }
-
-    fn subscribe(&self) -> UnlockNotify {
-        UnlockNotify(self.0.clone())
-    }
-}
-
-impl Drop for UnlockSender {
-    fn drop(&mut self) {
-        self.0.notify_waiters()
-    }
-}
-
 struct State {
     kind: Kind,
-    notify: UnlockSender,
+    notify: DropAwaitable,
 }
 
 impl State {
     fn new(kind: Kind) -> Self {
         Self {
             kind,
-            notify: UnlockSender::new(),
+            notify: DropAwaitable::new(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::Shared;
 use crate::{
+    blob::lock::UnlockNotify,
     blob_id::BlobId,
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
@@ -9,6 +10,7 @@ use crate::{
     joint_directory::JointDirectory,
     versioned::{self, Tiebreaker},
 };
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use std::{cmp::Ordering, sync::Arc};
 use tokio::{
     select,
@@ -119,36 +121,54 @@ impl Inner {
 
         let mut state = State::Working;
 
+        let mut unlocked = FuturesUnordered::new();
+        let (unlocked_tx, mut unlocked_rx) = mpsc::channel(1);
+
+        // TODO: Find a way to avoid the code duplication here
+
         loop {
             match state {
                 State::Working => {
                     state = State::Waiting;
 
                     let work = async {
-                        self.work(ErrorHandling::Ignore).await.ok();
+                        self.work(ErrorHandling::Ignore, &unlocked_tx).await.ok();
                     };
 
                     let wait = async {
                         loop {
-                            let event = event_rx.recv().await;
-                            tracing::trace!(?event);
+                            select! {
+                                event = event_rx.recv() => {
+                                    tracing::trace!(?event, "event received");
 
-                            match event {
-                                Ok(Payload::BranchChanged(_)) => {
-                                    // On `BranchChanged`, interrupt the current job and
-                                    // immediately start a new one.
-                                    tracing::trace!("job interrupted");
-                                    state = State::Working;
-                                    break;
+                                    match event {
+                                        Ok(Payload::BranchChanged(_)) => {
+                                            // On `BranchChanged`, interrupt the current job and
+                                            // immediately start a new one.
+                                            tracing::trace!("job interrupted");
+                                            state = State::Working;
+                                            break;
+                                        }
+                                        Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
+                                            // On any other event, let the current job run to completion
+                                            // and then start a new one.
+                                            state = State::Working;
+                                        }
+                                        Err(RecvError::Closed) => {
+                                            state = State::Terminated;
+                                            break;
+                                        }
+                                    }
                                 }
-                                Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                                    // On any other event, let the current job run to completion
-                                    // and then start a new one.
-                                    state = State::Working;
+                                _ = unlocked.next(), if !unlocked.is_empty() => {
+                                    tracing::trace!("lock released");
+                                    state = State::Working
                                 }
-                                Err(RecvError::Closed) => {
-                                    state = State::Terminated;
-                                    break;
+                                notify = unlocked_rx.recv() => {
+                                    // unwrap ok because the sender is not destroyed until the end
+                                    // of this function.
+                                    let notify = notify.unwrap();
+                                    unlocked.push(notify.unlocked());
                                 }
                             }
                         }
@@ -162,16 +182,28 @@ impl Inner {
                 State::Waiting => {
                     state = select! {
                         event = event_rx.recv() => {
-                            tracing::trace!(?event);
+                            tracing::trace!(?event, "event received");
 
                             match event {
                                 Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
                                 Err(RecvError::Closed) => State::Terminated,
                             }
                         }
+                        _ = unlocked.next(), if !unlocked.is_empty() => {
+                            tracing::trace!("lock released");
+                            State::Working
+                        }
+                        notify = unlocked_rx.recv() => {
+                            // unwrap ok because the sender is not destroyed until the end
+                            // of this function.
+                            let notify = notify.unwrap();
+                            unlocked.push(notify.unlocked());
+
+                            state
+                        }
                         command = command_rx.recv() => {
                             if let Some(command) = command {
-                                if self.handle_command(command).await {
+                                if self.handle_command(command, &unlocked_tx).await {
                                     State::Waiting
                                 } else {
                                     State::Terminated
@@ -187,11 +219,15 @@ impl Inner {
         }
     }
 
-    async fn handle_command(&self, command: Command) -> bool {
+    async fn handle_command(
+        &self,
+        command: Command,
+        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+    ) -> bool {
         match command {
             Command::Work(result_tx) => {
                 result_tx
-                    .send(self.work(ErrorHandling::Return).await)
+                    .send(self.work(ErrorHandling::Return, unlocked_tx).await)
                     .unwrap_or(());
                 true
             }
@@ -202,14 +238,18 @@ impl Inner {
         }
     }
 
-    async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
+    async fn work(
+        &self,
+        error_handling: ErrorHandling,
+        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+    ) -> Result<()> {
         tracing::trace!("job started");
 
         // Merge
         if let Some(local_branch) = &self.local_branch {
             let result = self
                 .event_scope
-                .apply(merge::run(&self.shared, local_branch))
+                .apply(merge::run(&self.shared, local_branch, unlocked_tx))
                 .await;
             tracing::trace!(?result, "merge completed");
 
@@ -217,7 +257,7 @@ impl Inner {
         }
 
         // Prune outdated branches and snapshots
-        let result = prune::run(&self.shared).await;
+        let result = prune::run(&self.shared, unlocked_tx).await;
         tracing::trace!(?result, "prune completed");
 
         error_handling.apply(result)?;
@@ -257,7 +297,11 @@ mod merge {
     use tracing::{field, Span};
 
     #[instrument(name = "merge", skip_all)]
-    pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        local_branch: &Branch,
+        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+    ) -> Result<()> {
         let snapshots = shared.load_snapshots().await?;
         // If the vvs are equal, break ties by comparing by the root hash so that all replicas
         // eventually end up having the same root hash of their local branch.
@@ -267,7 +311,7 @@ mod merge {
         // short and simply fork it (unless it's already the local one).
         if snapshots.len() <= 1 {
             if let Some(snapshot) = snapshots.first() {
-                if fork(shared, snapshot, local_branch).await? {
+                if fork(shared, snapshot, local_branch, unlocked_tx).await? {
                     return Ok(());
                 } // else fallback to deep merge
             }
@@ -307,7 +351,12 @@ mod merge {
             src_vv = ?snapshot.version_vector(),
         ),
     )]
-    async fn fork(shared: &Shared, snapshot: &SnapshotData, local_branch: &Branch) -> Result<bool> {
+    async fn fork(
+        shared: &Shared,
+        snapshot: &SnapshotData,
+        local_branch: &Branch,
+        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+    ) -> Result<bool> {
         if snapshot.branch_id() == local_branch.id() {
             tracing::trace!("local branch already newest");
             return Ok(true);
@@ -323,9 +372,13 @@ mod merge {
         // which does not reference all blocks of B. If we forked the remote branch then
         // some blocks of B would become unreachable because there would be no more
         // branches referencing them.
-        let Ok(_lock) = local_branch.locker().try_unique(BlobId::ROOT) else {
-            tracing::trace!("failed to acquire unique lock");
-            return Ok(false);
+        let _lock = match local_branch.locker().try_unique(BlobId::ROOT) {
+            Ok(lock) => lock,
+            Err((notify, _)) => {
+                tracing::trace!("failed to acquire unique lock");
+                unlocked_tx.send(notify).await.ok();
+                return Ok(false);
+            }
         };
 
         tracing::trace!("unique newest branch");
@@ -373,7 +426,10 @@ mod prune {
     use super::*;
 
     #[instrument(name = "prune", skip_all)]
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+    ) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
         let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, CompareRootHash);
 
@@ -387,14 +443,18 @@ mod prune {
             // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.
-            let Ok(_lock) = shared
+            let _lock = match shared
                 .branch_shared
                 .locker
                 .branch(*snapshot.branch_id())
                 .try_unique(BlobId::ROOT)
-            else {
-                tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
-                continue;
+            {
+                Ok(lock) => lock,
+                Err((notify, _)) => {
+                    tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
+                    unlocked_tx.send(notify).await.ok();
+                    continue;
+                }
             };
 
             let mut tx = shared.store.db().begin_write().await?;
