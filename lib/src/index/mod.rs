@@ -123,9 +123,9 @@ impl Index {
             let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
 
             tracing::debug!(
-                vv = ?node.proof.version_vector,
-                hash = ?node.proof.hash,
                 branch_id = ?node.proof.writer_id,
+                hash = ?node.proof.hash,
+                vv = ?node.proof.version_vector,
                 "snapshot started"
             );
 
@@ -271,9 +271,9 @@ impl Index {
                     let mut conn = self.pool.acquire().await?;
                     let snapshot = branch.load_snapshot(&mut conn).await?;
                     tracing::debug!(
-                        vv = ?snapshot.version_vector(),
-                        hash = ?snapshot.root_hash(),
                         branch_id = ?snapshot.branch_id(),
+                        hash = ?snapshot.root_hash(),
+                        vv = ?snapshot.version_vector(),
                         "snapshot complete"
                     );
                 }

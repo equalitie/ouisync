@@ -334,9 +334,9 @@ impl SnapshotData {
         let root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
 
         tracing::trace!(
-            vv = ?root_node.proof.version_vector,
-            hash = ?root_node.proof.hash,
             branch_id = ?root_node.proof.writer_id,
+            hash = ?root_node.proof.hash,
+            vv = ?root_node.proof.version_vector,
             src_branch_id = ?self.root_node.proof.writer_id,
             "create local snapshot (fork)"
         );
@@ -379,8 +379,8 @@ impl SnapshotData {
                 // previous snapshot.
                 tracing::trace!(
                     branch_id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
                     "outdated snapshot not removed - possible fallback"
                 );
 
@@ -397,8 +397,8 @@ impl SnapshotData {
 
                 tracing::trace!(
                     branch_id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
                     "outdated snapshot removed"
                 );
 

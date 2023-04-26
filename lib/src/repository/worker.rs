@@ -256,7 +256,7 @@ mod merge {
     use super::*;
     use tracing::{field, Span};
 
-    #[instrument(name = "merge", skip_all, err(Debug))]
+    #[instrument(name = "merge", skip_all)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let snapshots = shared.load_snapshots().await?;
         // If the vvs are equal, break ties by comparing by the root hash so that all replicas
@@ -300,9 +300,11 @@ mod merge {
     #[instrument(
         skip_all,
         fields(
+            local_id = ?local_branch.id(),
             local_vv,
-            remote_vv = ?snapshot.version_vector(),
-            remote_id = ?snapshot.branch_id()
+            src_id = ?snapshot.branch_id(),
+            src_hash = ?snapshot.root_hash(),
+            src_vv = ?snapshot.version_vector(),
         ),
     )]
     async fn fork(shared: &Shared, snapshot: &SnapshotData, local_branch: &Branch) -> Result<bool> {
@@ -370,7 +372,7 @@ mod merge {
 mod prune {
     use super::*;
 
-    #[instrument(name = "prune", skip_all, err(Debug))]
+    #[instrument(name = "prune", skip_all)]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
         let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, CompareRootHash);
@@ -394,8 +396,6 @@ mod prune {
                 tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
                 continue;
             };
-
-            tracing::trace!(id = ?snapshot.branch_id(), "outdated branch will be removed");
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
@@ -428,7 +428,7 @@ mod scan {
         block::{self, BlockId},
         crypto::sign::Keypair,
         db,
-        index::{self, BranchData, LeafNode, SnapshotData},
+        index::{self, LeafNode, SnapshotData},
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
@@ -461,7 +461,7 @@ mod scan {
         }
     }
 
-    #[instrument(name = "scan", skip(shared), err(Debug))]
+    #[instrument(name = "scan", skip(shared))]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
@@ -507,7 +507,10 @@ mod scan {
 
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
-                .await
+                .await.map_err(|error| {
+                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    error
+                })
             {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
@@ -629,11 +632,7 @@ mod scan {
             for blob_id in blob_ids {
                 let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {
                     Ok(block_ids) => block_ids,
-                    Err(Error::EntryNotFound) => {
-                        // See the comment above.
-                        tracing::warn!(?branch_id, ?blob_id, "failed to open BlockIds");
-                        continue;
-                    }
+                    Err(Error::EntryNotFound) => continue, // See the comment above.
                     Err(error) => return Err(error),
                 };
 
@@ -747,14 +746,6 @@ mod scan {
         }
 
         Ok(())
-    }
-
-    struct NotifyGuard<'a>(&'a BranchData);
-
-    impl Drop for NotifyGuard<'_> {
-        fn drop(&mut self) {
-            self.0.notify();
-        }
     }
 }
 

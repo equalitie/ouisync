@@ -365,13 +365,19 @@ where
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
         match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
-            Ok(Ok(Event {
-                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
-                ..
-            }))
-            | Ok(Err(RecvError::Lagged(_))) => return,
-            Ok(Ok(Event { .. })) => continue,
-            Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
+            Ok(event) => {
+                tracing::debug!(?event);
+
+                match event {
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        ..
+                    })
+                    | Err(RecvError::Lagged(_)) => return,
+                    Ok(Event { .. }) => continue,
+                    Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+                }
+            }
             Err(_) => {
                 const MESSAGE: &str = "timeout waiting for notification";
 
