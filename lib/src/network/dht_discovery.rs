@@ -54,7 +54,7 @@ pub struct ActiveDhtNodes {
 }
 
 #[async_trait]
-pub trait DhtContacts {
+pub trait DhtContactsStoreTrait {
     async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>>;
     async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>>;
     async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()>;
@@ -75,15 +75,15 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
-        contacts: Option<impl DhtContacts + Sync + Send + 'static>,
+        contacts_store: Option<impl DhtContactsStoreTrait + Sync + Send + 'static>,
         monitor: StateMonitor,
     ) -> Self {
-        let contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>> =
-            contacts.map(|cs| Arc::new(cs) as _);
+        let contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>> =
+            contacts_store.map(|cs| Arc::new(cs) as _);
 
-        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts.clone()));
+        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts_store.clone()));
 
-        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, contacts));
+        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, contacts_store));
 
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
 
@@ -184,18 +184,18 @@ impl DhtDiscovery {
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
     dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
-    contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+    contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
 }
 
 impl RestartableDht {
     fn new(
         socket_maker: Option<quic::SideChannelMaker>,
-        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
     ) -> Self {
         Self {
             socket_maker,
             dht: Weak::new(),
-            contacts,
+            contacts_store,
         }
     }
 
@@ -210,7 +210,7 @@ impl RestartableDht {
             dht
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
-            let dht = MonitoredDht::start(socket, monitor, span, self.contacts.clone());
+            let dht = MonitoredDht::start(socket, monitor, span, self.contacts_store.clone());
 
             let dht = Arc::new(Some(dht));
 
@@ -240,7 +240,7 @@ impl MonitoredDht {
         socket: quic::SideChannel,
         parent_monitor: &StateMonitor,
         span: &Span,
-        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
     ) -> TaskOrResult<Self> {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
@@ -253,7 +253,11 @@ impl MonitoredDht {
         let monitor = parent_monitor.make_child(monitor_name);
 
         TaskOrResult::new(scoped_task::spawn(MonitoredDht::create(
-            is_v4, socket, monitor, span, contacts,
+            is_v4,
+            socket,
+            monitor,
+            span,
+            contacts_store,
         )))
     }
 
@@ -262,15 +266,15 @@ impl MonitoredDht {
         socket: quic::SideChannel,
         monitor: StateMonitor,
         span: Span,
-        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
         let mut builder = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(false);
 
-        if let Some(contacts) = &contacts {
-            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts).await;
+        if let Some(contacts_store) = &contacts_store {
+            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
 
             for contact in initial_contacts {
                 builder = builder.add_node(contact);
@@ -334,9 +338,9 @@ impl MonitoredDht {
         let monitoring_task = monitoring_task.instrument(span.clone());
         let monitoring_task = scoped_task::spawn(monitoring_task);
 
-        let _periodic_dht_node_load_task = contacts.map(|contacts| {
+        let _periodic_dht_node_load_task = contacts_store.map(|contacts_store| {
             scoped_task::spawn(
-                Self::keep_reading_contacts(is_v4, dht.clone(), contacts).instrument(span),
+                Self::keep_reading_contacts(is_v4, dht.clone(), contacts_store).instrument(span),
             )
         });
 
@@ -351,7 +355,7 @@ impl MonitoredDht {
     async fn keep_reading_contacts(
         is_v4: bool,
         dht: MainlineDht,
-        contacts: Arc<dyn DhtContacts + Sync + Send + 'static>,
+        contacts_store: Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>,
     ) {
         let mut reported_failure = false;
 
@@ -373,7 +377,7 @@ impl MonitoredDht {
                     SocketAddr::V6(_) => None,
                 });
 
-                match contacts.store_v4(mix.collect()).await {
+                match contacts_store.store_v4(mix.collect()).await {
                     Ok(()) => reported_failure = false,
                     Err(error) => {
                         if !reported_failure {
@@ -388,7 +392,7 @@ impl MonitoredDht {
                     SocketAddr::V6(addr) => Some(*addr),
                 });
 
-                match contacts.store_v6(mix.collect()).await {
+                match contacts_store.store_v6(mix.collect()).await {
                     Ok(()) => reported_failure = false,
                     Err(error) => {
                         if !reported_failure {
@@ -405,19 +409,19 @@ impl MonitoredDht {
 
     async fn load_initial_contacts(
         is_v4: bool,
-        contacts: &(impl DhtContacts + ?Sized),
+        contacts_store: &(impl DhtContactsStoreTrait + ?Sized),
     ) -> HashSet<SocketAddr> {
         if is_v4 {
-            match contacts.load_v4().await {
-                Ok(mut contacts) => contacts.drain().map(SocketAddr::V4).collect(),
+            match contacts_store.load_v4().await {
+                Ok(mut contacts_store) => contacts_store.drain().map(SocketAddr::V4).collect(),
                 Err(error) => {
                     tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
                     Default::default()
                 }
             }
         } else {
-            match contacts.load_v6().await {
-                Ok(mut contacts) => contacts.drain().map(SocketAddr::V6).collect(),
+            match contacts_store.load_v6().await {
+                Ok(mut contacts_store) => contacts_store.drain().map(SocketAddr::V6).collect(),
                 Err(error) => {
                     tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
                     Default::default()

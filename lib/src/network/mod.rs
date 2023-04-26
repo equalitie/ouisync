@@ -31,7 +31,7 @@ mod upnp;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
-    dht_discovery::{DhtContacts, DhtDiscovery},
+    dht_discovery::{DhtContactsStoreTrait, DhtDiscovery},
     gateway::Gateway,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
@@ -85,7 +85,7 @@ pub struct Network {
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
     pub fn new(
-        dht_contacts: Option<impl DhtContacts + Sync + Send + 'static>,
+        dht_contacts: Option<impl DhtContactsStoreTrait + Sync + Send + 'static>,
         monitor: StateMonitor,
     ) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
