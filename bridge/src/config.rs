@@ -1,3 +1,4 @@
+use crate::dht_contacts;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     borrow::Borrow,
@@ -33,6 +34,10 @@ impl ConfigStore {
             store: self.clone(),
             key,
         }
+    }
+
+    pub fn dht_contacts_store(&self) -> dht_contacts::Store {
+        dht_contacts::Store::new(&self.dir)
     }
 }
 

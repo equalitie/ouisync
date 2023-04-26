@@ -31,7 +31,7 @@ mod upnp;
 use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
-    dht_discovery::DhtDiscovery,
+    dht_discovery::{DhtContacts, DhtDiscovery},
     gateway::Gateway,
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
@@ -84,7 +84,10 @@ pub struct Network {
 
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
-    pub fn new(monitor: StateMonitor) -> Self {
+    pub fn new(
+        dht_contacts: Option<impl DhtContacts + Sync + Send + 'static>,
+        monitor: StateMonitor,
+    ) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
 
@@ -94,7 +97,7 @@ impl Network {
         // TODO: There are ways to address this: e.g. we could try both, or we could include
         // the protocol information in the info-hash generation. There are pros and cons to
         // these approaches.
-        let dht_discovery = DhtDiscovery::new(None, None, monitor.make_child("DHT"));
+        let dht_discovery = DhtDiscovery::new(None, None, dht_contacts, monitor.make_child("DHT"));
         let port_forwarder = upnp::PortForwarder::new(monitor.make_child("UPnP"));
 
         let tasks = Arc::new(BlockingMutex::new(JoinSet::new()));
@@ -547,7 +550,7 @@ impl Inner {
 
     fn start_dht_lookup(&self, info_hash: InfoHash) -> dht_discovery::LookupRequest {
         self.dht_discovery
-            .lookup(info_hash, self.dht_discovery_tx.clone())
+            .start_lookup(info_hash, self.dht_discovery_tx.clone())
     }
 
     async fn run_dht(self: Arc<Self>, mut discovery_rx: mpsc::UnboundedReceiver<SeenPeer>) {

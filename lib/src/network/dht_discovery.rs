@@ -2,7 +2,11 @@ use super::{
     peer_addr::PeerAddr,
     seen_peers::{SeenPeer, SeenPeers},
 };
-use crate::{collections::HashMap, deadlock::BlockingMutex, state_monitor::StateMonitor};
+use crate::{
+    collections::{hash_map, HashMap, HashSet},
+    deadlock::{AsyncMutex, BlockingMutex},
+    state_monitor::StateMonitor,
+};
 use async_trait::async_trait;
 use btdht::{InfoHash, MainlineDht};
 use chrono::{offset::Local, DateTime};
@@ -13,7 +17,7 @@ use scoped_task::ScopedJoinHandle;
 use std::{
     future::pending,
     io,
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV4, SocketAddrV6},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Weak,
@@ -43,6 +47,20 @@ pub const DHT_ROUTERS: &[&str] = &[
 pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
+#[derive(Clone)]
+pub struct ActiveDhtNodes {
+    pub good: HashSet<SocketAddr>,
+    pub questionable: HashSet<SocketAddr>,
+}
+
+#[async_trait]
+pub trait DhtContacts {
+    async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>>;
+    async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>>;
+    async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()>;
+    async fn store_v6(&self, contacts: HashSet<SocketAddrV6>) -> io::Result<()>;
+}
+
 pub(super) struct DhtDiscovery {
     v4: BlockingMutex<RestartableDht>,
     v6: BlockingMutex<RestartableDht>,
@@ -57,10 +75,16 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
+        contacts: Option<impl DhtContacts + Sync + Send + 'static>,
         monitor: StateMonitor,
     ) -> Self {
-        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4));
-        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6));
+        let contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>> =
+            contacts.map(|cs| Arc::new(cs) as _);
+
+        let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts.clone()));
+
+        let v6 = BlockingMutex::new(RestartableDht::new(socket_maker_v6, contacts));
+
         let lookups = Arc::new(BlockingMutex::new(HashMap::default()));
 
         let lookups_monitor = monitor.make_child("lookups");
@@ -110,7 +134,7 @@ impl DhtDiscovery {
         }
     }
 
-    pub fn lookup(
+    pub fn start_lookup(
         &self,
         info_hash: InfoHash,
         found_peers_tx: mpsc::UnboundedSender<SeenPeer>,
@@ -123,25 +147,34 @@ impl DhtDiscovery {
             lookups: Arc::downgrade(&self.lookups),
         };
 
-        self.lookups
-            .lock()
-            .unwrap()
-            .entry(info_hash)
-            .or_insert_with(|| {
+        let mut lookups = self.lookups.lock().unwrap();
+
+        match lookups.entry(info_hash) {
+            hash_map::Entry::Occupied(mut entry) => entry.get_mut().add_request(id, found_peers_tx),
+            hash_map::Entry::Vacant(entry) => {
                 let dht_v4 = self
                     .v4
                     .lock()
                     .unwrap()
                     .fetch(&self.main_monitor, &self.span);
+
                 let dht_v6 = self
                     .v6
                     .lock()
                     .unwrap()
                     .fetch(&self.main_monitor, &self.span);
 
-                Lookup::start(dht_v4, dht_v6, info_hash, &self.lookups_monitor, &self.span)
-            })
-            .add_request(id, found_peers_tx);
+                entry
+                    .insert(Lookup::start(
+                        dht_v4,
+                        dht_v6,
+                        info_hash,
+                        &self.lookups_monitor,
+                        &self.span,
+                    ))
+                    .add_request(id, found_peers_tx);
+            }
+        }
 
         request
     }
@@ -150,25 +183,35 @@ impl DhtDiscovery {
 // Wrapper for a DHT instance that can be stopped and restarted at any point.
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
-    dht: Weak<Option<MonitoredDht>>,
+    dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
+    contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
 }
 
 impl RestartableDht {
-    fn new(socket_maker: Option<quic::SideChannelMaker>) -> Self {
+    fn new(
+        socket_maker: Option<quic::SideChannelMaker>,
+        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+    ) -> Self {
         Self {
             socket_maker,
             dht: Weak::new(),
+            contacts,
         }
     }
 
     // Retrieve a shared pointer to a running DHT instance if there is one already or start a new
     // one. When all such pointers are dropped, the underlying DHT is terminated.
-    fn fetch(&mut self, monitor: &StateMonitor, span: &Span) -> Arc<Option<MonitoredDht>> {
+    fn fetch(
+        &mut self,
+        monitor: &StateMonitor,
+        span: &Span,
+    ) -> Arc<Option<TaskOrResult<MonitoredDht>>> {
         if let Some(dht) = self.dht.upgrade() {
             dht
         } else if let Some(maker) = &self.socket_maker {
             let socket = maker.make();
-            let dht = MonitoredDht::start(socket, monitor, span);
+            let dht = MonitoredDht::start(socket, monitor, span, self.contacts.clone());
+
             let dht = Arc::new(Some(dht));
 
             self.dht = Arc::downgrade(&dht);
@@ -189,29 +232,58 @@ impl RestartableDht {
 struct MonitoredDht {
     dht: MainlineDht,
     _monitoring_task: ScopedJoinHandle<()>,
+    _periodic_dht_node_load_task: Option<ScopedJoinHandle<()>>,
 }
 
 impl MonitoredDht {
-    fn start(socket: quic::SideChannel, parent_monitor: &StateMonitor, span: &Span) -> Self {
+    fn start(
+        socket: quic::SideChannel,
+        parent_monitor: &StateMonitor,
+        span: &Span,
+        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+    ) -> TaskOrResult<Self> {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
 
-        let (monitor_name, span) = match local_addr {
-            SocketAddr::V4(_) => ("IPv4", tracing::info_span!(parent: span, "DHT/IPv4")),
-            SocketAddr::V6(_) => ("IPv6", tracing::info_span!(parent: span, "DHT/IPv6")),
+        let (is_v4, monitor_name, span) = match local_addr {
+            SocketAddr::V4(_) => (true, "IPv4", tracing::info_span!(parent: span, "DHT/IPv4")),
+            SocketAddr::V6(_) => (false, "IPv6", tracing::info_span!(parent: span, "DHT/IPv6")),
         };
 
+        let monitor = parent_monitor.make_child(monitor_name);
+
+        TaskOrResult::new(scoped_task::spawn(MonitoredDht::create(
+            is_v4, socket, monitor, span, contacts,
+        )))
+    }
+
+    async fn create(
+        is_v4: bool,
+        socket: quic::SideChannel,
+        monitor: StateMonitor,
+        span: Span,
+        contacts: Option<Arc<dyn DhtContacts + Sync + Send + 'static>>,
+    ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
-        let dht = MainlineDht::builder()
+        let mut builder = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
-            .set_read_only(false)
+            .set_read_only(false);
+
+        if let Some(contacts) = &contacts {
+            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts).await;
+
+            for contact in initial_contacts {
+                builder = builder.add_node(contact);
+            }
+        }
+
+        let dht = builder
             .start(Socket(socket))
-            // Unwrap OK because `start` only fails if it can't get `local_addr` out of the socket, but
-            // since we just succeeded in binding the socket above, that shouldn't happen.
+            // TODO: `start` only fails if the socket has been closed. That shouldn't be the case
+            // there but better check.
             .unwrap();
 
         // Spawn a task to monitor the DHT status.
-        let monitor = parent_monitor.make_child(monitor_name);
         let monitoring_task = {
             let dht = dht.clone();
 
@@ -259,12 +331,98 @@ impl MonitoredDht {
                 }
             }
         };
-        let monitoring_task = monitoring_task.instrument(span);
+        let monitoring_task = monitoring_task.instrument(span.clone());
         let monitoring_task = scoped_task::spawn(monitoring_task);
+
+        let _periodic_dht_node_load_task = contacts.map(|contacts| {
+            scoped_task::spawn(
+                Self::keep_reading_contacts(is_v4, dht.clone(), contacts).instrument(span),
+            )
+        });
 
         Self {
             dht,
             _monitoring_task: monitoring_task,
+            _periodic_dht_node_load_task,
+        }
+    }
+
+    /// Periodically read contacts from the `dht` and send it to `on_periodic_dht_node_load_tx`.
+    async fn keep_reading_contacts(
+        is_v4: bool,
+        dht: MainlineDht,
+        contacts: Arc<dyn DhtContacts + Sync + Send + 'static>,
+    ) {
+        let mut reported_failure = false;
+
+        loop {
+            let (good, questionable) = match dht.load_contacts().await {
+                Ok((good, questionable)) => (good, questionable),
+                Err(error) => {
+                    tracing::warn!("DhtDiscovery stopped reading contacts: {error:?}");
+                    break;
+                }
+            };
+
+            // TODO: Make use of the information which is good and which questionable.
+            let mix = good.union(&questionable);
+
+            if is_v4 {
+                let mix = mix.filter_map(|addr| match addr {
+                    SocketAddr::V4(addr) => Some(*addr),
+                    SocketAddr::V6(_) => None,
+                });
+
+                match contacts.store_v4(mix.collect()).await {
+                    Ok(()) => reported_failure = false,
+                    Err(error) => {
+                        if !reported_failure {
+                            reported_failure = true;
+                            tracing::error!("DhtDiscovery failed to write contacts {error:?}");
+                        }
+                    }
+                }
+            } else {
+                let mix = mix.filter_map(|addr| match addr {
+                    SocketAddr::V4(_) => None,
+                    SocketAddr::V6(addr) => Some(*addr),
+                });
+
+                match contacts.store_v6(mix.collect()).await {
+                    Ok(()) => reported_failure = false,
+                    Err(error) => {
+                        if !reported_failure {
+                            reported_failure = true;
+                            tracing::error!("DhtDiscovery failed to write contacts {error:?}");
+                        }
+                    }
+                }
+            }
+
+            time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    async fn load_initial_contacts(
+        is_v4: bool,
+        contacts: &(impl DhtContacts + ?Sized),
+    ) -> HashSet<SocketAddr> {
+        if is_v4 {
+            match contacts.load_v4().await {
+                Ok(mut contacts) => contacts.drain().map(SocketAddr::V4).collect(),
+                Err(error) => {
+                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+                    Default::default()
+                }
+            }
+        } else {
+            match contacts.load_v6().await {
+                Ok(mut contacts) => contacts.drain().map(SocketAddr::V6).collect(),
+                Err(error) => {
+                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+                    Default::default()
+                }
+            }
         }
     }
 }
@@ -308,8 +466,8 @@ struct Lookup {
 
 impl Lookup {
     fn start(
-        dht_v4: Arc<Option<MonitoredDht>>,
-        dht_v6: Arc<Option<MonitoredDht>>,
+        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
         span: &Span,
@@ -348,8 +506,8 @@ impl Lookup {
     // Start this same lookup on different DHT instances
     fn restart(
         &mut self,
-        dht_v4: Arc<Option<MonitoredDht>>,
-        dht_v6: Arc<Option<MonitoredDht>>,
+        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         monitor: &StateMonitor,
         span: &Span,
@@ -387,8 +545,8 @@ impl Lookup {
 
     #[allow(clippy::too_many_arguments)]
     fn start_task(
-        dht_v4: Arc<Option<MonitoredDht>>,
-        dht_v6: Arc<Option<MonitoredDht>>,
+        dht_v4: Arc<Option<TaskOrResult<MonitoredDht>>>,
+        dht_v6: Arc<Option<TaskOrResult<MonitoredDht>>>,
         info_hash: InfoHash,
         seen_peers: Arc<SeenPeers>,
         requests: Arc<BlockingMutex<HashMap<RequestId, mpsc::UnboundedSender<SeenPeer>>>>,
@@ -401,6 +559,16 @@ impl Lookup {
         let next = monitor.make_value("next", SystemTime::now().into());
 
         let task = async move {
+            let dht_v4 = match &*dht_v4 {
+                Some(dht) => Some(dht.result().await),
+                None => None,
+            };
+
+            let dht_v6 = match &*dht_v6 {
+                Some(dht) => Some(dht.result().await),
+                None => None,
+            };
+
             // Wait for the first request to be created
             wake_up.changed().await.unwrap_or(());
 
@@ -475,5 +643,37 @@ impl btdht::SocketTrait for Socket {
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
         self.0.local_addr()
+    }
+}
+
+struct TaskOrResult<T> {
+    task: AsyncMutex<Option<ScopedJoinHandle<T>>>,
+    result: once_cell::sync::OnceCell<T>,
+}
+
+impl<T> TaskOrResult<T> {
+    fn new(task: ScopedJoinHandle<T>) -> Self {
+        Self {
+            task: AsyncMutex::new(Some(task)),
+            result: once_cell::sync::OnceCell::new(),
+        }
+    }
+
+    // Note that this function is not cancel safe.
+    async fn result(&self) -> &T {
+        if let Some(result) = self.result.get() {
+            return result;
+        }
+
+        let mut lock = self.task.lock().await;
+
+        if let Some(handle) = lock.take() {
+            // The unwrap is OK for the same reason we unwrap `BlockingMutex::lock()`s.
+            // The assert is OK because we can await on the handle only once.
+            assert!(self.result.set(handle.await.unwrap()).is_ok());
+        }
+
+        // Unwrap is OK because we ensured the `result` holds a value.
+        self.result.get().unwrap()
     }
 }
