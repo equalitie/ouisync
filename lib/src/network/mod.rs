@@ -84,10 +84,7 @@ pub struct Network {
 
 impl Network {
     #[allow(clippy::new_without_default)] // Default doesn't seem right for this
-    pub fn new(
-        dht_contacts: Option<impl DhtContactsStoreTrait + Sync + Send + 'static>,
-        monitor: StateMonitor,
-    ) -> Self {
+    pub fn new(dht_contacts: Option<impl DhtContactsStoreTrait>, monitor: StateMonitor) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(1);
         let gateway = Gateway::new(incoming_tx);
 

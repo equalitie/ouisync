@@ -54,7 +54,7 @@ pub struct ActiveDhtNodes {
 }
 
 #[async_trait]
-pub trait DhtContactsStoreTrait {
+pub trait DhtContactsStoreTrait: Sync + Send + 'static {
     async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>>;
     async fn load_v6(&self) -> io::Result<HashSet<SocketAddrV6>>;
     async fn store_v4(&self, contacts: HashSet<SocketAddrV4>) -> io::Result<()>;
@@ -75,10 +75,10 @@ impl DhtDiscovery {
     pub fn new(
         socket_maker_v4: Option<quic::SideChannelMaker>,
         socket_maker_v6: Option<quic::SideChannelMaker>,
-        contacts_store: Option<impl DhtContactsStoreTrait + Sync + Send + 'static>,
+        contacts_store: Option<impl DhtContactsStoreTrait>,
         monitor: StateMonitor,
     ) -> Self {
-        let contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>> =
+        let contacts_store: Option<Arc<dyn DhtContactsStoreTrait>> =
             contacts_store.map(|cs| Arc::new(cs) as _);
 
         let v4 = BlockingMutex::new(RestartableDht::new(socket_maker_v4, contacts_store.clone()));
@@ -184,13 +184,13 @@ impl DhtDiscovery {
 struct RestartableDht {
     socket_maker: Option<quic::SideChannelMaker>,
     dht: Weak<Option<TaskOrResult<MonitoredDht>>>,
-    contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
+    contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
 }
 
 impl RestartableDht {
     fn new(
         socket_maker: Option<quic::SideChannelMaker>,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> Self {
         Self {
             socket_maker,
@@ -240,7 +240,7 @@ impl MonitoredDht {
         socket: quic::SideChannel,
         parent_monitor: &StateMonitor,
         span: &Span,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> TaskOrResult<Self> {
         // TODO: Unwrap
         let local_addr = socket.local_addr().unwrap();
@@ -266,7 +266,7 @@ impl MonitoredDht {
         socket: quic::SideChannel,
         monitor: StateMonitor,
         span: Span,
-        contacts_store: Option<Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>>,
+        contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
         let mut builder = MainlineDht::builder()
@@ -355,7 +355,7 @@ impl MonitoredDht {
     async fn keep_reading_contacts(
         is_v4: bool,
         dht: MainlineDht,
-        contacts_store: Arc<dyn DhtContactsStoreTrait + Sync + Send + 'static>,
+        contacts_store: Arc<dyn DhtContactsStoreTrait>,
     ) {
         let mut reported_failure = false;
 
