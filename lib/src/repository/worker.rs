@@ -1,19 +1,22 @@
 use super::Shared;
 use crate::{
-    blob::lock::UnlockNotify,
     blob_id::BlobId,
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
-    event::{EventScope, IgnoreScopeReceiver, Payload},
+    event::{Event, EventScope, IgnoreScopeReceiver, Payload},
     joint_directory::JointDirectory,
+    sync::AwaitDrop,
     versioned,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use std::sync::Arc;
+use std::{ops::ControlFlow, sync::Arc};
 use tokio::{
     select,
-    sync::{broadcast::error::RecvError, mpsc, oneshot},
+    sync::{
+        broadcast::{self, error::RecvError},
+        mpsc, oneshot,
+    },
 };
 use tracing::instrument;
 
@@ -112,21 +115,10 @@ struct Inner {
 
 impl Inner {
     async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
-        let mut event_rx =
-            IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope);
-
-        enum State {
-            Working,
-            Waiting,
-            Terminated,
-        }
-
+        let event_rx = self.shared.store.index.subscribe();
+        let (unlocked_tx, unlocked_rx) = mpsc::channel(1);
+        let mut waiter = Waiter::new(event_rx, self.event_scope, unlocked_rx);
         let mut state = State::Working;
-
-        let mut unlocked = FuturesUnordered::new();
-        let (unlocked_tx, mut unlocked_rx) = mpsc::channel(1);
-
-        // TODO: Find a way to avoid the code duplication here
 
         loop {
             match state {
@@ -139,41 +131,18 @@ impl Inner {
 
                     let wait = async {
                         loop {
-                            select! {
-                                event = event_rx.recv() => {
-                                    tracing::trace!(?event, "event received");
-
-                                    match event {
-                                        Ok(Payload::BranchChanged(_)) => {
-                                            // On `BranchChanged`, interrupt the current job and
-                                            // immediately start a new one.
-                                            tracing::trace!("job interrupted");
-                                            state = State::Working;
-                                            break;
-                                        }
-                                        Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                                            // On any other event, let the current job run to completion
-                                            // and then start a new one.
-                                            state = State::Working;
-                                        }
-                                        Err(RecvError::Closed) => {
-                                            state = State::Terminated;
-                                            break;
-                                        }
-                                    }
+                            match waiter.wait(state).await {
+                                ControlFlow::Continue(new_state) => {
+                                    state = new_state;
                                 }
-                                _ = unlocked.next(), if !unlocked.is_empty() => {
-                                    tracing::trace!("lock released");
-                                    state = State::Working
-                                }
-                                notify = unlocked_rx.recv() => {
-                                    // unwrap ok because the sender is not destroyed until the end
-                                    // of this function.
-                                    let notify = notify.unwrap();
-                                    unlocked.push(notify.unlocked());
+                                ControlFlow::Break(new_state) => {
+                                    state = new_state;
+                                    break;
                                 }
                             }
                         }
+
+                        tracing::trace!("job interrupted");
                     };
 
                     select! {
@@ -183,25 +152,11 @@ impl Inner {
                 }
                 State::Waiting => {
                     state = select! {
-                        event = event_rx.recv() => {
-                            tracing::trace!(?event, "event received");
-
-                            match event {
-                                Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
-                                Err(RecvError::Closed) => State::Terminated,
+                        new_state = waiter.wait(state) => {
+                            match new_state {
+                                ControlFlow::Continue(new_state) => new_state,
+                                ControlFlow::Break(new_state) => new_state,
                             }
-                        }
-                        _ = unlocked.next(), if !unlocked.is_empty() => {
-                            tracing::trace!("lock released");
-                            State::Working
-                        }
-                        notify = unlocked_rx.recv() => {
-                            // unwrap ok because the sender is not destroyed until the end
-                            // of this function.
-                            let notify = notify.unwrap();
-                            unlocked.push(notify.unlocked());
-
-                            state
                         }
                         command = command_rx.recv() => {
                             if let Some(command) = command {
@@ -224,7 +179,7 @@ impl Inner {
     async fn handle_command(
         &self,
         command: Command,
-        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+        unlocked_tx: &mpsc::Sender<AwaitDrop>,
     ) -> bool {
         match command {
             Command::Work(result_tx) => {
@@ -243,7 +198,7 @@ impl Inner {
     async fn work(
         &self,
         error_handling: ErrorHandling,
-        unlocked_tx: &mpsc::Sender<UnlockNotify>,
+        unlocked_tx: &mpsc::Sender<AwaitDrop>,
     ) -> Result<()> {
         tracing::trace!("job started");
 
@@ -272,6 +227,67 @@ impl Inner {
         tracing::trace!("job completed");
 
         Ok(())
+    }
+}
+
+#[derive(Copy, Clone)]
+enum State {
+    Working,
+    Waiting,
+    Terminated,
+}
+
+struct Waiter {
+    event_rx: IgnoreScopeReceiver,
+    unlocked: FuturesUnordered<AwaitDrop>,
+    unlocked_rx: mpsc::Receiver<AwaitDrop>,
+}
+
+impl Waiter {
+    fn new(
+        event_rx: broadcast::Receiver<Event>,
+        event_scope: EventScope,
+        unlocked_rx: mpsc::Receiver<AwaitDrop>,
+    ) -> Self {
+        Self {
+            event_rx: IgnoreScopeReceiver::new(event_rx, event_scope),
+            unlocked: FuturesUnordered::new(),
+            unlocked_rx,
+        }
+    }
+
+    async fn wait(&mut self, state: State) -> ControlFlow<State, State> {
+        select! {
+            event = self.event_rx.recv() => {
+                tracing::trace!(?event, "event received");
+
+                match event {
+                    Ok(Payload::BranchChanged(_)) => {
+                        // On `BranchChanged`, interrupt the current job and
+                        // immediately start a new one.
+                        ControlFlow::Break(State::Working)
+                    }
+                    Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
+                        // On any other event, let the current job run to completion
+                        // and then start a new one.
+                        ControlFlow::Continue(State::Working)
+                    }
+                    Err(RecvError::Closed) => {
+                        ControlFlow::Break(State::Terminated)
+                    }
+                }
+            }
+            _ = self.unlocked.next(), if !self.unlocked.is_empty() => {
+                tracing::trace!("lock released");
+                ControlFlow::Continue(State::Working)
+            }
+            notify = self.unlocked_rx.recv() => {
+                // unwrap ok because the sender is not destroyed until the end
+                // of this function.
+                self.unlocked.push(notify.unwrap());
+                ControlFlow::Continue(state)
+            }
+        }
     }
 }
 
@@ -325,10 +341,7 @@ mod prune {
     use super::*;
 
     #[instrument(name = "prune", skip_all)]
-    pub(super) async fn run(
-        shared: &Shared,
-        unlocked_tx: &mpsc::Sender<UnlockNotify>,
-    ) -> Result<()> {
+    pub(super) async fn run(shared: &Shared, unlocked_tx: &mpsc::Sender<AwaitDrop>) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
 
         // When there are multiple branches with the same vv but different hash we need to preserve
@@ -589,6 +602,9 @@ mod scan {
         if locks.is_empty() {
             return Ok(());
         }
+
+        // TODO: get the AwaitDrops of the locks and put them into `unlocked` so we can retry the
+        // garbage collect when the blob locks get released.
 
         for (branch_id, blob_ids) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };

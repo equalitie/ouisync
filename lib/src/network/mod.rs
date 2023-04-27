@@ -678,7 +678,7 @@ impl Inner {
                         "duplicate from different source - awaiting permit"
                     );
 
-                    on_release.recv().await;
+                    on_release.await;
                     continue;
                 }
             };
@@ -790,7 +790,7 @@ impl Inner {
             monitor,
         };
 
-        released.recv().await;
+        released.await;
 
         true
     }

@@ -113,7 +113,7 @@ impl ParentContext {
         let new_lock = loop {
             match dst_branch.locker().try_unique(new_blob_id) {
                 Ok(lock) => break Ok(lock),
-                Err((notify, LockKind::Unique)) => notify.unlocked().await,
+                Err((notify, LockKind::Unique)) => notify.await,
                 Err((_, LockKind::Read | LockKind::Write)) => break Err(Error::Locked),
             }
         };

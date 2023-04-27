@@ -1,5 +1,14 @@
 //! Synchronization utilities
 
+use futures_util::StreamExt;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{ready, Context, Poll},
+};
+use tokio::sync::watch;
+use tokio_stream::wrappers::WatchStream;
+
 /// MPMC broadcast channel
 pub mod broadcast {
     use tokio::{
@@ -126,19 +135,19 @@ pub(crate) mod uninitialized_watch {
 //     on_dropped.recv().await;
 //
 pub struct DropAwaitable {
-    tx: tokio::sync::watch::Sender<()>,
+    tx: watch::Sender<()>,
 }
 
 impl DropAwaitable {
     pub fn new() -> Self {
         Self {
-            tx: tokio::sync::watch::channel(()).0,
+            tx: watch::channel(()).0,
         }
     }
 
     pub fn subscribe(&self) -> AwaitDrop {
         AwaitDrop {
-            rx: self.tx.subscribe(),
+            rx: WatchStream::new(self.tx.subscribe()),
         }
     }
 }
@@ -149,14 +158,16 @@ impl Default for DropAwaitable {
     }
 }
 
-#[derive(Clone)]
 pub struct AwaitDrop {
-    rx: tokio::sync::watch::Receiver<()>,
+    rx: WatchStream<()>,
 }
 
-impl AwaitDrop {
-    pub async fn recv(mut self) {
-        while self.rx.changed().await.is_ok() {}
+impl Future for AwaitDrop {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        while ready!(self.rx.poll_next_unpin(cx)).is_some() {}
+        Poll::Ready(())
     }
 }
 

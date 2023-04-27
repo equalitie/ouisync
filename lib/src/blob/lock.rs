@@ -51,7 +51,7 @@ impl BranchLocker {
     /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
     /// given blob. The error contains a notifier so the caller can decide whether to wait for the
     /// lock to be released or fail immediately.
-    pub fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, UnlockNotify> {
+    pub fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, AwaitDrop> {
         let mut shared = self.shared.lock().unwrap();
 
         let state = shared
@@ -70,7 +70,7 @@ impl BranchLocker {
                     blob_id,
                 })
             }
-            Kind::Unique => Err(UnlockNotify(state.notify.subscribe())),
+            Kind::Unique => Err(state.notify.subscribe()),
         }
     }
 
@@ -79,7 +79,7 @@ impl BranchLocker {
         loop {
             match self.try_read(blob_id) {
                 Ok(lock) => return lock,
-                Err(notify) => notify.unlocked().await,
+                Err(notify) => notify.await,
             }
         }
     }
@@ -88,7 +88,7 @@ impl BranchLocker {
     /// The error contains an unlock notifier and the kind of lock currently being held. The caller
     /// can use them to decide whether they want to wait for the lock to be unlocked or fail
     /// immediately.
-    pub fn try_unique(&self, blob_id: BlobId) -> Result<UniqueLock, (UnlockNotify, LockKind)> {
+    pub fn try_unique(&self, blob_id: BlobId) -> Result<UniqueLock, (AwaitDrop, LockKind)> {
         let mut shared = self.shared.lock().unwrap();
 
         match shared.entry(self.branch_id).or_default().entry(blob_id) {
@@ -108,7 +108,7 @@ impl BranchLocker {
                     Kind::Unique => LockKind::Unique,
                 };
 
-                let notify = UnlockNotify(entry.get_mut().notify.subscribe());
+                let notify = entry.get_mut().notify.subscribe();
 
                 Err((notify, kind))
             }
@@ -304,14 +304,6 @@ impl UpgradableLock {
             }
             Self::Write(_) => true,
         }
-    }
-}
-
-pub(crate) struct UnlockNotify(AwaitDrop);
-
-impl UnlockNotify {
-    pub async fn unlocked(self) {
-        self.0.recv().await
     }
 }
 
