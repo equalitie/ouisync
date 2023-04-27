@@ -355,6 +355,9 @@ impl MonitoredDht {
     ) {
         let mut reported_failure = false;
 
+        // Give `MainlineDht` a chance to bootstrap.
+        time::sleep(Duration::from_secs(10)).await;
+
         loop {
             let (good, questionable) = match dht.load_contacts().await {
                 Ok((good, questionable)) => (good, questionable),
@@ -399,7 +402,7 @@ impl MonitoredDht {
                 }
             }
 
-            time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(60)).await;
         }
     }
 
