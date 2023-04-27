@@ -39,7 +39,7 @@ use tracing::instrument;
 pub struct Directory {
     blob: Blob,
     parent: Option<ParentContext>,
-    entries: Content,
+    content: Content,
     lock: Option<ReadLock>,
 }
 
@@ -95,23 +95,12 @@ impl Directory {
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
         let mut tx = self.branch().db().begin_read().await?;
-        let (blob, entries) = load(
-            &mut tx,
-            self.branch().clone(),
-            *self.locator(),
-            DirectoryFallback::Disabled,
-        )
-        .await?;
-
-        self.blob = blob;
-        self.entries = entries;
-
-        Ok(())
+        self.refresh_in(&mut tx).await
     }
 
     /// Lookup an entry of this directory by name.
     pub fn lookup(&self, name: &'_ str) -> Result<EntryRef> {
-        self.entries
+        self.content
             .get_key_value(name)
             .map(|(name, data)| EntryRef::new(self, name, data))
             .ok_or(Error::EntryNotFound)
@@ -119,7 +108,7 @@ impl Directory {
 
     /// Returns iterator over the entries of this directory.
     pub fn entries(&self) -> impl Iterator<Item = EntryRef> + DoubleEndedIterator + Clone {
-        self.entries
+        self.content
             .iter()
             .map(move |(name, data)| EntryRef::new(self, name, data))
     }
@@ -127,16 +116,18 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let mut tx = self.branch().db().begin_write().await?;
-        let mut content = self.load(&mut tx).await?;
+        self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
-        let version_vector = content
+        let version_vector = self
+            .content
             .initial_version_vector(&name)
             .incremented(*self.branch().id());
         let data = EntryData::file(blob_id, version_vector);
         let parent = self.create_parent_context(name.clone());
 
         let mut file = File::create(self.branch().clone(), Locator::head(blob_id), parent);
+        let mut content = self.content.clone();
 
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         file.save(&mut tx).await?;
@@ -160,11 +151,11 @@ impl Directory {
         op: VersionVectorOp<'_>,
     ) -> Result<Self> {
         let mut tx = self.branch().db().begin_write().await?;
-        let mut content = self.load(&mut tx).await?;
+        self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
 
-        let mut version_vector = content.initial_version_vector(&name);
+        let mut version_vector = self.content.initial_version_vector(&name);
         op.apply(self.branch().id(), &mut version_vector);
 
         let data = EntryData::directory(blob_id, version_vector);
@@ -172,6 +163,7 @@ impl Directory {
 
         let mut dir =
             Directory::create(self.branch().clone(), Locator::head(blob_id), Some(parent));
+        let mut content = self.content.clone();
 
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         dir.save(&mut tx, &Content::empty()).await?;
@@ -380,12 +372,12 @@ impl Directory {
         parent: Option<ParentContext>,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, entries) = load(tx, branch, locator, fallback).await?;
+        let (blob, content) = load(tx, branch, locator, fallback).await?;
 
         Ok(Self {
             blob,
             parent,
-            entries,
+            content,
             lock,
         })
     }
@@ -396,8 +388,8 @@ impl Directory {
         locator: Locator,
         fallback: DirectoryFallback,
     ) -> Result<Content> {
-        let (_, entries) = load(tx, branch, locator, fallback).await?;
-        Ok(entries)
+        let (_, content) = load(tx, branch, locator, fallback).await?;
+        Ok(content)
     }
 
     async fn open(
@@ -427,14 +419,14 @@ impl Directory {
         Directory {
             blob,
             parent,
-            entries: Content::empty(),
+            content: Content::empty(),
             lock: Some(lock),
         }
     }
 
     #[async_recursion]
     pub async fn debug_print(&self, print: DebugPrinter) {
-        for (name, entry_data) in &self.entries {
+        for (name, entry_data) in &self.content {
             print.display(&format_args!("{:?}: {:?}", name, entry_data));
 
             match entry_data {
@@ -581,7 +573,9 @@ impl Directory {
         name: String,
         data: EntryData,
     ) -> Result<(Content, Option<UniqueLock>)> {
-        let mut content = self.load(tx).await?;
+        self.refresh_in(tx).await?;
+
+        let mut content = self.content.clone();
         let old_lock = content.insert(self.branch(), name, data, None)?;
         self.save(tx, &content).await?;
         self.bump(tx, VersionVectorOp::IncrementLocal).await?;
@@ -589,9 +583,9 @@ impl Directory {
         Ok((content, old_lock))
     }
 
-    async fn load(&mut self, tx: &mut db::ReadTransaction) -> Result<Content> {
+    async fn refresh_in(&mut self, tx: &mut db::ReadTransaction) -> Result<()> {
         if self.blob.is_dirty() {
-            Ok(self.entries.clone())
+            Ok(())
         } else {
             let (blob, content) = load(
                 tx,
@@ -601,7 +595,9 @@ impl Directory {
             )
             .await?;
             self.blob = blob;
-            Ok(content)
+            self.content = content;
+
+            Ok(())
         }
     }
 
@@ -645,7 +641,7 @@ impl Directory {
 
     /// Finalize pending modifications. Call this only after the db transaction has been committed.
     fn finalize(&mut self, content: Content) {
-        self.entries = content;
+        self.content = content;
     }
 }
 

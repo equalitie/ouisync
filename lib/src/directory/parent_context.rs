@@ -52,7 +52,7 @@ impl ParentContext {
         op: VersionVectorOp<'_>,
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
-        let mut content = directory.entries.clone();
+        let mut content = directory.content.clone();
         content.bump(directory.branch(), &self.entry_name, op)?;
         directory.save(tx, &content).await?;
         directory.bump(tx, op).await?;
@@ -94,7 +94,7 @@ impl ParentContext {
 
         // Check whether the fork is allowed, to avoid the hard work in case it isn't.
         let old_blob_id = match directory
-            .entries
+            .content
             .check_insert(self.entry_name(), &src_entry_data)
         {
             Ok(id) => id,
@@ -137,7 +137,7 @@ impl ParentContext {
         directory.refresh().await?;
 
         match directory
-            .entries
+            .content
             .check_insert(self.entry_name(), &src_entry_data)
         {
             Ok(_) => (),
@@ -161,10 +161,7 @@ impl ParentContext {
         // cases the newly forked blob will be unlocked and eventually garbage-collected. This
         // wastes work but is otherwise harmless. The fork can be retried at any time.
         let mut tx = directory.branch().db().begin_write().await?;
-        let mut content = directory.load(&mut tx).await.map_err(|error| {
-            tracing::error!(?error);
-            error
-        })?;
+        directory.refresh_in(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 
         // Make sure `new_lock` always lives until the end of this function.
@@ -174,6 +171,8 @@ impl ParentContext {
         } else {
             old_lock
         };
+
+        let mut content = directory.content.clone();
 
         match content.insert(
             directory.branch(),

@@ -600,6 +600,8 @@ async fn version_vector_recreate_deleted_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn version_vector_fork() {
+    use tokio::time;
+
     // TODO: this test would be more precise without merger. Consider converting it to a
     // joint_directory test.
 
@@ -614,65 +616,71 @@ async fn version_vector_fork() {
 
     tracing::info!(local_id = ?local_branch.id(), remote_id = ?remote_branch.id());
 
-    let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
-    let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
-    let mut file = create_file_in_directory(&mut remote_parent, "foo.txt", &[]).await;
+    time::timeout(Duration::from_secs(5), async move {
+        let mut remote_root = remote_branch.open_or_create_root().await.unwrap();
+        let mut remote_parent = remote_root.create_directory("parent".into()).await.unwrap();
+        let mut file = create_file_in_directory(&mut remote_parent, "foo.txt", &[]).await;
 
-    remote_parent.refresh().await.unwrap();
-    let remote_parent_vv = remote_parent.version_vector().await.unwrap();
-    let remote_file_vv = file.version_vector().await.unwrap();
+        remote_parent.refresh().await.unwrap();
+        let remote_parent_vv = remote_parent.version_vector().await.unwrap();
+        let remote_file_vv = file.version_vector().await.unwrap();
 
-    file.fork(local_branch.clone()).await.unwrap();
+        tracing::info!("step 1");
+        file.fork(local_branch.clone()).await.unwrap();
+        tracing::info!("step 2");
 
-    let local_file_vv_0 = file.version_vector().await.unwrap();
-    assert_eq!(local_file_vv_0, remote_file_vv);
+        let local_file_vv_0 = file.version_vector().await.unwrap();
+        assert_eq!(local_file_vv_0, remote_file_vv);
 
-    let local_parent_vv_0 = local_branch
-        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-        .await
-        .unwrap()
-        .lookup("parent")
-        .unwrap()
-        .version_vector()
-        .clone();
+        let local_parent_vv_0 = local_branch
+            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+            .await
+            .unwrap()
+            .lookup("parent")
+            .unwrap()
+            .version_vector()
+            .clone();
 
-    assert!(local_parent_vv_0 <= remote_parent_vv);
+        assert!(local_parent_vv_0 <= remote_parent_vv);
 
-    drop(file);
+        drop(file);
 
-    // modify the file and fork again
-    let mut file = remote_parent
-        .lookup("foo.txt")
-        .unwrap()
-        .file()
-        .unwrap()
-        .open()
-        .await
-        .unwrap();
-    file.write(b"hello").await.unwrap();
-    file.flush().await.unwrap();
+        // modify the file and fork again
+        let mut file = remote_parent
+            .lookup("foo.txt")
+            .unwrap()
+            .file()
+            .unwrap()
+            .open()
+            .await
+            .unwrap();
+        file.write(b"hello").await.unwrap();
+        file.flush().await.unwrap();
 
-    remote_parent.refresh().await.unwrap();
-    let remote_parent_vv = remote_parent.version_vector().await.unwrap();
-    let remote_file_vv = file.version_vector().await.unwrap();
+        remote_parent.refresh().await.unwrap();
+        let remote_parent_vv = remote_parent.version_vector().await.unwrap();
+        let remote_file_vv = file.version_vector().await.unwrap();
 
-    file.fork(local_branch.clone()).await.unwrap();
+        file.fork(local_branch.clone()).await.unwrap();
 
-    let local_file_vv_1 = file.version_vector().await.unwrap();
-    assert_eq!(local_file_vv_1, remote_file_vv);
-    assert!(local_file_vv_1 > local_file_vv_0);
+        let local_file_vv_1 = file.version_vector().await.unwrap();
+        assert_eq!(local_file_vv_1, remote_file_vv);
+        assert!(local_file_vv_1 > local_file_vv_0);
 
-    let local_parent_vv_1 = local_branch
-        .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
-        .await
-        .unwrap()
-        .lookup("parent")
-        .unwrap()
-        .version_vector()
-        .clone();
+        let local_parent_vv_1 = local_branch
+            .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
+            .await
+            .unwrap()
+            .lookup("parent")
+            .unwrap()
+            .version_vector()
+            .clone();
 
-    assert!(local_parent_vv_1 <= remote_parent_vv);
-    assert!(local_parent_vv_1 >= local_parent_vv_0);
+        assert!(local_parent_vv_1 <= remote_parent_vv);
+        assert!(local_parent_vv_1 >= local_parent_vv_0);
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
