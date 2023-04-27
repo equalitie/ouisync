@@ -30,13 +30,22 @@ impl Locker {
         }
     }
 
-    /// Returns the ids of all currently locked blobs grouped by their branch id.
-    pub fn all(&self) -> Vec<(PublicKey, Vec<BlobId>)> {
+    /// Returns the blob_ids and unlock notifiers of all currently held locks, grouped by their
+    /// branch id.
+    pub fn all(&self) -> Vec<(PublicKey, Vec<(BlobId, AwaitDrop)>)> {
         self.shared
             .lock()
             .unwrap()
             .iter()
-            .map(|(branch_id, states)| (*branch_id, states.keys().copied().collect()))
+            .map(|(branch_id, states)| {
+                (
+                    *branch_id,
+                    states
+                        .iter()
+                        .map(|(blob_id, state)| (*blob_id, state.notify.subscribe()))
+                        .collect(),
+                )
+            })
             .collect()
     }
 }
