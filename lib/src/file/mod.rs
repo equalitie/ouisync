@@ -147,11 +147,11 @@ impl File {
             .await?;
 
         let uncommitted_block_counter = self.branch().uncommitted_block_counter().clone();
-        let branch_data = self.branch().data().clone();
+        let event_tx = self.branch().notify();
 
         tx.commit_and_then(move || {
             uncommitted_block_counter.reset();
-            branch_data.notify();
+            event_tx.send();
         })
         .await?;
 
@@ -235,14 +235,13 @@ mod tests {
         crypto::sign::PublicKey,
         db,
         directory::{DirectoryFallback, DirectoryLocking},
-        event::Event,
+        event::EventSender,
         index::BranchData,
         state_monitor::StateMonitor,
         test_utils,
     };
     use assert_matches::assert_matches;
     use tempfile::TempDir;
-    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
@@ -362,8 +361,8 @@ mod tests {
         let monitor = StateMonitor::make_root();
         let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
-        let (event_tx, _) = broadcast::channel(1);
-        let shared = BranchShared::new(event_tx.clone());
+        let event_tx = EventSender::new(1);
+        let shared = BranchShared::new();
 
         let branches = [(); N]
             .map(|_| create_branch(pool.clone(), event_tx.clone(), keys.clone(), shared.clone()));
@@ -373,13 +372,13 @@ mod tests {
 
     fn create_branch(
         pool: db::Pool,
-        event_tx: broadcast::Sender<Event>,
+        event_tx: EventSender,
         keys: AccessKeys,
         shared: BranchShared,
     ) -> Branch {
         let id = PublicKey::random();
-        let branch_data = BranchData::new(id, event_tx);
-        Branch::new(pool, branch_data, keys, shared)
+        let branch_data = BranchData::new(id);
+        Branch::new(pool, branch_data, keys, shared, event_tx)
     }
 }
 

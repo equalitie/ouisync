@@ -5,6 +5,7 @@ use crate::{
     branch::BranchShared,
     crypto::sign::PublicKey,
     error::Error,
+    event::EventSender,
     index::BranchData,
     state_monitor::StateMonitor,
     test_utils,
@@ -13,7 +14,6 @@ use proptest::collection::vec;
 use rand::{distributions::Standard, prelude::*};
 use tempfile::TempDir;
 use test_strategy::proptest;
-use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_blob() {
@@ -620,13 +620,19 @@ async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, db::Pool, [Br
     let monitor = StateMonitor::make_root();
     let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
-    let (event_tx, _) = broadcast::channel(1);
-    let shared = BranchShared::new(event_tx.clone());
+    let event_tx = EventSender::new(1);
+    let shared = BranchShared::new();
 
     let branches = [(); N].map(|_| {
         let id = PublicKey::random();
-        let data = BranchData::new(id, event_tx.clone());
-        Branch::new(pool.clone(), data, keys.clone(), shared.clone())
+        let data = BranchData::new(id);
+        Branch::new(
+            pool.clone(),
+            data,
+            keys.clone(),
+            shared.clone(),
+            event_tx.clone(),
+        )
     });
 
     (rng, base_dir, pool, branches)

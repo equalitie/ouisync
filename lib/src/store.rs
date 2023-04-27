@@ -4,7 +4,7 @@ use crate::{
     block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
     db,
     error::{Error, Result},
-    event::{Event, EventScope, Payload},
+    event::Payload,
     index::{self, Index},
     progress::Progress,
     repository::{LocalId, Metadata, RepositoryMonitor},
@@ -101,13 +101,10 @@ impl Store {
 
             // Notify affected branches.
             for writer_id in writer_ids {
-                index.notify(Event::new(
-                    EventScope::DEFAULT,
-                    Payload::BlockReceived {
-                        block_id: data_id,
-                        branch_id: writer_id,
-                    },
-                ));
+                index.notify().send(Payload::BlockReceived {
+                    block_id: data_id,
+                    branch_id: writer_id,
+                });
             }
 
             block_tracker.complete(&data_id);
@@ -200,6 +197,7 @@ mod tests {
         },
         db,
         error::Error,
+        event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
             BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
@@ -214,7 +212,6 @@ mod tests {
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use tempfile::TempDir;
     use test_strategy::proptest;
-    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
@@ -222,10 +219,9 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let (notify_tx, _) = broadcast::channel(1);
 
-        let branch0 = BranchData::new(PublicKey::random(), notify_tx.clone());
-        let branch1 = BranchData::new(PublicKey::random(), notify_tx);
+        let branch0 = BranchData::new(PublicKey::random());
+        let branch1 = BranchData::new(PublicKey::random());
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
@@ -288,9 +284,8 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let (notify_tx, _) = broadcast::channel(1);
 
-        let branch = BranchData::new(PublicKey::random(), notify_tx.clone());
+        let branch = BranchData::new(PublicKey::random());
 
         let locator = Locator::head(rng.gen());
         let locator = locator.encode(&read_key);
@@ -672,7 +667,7 @@ mod tests {
     }
 
     fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
-        let (event_tx, _) = broadcast::channel(1);
+        let event_tx = EventSender::new(1);
         let index = Index::new(pool, repo_id, event_tx);
         Store {
             index,

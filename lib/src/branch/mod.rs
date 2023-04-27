@@ -7,7 +7,7 @@ use crate::{
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
-    event::{Event, EventScope},
+    event::{EventScope, EventSender, Payload},
     file::File,
     index::BranchData,
     locator::Locator,
@@ -19,7 +19,6 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
-use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct Branch {
@@ -27,6 +26,7 @@ pub struct Branch {
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
+    event_tx: EventSender,
 }
 
 impl Branch {
@@ -35,12 +35,14 @@ impl Branch {
         branch_data: BranchData,
         keys: AccessKeys,
         shared: BranchShared,
+        event_tx: EventSender,
     ) -> Self {
         Self {
             pool,
             branch_data,
             keys,
             shared,
+            event_tx,
         }
     }
 
@@ -48,7 +50,7 @@ impl Branch {
     /// belonging to it (files, directories) will be sent with this scope.
     pub(crate) fn with_event_scope(self, event_scope: EventScope) -> Self {
         Self {
-            branch_data: self.branch_data.with_event_scope(event_scope),
+            event_tx: self.event_tx.with_scope(event_scope),
             ..self
         }
     }
@@ -147,6 +149,13 @@ impl Branch {
         &self.shared.uncommitted_block_counter
     }
 
+    pub(crate) fn notify(&self) -> BranchEventSender {
+        BranchEventSender {
+            event_tx: self.event_tx.clone(),
+            branch_id: *self.id(),
+        }
+    }
+
     pub async fn debug_print(&self, print: DebugPrinter) {
         match self
             .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
@@ -174,8 +183,7 @@ pub(crate) struct BranchShared {
 }
 
 impl BranchShared {
-    // TODO: event_tx
-    pub fn new(_event_tx: broadcast::Sender<Event>) -> Self {
+    pub fn new() -> Self {
         Self {
             locker: Locker::new(),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
@@ -204,16 +212,28 @@ impl AtomicCounter {
     }
 }
 
+/// Sender to send event notification for the given branch.
+#[derive(Clone)]
+pub(crate) struct BranchEventSender {
+    event_tx: EventSender,
+    branch_id: PublicKey,
+}
+
+impl BranchEventSender {
+    pub fn send(&self) {
+        self.event_tx.send(Payload::BranchChanged(self.branch_id));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        access_control::WriteSecrets, db, index::Index, locator::Locator,
+        access_control::WriteSecrets, db, event::EventSender, index::Index, locator::Locator,
         state_monitor::StateMonitor,
     };
     use assert_matches::assert_matches;
     use tempfile::TempDir;
-    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn ensure_root_directory_exists() {
@@ -281,13 +301,13 @@ mod tests {
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
         let repository_id = secrets.id;
-        let (event_tx, _) = broadcast::channel(1);
+        let event_tx = EventSender::new(1);
 
         let index = Index::new(pool.clone(), repository_id, event_tx.clone());
 
-        let shared = BranchShared::new(event_tx);
+        let shared = BranchShared::new();
         let data = index.get_branch(writer_id);
-        let branch = Branch::new(pool, data, secrets.into(), shared);
+        let branch = Branch::new(pool, data, secrets.into(), shared, event_tx);
 
         (base_dir, branch)
     }

@@ -25,7 +25,7 @@ use crate::{
     db,
     debug::DebugPrinter,
     error::{Error, Result},
-    event::Event,
+    event::{Event, EventSender, Payload},
     repository::RepositoryId,
     version_vector::VersionVector,
 };
@@ -41,19 +41,15 @@ pub(crate) type SnapshotId = u32;
 pub(crate) struct Index {
     pub pool: db::Pool,
     repository_id: RepositoryId,
-    notify_tx: broadcast::Sender<Event>,
+    event_tx: EventSender,
 }
 
 impl Index {
-    pub fn new(
-        pool: db::Pool,
-        repository_id: RepositoryId,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> Self {
+    pub fn new(pool: db::Pool, repository_id: RepositoryId, event_tx: EventSender) -> Self {
         Self {
             pool,
             repository_id,
-            notify_tx,
+            event_tx,
         }
     }
 
@@ -62,31 +58,27 @@ impl Index {
     }
 
     pub fn get_branch(&self, writer_id: PublicKey) -> BranchData {
-        BranchData::new(writer_id, self.notify_tx.clone())
+        BranchData::new(writer_id)
     }
 
     pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.pool.acquire().await?;
-        BranchData::load_all(&mut conn, self.notify_tx.clone())
-            .try_collect()
-            .await
+        BranchData::load_all(&mut conn).try_collect().await
     }
 
     /// Load latest snapshots of all branches.
     pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
         let mut conn = self.pool.acquire().await?;
-        SnapshotData::load_all(&mut conn, self.notify_tx.clone())
-            .try_collect()
-            .await
+        SnapshotData::load_all(&mut conn).try_collect().await
     }
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.notify_tx.subscribe()
+        self.event_tx.subscribe()
     }
 
-    pub(crate) fn notify(&self, event: Event) {
-        self.notify_tx.send(event).unwrap_or(0);
+    pub(crate) fn notify(&self) -> &EventSender {
+        &self.event_tx
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -265,11 +257,9 @@ impl Index {
 
         if !completed.is_empty() {
             for branch_id in &completed {
-                let branch = self.get_branch(*branch_id);
-
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
-                    let snapshot = branch.load_snapshot(&mut conn).await?;
+                    let snapshot = self.get_branch(*branch_id).load_snapshot(&mut conn).await?;
                     tracing::debug!(
                         branch_id = ?snapshot.branch_id(),
                         hash = ?snapshot.root_hash(),
@@ -278,7 +268,7 @@ impl Index {
                     );
                 }
 
-                branch.notify();
+                self.notify().send(Payload::BranchChanged(*branch_id));
             }
         }
 

@@ -11,6 +11,7 @@ use crate::{
     block::{self, BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
+    event::EventSender,
     repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
@@ -20,7 +21,7 @@ use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use tempfile::TempDir;
-use tokio::{sync::broadcast, task};
+use tokio::task;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
@@ -687,7 +688,7 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
-    let (event_tx, _) = broadcast::channel(1);
+    let event_tx = EventSender::new(1);
     let index = Index::new(pool, repository_id, event_tx);
 
     (base_dir, index, write_keys)

@@ -651,8 +651,8 @@ mod scan {
                 // If we modified the local branch (by removing nodes from it), we need to notify,
                 // to let other replicas know about the change. Using `commit_and_then` to handle
                 // possible cancellation.
-                let branch = branch.data().clone();
-                tx.commit_and_then(move || branch.notify()).await?
+                let event_tx = branch.notify();
+                tx.commit_and_then(move || event_tx.send()).await?
             } else {
                 // Using regular `commit` here because if there is nothing to notify then we don't
                 // care about cancellation.

@@ -8,7 +8,7 @@ use crate::{
     block::{self, BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
-    event::Event,
+    event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
@@ -368,7 +368,7 @@ async fn create_store<R: Rng + CryptoRng>(
     let (base_dir, db) = db::create_temp(&monitor).await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
-    let (event_tx, _) = broadcast::channel(1);
+    let event_tx = EventSender::new(1);
 
     let index = Index::new(db, repository_id, event_tx);
     // index.create_branch(writer_id, write_keys).await.unwrap();
@@ -480,7 +480,7 @@ async fn create_changeset(
         .unwrap();
     tx.commit().await.unwrap();
 
-    branch.notify();
+    index.notify().send(Payload::BranchChanged(*branch.id()));
 }
 
 async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, write_keys: &Keypair) {

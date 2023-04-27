@@ -617,8 +617,8 @@ impl Directory {
 
     /// Atomically commits the transaction and sends notification event.
     async fn commit(&mut self, tx: db::WriteTransaction) -> Result<()> {
-        let branch = self.branch().data().clone();
-        tx.commit_and_then(move || branch.notify()).await?;
+        let event_tx = self.branch().notify();
+        tx.commit_and_then(move || event_tx.send()).await?;
         Ok(())
     }
 

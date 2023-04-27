@@ -12,55 +12,33 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    event::{Event, EventScope, Payload},
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, TryStreamExt};
-use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
 
 #[derive(Clone)]
 pub(crate) struct BranchData {
     writer_id: PublicKey,
-    notify_tx: broadcast::Sender<Event>,
-    event_scope: EventScope,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<Event>) -> Self {
-        Self {
-            writer_id,
-            notify_tx,
-            event_scope: EventScope::DEFAULT,
-        }
-    }
-
-    pub fn with_event_scope(self, event_scope: EventScope) -> Self {
-        Self {
-            event_scope,
-            ..self
-        }
+    pub fn new(writer_id: PublicKey) -> Self {
+        Self { writer_id }
     }
 
     /// Load all branches
-    pub fn load_all(
-        conn: &mut db::Connection,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
-        SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
+    pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        SnapshotData::load_all(conn).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
-        Ok(SnapshotData {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-            event_scope: self.event_scope,
-        })
+        Ok(SnapshotData { root_node })
     }
 
     pub async fn load_or_create_snapshot(
@@ -80,11 +58,7 @@ impl BranchData {
             RootNode::empty(self.writer_id, write_keys)
         };
 
-        Ok(SnapshotData {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-            event_scope: self.event_scope,
-        })
+        Ok(SnapshotData { root_node })
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -159,16 +133,6 @@ impl BranchData {
         count_leaf_nodes(conn, 0, &root_hash).await
     }
 
-    /// Trigger a notification event from this branch.
-    pub fn notify(&self) {
-        self.notify_tx
-            .send(Event::new(
-                self.event_scope,
-                Payload::BranchChanged(self.writer_id),
-            ))
-            .unwrap_or(0);
-    }
-
     /// Update the root version vector of this branch.
     ///
     /// # Cancel safety
@@ -190,30 +154,21 @@ impl BranchData {
 
 pub(crate) struct SnapshotData {
     pub(super) root_node: RootNode,
-    notify_tx: broadcast::Sender<Event>,
-    event_scope: EventScope,
 }
 
 impl SnapshotData {
     /// Load all latest snapshots
-    pub fn load_all(
-        conn: &mut db::Connection,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
-        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self {
-            root_node,
-            notify_tx: notify_tx.clone(),
-            event_scope: EventScope::DEFAULT,
-        })
+    pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self { root_node })
     }
 
     /// Load previous snapshot
     pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
-        Ok(self.root_node.load_prev(conn).await?.map(|root_node| Self {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-            event_scope: self.event_scope,
-        }))
+        Ok(self
+            .root_node
+            .load_prev(conn)
+            .await?
+            .map(|root_node| Self { root_node }))
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -229,8 +184,6 @@ impl SnapshotData {
     pub fn to_branch_data(&self) -> BranchData {
         BranchData {
             writer_id: self.root_node.proof.writer_id,
-            notify_tx: self.notify_tx.clone(),
-            event_scope: self.event_scope,
         }
     }
 
@@ -869,9 +822,7 @@ mod tests {
 
     async fn setup() -> (TempDir, db::Pool, BranchData) {
         let (base_dir, pool) = init_db().await;
-
-        let (notify_tx, _) = broadcast::channel(1);
-        let branch = BranchData::new(PublicKey::random(), notify_tx);
+        let branch = BranchData::new(PublicKey::random());
 
         (base_dir, pool, branch)
     }

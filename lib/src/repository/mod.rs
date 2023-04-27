@@ -25,7 +25,7 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
     error::{Error, Result},
-    event::Event,
+    event::{Event, EventSender},
     file::File,
     index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
@@ -191,8 +191,8 @@ impl Repository {
         secrets: AccessSecrets,
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
-        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        let index = Index::new(pool, *secrets.id(), event_tx.clone());
+        let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
+        let index = Index::new(pool, *secrets.id(), event_tx);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -218,7 +218,7 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            branch_shared: BranchShared::new(event_tx),
+            branch_shared: BranchShared::new(),
         });
 
         let local_branch = if shared.secrets.can_write() {
@@ -812,6 +812,7 @@ impl Shared {
             data,
             keys,
             self.branch_shared.clone(),
+            self.store.index.notify().clone(),
         ))
     }
 }

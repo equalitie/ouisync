@@ -30,8 +30,15 @@ pub struct Event {
 }
 
 impl Event {
-    pub(crate) fn new(scope: EventScope, payload: Payload) -> Self {
-        Self { payload, scope }
+    pub(crate) fn new(payload: Payload) -> Self {
+        Self {
+            payload,
+            scope: EventScope::DEFAULT,
+        }
+    }
+
+    pub(crate) fn with_scope(self, scope: EventScope) -> Self {
+        Self { scope, ..self }
     }
 }
 
@@ -45,6 +52,35 @@ impl EventScope {
     pub fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct EventSender {
+    inner: broadcast::Sender<Event>,
+    scope: EventScope,
+}
+
+impl EventSender {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: broadcast::channel(capacity).0,
+            scope: EventScope::DEFAULT,
+        }
+    }
+
+    pub fn with_scope(self, scope: EventScope) -> Self {
+        Self { scope, ..self }
+    }
+
+    pub fn send(&self, payload: Payload) {
+        self.inner
+            .send(Event::new(payload).with_scope(self.scope))
+            .unwrap_or(0);
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.inner.subscribe()
     }
 }
 
