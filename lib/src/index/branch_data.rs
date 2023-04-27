@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 
 use super::{
-    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
+    node::{
+        self, InnerNode, LeafNode, MultiBlockPresence, RootNode, SingleBlockPresence,
+        INNER_LAYER_COUNT,
+    },
     path::Path,
     proof::Proof,
     Summary, VersionVectorOp,
@@ -123,6 +126,11 @@ impl SnapshotData {
     /// Returns the root node hash of this snapshot.
     pub fn root_hash(&self) -> &Hash {
         &self.root_node.proof.hash
+    }
+
+    /// Returns the block presence of this snapshot
+    pub fn block_presence(&self) -> &MultiBlockPresence {
+        &self.root_node.summary.block_presence
     }
 
     pub fn to_branch_data(&self) -> BranchData {

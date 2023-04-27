@@ -339,6 +339,11 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
+    use crate::{
+        crypto::sign::PublicKey,
+        index::{MultiBlockPresence, SnapshotData},
+    };
+    use std::cmp::Ordering;
 
     #[instrument(name = "prune", skip_all)]
     pub(super) async fn run(shared: &Shared, unlocked_tx: &mpsc::Sender<AwaitDrop>) -> Result<()> {
@@ -347,8 +352,8 @@ mod prune {
         // When there are multiple branches with the same vv but different hash we need to preserve
         // them because we might need them to request missing blocks. But once the local branch has
         // all blocks we can prune them.
-        // TODO: actually prune them
-        let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
+        let (uptodate, outdated): (Vec<_>, Vec<_>) =
+            versioned::partition(all, Tiebreaker(&shared.this_writer_id));
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -393,6 +398,24 @@ mod prune {
         }
 
         Ok(())
+    }
+
+    // If one of the snapshots is local and has all blocks discard the other one, otherwise keep
+    // both.
+    struct Tiebreaker<'a>(&'a PublicKey);
+
+    impl versioned::Tiebreaker<SnapshotData> for Tiebreaker<'_> {
+        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
+            match (lhs.branch_id() == self.0, rhs.branch_id() == self.0) {
+                (true, false) if lhs.block_presence() == &MultiBlockPresence::Full => {
+                    Ordering::Greater
+                }
+                (false, true) if rhs.block_presence() == &MultiBlockPresence::Full => {
+                    Ordering::Less
+                }
+                _ => Ordering::Equal,
+            }
+        }
     }
 }
 
