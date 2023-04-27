@@ -1,6 +1,7 @@
 pub mod config;
 pub mod constants;
 pub mod device_id;
+pub mod dht_contacts;
 pub mod error;
 pub mod logger;
 pub mod network;

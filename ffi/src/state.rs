@@ -20,7 +20,12 @@ pub(crate) struct State {
 impl State {
     pub fn new(configs_path: PathBuf, root_monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(configs_path);
-        let network = Network::new(root_monitor.make_child("Network"));
+
+        let network = Network::new(
+            Some(config.dht_contacts_store()),
+            root_monitor.make_child("Network"),
+        );
+
         let repos_monitor = root_monitor.make_child("Repositories");
 
         Self {

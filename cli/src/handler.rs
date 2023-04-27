@@ -30,7 +30,11 @@ pub(crate) struct State {
 impl State {
     pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
         let config = ConfigStore::new(&dirs.config_dir);
-        let network = Network::new(monitor.make_child("Network"));
+
+        let network = Network::new(
+            Some(config.dht_contacts_store()),
+            monitor.make_child("Network"),
+        );
 
         network::init(
             &network,

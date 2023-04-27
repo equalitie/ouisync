@@ -142,7 +142,7 @@ pub(crate) mod actor {
     use ouisync::StateMonitor;
 
     pub(crate) fn create_unbound_network() -> Network {
-        Network::new(StateMonitor::make_root())
+        Network::new(None, StateMonitor::make_root())
     }
 
     pub(crate) async fn create_network(proto: Proto) -> Network {
