@@ -33,10 +33,13 @@ impl Worker {
         let (command_tx, command_rx) = mpsc::channel(1);
         let (abort_tx, abort_rx) = oneshot::channel();
 
+        let event_scope = EventScope::new();
+        let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
+
         let inner = Inner {
             shared,
             local_branch,
-            event_scope: EventScope::new(),
+            event_scope,
         };
 
         let worker = Self {
@@ -246,10 +249,7 @@ impl Inner {
 
         // Merge
         if let Some(local_branch) = &self.local_branch {
-            let result = self
-                .event_scope
-                .apply(merge::run(&self.shared, local_branch))
-                .await;
+            let result = merge::run(&self.shared, local_branch).await;
             tracing::trace!(?result, "merge completed");
 
             error_handling.apply(result)?;
@@ -263,7 +263,7 @@ impl Inner {
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = self.event_scope.apply(scan::run(&self.shared)).await;
+            let result = scan::run(&self.shared, self.local_branch.as_ref()).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
@@ -296,7 +296,7 @@ mod merge {
 
     #[instrument(name = "merge", skip_all)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let branches = shared.load_branches().await?;
+        let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -423,8 +423,8 @@ mod scan {
         }
     }
 
-    #[instrument(name = "scan", skip(shared))]
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+    #[instrument(name = "scan", skip_all)]
+    pub(super) async fn run(shared: &Shared, local_branch: Option<&Branch>) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
         // blocks. The subsequent passes (if any) for collecting only.
@@ -441,14 +441,14 @@ mod scan {
 
             process_locked_blocks(shared, &mut unreachable_block_ids).await?;
 
-            mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
+            mode = traverse_root(shared, local_branch, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
                 mode
             } else {
                 break;
             };
 
-            remove_unreachable_blocks(shared, unreachable_block_ids).await?;
+            remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
         Ok(())
@@ -456,6 +456,7 @@ mod scan {
 
     async fn traverse_root(
         shared: &Shared,
+        local_branch: Option<&Branch>,
         mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<Mode> {
@@ -493,12 +494,11 @@ mod scan {
             process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
-        let local_branch = shared.local_branch().ok();
         traverse(
             shared,
             mode,
             unreachable_block_ids,
-            JointDirectory::new(local_branch, versions),
+            JointDirectory::new(local_branch.cloned(), versions),
         )
         .await
     }
@@ -609,6 +609,7 @@ mod scan {
 
     async fn remove_unreachable_blocks(
         shared: &Shared,
+        local_branch: Option<&Branch>,
         unreachable_block_ids: BTreeSet<BlockId>,
     ) -> Result<()> {
         // We need to delete the blocks and also mark them as missing (so they can be requested in
@@ -621,7 +622,6 @@ mod scan {
         let mut batch = Vec::with_capacity(BATCH_SIZE);
         let mut total_count = 0;
 
-        let local_branch = shared.local_branch().ok();
         let local_branch_and_write_keys = local_branch
             .as_ref()
             .and_then(|branch| branch.keys().write().map(|keys| (branch, keys)));

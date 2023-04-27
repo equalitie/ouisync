@@ -12,7 +12,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    event::{Event, Payload},
+    event::{Event, EventScope, Payload},
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
@@ -25,6 +25,7 @@ type LocatorHash = Hash;
 pub(crate) struct BranchData {
     writer_id: PublicKey,
     notify_tx: broadcast::Sender<Event>,
+    event_scope: EventScope,
 }
 
 impl BranchData {
@@ -33,6 +34,14 @@ impl BranchData {
         Self {
             writer_id,
             notify_tx,
+            event_scope: EventScope::DEFAULT,
+        }
+    }
+
+    pub fn with_event_scope(self, event_scope: EventScope) -> Self {
+        Self {
+            event_scope,
+            ..self
         }
     }
 
@@ -50,6 +59,7 @@ impl BranchData {
         Ok(SnapshotData {
             root_node,
             notify_tx: self.notify_tx.clone(),
+            event_scope: self.event_scope,
         })
     }
 
@@ -73,6 +83,7 @@ impl BranchData {
         Ok(SnapshotData {
             root_node,
             notify_tx: self.notify_tx.clone(),
+            event_scope: self.event_scope,
         })
     }
 
@@ -151,7 +162,10 @@ impl BranchData {
     /// Trigger a notification event from this branch.
     pub fn notify(&self) {
         self.notify_tx
-            .send(Event::new(Payload::BranchChanged(self.writer_id)))
+            .send(Event::new(
+                self.event_scope,
+                Payload::BranchChanged(self.writer_id),
+            ))
             .unwrap_or(0);
     }
 
@@ -177,6 +191,7 @@ impl BranchData {
 pub(crate) struct SnapshotData {
     pub(super) root_node: RootNode,
     notify_tx: broadcast::Sender<Event>,
+    event_scope: EventScope,
 }
 
 impl SnapshotData {
@@ -188,6 +203,7 @@ impl SnapshotData {
         RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self {
             root_node,
             notify_tx: notify_tx.clone(),
+            event_scope: EventScope::DEFAULT,
         })
     }
 
@@ -196,6 +212,7 @@ impl SnapshotData {
         Ok(self.root_node.load_prev(conn).await?.map(|root_node| Self {
             root_node,
             notify_tx: self.notify_tx.clone(),
+            event_scope: self.event_scope,
         }))
     }
 
@@ -213,6 +230,7 @@ impl SnapshotData {
         BranchData {
             writer_id: self.root_node.proof.writer_id,
             notify_tx: self.notify_tx.clone(),
+            event_scope: self.event_scope,
         }
     }
 

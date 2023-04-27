@@ -2,15 +2,8 @@
 #![allow(clippy::declare_interior_mutable_const)]
 
 use crate::{block::BlockId, crypto::sign::PublicKey};
-use std::{
-    future::Future,
-    sync::atomic::{AtomicUsize, Ordering},
-};
-use tokio::{sync::broadcast, task_local};
-
-task_local! {
-    static CURRENT_SCOPE: EventScope;
-}
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::broadcast;
 
 #[derive(Copy, Clone, Debug)]
 #[non_exhaustive]
@@ -37,11 +30,7 @@ pub struct Event {
 }
 
 impl Event {
-    pub(crate) fn new(payload: Payload) -> Self {
-        let scope = CURRENT_SCOPE
-            .try_with(|scope| *scope)
-            .unwrap_or(EventScope::DEFAULT);
-
+    pub(crate) fn new(scope: EventScope, payload: Payload) -> Self {
         Self { payload, scope }
     }
 }
@@ -50,16 +39,12 @@ impl Event {
 pub(crate) struct EventScope(usize);
 
 impl EventScope {
-    const DEFAULT: Self = Self(0);
+    pub const DEFAULT: Self = Self(0);
 
     /// Creates new scope.
     pub fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub async fn apply<F: Future>(self, f: F) -> F::Output {
-        CURRENT_SCOPE.scope(self, f).await
     }
 }
 

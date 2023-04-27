@@ -7,7 +7,7 @@ use crate::{
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
-    event::Event,
+    event::{Event, EventScope},
     file::File,
     index::BranchData,
     locator::Locator,
@@ -41,6 +41,15 @@ impl Branch {
             branch_data,
             keys,
             shared,
+        }
+    }
+
+    /// Binds the given event scope to this branch. Any event from this branch or any objects
+    /// belonging to it (files, directories) will be sent with this scope.
+    pub(crate) fn with_event_scope(self, event_scope: EventScope) -> Self {
+        Self {
+            branch_data: self.branch_data.with_event_scope(event_scope),
+            ..self
         }
     }
 
