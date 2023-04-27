@@ -355,6 +355,16 @@ impl SharedWriteTransaction {
         // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().commit().await
     }
+
+    /// See [WriteTransaction::commit_and_then]
+    pub async fn commit_and_then<F, R>(mut self, f: F) -> Result<R, sqlx::Error>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        // `unwrap` is ok, see the NOTE above.
+        self.0.take().unwrap().commit_and_then(f).await
+    }
 }
 
 impl Deref for SharedWriteTransaction {

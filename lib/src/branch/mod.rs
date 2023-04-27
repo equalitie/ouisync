@@ -143,7 +143,7 @@ impl Branch {
         self.shared.locker.branch(*self.id())
     }
 
-    pub(crate) fn uncommitted_block_counter(&self) -> &AtomicCounter {
+    pub(crate) fn uncommitted_block_counter(&self) -> &Arc<AtomicCounter> {
         &self.shared.uncommitted_block_counter
     }
 

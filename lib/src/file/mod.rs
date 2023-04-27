@@ -145,11 +145,15 @@ impl File {
                 VersionVectorOp::IncrementLocal,
             )
             .await?;
-        // TODO: use commit_and_then
-        tx.commit().await?;
 
-        self.branch().uncommitted_block_counter().reset();
-        self.branch().data().notify();
+        let uncommitted_block_counter = self.branch().uncommitted_block_counter().clone();
+        let branch_data = self.branch().data().clone();
+
+        tx.commit_and_then(move || {
+            uncommitted_block_counter.reset();
+            branch_data.notify();
+        })
+        .await?;
 
         Ok(())
     }
