@@ -412,7 +412,7 @@ impl MonitoredDht {
     ) -> HashSet<SocketAddr> {
         if is_v4 {
             match contacts_store.load_v4().await {
-                Ok(mut contacts_store) => contacts_store.drain().map(SocketAddr::V4).collect(),
+                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V4).collect(),
                 Err(error) => {
                     tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
                     Default::default()
@@ -420,7 +420,7 @@ impl MonitoredDht {
             }
         } else {
             match contacts_store.load_v6().await {
-                Ok(mut contacts_store) => contacts_store.drain().map(SocketAddr::V6).collect(),
+                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V6).collect(),
                 Err(error) => {
                     tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
                     Default::default()

@@ -14,6 +14,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
 futures-util = { workspace = true }
+indexmap = "1.9.3"
 num_enum = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rand = { workspace = true }
