@@ -168,11 +168,7 @@ impl JointDirectory {
                     let next = curr
                         .lookup(name)
                         .find_map(|entry| entry.directory().ok())
-                        .ok_or(Error::EntryNotFound)
-                        .map_err(|error| {
-                            tracing::error!(?name, ?error);
-                            error
-                        })?
+                        .ok_or(Error::EntryNotFound)?
                         .open()
                         .await?;
                     curr = Cow::Owned(next);
@@ -567,12 +563,7 @@ impl<'a> JointDirectoryRef<'a> {
                         .map(|local_branch| version.branch().id() == local_branch.id())
                         .unwrap_or(false) =>
                 {
-                    tracing::error!(
-                        "failed to open directory '{}' on the local branch: {:?}",
-                        self.name(),
-                        e
-                    );
-                    return Err(e);
+                    return Err(e)
                 }
                 Err(Error::EntryNotFound | Error::BlockNotFound(_))
                     if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>
@@ -582,15 +573,7 @@ impl<'a> JointDirectoryRef<'a> {
                     // cases as if this replica doesn't know about those directories.
                     continue;
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "failed to open directory '{}' on a remote branch {:?}: {:?}",
-                        self.name(),
-                        version.branch().id(),
-                        e
-                    );
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
 

@@ -149,7 +149,6 @@ impl Directory {
     }
 
     /// Creates a new subdirectory of this directory.
-    #[instrument(skip(self))]
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
         self.create_directory_with_version_vector_op(name, VersionVectorOp::IncrementLocal)
             .await

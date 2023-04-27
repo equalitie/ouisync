@@ -312,39 +312,8 @@ impl SnapshotData {
         );
 
         self.create_root_node(tx, new_proof, self.root_node.summary)
+            .instrument(tracing::info_span!("bump"))
             .await
-    }
-
-    pub async fn fork(
-        &self,
-        tx: &mut db::WriteTransaction,
-        dst_id: PublicKey,
-        dst_version_vector: VersionVector,
-        write_keys: &Keypair,
-    ) -> Result<Self> {
-        let new_proof = Proof::new(
-            dst_id,
-            dst_version_vector,
-            self.root_node.proof.hash,
-            write_keys,
-        );
-
-        // We are not using `self.create_root_node` because we don't want to remove the older
-        // snapshots just yet (we leave that up to the pruner).
-        let root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
-
-        tracing::trace!(
-            branch_id = ?root_node.proof.writer_id,
-            hash = ?root_node.proof.hash,
-            vv = ?root_node.proof.version_vector,
-            src_branch_id = ?self.root_node.proof.writer_id,
-            "create local snapshot (fork)"
-        );
-
-        Ok(Self {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-        })
     }
 
     /// Remove this snapshot
@@ -500,6 +469,7 @@ impl BranchItem for SnapshotData {
 
 #[cfg(test)]
 use async_recursion::async_recursion;
+use tracing::Instrument;
 
 #[async_recursion]
 #[cfg(test)]

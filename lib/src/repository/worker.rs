@@ -6,12 +6,11 @@ use crate::{
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
     event::{EventScope, IgnoreScopeReceiver, Payload},
-    index::SnapshotData,
     joint_directory::JointDirectory,
-    versioned::{self, Tiebreaker},
+    versioned,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use std::{cmp::Ordering, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     select,
     sync::{broadcast::error::RecvError, mpsc, oneshot},
@@ -249,7 +248,7 @@ impl Inner {
         if let Some(local_branch) = &self.local_branch {
             let result = self
                 .event_scope
-                .apply(merge::run(&self.shared, local_branch, unlocked_tx))
+                .apply(merge::run(&self.shared, local_branch))
                 .await;
             tracing::trace!(?result, "merge completed");
 
@@ -294,31 +293,10 @@ impl ErrorHandling {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
-    use tracing::{field, Span};
 
     #[instrument(name = "merge", skip_all)]
-    pub(super) async fn run(
-        shared: &Shared,
-        local_branch: &Branch,
-        unlocked_tx: &mpsc::Sender<UnlockNotify>,
-    ) -> Result<()> {
-        let snapshots = shared.load_snapshots().await?;
-        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
-        // eventually end up having the same root hash of their local branch.
-        let snapshots = versioned::keep_maximal(snapshots, CompareRootHash);
-
-        // If there is only one branch which is newer than all the other branches we can cut things
-        // short and simply fork it (unless it's already the local one).
-        if snapshots.len() <= 1 {
-            if let Some(snapshot) = snapshots.first() {
-                if fork(shared, snapshot, local_branch, unlocked_tx).await? {
-                    return Ok(());
-                } // else fallback to deep merge
-            }
-        }
-
-        // Otherwise we need to proceed with deep merge.
-        let branches = inflate_all(shared, snapshots)?;
+    pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
+        let branches = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -340,85 +318,6 @@ mod merge {
             Err(error) => Err(error),
         }
     }
-
-    #[instrument(
-        skip_all,
-        fields(
-            local_id = ?local_branch.id(),
-            local_vv,
-            src_id = ?snapshot.branch_id(),
-            src_hash = ?snapshot.root_hash(),
-            src_vv = ?snapshot.version_vector(),
-        ),
-    )]
-    async fn fork(
-        shared: &Shared,
-        snapshot: &SnapshotData,
-        local_branch: &Branch,
-        unlocked_tx: &mpsc::Sender<UnlockNotify>,
-    ) -> Result<bool> {
-        if snapshot.branch_id() == local_branch.id() {
-            tracing::trace!("local branch already newest");
-            return Ok(true);
-        }
-
-        let local_vv = local_branch.version_vector().await?;
-        Span::current().record("local_vv", field::debug(&local_vv));
-
-        // We can only proceed with the fork if the local branch is not locked. This is to
-        // avoid premature garbage-collection: Consider there is a blob B in the local
-        // branch which is currently locked. Additionally consider there is a single remote
-        // branch that is newer than all the other branches (including the local one) but
-        // which does not reference all blocks of B. If we forked the remote branch then
-        // some blocks of B would become unreachable because there would be no more
-        // branches referencing them.
-        let _lock = match local_branch.locker().try_unique(BlobId::ROOT) {
-            Ok(lock) => lock,
-            Err((notify, _)) => {
-                tracing::trace!("failed to acquire unique lock");
-                unlocked_tx.send(notify).await.ok();
-                return Ok(false);
-            }
-        };
-
-        tracing::trace!("unique newest branch");
-
-        // Note if the local and remote branches have the same version vector we still want to fork
-        // the remote one to resolve the ambiguity but we need to bump the version vector to make
-        // it happens-after the local one otherwise the fork would fail. Note we only bump it once
-        // so if the local branch progressed in the meantime it would still fail but that's OK
-        // because that means the local branch became happens-after the remote one and so we can't
-        // fork anyway. We propagate the errors and try again next time `merge` is run.
-        let dst_vv = snapshot.version_vector().clone();
-        let dst_vv = if dst_vv == local_vv {
-            dst_vv.incremented(shared.this_writer_id)
-        } else {
-            dst_vv
-        };
-
-        let write_keys = local_branch.keys().write().ok_or(Error::PermissionDenied)?;
-        let mut tx = shared.store.db().begin_write().await?;
-        snapshot
-            .fork(&mut tx, *local_branch.id(), dst_vv, write_keys)
-            .await?;
-        tx.commit_and_then({
-            let branch = local_branch.data().clone();
-            move || branch.notify()
-        })
-        .await?;
-
-        Ok(true)
-    }
-
-    fn inflate_all(
-        shared: &Shared,
-        snapshots: impl IntoIterator<Item = SnapshotData>,
-    ) -> Result<Vec<Branch>> {
-        snapshots
-            .into_iter()
-            .map(|snapshot| shared.inflate(snapshot.to_branch_data()))
-            .collect()
-    }
 }
 
 /// Remove outdated branches and snapshots.
@@ -430,8 +329,11 @@ mod prune {
         shared: &Shared,
         unlocked_tx: &mpsc::Sender<UnlockNotify>,
     ) -> Result<()> {
+        // DEBUG
+        return Ok(());
+
         let all = shared.store.index.load_snapshots().await?;
-        let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, CompareRootHash);
+        let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -806,13 +708,5 @@ mod scan {
         }
 
         Ok(())
-    }
-}
-
-struct CompareRootHash;
-
-impl Tiebreaker<SnapshotData> for CompareRootHash {
-    fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
-        lhs.root_hash().cmp(rhs.root_hash())
     }
 }

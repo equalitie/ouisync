@@ -27,7 +27,7 @@ use crate::{
     error::{Error, Result},
     event::Event,
     file::File,
-    index::{BranchData, Index, SnapshotData},
+    index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -794,10 +794,6 @@ impl Shared {
             .into_iter()
             .map(|data| self.inflate(data))
             .collect()
-    }
-
-    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
-        self.store.index.load_snapshots().await
     }
 
     // Create `Branch` wrapping the given `data`.

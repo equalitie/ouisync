@@ -470,14 +470,22 @@ pub(crate) async fn check_entry_exists(
     path: &str,
     entry_type: EntryType,
 ) -> bool {
+    tracing::debug!(path, "opening");
+
     let result = match entry_type {
         EntryType::File => repo.open_file(path).await.map(|_| ()),
         EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
     };
 
     match result {
-        Ok(()) => true,
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+        Ok(()) => {
+            tracing::debug!(path, "opened");
+            true
+        }
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::warn!(path, ?error, "open failed");
+            false
+        }
         Err(error) => panic!("unexpected error: {error:?}"),
     }
 }
