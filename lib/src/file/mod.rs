@@ -145,6 +145,7 @@ impl File {
                 VersionVectorOp::IncrementLocal,
             )
             .await?;
+        // TODO: use commit_and_then
         tx.commit().await?;
 
         self.branch().uncommitted_block_counter().reset();

@@ -329,10 +329,12 @@ mod prune {
         shared: &Shared,
         unlocked_tx: &mpsc::Sender<UnlockNotify>,
     ) -> Result<()> {
-        // DEBUG
-        return Ok(());
-
         let all = shared.store.index.load_snapshots().await?;
+
+        // When there are multiple branches with the same vv but different hash we need to preserve
+        // them because we might need them to request missing blocks. But once the local branch has
+        // all blocks we can prune them.
+        // TODO: actually prune them
         let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
 
         // Remove outdated branches
