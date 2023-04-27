@@ -107,28 +107,17 @@ impl ParentContext {
             Err(EntryExists::Different) => return Err(Error::EntryExists),
         };
 
-        // Acquire unique lock for the destination blob. This prevents us from overwriting it in
-        // case it's currently being accessed and it also coordinates multiple concurrent fork of
-        // the same blob.
-        let new_lock = loop {
-            match dst_branch.locker().try_unique(new_blob_id) {
+        // Acquire unique lock for the destination blob. This prevents us from overwriting it if it
+        // exists and is currently being accessed and it also coordinates multiple concurrent fork
+        // of the same blob.
+        let lock_blob_id = old_blob_id.unwrap_or(new_blob_id);
+        let lock = loop {
+            match dst_branch.locker().try_unique(lock_blob_id) {
                 Ok(lock) => break Ok(lock),
                 Err((notify, LockKind::Unique)) => notify.await,
                 Err((_, LockKind::Read | LockKind::Write)) => break Err(Error::Locked),
             }
         };
-
-        // If the destination blob already exists and is different from the one we are about to
-        // create, acquire a unique lock for it as well.
-        let old_lock = old_blob_id
-            .filter(|old_blob_id| old_blob_id != &new_blob_id)
-            .map(|old_blob_id| {
-                dst_branch
-                    .locker()
-                    .try_unique(old_blob_id)
-                    .map_err(|_| Error::Locked)
-            })
-            .transpose()?;
 
         // We need to reload the directory and check again. This prevents race condition where the
         // old entry might have been modified after we forked the directory but before we did the
@@ -140,7 +129,10 @@ impl ParentContext {
             .content
             .check_insert(self.entry_name(), &src_entry_data)
         {
-            Ok(_) => (),
+            Ok(_) => {
+                // TODO: what if the old_blob_id changed since the first `check_insert`?
+                // Can it happen? If so, it would currently cause panic in the `insert` below.
+            }
             Err(EntryExists::Same) => {
                 tracing::trace!("already forked");
                 return Ok(new_context);
@@ -148,7 +140,7 @@ impl ParentContext {
             Err(EntryExists::Different) => return Err(Error::EntryExists),
         }
 
-        let new_lock = new_lock?;
+        let lock = lock?;
 
         // Fork the blob first without inserting it into the dst directory. This is because
         // `blob::fork` is not atomic and in case it's interrupted, we don't want overwrite the dst
@@ -164,21 +156,13 @@ impl ParentContext {
         directory.refresh_in(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 
-        // Make sure `new_lock` always lives until the end of this function.
-        let mut new_lock = Some(new_lock);
-        let insert_lock = if Some(new_blob_id) == old_blob_id {
-            new_lock.take()
-        } else {
-            old_lock
-        };
-
         let mut content = directory.content.clone();
 
         match content.insert(
             directory.branch(),
             self.entry_name.clone(),
             src_entry_data,
-            insert_lock,
+            old_blob_id.map(|_| lock),
         ) {
             Ok(_lock) => {
                 directory.save(&mut tx, &content).await?;
