@@ -635,7 +635,12 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch().data().bump(tx, op, write_keys).await
+            self.branch()
+                .data()
+                .load_or_create_snapshot(tx, write_keys)
+                .await?
+                .bump(tx, op, write_keys)
+                .await
         }
     }
 

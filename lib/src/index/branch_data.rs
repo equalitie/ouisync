@@ -77,46 +77,6 @@ impl BranchData {
         }
     }
 
-    /// Inserts a new block into the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
-    #[cfg(test)] // currently used only in tests
-    pub async fn insert(
-        &self,
-        tx: &mut db::WriteTransaction,
-        encoded_locator: &LocatorHash,
-        block_id: &BlockId,
-        block_presence: SingleBlockPresence,
-        write_keys: &Keypair,
-    ) -> Result<bool> {
-        self.load_or_create_snapshot(tx, write_keys)
-            .await?
-            .insert_block(tx, encoded_locator, block_id, block_presence, write_keys)
-            .await
-    }
-
-    /// Removes the block identified by encoded_locator from the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
-    #[cfg(test)] // currently used only in tests
-    pub async fn remove(
-        &self,
-        tx: &mut db::WriteTransaction,
-        encoded_locator: &Hash,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        self.load_snapshot(tx)
-            .await?
-            .remove_block(tx, encoded_locator, None, write_keys)
-            .await
-    }
-
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
     pub async fn get(
         &self,
@@ -133,24 +93,6 @@ impl BranchData {
     pub async fn count_leaf_nodes(&self, conn: &mut db::Connection) -> Result<usize> {
         let root_hash = self.load_snapshot(conn).await?.root_node.proof.hash;
         count_leaf_nodes(conn, 0, &root_hash).await
-    }
-
-    /// Update the root version vector of this branch.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
-    pub async fn bump(
-        &self,
-        tx: &mut db::WriteTransaction,
-        op: VersionVectorOp<'_>,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        self.load_or_create_snapshot(tx, write_keys)
-            .await?
-            .bump(tx, op, write_keys)
-            .await
     }
 }
 
@@ -301,7 +243,7 @@ impl SnapshotData {
 
     /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
     /// preserves older snapshots that can be used as fallback for the latest snapshot and only
-    // removed those that can't.
+    /// removes those that can't.
     pub async fn prune(&self, db: &db::Pool) -> Result<()> {
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = db.begin_write().await?;
@@ -494,7 +436,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &encoded_locator,
                 &block_id,
@@ -525,7 +470,10 @@ mod tests {
             let mut tx = pool.begin_write().await.unwrap();
 
             branch
-                .insert(
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(
                     &mut tx,
                     &encoded_locator,
                     &b1,
@@ -536,7 +484,10 @@ mod tests {
                 .unwrap();
 
             branch
-                .insert(
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(
                     &mut tx,
                     &encoded_locator,
                     &b2,
@@ -579,7 +530,10 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &encoded_locator,
                 &b,
@@ -597,7 +551,10 @@ mod tests {
         );
 
         branch
-            .remove(&mut tx, &encoded_locator, &write_keys)
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .remove_block(&mut tx, &encoded_locator, None, &write_keys)
             .await
             .unwrap();
 

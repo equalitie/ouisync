@@ -170,7 +170,10 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
     local_branch
-        .insert(
+        .load_or_create_snapshot(&mut tx, &write_keys)
+        .await
+        .unwrap()
+        .insert_block(
             &mut tx,
             &locator,
             &block_id,
@@ -262,7 +265,10 @@ mod receive_and_create_root_node {
             (locator_2, block_id_2, SingleBlockPresence::Missing),
         ] {
             local_branch
-                .insert(&mut tx, &locator, &block_id, presence, &write_keys)
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(&mut tx, &locator, &block_id, presence, &write_keys)
                 .await
                 .unwrap();
         }
@@ -304,7 +310,10 @@ mod receive_and_create_root_node {
             }
 
             local_branch
-                .insert(
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(
                     &mut tx,
                     &locator_0,
                     &block_id_0_1,

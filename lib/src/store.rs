@@ -235,7 +235,10 @@ mod tests {
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
         branch0
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator0,
                 &block_id,
@@ -248,7 +251,10 @@ mod tests {
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
         branch1
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator1,
                 &block_id,
@@ -301,7 +307,10 @@ mod tests {
             .await
             .unwrap();
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator,
                 &id0,
@@ -320,8 +329,13 @@ mod tests {
         block::write(&mut tx, &id1, &buffer, &rng.gen())
             .await
             .unwrap();
-        branch
-            .insert(
+
+        let mut snapshot = branch
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap();
+        snapshot
+            .insert_block(
                 &mut tx,
                 &locator,
                 &id1,
@@ -330,14 +344,7 @@ mod tests {
             )
             .await
             .unwrap();
-
-        branch
-            .load_snapshot(&mut tx)
-            .await
-            .unwrap()
-            .remove_all_older(&mut tx)
-            .await
-            .unwrap();
+        snapshot.remove_all_older(&mut tx).await.unwrap();
 
         assert!(!block::exists(&mut tx, &id0).await.unwrap());
         assert!(block::exists(&mut tx, &id1).await.unwrap());
@@ -488,7 +495,10 @@ mod tests {
 
         let mut tx = store.db().begin_write().await.unwrap();
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator,
                 &block_id,
