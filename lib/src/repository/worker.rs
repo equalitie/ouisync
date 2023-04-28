@@ -116,7 +116,8 @@ struct Inner {
 impl Inner {
     async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
         let event_rx = self.shared.store.index.subscribe();
-        let (unlocked_tx, unlocked_rx) = mpsc::channel(1);
+        // NOTE: using unbounded here to prevent hang in `handle_command`
+        let (unlocked_tx, unlocked_rx) = mpsc::unbounded_channel();
         let mut waiter = Waiter::new(event_rx, self.event_scope, unlocked_rx);
         let mut state = State::Working;
 
@@ -179,7 +180,7 @@ impl Inner {
     async fn handle_command(
         &self,
         command: Command,
-        unlocked_tx: &mpsc::Sender<AwaitDrop>,
+        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
     ) -> bool {
         match command {
             Command::Work(result_tx) => {
@@ -198,7 +199,7 @@ impl Inner {
     async fn work(
         &self,
         error_handling: ErrorHandling,
-        unlocked_tx: &mpsc::Sender<AwaitDrop>,
+        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
     ) -> Result<()> {
         tracing::trace!("job started");
 
@@ -218,7 +219,7 @@ impl Inner {
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared, self.local_branch.as_ref()).await;
+            let result = scan::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
@@ -240,14 +241,14 @@ enum State {
 struct Waiter {
     event_rx: IgnoreScopeReceiver,
     unlocked: FuturesUnordered<AwaitDrop>,
-    unlocked_rx: mpsc::Receiver<AwaitDrop>,
+    unlocked_rx: mpsc::UnboundedReceiver<AwaitDrop>,
 }
 
 impl Waiter {
     fn new(
         event_rx: broadcast::Receiver<Event>,
         event_scope: EventScope,
-        unlocked_rx: mpsc::Receiver<AwaitDrop>,
+        unlocked_rx: mpsc::UnboundedReceiver<AwaitDrop>,
     ) -> Self {
         Self {
             event_rx: IgnoreScopeReceiver::new(event_rx, event_scope),
@@ -346,7 +347,10 @@ mod prune {
     use std::cmp::Ordering;
 
     #[instrument(name = "prune", skip_all)]
-    pub(super) async fn run(shared: &Shared, unlocked_tx: &mpsc::Sender<AwaitDrop>) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
+    ) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
 
         // When there are multiple branches with the same vv but different hash we need to preserve
@@ -374,7 +378,7 @@ mod prune {
                 Ok(lock) => lock,
                 Err((notify, _)) => {
                     tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
-                    unlocked_tx.send(notify).await.ok();
+                    unlocked_tx.send(notify).ok();
                     continue;
                 }
             };
@@ -462,7 +466,11 @@ mod scan {
     }
 
     #[instrument(name = "scan", skip_all)]
-    pub(super) async fn run(shared: &Shared, local_branch: Option<&Branch>) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        local_branch: Option<&Branch>,
+        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
+    ) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
         // blocks. The subsequent passes (if any) for collecting only.
@@ -477,7 +485,7 @@ mod scan {
                 break;
             }
 
-            process_locked_blocks(shared, &mut unreachable_block_ids).await?;
+            process_locked_blocks(shared, &mut unreachable_block_ids, unlocked_tx).await?;
 
             mode = traverse_root(shared, local_branch, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
@@ -615,6 +623,7 @@ mod scan {
     async fn process_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
+        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
     ) -> Result<()> {
         // This can sometimes include pruned branches. It happens when a branch is first loaded,
         // then pruned, then in an attempt to open the root directory, it's read lock is acquired
@@ -626,18 +635,17 @@ mod scan {
             return Ok(());
         }
 
-        // TODO: get the AwaitDrops of the locks and put them into `unlocked` so we can retry the
-        // garbage collect when the blob locks get released.
-
-        for (branch_id, blob_ids) in locks {
+        for (branch_id, locks) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
-            for blob_id in blob_ids {
+            for (blob_id, notify) in locks {
                 let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {
                     Ok(block_ids) => block_ids,
                     Err(Error::EntryNotFound) => continue, // See the comment above.
                     Err(error) => return Err(error),
                 };
+
+                unlocked_tx.send(notify).ok();
 
                 while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);

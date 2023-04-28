@@ -5,6 +5,7 @@ mod common;
 use self::common::{actor, Env};
 use ouisync::{File, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 #[test]
 fn local_delete_local_file() {
@@ -120,7 +121,10 @@ fn local_truncate_local_file() {
         write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
         file.flush().await.unwrap();
 
-        repo.force_work().await.unwrap();
+        repo.force_work()
+            .instrument(tracing::info_span!("force_work", step = 1))
+            .await
+            .unwrap();
 
         // 2 blocks for the file + 1 block for the root directory
         assert_eq!(repo.count_blocks().await.unwrap(), 3);
@@ -128,7 +132,10 @@ fn local_truncate_local_file() {
         file.truncate(0).await.unwrap();
         file.flush().await.unwrap();
 
-        repo.force_work().await.unwrap();
+        repo.force_work()
+            .instrument(tracing::info_span!("force_work", step = 2))
+            .await
+            .unwrap();
 
         // 1 block for the file + 1 block for the root directory
         assert_eq!(repo.count_blocks().await.unwrap(), 2);
