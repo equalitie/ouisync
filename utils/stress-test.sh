@@ -114,19 +114,26 @@ export PROPTEST_CASES=32
 
 for process in $(seq $concurrency); do
     {
+        # Bind the pipe to the file descriptor 3 so we can echo to it without constantly reopening
+        # it.
+        exec 3> $pipe
+
         local_iteration=0
 
         while true; do
             if $exe $args > $dir/test-$process.log 2>&1; then
                 ((local_iteration=local_iteration+1))
-                echo "$process $local_iteration ok" > $pipe
+                echo "$process $local_iteration ok" >&3
             else
                 status=$?
                 echo "$(date_tag) Process $process aborted with status $status after $local_iteration iterations"
-                echo "$process $local_iteration fail" > $pipe
+                echo "$process $local_iteration fail" >&3
                 break
             fi
         done
+
+        # Close the file descriptor 3
+        exec 3>&-
     } &
 done
 
@@ -136,7 +143,7 @@ global_iteration=0
 aborted_process=""
 
 while true; do
-    if read process local_iteration status; then
+    if read -r process local_iteration status; then
         if [ "$status" = "ok" ]; then
             ((global_iteration=global_iteration+1))
             echo "$(date_tag) Iteration #$global_iteration ($process/$local_iteration)"
