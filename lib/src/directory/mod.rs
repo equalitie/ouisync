@@ -635,12 +635,15 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            self.branch()
+            let mut snapshot = self
+                .branch()
                 .data()
                 .load_or_create_snapshot(tx, write_keys)
-                .await?
-                .bump(tx, op, write_keys)
-                .await
+                .await?;
+            snapshot.bump(tx, op, write_keys).await?;
+            snapshot.remove_all_older(tx).await?;
+
+            Ok(())
         }
     }
 

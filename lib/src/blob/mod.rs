@@ -517,6 +517,8 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
                 .await?;
         }
 
+        dst_snapshot.remove_all_older(&mut tx).await?;
+
         tx.commit().await?;
     }
 
@@ -578,6 +580,7 @@ async fn write_block(
             write_keys,
         )
         .await?;
+    snapshot.remove_all_older(tx).await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
     // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.

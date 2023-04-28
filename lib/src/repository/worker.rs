@@ -705,6 +705,8 @@ mod scan {
             }
         }
 
+        snapshot.remove_all_older(tx).await?;
+
         Ok(())
     }
 

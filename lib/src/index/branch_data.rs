@@ -351,7 +351,6 @@ impl SnapshotData {
         new_summary: Summary,
     ) -> Result<()> {
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
-        self.remove_all_older(tx).await?;
 
         tracing::trace!(
             vv = ?self.root_node.proof.version_vector,
