@@ -725,7 +725,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn fallback() {
         test_utils::init_log();
