@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
     path::Path,
@@ -311,10 +313,10 @@ impl SnapshotData {
         let mut conn = db.acquire().await?;
 
         // Then remove those snapshots that can't serve as fallback for the current one.
-        let mut maybe_old = self.root_node.load_prev(&mut conn).await?;
+        let mut new = Cow::Borrowed(&self.root_node);
 
-        while let Some(old) = maybe_old {
-            if node::check_fallback(&mut conn, &old, &self.root_node).await? {
+        while let Some(old) = new.load_prev(&mut conn).await? {
+            if node::check_fallback(&mut conn, &old, &new).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
@@ -324,15 +326,11 @@ impl SnapshotData {
                     "outdated snapshot not removed - possible fallback"
                 );
 
-                maybe_old = old.load_prev(&mut conn).await?;
+                new = Cow::Owned(old);
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
-                // including all its predecessors.
-                drop(conn);
-
                 let mut tx = db.begin_write().await?;
                 old.remove_recursively(&mut tx).await?;
-                old.remove_recursively_all_older(&mut tx).await?;
                 tx.commit().await?;
 
                 tracing::trace!(
@@ -341,8 +339,6 @@ impl SnapshotData {
                     vv = ?old.proof.version_vector,
                     "outdated snapshot removed"
                 );
-
-                break;
             }
         }
 
@@ -771,6 +767,63 @@ mod tests {
             // Verify the snapshot is still complete
             check_complete(&mut tx, &snapshot).await;
         }
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback() {
+        test_utils::init_log();
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, pool, branch0) = setup().await;
+        let write_keys = Keypair::generate(&mut rng);
+
+        let mut snapshot = {
+            let mut conn = pool.acquire().await.unwrap();
+            branch0
+                .load_or_create_snapshot(&mut conn, &write_keys)
+                .await
+                .unwrap()
+        };
+
+        let locator = rng.gen();
+        let id0 = rng.gen();
+        let id1 = rng.gen();
+        let id2 = rng.gen();
+        let id3 = rng.gen();
+
+        for (block_id, presence) in [
+            (id0, SingleBlockPresence::Present),
+            (id1, SingleBlockPresence::Present),
+            (id2, SingleBlockPresence::Missing),
+            (id3, SingleBlockPresence::Missing),
+        ] {
+            let mut tx = pool.begin_write().await.unwrap();
+            snapshot
+                .insert_block(&mut tx, &locator, &block_id, presence, &write_keys)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        snapshot.prune(&pool).await.unwrap();
+
+        let mut tx = pool.begin_read().await.unwrap();
+
+        assert_eq!(
+            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            (id3, SingleBlockPresence::Missing)
+        );
+
+        // The previous snapshot was pruned because it can't serve as fallback for the latest one
+        // but the one before it was not because it can.
+        let snapshot = snapshot.load_prev(&mut tx).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            (id1, SingleBlockPresence::Present)
+        );
+
+        // All the further snapshots were pruned as well
+        assert!(snapshot.load_prev(&mut tx).await.unwrap().is_none());
     }
 
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {
