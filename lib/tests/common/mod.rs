@@ -1,6 +1,7 @@
 mod wait_map;
 
 use camino::Utf8Path;
+use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
     network::{Network, Registration},
@@ -10,6 +11,7 @@ use ouisync::{
 use rand::Rng;
 use std::{
     cell::Cell,
+    fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -26,11 +28,18 @@ use tracing::{instrument, Instrument, Span};
 pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
 
-// Timeout for running a whole test case
-pub(crate) const TEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
+// (in seconds).
+pub(crate) static EVENT_TIMEOUT: Lazy<Duration> = Lazy::new(|| {
+    Duration::from_secs(
+        std::env::var("TEST_EVENT_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60),
+    )
+});
 
-// Timeout for waiting for an event
-pub(crate) const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) static TEST_TIMEOUT: Lazy<Duration> = Lazy::new(|| 4 * *EVENT_TIMEOUT);
 
 #[cfg(not(feature = "simulation"))]
 pub(crate) mod env {
@@ -340,7 +349,7 @@ where
 {
     let mut rx = repo.subscribe();
 
-    time::timeout(TEST_TIMEOUT, async {
+    time::timeout(*TEST_TIMEOUT, async {
         loop {
             if f().await {
                 break;
@@ -355,14 +364,20 @@ where
 
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
     loop {
-        match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
-            Ok(Ok(Event {
-                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
-                ..
-            }))
-            | Ok(Err(RecvError::Lagged(_))) => return,
-            Ok(Ok(Event { .. })) => continue,
-            Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
+        match time::timeout(*EVENT_TIMEOUT, rx.recv()).await {
+            Ok(event) => {
+                tracing::debug!(?event);
+
+                match event {
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        ..
+                    })
+                    | Err(RecvError::Lagged(_)) => return,
+                    Ok(Event { .. }) => continue,
+                    Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+                }
+            }
             Err(_) => {
                 const MESSAGE: &str = "timeout waiting for notification";
 
@@ -455,14 +470,22 @@ pub(crate) async fn check_entry_exists(
     path: &str,
     entry_type: EntryType,
 ) -> bool {
+    tracing::debug!(path, "opening");
+
     let result = match entry_type {
         EntryType::File => repo.open_file(path).await.map(|_| ()),
         EntryType::Directory => repo.open_directory(path).await.map(|_| ()),
     };
 
     match result {
-        Ok(()) => true,
-        Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+        Ok(()) => {
+            tracing::debug!(path, "opened");
+            true
+        }
+        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+            tracing::warn!(path, ?error, "open failed");
+            false
+        }
         Err(error) => panic!("unexpected error: {error:?}"),
     }
 }
@@ -523,6 +546,48 @@ pub(crate) fn random_content(size: usize) -> Vec<u8> {
 
 fn to_megabytes(bytes: usize) -> usize {
     bytes / 1024 / 1024
+}
+
+/// Helper to assert two byte slices are equal which prints useful info if they are not.
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
+#[track_caller]
+pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
+    let Some(snip_start) = lhs.iter().zip(rhs).position(|(lhs, rhs)| lhs != rhs) else {
+        return;
+    };
+
+    let snip_len = 32;
+    let snip_end = snip_start + snip_len;
+
+    let lhs_snip = &lhs[snip_start..snip_end.min(lhs.len())];
+    let rhs_snip = &rhs[snip_start..snip_end.min(rhs.len())];
+
+    let ellipsis_start = if snip_start > 0 { "…" } else { "" };
+    let lhs_ellipsis_end = if snip_end < lhs.len() { "…" } else { "" };
+    let rhs_ellipsis_end = if snip_end < rhs.len() { "…" } else { "" };
+
+    panic!(
+        "content not equal (differing offset: {})\n    lhs: {}{:x}{}\n    rhs: {}{:x}{}",
+        snip_start,
+        ellipsis_start,
+        HexFmt(lhs_snip),
+        lhs_ellipsis_end,
+        ellipsis_start,
+        HexFmt(rhs_snip),
+        rhs_ellipsis_end,
+    );
+
+    struct HexFmt<'a>(&'a [u8]);
+
+    impl fmt::LowerHex for HexFmt<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            for byte in self.0 {
+                write!(f, "{:02x}", byte)?;
+            }
+
+            Ok(())
+        }
+    }
 }
 
 pub(crate) fn init_log() {

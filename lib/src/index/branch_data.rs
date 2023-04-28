@@ -1,5 +1,10 @@
+use std::borrow::Cow;
+
 use super::{
-    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
+    node::{
+        self, InnerNode, LeafNode, MultiBlockPresence, RootNode, SingleBlockPresence,
+        INNER_LAYER_COUNT,
+    },
     path::Path,
     proof::Proof,
     Summary, VersionVectorOp,
@@ -12,45 +17,33 @@ use crate::{
     },
     db,
     error::{Error, Result},
-    event::{Event, Payload},
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, TryStreamExt};
-use tokio::sync::broadcast;
 
 type LocatorHash = Hash;
 
 #[derive(Clone)]
 pub(crate) struct BranchData {
     writer_id: PublicKey,
-    notify_tx: broadcast::Sender<Event>,
 }
 
 impl BranchData {
     /// Construct a branch data using the provided root node.
-    pub fn new(writer_id: PublicKey, notify_tx: broadcast::Sender<Event>) -> Self {
-        Self {
-            writer_id,
-            notify_tx,
-        }
+    pub fn new(writer_id: PublicKey) -> Self {
+        Self { writer_id }
     }
 
     /// Load all branches
-    pub fn load_all(
-        conn: &mut db::Connection,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
-        SnapshotData::load_all(conn, notify_tx).map_ok(move |snapshot| snapshot.to_branch_data())
+    pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        SnapshotData::load_all(conn).map_ok(move |snapshot| snapshot.to_branch_data())
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
         let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
 
-        Ok(SnapshotData {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-        })
+        Ok(SnapshotData { root_node })
     }
 
     pub async fn load_or_create_snapshot(
@@ -70,10 +63,7 @@ impl BranchData {
             RootNode::empty(self.writer_id, write_keys)
         };
 
-        Ok(SnapshotData {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-        })
+        Ok(SnapshotData { root_node })
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -88,46 +78,6 @@ impl BranchData {
             Err(Error::EntryNotFound) => Ok(VersionVector::new()),
             Err(error) => Err(error),
         }
-    }
-
-    /// Inserts a new block into the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
-    #[cfg(test)] // currently used only in tests
-    pub async fn insert(
-        &self,
-        tx: &mut db::WriteTransaction,
-        encoded_locator: &LocatorHash,
-        block_id: &BlockId,
-        block_presence: SingleBlockPresence,
-        write_keys: &Keypair,
-    ) -> Result<bool> {
-        self.load_or_create_snapshot(tx, write_keys)
-            .await?
-            .insert_block(tx, encoded_locator, block_id, block_presence, write_keys)
-            .await
-    }
-
-    /// Removes the block identified by encoded_locator from the index.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is executed inside a db transaction which makes it atomic even in the
-    /// presence of cancellation.
-    #[cfg(test)] // currently used only in tests
-    pub async fn remove(
-        &self,
-        tx: &mut db::WriteTransaction,
-        encoded_locator: &Hash,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        self.load_snapshot(tx)
-            .await?
-            .remove_block(tx, encoded_locator, None, write_keys)
-            .await
     }
 
     /// Retrieve `BlockId` of a block with the given encoded `Locator`.
@@ -147,56 +97,25 @@ impl BranchData {
         let root_hash = self.load_snapshot(conn).await?.root_node.proof.hash;
         count_leaf_nodes(conn, 0, &root_hash).await
     }
-
-    /// Trigger a notification event from this branch.
-    pub fn notify(&self) {
-        self.notify_tx
-            .send(Event::new(Payload::BranchChanged(self.writer_id)))
-            .unwrap_or(0);
-    }
-
-    /// Update the root version vector of this branch.
-    ///
-    /// # Cancel safety
-    ///
-    /// This operation is atomic even in the presence of cancellation - it either executes fully or
-    /// it doesn't execute at all.
-    pub async fn bump(
-        &self,
-        tx: &mut db::WriteTransaction,
-        op: VersionVectorOp<'_>,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        self.load_or_create_snapshot(tx, write_keys)
-            .await?
-            .bump(tx, op, write_keys)
-            .await
-    }
 }
 
 pub(crate) struct SnapshotData {
     pub(super) root_node: RootNode,
-    notify_tx: broadcast::Sender<Event>,
 }
 
 impl SnapshotData {
     /// Load all latest snapshots
-    pub fn load_all(
-        conn: &mut db::Connection,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
-        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self {
-            root_node,
-            notify_tx: notify_tx.clone(),
-        })
+    pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self { root_node })
     }
 
     /// Load previous snapshot
     pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
-        Ok(self.root_node.load_prev(conn).await?.map(|root_node| Self {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-        }))
+        Ok(self
+            .root_node
+            .load_prev(conn)
+            .await?
+            .map(|root_node| Self { root_node }))
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -209,10 +128,14 @@ impl SnapshotData {
         &self.root_node.proof.hash
     }
 
+    /// Returns the block presence of this snapshot
+    pub fn block_presence(&self) -> &MultiBlockPresence {
+        &self.root_node.summary.block_presence
+    }
+
     pub fn to_branch_data(&self) -> BranchData {
         BranchData {
             writer_id: self.root_node.proof.writer_id,
-            notify_tx: self.notify_tx.clone(),
         }
     }
 
@@ -312,39 +235,8 @@ impl SnapshotData {
         );
 
         self.create_root_node(tx, new_proof, self.root_node.summary)
+            .instrument(tracing::info_span!("bump"))
             .await
-    }
-
-    pub async fn fork(
-        &self,
-        tx: &mut db::WriteTransaction,
-        dst_id: PublicKey,
-        dst_version_vector: VersionVector,
-        write_keys: &Keypair,
-    ) -> Result<Self> {
-        let new_proof = Proof::new(
-            dst_id,
-            dst_version_vector,
-            self.root_node.proof.hash,
-            write_keys,
-        );
-
-        // We are not using `self.create_root_node` because we don't want to remove the older
-        // snapshots just yet (we leave that up to the pruner).
-        let root_node = RootNode::create(tx, new_proof, self.root_node.summary).await?;
-
-        tracing::trace!(
-            vv = ?root_node.proof.version_vector,
-            hash = ?root_node.proof.hash,
-            branch_id = ?root_node.proof.writer_id,
-            src_branch_id = ?self.root_node.proof.writer_id,
-            "create local snapshot (fork)"
-        );
-
-        Ok(Self {
-            root_node,
-            notify_tx: self.notify_tx.clone(),
-        })
     }
 
     /// Remove this snapshot
@@ -359,7 +251,7 @@ impl SnapshotData {
 
     /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
     /// preserves older snapshots that can be used as fallback for the latest snapshot and only
-    // removed those that can't.
+    /// removes those that can't.
     pub async fn prune(&self, db: &db::Pool) -> Result<()> {
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = db.begin_write().await?;
@@ -371,38 +263,32 @@ impl SnapshotData {
         let mut conn = db.acquire().await?;
 
         // Then remove those snapshots that can't serve as fallback for the current one.
-        let mut maybe_old = self.root_node.load_prev(&mut conn).await?;
+        let mut new = Cow::Borrowed(&self.root_node);
 
-        while let Some(old) = maybe_old {
-            if node::check_fallback(&mut conn, &old, &self.root_node).await? {
+        while let Some(old) = new.load_prev(&mut conn).await? {
+            if node::check_fallback(&mut conn, &old, &new).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
                     branch_id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
                     "outdated snapshot not removed - possible fallback"
                 );
 
-                maybe_old = old.load_prev(&mut conn).await?;
+                new = Cow::Owned(old);
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
-                // including all its predecessors.
-                drop(conn);
-
                 let mut tx = db.begin_write().await?;
                 old.remove_recursively(&mut tx).await?;
-                old.remove_recursively_all_older(&mut tx).await?;
                 tx.commit().await?;
 
                 tracing::trace!(
                     branch_id = ?old.proof.writer_id,
-                    vv = ?old.proof.version_vector,
                     hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
                     "outdated snapshot removed"
                 );
-
-                break;
             }
         }
 
@@ -473,7 +359,6 @@ impl SnapshotData {
         new_summary: Summary,
     ) -> Result<()> {
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
-        self.remove_all_older(tx).await?;
 
         tracing::trace!(
             vv = ?self.root_node.proof.version_vector,
@@ -500,6 +385,7 @@ impl BranchItem for SnapshotData {
 
 #[cfg(test)]
 use async_recursion::async_recursion;
+use tracing::Instrument;
 
 #[async_recursion]
 #[cfg(test)]
@@ -557,7 +443,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &encoded_locator,
                 &block_id,
@@ -588,7 +477,10 @@ mod tests {
             let mut tx = pool.begin_write().await.unwrap();
 
             branch
-                .insert(
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(
                     &mut tx,
                     &encoded_locator,
                     &b1,
@@ -599,7 +491,10 @@ mod tests {
                 .unwrap();
 
             branch
-                .insert(
+                .load_or_create_snapshot(&mut tx, &write_keys)
+                .await
+                .unwrap()
+                .insert_block(
                     &mut tx,
                     &encoded_locator,
                     &b2,
@@ -642,7 +537,10 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(&mut tx).await);
 
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &encoded_locator,
                 &b,
@@ -660,7 +558,10 @@ mod tests {
         );
 
         branch
-            .remove(&mut tx, &encoded_locator, &write_keys)
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .remove_block(&mut tx, &encoded_locator, None, &write_keys)
             .await
             .unwrap();
 
@@ -832,6 +733,62 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fallback() {
+        test_utils::init_log();
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, pool, branch0) = setup().await;
+        let write_keys = Keypair::generate(&mut rng);
+
+        let mut snapshot = {
+            let mut conn = pool.acquire().await.unwrap();
+            branch0
+                .load_or_create_snapshot(&mut conn, &write_keys)
+                .await
+                .unwrap()
+        };
+
+        let locator = rng.gen();
+        let id0 = rng.gen();
+        let id1 = rng.gen();
+        let id2 = rng.gen();
+        let id3 = rng.gen();
+
+        for (block_id, presence) in [
+            (id0, SingleBlockPresence::Present),
+            (id1, SingleBlockPresence::Present),
+            (id2, SingleBlockPresence::Missing),
+            (id3, SingleBlockPresence::Missing),
+        ] {
+            let mut tx = pool.begin_write().await.unwrap();
+            snapshot
+                .insert_block(&mut tx, &locator, &block_id, presence, &write_keys)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        snapshot.prune(&pool).await.unwrap();
+
+        let mut tx = pool.begin_read().await.unwrap();
+
+        assert_eq!(
+            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            (id3, SingleBlockPresence::Missing)
+        );
+
+        // The previous snapshot was pruned because it can't serve as fallback for the latest one
+        // but the one before it was not because it can.
+        let snapshot = snapshot.load_prev(&mut tx).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            (id1, SingleBlockPresence::Present)
+        );
+
+        // All the further snapshots were pruned as well
+        assert!(snapshot.load_prev(&mut tx).await.unwrap().is_none());
+    }
+
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {
         sqlx::query(
             "SELECT
@@ -881,9 +838,7 @@ mod tests {
 
     async fn setup() -> (TempDir, db::Pool, BranchData) {
         let (base_dir, pool) = init_db().await;
-
-        let (notify_tx, _) = broadcast::channel(1);
-        let branch = BranchData::new(PublicKey::random(), notify_tx);
+        let branch = BranchData::new(PublicKey::random());
 
         (base_dir, pool, branch)
     }

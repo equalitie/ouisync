@@ -3,13 +3,13 @@ use crate::{
     access_control::{AccessKeys, WriteSecrets},
     branch::BranchShared,
     db,
+    event::EventSender,
     index::BranchData,
     state_monitor::StateMonitor,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
 use tempfile::TempDir;
-use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_and_list_entries() {
@@ -593,9 +593,9 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 }
 
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
-    let (event_tx, _) = broadcast::channel(1);
-    let shared = BranchShared::new(event_tx.clone());
+    let event_tx = EventSender::new(1);
+    let shared = BranchShared::new();
     let id = PublicKey::random();
-    let branch_data = BranchData::new(id, event_tx);
-    Branch::new(pool, branch_data, keys, shared)
+    let branch_data = BranchData::new(id);
+    Branch::new(pool, branch_data, keys, shared, event_tx)
 }

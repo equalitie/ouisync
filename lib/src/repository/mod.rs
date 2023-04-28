@@ -25,9 +25,9 @@ use crate::{
     device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
     error::{Error, Result},
-    event::Event,
+    event::{Event, EventSender},
     file::File,
-    index::{BranchData, Index, SnapshotData},
+    index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -191,8 +191,8 @@ impl Repository {
         secrets: AccessSecrets,
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
-        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        let index = Index::new(pool, *secrets.id(), event_tx.clone());
+        let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
+        let index = Index::new(pool, *secrets.id(), event_tx);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -218,7 +218,7 @@ impl Repository {
             store,
             this_writer_id,
             secrets,
-            branch_shared: BranchShared::new(event_tx),
+            branch_shared: BranchShared::new(),
         });
 
         let local_branch = if shared.secrets.can_write() {
@@ -540,9 +540,12 @@ impl Repository {
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
     #[instrument(
-        skip(self, src_dir_path, dst_dir_path),
-        fields(src_dir_path = %src_dir_path.as_ref(), dst_dir_path = %dst_dir_path.as_ref()),
-        err
+        skip_all,
+        fields(
+            src = %src_dir_path.as_ref().join(src_name),
+            dst = %dst_dir_path.as_ref().join(dst_name),
+        ),
+        err(Debug)
     )]
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
@@ -793,10 +796,6 @@ impl Shared {
             .collect()
     }
 
-    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
-        self.store.index.load_snapshots().await
-    }
-
     // Create `Branch` wrapping the given `data`.
     fn inflate(&self, data: BranchData) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
@@ -813,6 +812,7 @@ impl Shared {
             data,
             keys,
             self.branch_shared.clone(),
+            self.store.index.notify().clone(),
         ))
     }
 }

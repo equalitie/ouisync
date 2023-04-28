@@ -1,17 +1,22 @@
 use super::Shared;
 use crate::{
+    blob_id::BlobId,
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
-    event::{EventScope, IgnoreScopeReceiver, Payload},
-    index::SnapshotData,
+    event::{Event, EventScope, IgnoreScopeReceiver, Payload},
     joint_directory::JointDirectory,
-    versioned::{self, PreferBranch, Tiebreaker},
+    sync::AwaitDrop,
+    versioned,
 };
-use std::{cmp::Ordering, sync::Arc};
+use futures_util::{stream::FuturesUnordered, StreamExt};
+use std::{ops::ControlFlow, sync::Arc};
 use tokio::{
     select,
-    sync::{broadcast::error::RecvError, mpsc, oneshot},
+    sync::{
+        broadcast::{self, error::RecvError},
+        mpsc, oneshot,
+    },
 };
 use tracing::instrument;
 
@@ -31,10 +36,13 @@ impl Worker {
         let (command_tx, command_rx) = mpsc::channel(1);
         let (abort_tx, abort_rx) = oneshot::channel();
 
+        let event_scope = EventScope::new();
+        let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
+
         let inner = Inner {
             shared,
             local_branch,
-            event_scope: EventScope::new(),
+            event_scope,
         };
 
         let worker = Self {
@@ -107,15 +115,9 @@ struct Inner {
 
 impl Inner {
     async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
-        let mut event_rx =
-            IgnoreScopeReceiver::new(self.shared.store.index.subscribe(), self.event_scope);
-
-        enum State {
-            Working,
-            Waiting,
-            Terminated,
-        }
-
+        let event_rx = self.shared.store.index.subscribe();
+        let (unlocked_tx, unlocked_rx) = mpsc::channel(1);
+        let mut waiter = Waiter::new(event_rx, self.event_scope, unlocked_rx);
         let mut state = State::Working;
 
         loop {
@@ -124,33 +126,23 @@ impl Inner {
                     state = State::Waiting;
 
                     let work = async {
-                        self.work(ErrorHandling::Ignore).await.ok();
+                        self.work(ErrorHandling::Ignore, &unlocked_tx).await.ok();
                     };
 
                     let wait = async {
                         loop {
-                            let event = event_rx.recv().await;
-                            tracing::trace!(?event);
-
-                            match event {
-                                Ok(Payload::BranchChanged(_)) => {
-                                    // On `BranchChanged`, interrupt the current job and
-                                    // immediately start a new one.
-                                    tracing::trace!("job interrupted");
-                                    state = State::Working;
-                                    break;
+                            match waiter.wait(state).await {
+                                ControlFlow::Continue(new_state) => {
+                                    state = new_state;
                                 }
-                                Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                                    // On any other event, let the current job run to completion
-                                    // and then start a new one.
-                                    state = State::Working;
-                                }
-                                Err(RecvError::Closed) => {
-                                    state = State::Terminated;
+                                ControlFlow::Break(new_state) => {
+                                    state = new_state;
                                     break;
                                 }
                             }
                         }
+
+                        tracing::trace!("job interrupted");
                     };
 
                     select! {
@@ -160,17 +152,15 @@ impl Inner {
                 }
                 State::Waiting => {
                     state = select! {
-                        event = event_rx.recv() => {
-                            tracing::trace!(?event);
-
-                            match event {
-                                Ok(_) | Err(RecvError::Lagged(_)) => State::Working,
-                                Err(RecvError::Closed) => State::Terminated,
+                        new_state = waiter.wait(state) => {
+                            match new_state {
+                                ControlFlow::Continue(new_state) => new_state,
+                                ControlFlow::Break(new_state) => new_state,
                             }
                         }
                         command = command_rx.recv() => {
                             if let Some(command) = command {
-                                if self.handle_command(command).await {
+                                if self.handle_command(command, &unlocked_tx).await {
                                     State::Waiting
                                 } else {
                                     State::Terminated
@@ -186,11 +176,15 @@ impl Inner {
         }
     }
 
-    async fn handle_command(&self, command: Command) -> bool {
+    async fn handle_command(
+        &self,
+        command: Command,
+        unlocked_tx: &mpsc::Sender<AwaitDrop>,
+    ) -> bool {
         match command {
             Command::Work(result_tx) => {
                 result_tx
-                    .send(self.work(ErrorHandling::Return).await)
+                    .send(self.work(ErrorHandling::Return, unlocked_tx).await)
                     .unwrap_or(());
                 true
             }
@@ -201,29 +195,30 @@ impl Inner {
         }
     }
 
-    async fn work(&self, error_handling: ErrorHandling) -> Result<()> {
+    async fn work(
+        &self,
+        error_handling: ErrorHandling,
+        unlocked_tx: &mpsc::Sender<AwaitDrop>,
+    ) -> Result<()> {
         tracing::trace!("job started");
 
         // Merge
         if let Some(local_branch) = &self.local_branch {
-            let result = self
-                .event_scope
-                .apply(merge::run(&self.shared, local_branch))
-                .await;
+            let result = merge::run(&self.shared, local_branch).await;
             tracing::trace!(?result, "merge completed");
 
             error_handling.apply(result)?;
         }
 
         // Prune outdated branches and snapshots
-        let result = prune::run(&self.shared).await;
+        let result = prune::run(&self.shared, unlocked_tx).await;
         tracing::trace!(?result, "prune completed");
 
         error_handling.apply(result)?;
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = self.event_scope.apply(scan::run(&self.shared)).await;
+            let result = scan::run(&self.shared, self.local_branch.as_ref()).await;
             tracing::trace!(?result, "scan completed");
 
             error_handling.apply(result)?;
@@ -232,6 +227,67 @@ impl Inner {
         tracing::trace!("job completed");
 
         Ok(())
+    }
+}
+
+#[derive(Copy, Clone)]
+enum State {
+    Working,
+    Waiting,
+    Terminated,
+}
+
+struct Waiter {
+    event_rx: IgnoreScopeReceiver,
+    unlocked: FuturesUnordered<AwaitDrop>,
+    unlocked_rx: mpsc::Receiver<AwaitDrop>,
+}
+
+impl Waiter {
+    fn new(
+        event_rx: broadcast::Receiver<Event>,
+        event_scope: EventScope,
+        unlocked_rx: mpsc::Receiver<AwaitDrop>,
+    ) -> Self {
+        Self {
+            event_rx: IgnoreScopeReceiver::new(event_rx, event_scope),
+            unlocked: FuturesUnordered::new(),
+            unlocked_rx,
+        }
+    }
+
+    async fn wait(&mut self, state: State) -> ControlFlow<State, State> {
+        select! {
+            event = self.event_rx.recv() => {
+                tracing::trace!(?event, "event received");
+
+                match event {
+                    Ok(Payload::BranchChanged(_)) => {
+                        // On `BranchChanged`, interrupt the current job and
+                        // immediately start a new one.
+                        ControlFlow::Break(State::Working)
+                    }
+                    Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
+                        // On any other event, let the current job run to completion
+                        // and then start a new one.
+                        ControlFlow::Continue(State::Working)
+                    }
+                    Err(RecvError::Closed) => {
+                        ControlFlow::Break(State::Terminated)
+                    }
+                }
+            }
+            _ = self.unlocked.next(), if !self.unlocked.is_empty() => {
+                tracing::trace!("lock released");
+                ControlFlow::Continue(State::Working)
+            }
+            notify = self.unlocked_rx.recv() => {
+                // unwrap ok because the sender is not destroyed until the end
+                // of this function.
+                self.unlocked.push(notify.unwrap());
+                ControlFlow::Continue(state)
+            }
+        }
     }
 }
 
@@ -252,28 +308,11 @@ impl ErrorHandling {
 
 /// Merge remote branches into the local one.
 mod merge {
-    use crate::version_vector::VersionVector;
-
     use super::*;
 
-    #[instrument(name = "merge", skip_all, err(Debug))]
+    #[instrument(name = "merge", skip_all)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
-        let snapshots = shared.load_snapshots().await?;
-        // If the vvs are equal, break ties by comparing by the root hash so that all replicas
-        // eventually end up having the same root hash of their local branch.
-        let snapshots = versioned::keep_maximal(snapshots, CompareRootHash);
-
-        // If there is only one branch which is newer than all the other branches, then fork it
-        // into the local branch (unless it's already the local one) and we are done.
-        if snapshots.len() <= 1 {
-            if let Some(snapshot) = snapshots.first() {
-                fork(shared, snapshot, &local_branch.version_vector().await?).await?;
-                return Ok(());
-            }
-        }
-
-        // Otherwise we need to proceed with deep merge.
-        let branches = inflate_all(shared, snapshots)?;
+        let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
 
         for branch in branches {
@@ -295,83 +334,26 @@ mod merge {
             Err(error) => Err(error),
         }
     }
-
-    async fn fork(
-        shared: &Shared,
-        snapshot: &SnapshotData,
-        local_vv: &VersionVector,
-    ) -> Result<()> {
-        if snapshot.branch_id() == &shared.this_writer_id {
-            tracing::trace!("local branch already newest");
-            return Ok(());
-        }
-
-        tracing::trace!(
-            ?local_vv,
-            remote_vv = ?snapshot.version_vector(),
-            "unique newest branch - attempting fork"
-        );
-
-        // Note if the local and remote branches have the same version vector we still want to fork
-        // the remote one to resolve the ambiguity but we need to bump the version vector to make
-        // it happens-after the local one otherwise the fork would fail. Note we only bump it once
-        // so if the local branch progressed in the meantime it would still fail but that's OK
-        // because that means the local branch became happens-after the remote one and so we can't
-        // fork anyway. We propagate the errors and try again next time `merge` is run.
-        let dst_vv = snapshot.version_vector().clone();
-        let dst_vv = if dst_vv == *local_vv {
-            dst_vv.incremented(shared.this_writer_id)
-        } else {
-            dst_vv
-        };
-
-        let write_keys = shared
-            .secrets
-            .write_secrets()
-            .map(|secrets| &secrets.write_keys)
-            .ok_or(Error::PermissionDenied)?;
-
-        let mut tx = shared.store.db().begin_write().await?;
-        snapshot
-            .fork(&mut tx, shared.this_writer_id, dst_vv, write_keys)
-            .await?;
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    fn inflate_all(
-        shared: &Shared,
-        snapshots: impl IntoIterator<Item = SnapshotData>,
-    ) -> Result<Vec<Branch>> {
-        snapshots
-            .into_iter()
-            .map(|snapshot| shared.inflate(snapshot.to_branch_data()))
-            .collect()
-    }
-
-    struct CompareRootHash;
-
-    impl Tiebreaker<SnapshotData> for CompareRootHash {
-        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
-            lhs.root_hash().cmp(rhs.root_hash())
-        }
-    }
 }
 
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
-    use crate::blob_id::BlobId;
+    use crate::{
+        crypto::sign::PublicKey,
+        index::{MultiBlockPresence, SnapshotData},
+    };
+    use std::cmp::Ordering;
 
-    #[instrument(name = "prune", skip_all, err(Debug))]
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+    #[instrument(name = "prune", skip_all)]
+    pub(super) async fn run(shared: &Shared, unlocked_tx: &mpsc::Sender<AwaitDrop>) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
+
+        // When there are multiple branches with the same vv but different hash we need to preserve
+        // them because we might need them to request missing blocks. But once the local branch has
+        // all blocks we can prune them.
         let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            // If the vvs are equal, break ties by preferring the one from the local branch (if
-            // any). This way if the local branch and some remote branch have the same vvs, we
-            // always prune the remote one.
-            versioned::partition(all, PreferBranch(Some(&shared.this_writer_id)));
+            versioned::partition(all, Tiebreaker(&shared.this_writer_id));
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -383,17 +365,19 @@ mod prune {
             // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.
-            let Some(_lock) = shared
+            let _lock = match shared
                 .branch_shared
                 .locker
                 .branch(*snapshot.branch_id())
-                .unique(BlobId::ROOT)
-            else {
-                tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
-                continue;
+                .try_unique(BlobId::ROOT)
+            {
+                Ok(lock) => lock,
+                Err((notify, _)) => {
+                    tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
+                    unlocked_tx.send(notify).await.ok();
+                    continue;
+                }
             };
-
-            tracing::trace!(id = ?snapshot.branch_id(), "outdated branch will be removed");
 
             let mut tx = shared.store.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
@@ -414,6 +398,24 @@ mod prune {
         }
 
         Ok(())
+    }
+
+    // If one of the snapshots is local and has all blocks discard the other one, otherwise keep
+    // both.
+    struct Tiebreaker<'a>(&'a PublicKey);
+
+    impl versioned::Tiebreaker<SnapshotData> for Tiebreaker<'_> {
+        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
+            match (lhs.branch_id() == self.0, rhs.branch_id() == self.0) {
+                (true, false) if lhs.block_presence() == &MultiBlockPresence::Full => {
+                    Ordering::Greater
+                }
+                (false, true) if rhs.block_presence() == &MultiBlockPresence::Full => {
+                    Ordering::Less
+                }
+                _ => Ordering::Equal,
+            }
+        }
     }
 }
 
@@ -459,8 +461,8 @@ mod scan {
         }
     }
 
-    #[instrument(name = "scan", skip(shared), err(Debug))]
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+    #[instrument(name = "scan", skip_all)]
+    pub(super) async fn run(shared: &Shared, local_branch: Option<&Branch>) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
         // blocks. The subsequent passes (if any) for collecting only.
@@ -477,14 +479,14 @@ mod scan {
 
             process_locked_blocks(shared, &mut unreachable_block_ids).await?;
 
-            mode = traverse_root(shared, mode, &mut unreachable_block_ids).await?;
+            mode = traverse_root(shared, local_branch, mode, &mut unreachable_block_ids).await?;
             mode = if let Some(mode) = mode.intersect(Mode::Collect) {
                 mode
             } else {
                 break;
             };
 
-            remove_unreachable_blocks(shared, unreachable_block_ids).await?;
+            remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
         Ok(())
@@ -492,6 +494,7 @@ mod scan {
 
     async fn traverse_root(
         shared: &Shared,
+        local_branch: Option<&Branch>,
         mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
     ) -> Result<Mode> {
@@ -505,7 +508,10 @@ mod scan {
 
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
-                .await
+                .await.map_err(|error| {
+                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    error
+                })
             {
                 Ok(dir) => versions.push(dir),
                 Err(Error::EntryNotFound) => {
@@ -526,12 +532,11 @@ mod scan {
             process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
         }
 
-        let local_branch = shared.local_branch().ok();
         traverse(
             shared,
             mode,
             unreachable_block_ids,
-            JointDirectory::new(local_branch, versions),
+            JointDirectory::new(local_branch.cloned(), versions),
         )
         .await
     }
@@ -546,8 +551,6 @@ mod scan {
         let mut entries = Vec::new();
         let mut subdirs = Vec::new();
 
-        // Collect the entries first, so we don't keep the directories locked while we are
-        // processing the entries.
         for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
@@ -623,17 +626,16 @@ mod scan {
             return Ok(());
         }
 
+        // TODO: get the AwaitDrops of the locks and put them into `unlocked` so we can retry the
+        // garbage collect when the blob locks get released.
+
         for (branch_id, blob_ids) in locks {
             let Ok(branch) = shared.get_branch(branch_id) else { continue };
 
             for blob_id in blob_ids {
                 let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {
                     Ok(block_ids) => block_ids,
-                    Err(Error::EntryNotFound) => {
-                        // See the comment above.
-                        tracing::warn!(?branch_id, ?blob_id, "failed to open BlockIds");
-                        continue;
-                    }
+                    Err(Error::EntryNotFound) => continue, // See the comment above.
                     Err(error) => return Err(error),
                 };
 
@@ -648,6 +650,7 @@ mod scan {
 
     async fn remove_unreachable_blocks(
         shared: &Shared,
+        local_branch: Option<&Branch>,
         unreachable_block_ids: BTreeSet<BlockId>,
     ) -> Result<()> {
         // We need to delete the blocks and also mark them as missing (so they can be requested in
@@ -660,7 +663,6 @@ mod scan {
         let mut batch = Vec::with_capacity(BATCH_SIZE);
         let mut total_count = 0;
 
-        let local_branch = shared.local_branch().ok();
         let local_branch_and_write_keys = local_branch
             .as_ref()
             .and_then(|branch| branch.keys().write().map(|keys| (branch, keys)));
@@ -684,12 +686,16 @@ mod scan {
 
             remove_blocks(&mut tx, &batch).await?;
 
-            tx.commit().await?;
-
-            // If we modified the local branch (by removing nodes from it), we need to notify, to
-            // let other replicas know about the change.
-            if let Some((local_branch, _)) = &local_branch_and_write_keys {
-                local_branch.data().notify();
+            if let Some((branch, _)) = local_branch_and_write_keys {
+                // If we modified the local branch (by removing nodes from it), we need to notify,
+                // to let other replicas know about the change. Using `commit_and_then` to handle
+                // possible cancellation.
+                let event_tx = branch.notify();
+                tx.commit_and_then(move || event_tx.send()).await?
+            } else {
+                // Using regular `commit` here because if there is nothing to notify then we don't
+                // care about cancellation.
+                tx.commit().await?;
             }
         }
 
@@ -721,6 +727,8 @@ mod scan {
                 }
             }
         }
+
+        snapshot.remove_all_older(tx).await?;
 
         Ok(())
     }

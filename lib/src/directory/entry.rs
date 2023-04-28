@@ -150,6 +150,11 @@ impl<'a> FileRef<'a> {
 
     /// Fork the file without opening it.
     pub(crate) async fn fork(&self, dst_branch: &Branch) -> Result<()> {
+        if self.branch().id() == dst_branch.id() {
+            // Already forked
+            return Ok(());
+        }
+
         let parent_context = self.inner.parent_context();
         let src_branch = self.branch();
 

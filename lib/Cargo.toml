@@ -47,7 +47,7 @@ sqlx = { version = "0.6.2", default-features = false, features = ["runtime-tokio
 ssdp-client = "1.0"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }

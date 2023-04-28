@@ -4,7 +4,7 @@ use crate::{
     block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
     db,
     error::{Error, Result},
-    event::{Event, Payload},
+    event::Payload,
     index::{self, Index},
     progress::Progress,
     repository::{LocalId, Metadata, RepositoryMonitor},
@@ -12,7 +12,7 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
-use tokio::task;
+use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
@@ -93,34 +93,23 @@ impl Store {
 
         let data_id = data.id;
         let index = self.index.clone();
+        let block_tracker = self.block_tracker.clone();
+        let span = Span::current();
 
-        // HACK: This function may run in a future that can get destroyed. If that happens during
-        // the commit phase, the committed data may or may not be written into the database. If
-        // they are, we _must_ notify the index about the fact. Therefore we do the commit in a
-        // separately spawned task so that it can still finish and we do the notification.
-        //
-        // Note that it would not be enough to execute the notification in some kind of local
-        // destructor and without spawning the task. It is because we can only do the notification
-        // _after the commit finishes_ which is not guaranteed to be the case if the local
-        // destructor is executed while the commit is still being awaited.
-        let handle: task::JoinHandle<Result<()>> = task::spawn(async move {
-            tx.commit().await?;
+        tx.commit_and_then(move || {
+            let _enter = span.enter();
 
             // Notify affected branches.
             for writer_id in writer_ids {
-                index.notify(Event::new(Payload::BlockReceived {
+                index.notify().send(Payload::BlockReceived {
                     block_id: data_id,
                     branch_id: writer_id,
-                }));
+                });
             }
 
-            Ok(())
-        });
-
-        // Unwrap is OK because nothing is `abort`ing the task.
-        handle.await.unwrap()?;
-
-        self.block_tracker.complete(&data.id);
+            block_tracker.complete(&data_id);
+        })
+        .await?;
 
         Ok(())
     }
@@ -208,6 +197,7 @@ mod tests {
         },
         db,
         error::Error,
+        event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
             BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
@@ -222,7 +212,6 @@ mod tests {
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use tempfile::TempDir;
     use test_strategy::proptest;
-    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
@@ -230,10 +219,9 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let (notify_tx, _) = broadcast::channel(1);
 
-        let branch0 = BranchData::new(PublicKey::random(), notify_tx.clone());
-        let branch1 = BranchData::new(PublicKey::random(), notify_tx);
+        let branch0 = BranchData::new(PublicKey::random());
+        let branch1 = BranchData::new(PublicKey::random());
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
@@ -247,7 +235,10 @@ mod tests {
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
         branch0
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator0,
                 &block_id,
@@ -260,7 +251,10 @@ mod tests {
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
         branch1
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator1,
                 &block_id,
@@ -296,9 +290,8 @@ mod tests {
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let (notify_tx, _) = broadcast::channel(1);
 
-        let branch = BranchData::new(PublicKey::random(), notify_tx.clone());
+        let branch = BranchData::new(PublicKey::random());
 
         let locator = Locator::head(rng.gen());
         let locator = locator.encode(&read_key);
@@ -314,7 +307,10 @@ mod tests {
             .await
             .unwrap();
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator,
                 &id0,
@@ -333,8 +329,13 @@ mod tests {
         block::write(&mut tx, &id1, &buffer, &rng.gen())
             .await
             .unwrap();
-        branch
-            .insert(
+
+        let mut snapshot = branch
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap();
+        snapshot
+            .insert_block(
                 &mut tx,
                 &locator,
                 &id1,
@@ -343,14 +344,7 @@ mod tests {
             )
             .await
             .unwrap();
-
-        branch
-            .load_snapshot(&mut tx)
-            .await
-            .unwrap()
-            .remove_all_older(&mut tx)
-            .await
-            .unwrap();
+        snapshot.remove_all_older(&mut tx).await.unwrap();
 
         assert!(!block::exists(&mut tx, &id0).await.unwrap());
         assert!(block::exists(&mut tx, &id1).await.unwrap());
@@ -501,7 +495,10 @@ mod tests {
 
         let mut tx = store.db().begin_write().await.unwrap();
         branch
-            .insert(
+            .load_or_create_snapshot(&mut tx, &write_keys)
+            .await
+            .unwrap()
+            .insert_block(
                 &mut tx,
                 &locator,
                 &block_id,
@@ -680,7 +677,7 @@ mod tests {
     }
 
     fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
-        let (event_tx, _) = broadcast::channel(1);
+        let event_tx = EventSender::new(1);
         let index = Index::new(pool, repo_id, event_tx);
         Store {
             index,

@@ -26,6 +26,7 @@ pub(crate) fn init_log() {
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
+        .with_target(false)
         .with_test_writer()
         .try_init()
         .ok();

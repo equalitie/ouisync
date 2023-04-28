@@ -5,6 +5,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     directory::{DirectoryFallback, DirectoryLocking},
+    event::EventSender,
     index::BranchData,
     state_monitor::StateMonitor,
     version_vector::VersionVector,
@@ -12,7 +13,6 @@ use crate::{
 use assert_matches::assert_matches;
 use rand::{rngs::StdRng, SeedableRng};
 use tempfile::TempDir;
-use tokio::sync::broadcast;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_conflict() {
@@ -997,17 +997,17 @@ async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
 async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N]) {
     let monitor = StateMonitor::make_root();
     let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
-    let (event_tx, _) = broadcast::channel(1);
+    let event_tx = EventSender::new(1);
     let secrets = WriteSecrets::generate(&mut rng);
-    let shared = BranchShared::new(event_tx.clone());
+    let shared = BranchShared::new();
 
     let branches = [(); N].map(|_| {
         let id = PublicKey::generate(&mut rng);
         let event_tx = event_tx.clone();
         let secrets = secrets.clone();
         let shared = shared.clone();
-        let data = BranchData::new(id, event_tx);
-        Branch::new(pool.clone(), data, secrets.into(), shared)
+        let data = BranchData::new(id);
+        Branch::new(pool.clone(), data, secrets.into(), shared, event_tx)
     });
 
     (base_dir, branches)

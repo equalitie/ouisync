@@ -30,18 +30,15 @@ impl File {
         locator: Locator,
         parent: ParentContext,
     ) -> Result<Self> {
-        let lock = branch
-            .locker()
-            .read(*locator.blob_id())
-            .ok_or(Error::EntryNotFound)
-            .map_err(|error| {
-                tracing::debug!(
-                    branch_id = ?branch.id(),
-                    blob_id = ?locator.blob_id(),
-                    "failed to acquire read lock"
-                );
-                error
-            })?;
+        let lock = branch.locker().try_read(*locator.blob_id()).map_err(|_| {
+            tracing::warn!(
+                branch_id = ?branch.id(),
+                blob_id = ?locator.blob_id(),
+                "failed to acquire read lock"
+            );
+
+            Error::EntryNotFound
+        })?;
         let lock = UpgradableLock::Read(lock);
 
         let mut tx = branch.db().begin_read().await?;
@@ -61,7 +58,8 @@ impl File {
         // as well panic.
         let lock = branch
             .locker()
-            .read(*locator.blob_id())
+            .try_read(*locator.blob_id())
+            .ok()
             .expect("blob_id collision");
         let lock = UpgradableLock::Read(lock);
 
@@ -147,10 +145,15 @@ impl File {
                 VersionVectorOp::IncrementLocal,
             )
             .await?;
-        tx.commit().await?;
 
-        self.branch().uncommitted_block_counter().reset();
-        self.branch().data().notify();
+        let uncommitted_block_counter = self.branch().uncommitted_block_counter().clone();
+        let event_tx = self.branch().notify();
+
+        tx.commit_and_then(move || {
+            uncommitted_block_counter.reset();
+            event_tx.send();
+        })
+        .await?;
 
         Ok(())
     }
@@ -192,7 +195,7 @@ impl File {
 
         let lock = dst_branch
             .locker()
-            .read_wait(*self.blob.locator().blob_id())
+            .read(*self.blob.locator().blob_id())
             .await;
         let lock = UpgradableLock::Read(lock);
 
@@ -232,14 +235,13 @@ mod tests {
         crypto::sign::PublicKey,
         db,
         directory::{DirectoryFallback, DirectoryLocking},
-        event::Event,
+        event::EventSender,
         index::BranchData,
         state_monitor::StateMonitor,
         test_utils,
     };
     use assert_matches::assert_matches;
     use tempfile::TempDir;
-    use tokio::sync::broadcast;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fork() {
@@ -359,8 +361,8 @@ mod tests {
         let monitor = StateMonitor::make_root();
         let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
-        let (event_tx, _) = broadcast::channel(1);
-        let shared = BranchShared::new(event_tx.clone());
+        let event_tx = EventSender::new(1);
+        let shared = BranchShared::new();
 
         let branches = [(); N]
             .map(|_| create_branch(pool.clone(), event_tx.clone(), keys.clone(), shared.clone()));
@@ -370,13 +372,13 @@ mod tests {
 
     fn create_branch(
         pool: db::Pool,
-        event_tx: broadcast::Sender<Event>,
+        event_tx: EventSender,
         keys: AccessKeys,
         shared: BranchShared,
     ) -> Branch {
         let id = PublicKey::random();
-        let branch_data = BranchData::new(id, event_tx);
-        Branch::new(pool, branch_data, keys, shared)
+        let branch_data = BranchData::new(id);
+        Branch::new(pool, branch_data, keys, shared, event_tx)
     }
 }
 

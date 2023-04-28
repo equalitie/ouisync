@@ -25,7 +25,7 @@ use crate::{
     db,
     debug::DebugPrinter,
     error::{Error, Result},
-    event::Event,
+    event::{Event, EventSender, Payload},
     repository::RepositoryId,
     version_vector::VersionVector,
 };
@@ -41,19 +41,15 @@ pub(crate) type SnapshotId = u32;
 pub(crate) struct Index {
     pub pool: db::Pool,
     repository_id: RepositoryId,
-    notify_tx: broadcast::Sender<Event>,
+    event_tx: EventSender,
 }
 
 impl Index {
-    pub fn new(
-        pool: db::Pool,
-        repository_id: RepositoryId,
-        notify_tx: broadcast::Sender<Event>,
-    ) -> Self {
+    pub fn new(pool: db::Pool, repository_id: RepositoryId, event_tx: EventSender) -> Self {
         Self {
             pool,
             repository_id,
-            notify_tx,
+            event_tx,
         }
     }
 
@@ -62,31 +58,27 @@ impl Index {
     }
 
     pub fn get_branch(&self, writer_id: PublicKey) -> BranchData {
-        BranchData::new(writer_id, self.notify_tx.clone())
+        BranchData::new(writer_id)
     }
 
     pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.pool.acquire().await?;
-        BranchData::load_all(&mut conn, self.notify_tx.clone())
-            .try_collect()
-            .await
+        BranchData::load_all(&mut conn).try_collect().await
     }
 
     /// Load latest snapshots of all branches.
     pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
         let mut conn = self.pool.acquire().await?;
-        SnapshotData::load_all(&mut conn, self.notify_tx.clone())
-            .try_collect()
-            .await
+        SnapshotData::load_all(&mut conn).try_collect().await
     }
 
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.notify_tx.subscribe()
+        self.event_tx.subscribe()
     }
 
-    pub(crate) fn notify(&self, event: Event) {
-        self.notify_tx.send(event).unwrap_or(0);
+    pub(crate) fn notify(&self) -> &EventSender {
+        &self.event_tx
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
@@ -121,7 +113,14 @@ impl Index {
 
         if action.insert {
             let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
-            tracing::debug!(vv = ?node.proof.version_vector, ?node.proof.hash, "snapshot started");
+
+            tracing::debug!(
+                branch_id = ?node.proof.writer_id,
+                hash = ?node.proof.hash,
+                vv = ?node.proof.version_vector,
+                "snapshot started"
+            );
+
             self.update_summaries(tx, node.proof.hash).await?;
         }
 
@@ -258,20 +257,18 @@ impl Index {
 
         if !completed.is_empty() {
             for branch_id in &completed {
-                let branch = self.get_branch(*branch_id);
-
                 if tracing::enabled!(Level::DEBUG) {
                     let mut conn = self.pool.acquire().await?;
-                    let snapshot = branch.load_snapshot(&mut conn).await?;
+                    let snapshot = self.get_branch(*branch_id).load_snapshot(&mut conn).await?;
                     tracing::debug!(
-                        vv = ?snapshot.version_vector(),
-                        hash = ?snapshot.root_hash(),
                         branch_id = ?snapshot.branch_id(),
+                        hash = ?snapshot.root_hash(),
+                        vv = ?snapshot.version_vector(),
                         "snapshot complete"
                     );
                 }
 
-                branch.notify();
+                self.notify().send(Payload::BranchChanged(*branch_id));
             }
         }
 
@@ -366,17 +363,16 @@ async fn decide_root_node_action(
             Some(Ordering::Equal) => {
                 // The incoming node has the same version vector as one of the existing nodes.
                 // If the hashes are also equal, there is no point inserting it but if the incoming
-                // summary is more up-to-date than the exising one, we still want to potentially
+                // summary is potentially more up-to-date than the exising one, we still want to
                 // request the children. Otherwise we discard it.
-
                 if new_proof.hash == old_node.proof.hash {
                     action.insert = false;
-                }
 
-                // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
-                // with `new_summary.is_outdated(&old_node.summary)`.
-                if !old_node.summary.is_outdated(new_summary) {
-                    action.request_children = false;
+                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
+                    // with `new_summary.is_outdated(&old_node.summary)`.
+                    if !old_node.summary.is_outdated(new_summary) {
+                        action.request_children = false;
+                    }
                 }
             }
             Some(Ordering::Greater) => (),

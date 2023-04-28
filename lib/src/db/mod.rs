@@ -33,6 +33,7 @@ use thiserror::Error;
 use tokio::{
     fs,
     sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
+    task,
 };
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
@@ -270,8 +271,58 @@ impl_executor_by_deref!(ReadTransaction);
 pub(crate) struct WriteTransaction(ReadTransaction);
 
 impl WriteTransaction {
+    /// Commits the transaction.
+    ///
+    /// # Cancel safety
+    ///
+    /// If the future returned by this function is cancelled before completion, the transaction
+    /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
+    /// which of the two operations happens.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         self.0.inner.commit().await
+    }
+
+    /// Commits the transaction and if (and only if) the commit completes successfully, runs the
+    /// given closure.
+    ///
+    /// # Cancel safety
+    ///
+    /// The commits completes and if it succeeds the closure gets called. This is guaranteed to
+    /// happen even if the future returned from this function is cancelled before completion.
+    ///
+    /// # Insufficient alternatives
+    ///
+    /// ## Calling `commit().await?` and then calling `f()`
+    ///
+    /// This is not enough because it has these possible outcomes depending on whether and when
+    /// cancellation happened:
+    ///
+    /// 1. `commit` completes successfully and `f` is called
+    /// 2. `commit` completes with error and `f` is not called
+    /// 3. `commit` is cancelled but the transaction is still committed and `f` is not called
+    /// 4. `commit` is cancelled and the transaction rolls back and `f` is not called
+    ///
+    /// Number 3 is typically not desirable.
+    ///
+    /// ## Calling `f` using a RAII guard
+    ///
+    /// This is still not enough because it has the following possible outcomes:
+    ///
+    /// 1. `commit` completes successfully and `f` is called
+    /// 2. `commit` completes with error and `f` is called
+    /// 3. `commit` is cancelled but the transaction is still committed and `f` is called
+    /// 4. `commit` is cancelled and the transaction rolls back and `f` is called
+    ///
+    /// Numbers 2 and 4 are not desirable. Number 2 can be handled by explicitly handling the error
+    /// case and disabling the guard but there is nothing to do about number 4.
+    pub async fn commit_and_then<F, R>(self, f: F) -> Result<R, sqlx::Error>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        task::spawn(async move { self.commit().await.map(|()| f()) })
+            .await
+            .unwrap()
     }
 }
 
@@ -303,6 +354,16 @@ impl SharedWriteTransaction {
     pub async fn commit(mut self) -> Result<(), sqlx::Error> {
         // `unwrap` is ok, see the NOTE above.
         self.0.take().unwrap().commit().await
+    }
+
+    /// See [WriteTransaction::commit_and_then]
+    pub async fn commit_and_then<F, R>(mut self, f: F) -> Result<R, sqlx::Error>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        // `unwrap` is ok, see the NOTE above.
+        self.0.take().unwrap().commit_and_then(f).await
     }
 }
 

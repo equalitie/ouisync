@@ -277,19 +277,29 @@ fn sync_during_file_write() {
             rx.recv().await;
 
             // Write half of the file content but don't flush yet.
-            common::write_in_chunks(&mut file, &content[..content.len() / 2], 4096).await;
+            common::write_in_chunks(&mut file, &content[..content.len() / 2], 4096)
+                .instrument(tracing::info_span!("write", name = "foo.txt", step = 1))
+                .await;
 
             // Wait until we see the file created by B
             common::expect_file_content(&repo, "bar.txt", b"bar").await;
 
             // Write the second half of the content and flush.
-            common::write_in_chunks(&mut file, &content[content.len() / 2..], 4096).await;
-            file.flush().await.unwrap();
+            async {
+                common::write_in_chunks(&mut file, &content[content.len() / 2..], 4096).await;
+                file.flush().await.unwrap();
+            }
+            .instrument(tracing::info_span!("write", name = "foo.txt", step = 2))
+            .await;
 
             // Reopen the file and verify it has the expected full content
             let mut file = repo.open_file("foo.txt").await.unwrap();
-            let actual_content = file.read_to_end().await.unwrap();
-            assert_eq!(actual_content, *content);
+            let actual_content = file
+                .read_to_end()
+                .instrument(tracing::info_span!("read", name = "foo.txt"))
+                .await
+                .unwrap();
+            common::assert_content_equal(&actual_content, &content);
 
             rx.recv().await;
         }
@@ -308,10 +318,13 @@ fn sync_during_file_write() {
 
             // Write a file. Excluding the unflushed changes by Alice, this makes Bob's branch newer
             // than Alice's.
-            let mut file = repo.create_file("bar.txt").await.unwrap();
-            file.write(b"bar").await.unwrap();
-            file.flush().await.unwrap();
-            drop(file);
+            async {
+                let mut file = repo.create_file("bar.txt").await.unwrap();
+                file.write(b"bar").await.unwrap();
+                file.flush().await.unwrap();
+            }
+            .instrument(tracing::info_span!("write", name = "bar.txt"))
+            .await;
 
             // Wait until we see the file with the complete content from Alice
             common::expect_file_content(&repo, "foo.txt", &content).await;

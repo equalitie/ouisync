@@ -5,7 +5,7 @@ set -eEu
 self_pid=$$
 
 function date_tag {
-    date +"%Y-%m-%dT%H:%M:%S"
+    date --utc +"%Y-%m-%dT%H:%M:%S"
 }
 
 function descendant_pids() {
@@ -114,26 +114,26 @@ export PROPTEST_CASES=32
 
 for process in $(seq $concurrency); do
     {
+        # Bind the pipe to the file descriptor 3 so we can echo to it without constantly reopening
+        # it.
+        exec 3> $pipe
+
         local_iteration=0
 
         while true; do
             if $exe $args > $dir/test-$process.log 2>&1; then
                 ((local_iteration=local_iteration+1))
-
-                if ! echo "$process $local_iteration ok" > $pipe; then
-                    echo "$(date_tag) Failed to write to pipe"
-                fi
+                echo "$process $local_iteration ok" >&3
             else
                 status=$?
                 echo "$(date_tag) Process $process aborted with status $status after $local_iteration iterations"
-
-                if ! echo "$process $local_iteration fail" > $pipe; then
-                    echo "$(date_tag) Failed to write to pipe"
-                fi
-
+                echo "$process $local_iteration fail" >&3
                 break
             fi
         done
+
+        # Close the file descriptor 3
+        exec 3>&-
     } &
 done
 
@@ -143,18 +143,19 @@ global_iteration=0
 aborted_process=""
 
 while true; do
-    if read process local_iteration status < $pipe; then
+    if read -r process local_iteration status; then
         if [ "$status" = "ok" ]; then
             ((global_iteration=global_iteration+1))
             echo "$(date_tag) Iteration #$global_iteration ($process/$local_iteration)"
         else
+            echo "$(date_tag) FAIL ($process/$local_iteration)"
             aborted_process=$process
             break;
         fi
     else
         echo "$(date_tag) Failed to read from pipe"
     fi
-done
+done < $pipe
 
 new_log_name="/tmp/ouisync-log-$(date_tag).txt"
 mv $dir/test-$aborted_process.log $new_log_name
@@ -165,7 +166,7 @@ echo "Stopping all tests"
 # HACK: This should be called by trap but sometimes for some reason isn't...
 cleanup
 
-if [ -n "$log_open" -a -n "$EDITOR" ]; then
+if [ -n "$log_open" -a -n "${EDITOR-}" ]; then
     $EDITOR $new_log_name
 fi
 

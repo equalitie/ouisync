@@ -67,7 +67,6 @@ impl ConnectionDeduplicator {
             Entry::Vacant(entry) => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let on_release_tx = DropAwaitable::new();
-                let on_release_rx = on_release_tx.subscribe();
 
                 entry.insert(Peer {
                     id,
@@ -81,7 +80,6 @@ impl ConnectionDeduplicator {
                     connections: self.connections.clone(),
                     info,
                     id,
-                    on_release: on_release_rx,
                     on_deduplicator_change: self.on_change_tx.clone(),
                 })
             }
@@ -200,7 +198,6 @@ pub(super) struct ConnectionPermit {
     connections: Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>,
     info: ConnectionInfo,
     id: PermitId,
-    on_release: AwaitDrop,
     on_deduplicator_change: Arc<uninitialized_watch::Sender<()>>,
 }
 
@@ -216,7 +213,6 @@ impl ConnectionPermit {
                 connections: self.connections.clone(),
                 info: self.info,
                 id: self.id,
-                on_release: self.on_release.clone(),
                 on_deduplicator_change: self.on_deduplicator_change.clone(),
             }),
             ConnectionPermitHalf(self),
@@ -249,7 +245,7 @@ impl ConnectionPermit {
 
     /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
-        self.on_release.clone()
+        self.with_peer(|peer| peer.on_release.subscribe())
     }
 
     pub fn addr(&self) -> PeerAddr {
@@ -261,20 +257,13 @@ impl ConnectionPermit {
     }
 
     pub fn source(&self) -> PeerSource {
-        self.connections
-            .lock()
-            .unwrap()
-            .get(&self.info)
-            // unwrap is ok because if `self` exists then the entry should exists as well.
-            .unwrap()
-            .source
+        self.with_peer(|peer| peer.source)
     }
 
     /// Dummy connection permit for tests.
     #[cfg(test)]
     pub fn dummy() -> Self {
         use std::net::Ipv4Addr;
-        let on_release = DropAwaitable::new().subscribe();
 
         Self {
             connections: Arc::new(BlockingMutex::new(HashMap::default())),
@@ -283,9 +272,16 @@ impl ConnectionPermit {
                 dir: ConnectionDirection::Incoming,
             },
             id: 0,
-            on_release,
             on_deduplicator_change: Arc::new(uninitialized_watch::channel().0),
         }
+    }
+
+    fn with_peer<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Peer) -> R,
+    {
+        // unwrap is ok because if `self` exists then the entry should exists as well.
+        f(self.connections.lock().unwrap().get(&self.info).unwrap())
     }
 }
 
