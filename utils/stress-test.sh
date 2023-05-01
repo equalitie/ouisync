@@ -16,15 +16,6 @@ function descendant_pids() {
     done
 }
 
-function cleanup() {
-    # Kill all descendants (not just children) of this script
-    for pid in $(descendant_pids $self_pid); do
-        kill $pid 2>/dev/null || true
-    done
-}
-
-trap cleanup EXIT
-
 temp_dir_prefix="ouisync-stress-test"
 build_args="--release"
 
@@ -89,7 +80,27 @@ else
     build_args="$build_args --lib"
 fi
 
+# Create the work dir
 rm -rf "/tmp/$temp_dir_prefix-*"
+
+dir=`mktemp --tmpdir -d $temp_dir_prefix-XXXXXX`
+
+function cleanup() {
+    # Kill all descendants (not just children) of this script
+    for pid in $(descendant_pids $self_pid); do
+        kill $pid 2>/dev/null || true
+    done
+
+    # Remove the work dir
+    rm -rf "$dir"
+}
+
+trap cleanup INT TERM EXIT ERR
+
+# Override TMPDIR so that all temp files/directories created in the tests are created inside the
+# work dir for easier cleanup.
+export TMPDIR=$dir
+export TEMP=$dir # for windows
 
 echo "$(date_tag) Compiling the test with '$build_args'"
 cargo test $build_args --no-run
@@ -100,8 +111,6 @@ exe=$(cargo test $build_args --no-run 2>&1 | grep "Executable" | sed "s/^.*Execu
 if [ -n "$timeout" ]; then
     exe="timeout $timeout $exe"
 fi
-
-dir=`mktemp --tmpdir -d $temp_dir_prefix-XXXXXX`
 
 pipe="$dir/pipe"
 mkfifo $pipe
@@ -160,11 +169,6 @@ done < $pipe
 new_log_name="/tmp/ouisync-log-$(date_tag).txt"
 mv $dir/test-$aborted_process.log $new_log_name
 echo "$(date_tag) Log saved to $new_log_name"
-
-echo "Stopping all tests"
-
-# HACK: This should be called by trap but sometimes for some reason isn't...
-cleanup
 
 if [ -n "$log_open" -a -n "${EDITOR-}" ]; then
     $EDITOR $new_log_name
