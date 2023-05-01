@@ -9,13 +9,81 @@ use ouisync::{
     BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
-use tokio::sync::{broadcast, mpsc};
+use std::{cmp::Ordering, io::SeekFrom, iter, sync::Arc};
+use tokio::sync::{broadcast, mpsc, Barrier};
 use tracing::{instrument, Instrument};
 
-// Some tests used to fail only on sufficiently large files
-// const LARGE_SIZE: usize = 4 * 1024 * 1024;
+const SMALL_SIZE: usize = 1024;
 const LARGE_SIZE: usize = 2 * 1024 * 1024;
+
+#[test]
+fn sync_small_file_two_peers() {
+    sync_with_multiple_peers(2, SMALL_SIZE)
+}
+
+#[test]
+fn sync_small_file_three_peers() {
+    sync_with_multiple_peers(3, SMALL_SIZE)
+}
+
+#[test]
+fn sync_large_file_two_peers() {
+    sync_with_multiple_peers(2, 2 * LARGE_SIZE)
+}
+
+#[test]
+fn sync_large_file_three_peers() {
+    sync_with_multiple_peers(3, LARGE_SIZE)
+}
+
+fn sync_with_multiple_peers(peers: usize, file_size: usize) {
+    assert!(peers > 1);
+
+    let mut env = Env::new();
+    let content = common::random_content(file_size);
+    let barrier = Arc::new(Barrier::new(peers));
+
+    env.actor("writer", {
+        let content = content.clone();
+        let barrier = barrier.clone();
+
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file("test.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            barrier.wait().await;
+        }
+    });
+
+    for index in 0..peers - 1 {
+        env.actor(&format!("reader-{index}"), {
+            let content = content.clone();
+            let barrier = barrier.clone();
+
+            async move {
+                let (network, repo, _reg) = actor::setup().await;
+
+                // Connect to everyone else
+                let peers = iter::once("writer".to_owned()).chain(
+                    (0..peers - 1)
+                        .filter(|other_index| *other_index != index)
+                        .map(|other_index| format!("reader-{other_index}")),
+                );
+
+                for peer in peers {
+                    network.add_user_provided_peer(&actor::lookup_addr(&peer).await);
+                }
+
+                common::expect_file_content(&repo, "test.dat", &content).await;
+
+                barrier.wait().await;
+            }
+        });
+    }
+}
 
 #[test]
 fn relink_repository() {
@@ -165,40 +233,6 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
             common::expect_file_content(&repo, "test.dat", &content).await;
 
             tx.send(()).unwrap();
-        }
-    });
-}
-
-#[test]
-fn transfer_large_file() {
-    let mut env = Env::new();
-    let (tx, mut rx) = mpsc::channel(1); // side-channel
-
-    let file_size = LARGE_SIZE;
-    let content = Arc::new(common::random_content(file_size));
-
-    env.actor("writer", {
-        let content = content.clone();
-
-        async move {
-            let (_network, repo, _reg) = actor::setup().await;
-
-            let mut file = repo.create_file("test.dat").await.unwrap();
-            common::write_in_chunks(&mut file, &content, 4096).await;
-            file.flush().await.unwrap();
-
-            rx.recv().await;
-        }
-    });
-
-    env.actor("reader", {
-        async move {
-            let (network, repo, _reg) = actor::setup().await;
-            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
-
-            common::expect_file_content(&repo, "test.dat", &content).await;
-
-            tx.send(()).await.unwrap();
         }
     });
 }
