@@ -160,14 +160,19 @@ impl Inner {
                             }
                         }
                         command = command_rx.recv() => {
-                            if let Some(command) = command {
-                                if self.handle_command(command, &unlocked_tx).await {
-                                    State::Waiting
-                                } else {
-                                    State::Terminated
+                            let Some(command) = command else {
+                                break;
+                            };
+
+                            match self.handle_command(command, &unlocked_tx).await {
+                                ControlFlow::Continue(()) => State::Waiting,
+                                ControlFlow::Break(tx) => {
+                                    // Ensure that when the reply is received it's guaranteed that
+                                    // self has already been destroyed.
+                                    drop(self);
+                                    tx.send(()).ok();
+                                    break;
                                 }
-                            } else {
-                                State::Terminated
                             }
                         }
                     }
@@ -181,18 +186,15 @@ impl Inner {
         &self,
         command: Command,
         unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> bool {
+    ) -> ControlFlow<oneshot::Sender<()>> {
         match command {
             Command::Work(result_tx) => {
                 result_tx
                     .send(self.work(ErrorHandling::Return, unlocked_tx).await)
                     .unwrap_or(());
-                true
+                ControlFlow::Continue(())
             }
-            Command::Shutdown(result_tx) => {
-                result_tx.send(()).unwrap_or(());
-                false
-            }
+            Command::Shutdown(result_tx) => ControlFlow::Break(result_tx),
         }
     }
 

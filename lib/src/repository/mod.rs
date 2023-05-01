@@ -20,6 +20,7 @@ use crate::{
         sign::{self, PublicKey},
     },
     db::{self, DatabaseId},
+    deadlock::BlockingMutex,
     debug::DebugPrinter,
     device_id::DeviceId,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryType},
@@ -49,7 +50,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
-    _progress_reporter_handle: ScopedJoinHandle<()>,
+    progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
 impl Repository {
@@ -218,15 +219,16 @@ impl Repository {
         let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
         task::spawn(worker.run().instrument(shared.store.monitor.span().clone()));
 
-        let _progress_reporter_handle = scoped_task::spawn(
+        let progress_reporter_handle = scoped_task::spawn(
             report_sync_progress(shared.store.clone())
                 .instrument(shared.store.monitor.span().clone()),
         );
+        let progress_reporter_handle = BlockingMutex::new(Some(progress_reporter_handle));
 
         Ok(Self {
             shared,
             worker_handle,
-            _progress_reporter_handle,
+            progress_reporter_handle,
         })
     }
 
@@ -706,6 +708,14 @@ impl Repository {
     pub async fn close(&self) -> Result<()> {
         self.worker_handle.shutdown().await;
         self.shared.store.db().close().await?;
+
+        // Abort and *await* the task to make sure that the state it's holding is definitely
+        // dropped before we return from this function.
+        let task = self.progress_reporter_handle.lock().unwrap().take();
+        if let Some(task) = task {
+            task.abort();
+            task.await.ok();
+        }
 
         Ok(())
     }
