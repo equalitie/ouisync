@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{actor, Env, Proto};
+use self::common::{actor, Env, Proto, DEFAULT_REPO};
 use assert_matches::assert_matches;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, StateMonitor, VersionVector,
@@ -199,10 +199,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
 
         async move {
             let network = actor::create_network(proto).await;
-            let repo = actor::create_repo_with_secrets(
-                actor::default_secrets().with_mode(relay_access_mode),
-            )
-            .await;
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, relay_access_mode).await;
             let _reg = network.register(repo.store().clone()).await;
 
             rx.recv().await.unwrap();
@@ -445,12 +442,12 @@ fn recreate_local_branch() {
         let network = actor::create_network(proto).await;
 
         // 1. Create the repo but don't link it yet.
-        let repo_path = actor::make_repo_path();
+        let (repo_path, repo_secrets) = actor::get_repo_path_and_secrets(DEFAULT_REPO).await;
         let monitor = StateMonitor::make_root();
         let repo = Repository::create(
             &repo_path,
             actor::device_id(),
-            Access::new(None, None, actor::default_secrets()),
+            Access::new(None, None, repo_secrets),
             &monitor,
         )
         .await
@@ -693,7 +690,7 @@ fn remote_rename_directory_during_conflict() {
 
     env.actor("writer", async move {
         let network = actor::create_network(proto).await;
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo(DEFAULT_REPO).await;
 
         // Create file before linking the repo to ensure we create conflict.
         repo.create_file("dummy.txt").await.unwrap();
@@ -709,7 +706,7 @@ fn remote_rename_directory_during_conflict() {
 
     env.actor("reader", async move {
         let network = actor::create_network(proto).await;
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo(DEFAULT_REPO).await;
 
         network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
@@ -793,7 +790,7 @@ fn concurrent_update_and_delete_during_conflict() {
 
         async move {
             let network = actor::create_network(proto).await;
-            let repo = actor::create_repo().await;
+            let repo = actor::create_repo(DEFAULT_REPO).await;
 
             let id_a = *repo.local_branch().unwrap().id();
             let id_b = bob_rx.recv().await.unwrap();
@@ -829,7 +826,7 @@ fn concurrent_update_and_delete_during_conflict() {
             let network = actor::create_network(proto).await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
-            let repo = actor::create_repo().await;
+            let repo = actor::create_repo(DEFAULT_REPO).await;
 
             bob_tx
                 .send(*repo.local_branch().unwrap().id())
@@ -913,10 +910,7 @@ fn content_stays_available_during_sync() {
         async move {
             // Bob is read-only to disable the merger which could otherwise interfere with this test.
             let network = actor::create_network(Proto::Tcp).await;
-            let repo = actor::create_repo_with_secrets(
-                actor::default_secrets().with_mode(AccessMode::Read),
-            )
-            .await;
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
             let _reg = network.register(repo.store().clone()).await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 

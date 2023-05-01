@@ -10,7 +10,6 @@ use ouisync::{
 };
 use rand::Rng;
 use std::{
-    cell::Cell,
     fmt,
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -27,6 +26,8 @@ use tracing::{instrument, Instrument, Span};
 
 pub(crate) use self::env::*;
 use self::wait_map::WaitMap;
+
+pub(crate) const DEFAULT_REPO: &str = "default";
 
 // Timeout for waiting for an event. Can be overwritten using "TEST_EVENT_TIMEOUT" env variable
 // (in seconds).
@@ -148,7 +149,7 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
-    use ouisync::StateMonitor;
+    use ouisync::{AccessMode, StateMonitor};
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -199,38 +200,45 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn make_repo_path() -> PathBuf {
-        ACTOR.with(|actor| actor.next_repo_path())
-    }
-
     pub(crate) fn device_id() -> DeviceId {
         ACTOR.with(|actor| actor.device_id)
     }
 
-    pub(crate) fn default_secrets() -> AccessSecrets {
-        ACTOR.with(|actor| actor.context.default_secrets.clone())
+    pub(crate) async fn get_repo_path_and_secrets(name: &str) -> (PathBuf, AccessSecrets) {
+        ACTOR.with(|actor| {
+            (
+                actor.repo_path(name),
+                actor
+                    .context
+                    .repo_map
+                    .get_or_insert_with(name.to_owned(), AccessSecrets::random_write),
+            )
+        })
     }
 
-    pub(crate) async fn create_repo_with_secrets(secrets: AccessSecrets) -> Repository {
-        let store = make_repo_path();
+    pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
+        let (path, secrets) = get_repo_path_and_secrets(name).await;
         let monitor = StateMonitor::make_root();
 
         Repository::create(
-            &store,
+            path,
             device_id(),
-            Access::new(None, None, secrets),
+            Access::new(None, None, secrets.with_mode(mode)),
             &monitor,
         )
         .await
         .unwrap()
     }
 
-    pub(crate) async fn create_repo() -> Repository {
-        create_repo_with_secrets(default_secrets()).await
+    pub(crate) async fn create_repo(name: &str) -> Repository {
+        create_repo_with_mode(name, AccessMode::Write).await
     }
 
-    pub(crate) async fn create_linked_repo(network: &Network) -> (Repository, Registration) {
-        let repo = create_repo().await;
+    pub(crate) async fn create_linked_repo(
+        name: &str,
+        network: &Network,
+    ) -> (Repository, Registration) {
+        let repo = create_repo(name).await;
         let reg = network.register(repo.store().clone()).await;
 
         (repo, reg)
@@ -240,7 +248,7 @@ pub(crate) mod actor {
     /// Convenience function for the common case where the actor has one linked repository.
     pub(crate) async fn setup() -> (Network, Repository, Registration) {
         let network = create_network(Proto::Tcp).await;
-        let (repo, reg) = create_linked_repo(&network).await;
+        let (repo, reg) = create_linked_repo(DEFAULT_REPO, &network).await;
         (network, repo, reg)
     }
 }
@@ -252,7 +260,7 @@ task_local! {
 struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
-    default_secrets: AccessSecrets,
+    repo_map: WaitMap<String, AccessSecrets>,
 }
 
 impl Context {
@@ -262,7 +270,7 @@ impl Context {
         Self {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
-            default_secrets: AccessSecrets::random_write(),
+            repo_map: WaitMap::new(),
         }
     }
 }
@@ -272,7 +280,6 @@ struct Actor {
     context: Arc<Context>,
     base_dir: PathBuf,
     device_id: DeviceId,
-    repo_counter: Cell<u32>,
 }
 
 impl Actor {
@@ -284,15 +291,11 @@ impl Actor {
             context,
             base_dir,
             device_id: rand::random(),
-            repo_counter: Cell::new(0),
         }
     }
 
-    fn next_repo_path(&self) -> PathBuf {
-        let num = self.repo_counter.get();
-        self.repo_counter.set(num + 1);
-
-        self.base_dir.join(format!("repo-{num}.db"))
+    fn repo_path(&self, name: &str) -> PathBuf {
+        self.base_dir.join(name).with_extension("db")
     }
 }
 

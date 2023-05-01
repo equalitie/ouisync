@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{actor, Env};
+use self::common::{actor, Env, DEFAULT_REPO};
 use ouisync::{File, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -12,7 +12,7 @@ fn local_delete_local_file() {
     let mut env = Env::new();
 
     env.actor("local", async {
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo("test").await;
 
         assert_eq!(repo.count_blocks().await.unwrap(), 0);
 
@@ -115,7 +115,7 @@ fn local_truncate_local_file() {
     let mut env = Env::new();
 
     env.actor("local", async move {
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo(DEFAULT_REPO).await;
 
         let mut file = repo.create_file("test.dat").await.unwrap();
         write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
