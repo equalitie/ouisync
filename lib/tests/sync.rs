@@ -5,8 +5,7 @@ mod common;
 use self::common::{actor, Env, Proto};
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, RepositoryDb, StateMonitor, BLOB_HEADER_SIZE,
-    BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
@@ -413,9 +412,10 @@ fn recreate_local_branch() {
         let repo_path = actor::make_repo_path();
         let monitor = StateMonitor::make_root();
         let repo = Repository::create(
-            RepositoryDb::create(&repo_path, &monitor).await.unwrap(),
+            &repo_path,
             actor::device_id(),
             Access::new(None, None, actor::default_secrets()),
+            &monitor,
         )
         .await
         .unwrap();

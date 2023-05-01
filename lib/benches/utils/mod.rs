@@ -1,5 +1,5 @@
 use camino::Utf8Path;
-use ouisync::{Access, Repository, RepositoryDb, StateMonitor, WriteSecrets};
+use ouisync::{Access, Repository, StateMonitor, WriteSecrets};
 use rand::{rngs::StdRng, Rng};
 use std::{ops::Deref, path::Path};
 use tokio::runtime::Handle;
@@ -7,11 +7,12 @@ use tokio::runtime::Handle;
 pub async fn create_repo(rng: &mut StdRng, store: &Path) -> RepositoryGuard {
     let monitor = StateMonitor::make_root();
     let repository = Repository::create(
-        RepositoryDb::create(store, &monitor).await.unwrap(),
+        store,
         rng.gen(),
         Access::WriteUnlocked {
             secrets: WriteSecrets::generate(rng),
         },
+        &monitor,
     )
     .await
     .unwrap();

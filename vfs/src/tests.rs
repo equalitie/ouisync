@@ -1,5 +1,5 @@
 use super::*;
-use ouisync_lib::{Access, Repository, RepositoryDb, StateMonitor, WriteSecrets};
+use ouisync_lib::{Access, Repository, StateMonitor, WriteSecrets};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
 use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
@@ -231,16 +231,14 @@ async fn setup() -> (TempDir, MountGuard) {
 
     let span = tracing::info_span!("test", name = thread::current().name());
     let monitor = StateMonitor::make_root();
-    let db = RepositoryDb::create(base_dir.path().join("repo.db"), &monitor)
-        .await
-        .unwrap();
 
     let repo = Repository::create(
-        db,
+        base_dir.path().join("repo.db"),
         rand::random(),
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
+        &monitor,
     )
     .instrument(span)
     .await

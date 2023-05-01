@@ -3,8 +3,8 @@ use camino::Utf8PathBuf;
 use ouisync_lib::{
     crypto::Password,
     network::{Network, Registration},
-    Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository, RepositoryDb,
-    ShareToken, StateMonitor,
+    Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository, ShareToken,
+    StateMonitor,
 };
 use std::{borrow::Cow, sync::Arc};
 
@@ -33,8 +33,8 @@ pub async fn create(
     network: &Network,
     repos_monitor: &StateMonitor,
 ) -> Result<RepositoryHolder> {
-    let local_read_password = local_read_password.as_deref().map(Password::new);
-    let local_write_password = local_write_password.as_deref().map(Password::new);
+    let local_read_password = local_read_password.map(Password::from);
+    let local_write_password = local_write_password.map(Password::from);
 
     let access_secrets = if let Some(share_token) = share_token {
         share_token.into_secrets()
@@ -44,22 +44,11 @@ pub async fn create(
 
     let device_id = device_id::get_or_create(config).await?;
 
-    let db = RepositoryDb::create(store.into_std_path_buf(), repos_monitor).await?;
-
-    let local_read_key = if let Some(local_read_password) = local_read_password {
-        Some(db.password_to_key(local_read_password).await?)
-    } else {
-        None
-    };
-
-    let local_write_key = if let Some(local_write_password) = local_write_password {
-        Some(db.password_to_key(local_write_password).await?)
-    } else {
-        None
-    };
-
-    let access = Access::new(local_read_key, local_write_key, access_secrets);
-    let repository = Repository::create(db, device_id, access).await?;
+    let local_read_secret = local_read_password.map(LocalSecret::Password);
+    let local_write_secret = local_write_password.map(LocalSecret::Password);
+    let access = Access::new(local_read_secret, local_write_secret, access_secrets);
+    let repository =
+        Repository::create(store.into_std_path_buf(), device_id, access, repos_monitor).await?;
     let repository = Arc::new(repository);
 
     let registration = network.register(repository.store().clone()).await;
@@ -78,7 +67,7 @@ pub async fn open(
     network: &Network,
     repos_monitor: &StateMonitor,
 ) -> Result<RepositoryHolder> {
-    let local_password = local_password.as_deref().map(Password::new);
+    let local_password = local_password.map(Password::from);
 
     let device_id = device_id::get_or_create(config).await?;
 
@@ -136,8 +125,7 @@ pub async fn set_read_access(
     let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_read_secret = local_read_password
-        .as_deref()
-        .map(Password::new)
+        .map(Password::from)
         .map(LocalSecret::Password);
 
     repository
@@ -173,13 +161,11 @@ pub async fn set_read_and_write_access(
     let access_secrets = share_token.map(ShareToken::into_secrets);
 
     let local_old_rw_secret = local_old_rw_password
-        .as_deref()
-        .map(Password::new)
+        .map(Password::from)
         .map(LocalSecret::Password);
 
     let local_new_rw_secret = local_new_rw_password
-        .as_deref()
-        .map(Password::new)
+        .map(Password::from)
         .map(LocalSecret::Password);
 
     repository
@@ -201,7 +187,7 @@ pub async fn create_share_token(
     access_mode: AccessMode,
     name: Option<String>,
 ) -> Result<String> {
-    let password = password.as_deref().map(Password::new);
+    let password = password.map(Password::from);
 
     let access_secrets = if let Some(password) = password {
         Cow::Owned(

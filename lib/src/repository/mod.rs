@@ -18,7 +18,6 @@ use crate::{
     crypto::{
         cipher,
         sign::{self, PublicKey},
-        Password,
     },
     db::{self, DatabaseId},
     debug::DebugPrinter,
@@ -47,33 +46,6 @@ use tracing::{instrument, instrument::Instrument};
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
-pub struct RepositoryDb {
-    pool: db::Pool,
-    monitor: RepositoryMonitor,
-}
-
-impl RepositoryDb {
-    pub async fn create(store: impl AsRef<Path>, parent_monitor: &StateMonitor) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
-        let pool = db::create(store, monitor.node()).await?;
-
-        Ok(Self { pool, monitor })
-    }
-
-    pub async fn password_to_key(&self, password: Password) -> Result<cipher::SecretKey> {
-        let mut tx = self.pool.begin_write().await?;
-        let key = metadata::password_to_key(&mut tx, &password).await?;
-        tx.commit().await?;
-        Ok(key)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test(pool: db::Pool, parent_monitor: &StateMonitor) -> Self {
-        let monitor = RepositoryMonitor::new(parent_monitor, "test");
-        Self { pool, monitor }
-    }
-}
-
 pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
@@ -82,17 +54,33 @@ pub struct Repository {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(db: RepositoryDb, device_id: DeviceId, access: Access) -> Result<Self> {
-        let mut tx = db.pool.begin_write().await?;
+    pub async fn create(
+        store: impl AsRef<Path>,
+        device_id: DeviceId,
+        access: Access,
+        parent_monitor: &StateMonitor,
+    ) -> Result<Self> {
+        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let pool = db::create(store, monitor.node()).await?;
+        Self::create_in(pool, device_id, access, monitor).await
+    }
 
+    /// Creates a new repository in an already created database.
+    pub(crate) async fn create_in(
+        pool: db::Pool,
+        device_id: DeviceId,
+        access: Access,
+        monitor: RepositoryMonitor,
+    ) -> Result<Self> {
+        let mut tx = pool.begin_write().await?;
+
+        let local_keys = metadata::initialize_access_secrets(&mut tx, &access).await?;
         let this_writer_id =
-            generate_and_store_writer_id(&mut tx, &device_id, access.local_write_key()).await?;
-
-        metadata::initialize_access_secrets(&mut tx, &access).await?;
+            generate_and_store_writer_id(&mut tx, &device_id, local_keys.write.as_deref()).await?;
 
         tx.commit().await?;
 
-        Self::new(db.pool, this_writer_id, access.secrets(), db.monitor).await
+        Self::new(pool, this_writer_id, access.secrets(), monitor).await
     }
 
     /// Opens an existing repository.

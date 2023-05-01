@@ -300,66 +300,110 @@ pub(crate) async fn requires_local_password_for_writing(conn: &mut db::Connectio
     }
 }
 
-pub(crate) async fn initialize_access_secrets(
+pub(crate) async fn initialize_access_secrets<'a>(
     tx: &mut db::WriteTransaction,
-    access: &Access,
-) -> Result<()> {
+    access: &'a Access,
+) -> Result<LocalKeys<'a>> {
     set_public_blob(tx, REPOSITORY_ID, access.id()).await?;
     set_access(tx, access).await
 }
 
-pub(crate) async fn set_access(tx: &mut db::WriteTransaction, access: &Access) -> Result<()> {
+pub(crate) async fn set_access<'a>(
+    tx: &mut db::WriteTransaction,
+    access: &'a Access,
+) -> Result<LocalKeys<'a>> {
     match access {
         Access::Blind { .. } => {
             remove_public_read_key(tx).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
+
+            Ok(LocalKeys {
+                read: None,
+                write: None,
+            })
         }
         Access::ReadUnlocked { id: _, read_key } => {
             set_public_read_key(tx, read_key).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
+
+            Ok(LocalKeys {
+                read: None,
+                write: None,
+            })
         }
         Access::ReadLocked {
             id,
-            local_key,
+            local_secret,
             read_key,
         } => {
+            let local_key = secret_to_key(tx, local_secret).await?;
+
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, id, read_key, local_key).await?;
+            set_secret_read_key(tx, id, read_key, &local_key).await?;
             remove_public_write_key(tx).await?;
             remove_secret_write_key(tx).await?;
+
+            Ok(LocalKeys {
+                read: Some(local_key),
+                write: None,
+            })
         }
         Access::WriteUnlocked { secrets } => {
             set_public_read_key(tx, &secrets.read_key).await?;
             remove_secret_read_key(tx).await?;
             set_public_write_key(tx, secrets).await?;
             remove_secret_write_key(tx).await?;
+
+            Ok(LocalKeys {
+                read: None,
+                write: None,
+            })
         }
         Access::WriteLocked {
-            local_read_key,
-            local_write_key,
+            local_read_secret,
+            local_write_secret,
             secrets,
         } => {
+            let local_read_key = secret_to_key(tx, local_read_secret).await?;
+            let local_write_key = secret_to_key(tx, local_write_secret).await?;
+
             remove_public_read_key(tx).await?;
-            set_secret_read_key(tx, &secrets.id, &secrets.read_key, local_read_key).await?;
+            set_secret_read_key(tx, &secrets.id, &secrets.read_key, &local_read_key).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, local_write_key).await?;
+            set_secret_write_key(tx, secrets, &local_write_key).await?;
+
+            Ok(LocalKeys {
+                read: Some(local_read_key),
+                write: Some(local_write_key),
+            })
         }
         Access::WriteLockedReadUnlocked {
-            local_write_key,
+            local_write_secret,
             secrets,
         } => {
+            let local_write_key = secret_to_key(tx, local_write_secret).await?;
+
             set_public_read_key(tx, &secrets.read_key).await?;
             remove_secret_read_key(tx).await?;
             remove_public_write_key(tx).await?;
-            set_secret_write_key(tx, secrets, local_write_key).await?;
+            set_secret_write_key(tx, secrets, &local_write_key).await?;
+
+            Ok(LocalKeys {
+                read: None,
+                write: Some(local_write_key),
+            })
         }
     }
+}
 
-    Ok(())
+pub(crate) struct LocalKeys<'a> {
+    #[allow(unused)]
+    pub read: Option<Cow<'a, cipher::SecretKey>>,
+    pub write: Option<Cow<'a, cipher::SecretKey>>,
 }
 
 pub(crate) async fn get_access_secrets(
@@ -705,19 +749,19 @@ mod tests {
             },
             Access::ReadLocked {
                 id: RepositoryId::random(),
-                local_key: cipher::SecretKey::random(),
+                local_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
                 read_key: cipher::SecretKey::random(),
             },
             Access::WriteUnlocked {
                 secrets: WriteSecrets::random(),
             },
             Access::WriteLocked {
-                local_read_key: cipher::SecretKey::random(),
-                local_write_key: cipher::SecretKey::random(),
+                local_read_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
+                local_write_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
                 secrets: WriteSecrets::random(),
             },
             Access::WriteLockedReadUnlocked {
-                local_write_key: cipher::SecretKey::random(),
+                local_write_secret: LocalSecret::SecretKey(cipher::SecretKey::random()),
                 secrets: WriteSecrets::random(),
             },
         ];
@@ -726,10 +770,10 @@ mod tests {
             let (_base_dir, pool) = db::create_temp(&StateMonitor::make_root()).await.unwrap();
 
             let mut tx = pool.begin_write().await.unwrap();
-            initialize_access_secrets(&mut tx, &access).await.unwrap();
+            let local_keys = initialize_access_secrets(&mut tx, &access).await.unwrap();
             tx.commit().await.unwrap();
 
-            let local_key = access.highest_local_key();
+            let local_key = local_keys.write.as_deref().or(local_keys.read.as_deref());
 
             let mut conn = pool.acquire().await.unwrap();
 

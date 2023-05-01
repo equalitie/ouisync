@@ -7,9 +7,9 @@ use zeroize::Zeroizing;
 #[derive(Clone)]
 pub struct Password(Arc<Zeroizing<String>>);
 
-impl Password {
-    pub fn new(pwd: &str) -> Self {
-        Self(Arc::new(Zeroizing::new(pwd.to_owned())))
+impl From<String> for Password {
+    fn from(pwd: String) -> Self {
+        Self(Arc::new(Zeroizing::new(pwd)))
     }
 }
 

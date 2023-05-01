@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    blob, block::BLOCK_SIZE, crypto::cipher::SecretKey, db, state_monitor::StateMonitor,
-    test_utils, WriteSecrets,
-};
+use crate::{blob, block::BLOCK_SIZE, db, state_monitor::StateMonitor, test_utils, WriteSecrets};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -275,16 +272,17 @@ async fn blind_access_non_empty_repo() {
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
-    let local_key = SecretKey::random();
+    let local_secret = LocalSecret::random();
     // Create the repo and put a file in it.
-    let repo = Repository::create(
-        RepositoryDb::test(pool.clone(), &monitor),
+    let repo = Repository::create_in(
+        pool.clone(),
         device_id,
         Access::WriteLocked {
-            local_read_key: local_key.clone(),
-            local_write_key: local_key,
+            local_read_secret: local_secret.clone(),
+            local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
+        RepositoryMonitor::new(&monitor, "test"),
     )
     .await
     .unwrap();
@@ -349,17 +347,18 @@ async fn blind_access_empty_repo() {
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
-    let local_key = SecretKey::random();
+    let local_secret = LocalSecret::random();
 
     // Create an empty repo.
-    Repository::create(
-        RepositoryDb::test(pool.clone(), &monitor),
+    Repository::create_in(
+        pool.clone(),
         device_id,
         Access::WriteLocked {
-            local_read_key: local_key.clone(),
-            local_write_key: local_key,
+            local_read_secret: local_secret.clone(),
+            local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
+        RepositoryMonitor::new(&monitor, "test"),
     )
     .await
     .unwrap();
@@ -387,12 +386,13 @@ async fn read_access_same_replica() {
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
     let device_id = rand::random();
 
-    let repo = Repository::create(
-        RepositoryDb::test(pool.clone(), &monitor),
+    let repo = Repository::create_in(
+        pool.clone(),
         device_id,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
+        RepositoryMonitor::new(&monitor, "test"),
     )
     .await
     .unwrap();
@@ -452,12 +452,13 @@ async fn read_access_different_replica() {
     let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
 
     let device_id_a = rand::random();
-    let repo = Repository::create(
-        RepositoryDb::test(pool.clone(), &monitor),
+    let repo = Repository::create_in(
+        pool.clone(),
         device_id_a,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
+        RepositoryMonitor::new(&monitor, "test"),
     )
     .await
     .unwrap();
@@ -853,13 +854,12 @@ async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
     let monitor = StateMonitor::make_root();
     let repo = Repository::create(
-        RepositoryDb::create(base_dir.path().join("repo.db"), &monitor)
-            .await
-            .unwrap(),
+        base_dir.path().join("repo.db"),
         rand::random(),
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
+        &monitor,
     )
     .await
     .unwrap();
