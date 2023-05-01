@@ -61,4 +61,5 @@ pub use self::{
     repository::{Metadata, ReopenToken, Repository},
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     store::Store,
+    version_vector::VersionVector,
 };

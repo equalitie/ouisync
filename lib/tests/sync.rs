@@ -5,7 +5,8 @@ mod common;
 use self::common::{actor, Env, Proto};
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StateMonitor, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, StateMonitor, VersionVector,
+    BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
@@ -399,6 +400,7 @@ fn concurrent_modify_open_file() {
 
 // Test that the local version changes monotonically even when the local branch temporarily becomes
 // outdated.
+// TODO: This test is too low level. Consider converting it into unit test.
 #[test]
 fn recreate_local_branch() {
     let mut env = Env::new();
@@ -462,19 +464,27 @@ fn recreate_local_branch() {
         repo.force_work().await.unwrap();
 
         // 10. Make sure the local version changed monotonically.
-        let vv_b = rx.recv().await.unwrap();
-        assert!(vv_b > vv_a_0);
+        let vv_b: VersionVector = rx.recv().await.unwrap();
+        assert_eq!(
+            vv_b.partial_cmp(&vv_a_0),
+            Some(Ordering::Greater),
+            "expected {:?} > {:?}",
+            vv_b,
+            vv_a_0
+        );
 
         let vv_a_1 = repo.local_branch().unwrap().version_vector().await.unwrap();
         assert_eq!(
             vv_a_1.partial_cmp(&vv_b),
             Some(Ordering::Greater),
-            "non-monotonic version progression"
+            "expected {:?} > {:?}",
+            vv_a_1,
+            vv_b
         );
     });
 
     env.actor("bob", async move {
-        let (network, repo, _sreg) = actor::setup().await;
+        let (network, repo, _reg) = actor::setup().await;
         network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
         let id_b = *repo.local_branch().unwrap().id();
@@ -482,6 +492,7 @@ fn recreate_local_branch() {
         // 5. Sync with Alice
         common::expect_file_version_content(&repo, "foo.txt", Some(&id_b), b"hello from Alice\n")
             .await;
+        repo.force_work().await.unwrap();
 
         // 6. Modify the repo. This makes Bob's branch newer than Alice's
         let mut file = repo.open_file("foo.txt").await.unwrap();
