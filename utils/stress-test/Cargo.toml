@@ -1,0 +1,20 @@
+[package]
+name = "ouisync-stress-test"
+description = "Utility to stress test ouisync"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "stress-test"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.2.7", features = ["derive"] }
+tempfile = "3.2"
+serde = { workspace = true }
+serde_json = "1.0.94"
