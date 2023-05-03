@@ -26,6 +26,7 @@ async-trait = "0.1.67"
 btdht = { git = "https://github.com/equalitie/btdht.git", rev = "91f3f0da86130656643d1b787224b5777e18b459" }
 bytes = "1.4.0"
 camino = "1.0.9"
+chrono = "0.4.24"
 futures-util = { version = "0.3.27", default-features = false }
 num_enum = { version = "0.5.11", default-features = false }
 rand = { package = "ouisync-rand", path = "rand" }

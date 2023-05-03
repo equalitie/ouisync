@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use clap::{value_parser, Parser};
 use serde::Deserialize;
 use std::{
@@ -6,6 +7,7 @@ use std::{
     process::{self, Command, Output, Stdio},
     sync::mpsc,
     thread,
+    time::SystemTime,
 };
 use tempfile::TempDir;
 
@@ -58,15 +60,19 @@ fn main() {
     }
 
     for (global_iteration, status) in rx.into_iter().enumerate() {
+        let timestamp: DateTime<Local> = SystemTime::now().into();
+
         print!(
-            "Iteration #{global_iteration} ({}/{})",
-            status.process, status.iteration
+            "{} Iteration #{global_iteration}\t({}/{})",
+            timestamp.format("%Y-%m-%d %H:%M:%S"),
+            status.process,
+            status.iteration
         );
 
         match status.result {
             Ok(()) => println!(),
             Err(output) => {
-                println!(" FAILURE ({})", output.status);
+                println!("\tFAILURE ({})", output.status);
 
                 println!("\n\n---- stdout: ----\n\n");
                 io::copy(&mut &output.stdout[..], &mut io::stdout()).unwrap();
