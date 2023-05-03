@@ -5,7 +5,7 @@
 
 mod common;
 
-use self::common::{actor, Env, Proto, TEST_TIMEOUT};
+use self::common::{actor, Env, Proto, DEFAULT_REPO, TEST_TIMEOUT};
 use ouisync::network::{Network, PeerState};
 use std::{net::Ipv4Addr, sync::Arc};
 use tokio::{sync::Barrier, time};
@@ -25,7 +25,7 @@ fn peer_exchange() {
 
         async move {
             let network = actor::create_network(proto).await;
-            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
             reg.set_pex_enabled(true).await;
 
             barrier.wait().await;
@@ -37,7 +37,7 @@ fn peer_exchange() {
 
         async move {
             let network = actor::create_network(proto).await;
-            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
 
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
@@ -52,7 +52,7 @@ fn peer_exchange() {
     env.actor("carol", {
         async move {
             let network = actor::create_network(proto).await;
-            let (_repo, reg) = actor::create_linked_repo(&network).await;
+            let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
 
             let peer_addr = actor::lookup_addr("alice").await;
             network.add_user_provided_peer(&peer_addr);
@@ -73,7 +73,7 @@ fn dht_toggle() {
 
     env.actor("eric", async move {
         let network = actor::create_network(proto).await;
-        let (_repo, reg) = actor::create_linked_repo(&network).await;
+        let (_repo, reg) = actor::create_linked_repo(DEFAULT_REPO, &network).await;
 
         reg.set_dht_enabled(true).await;
         reg.set_dht_enabled(false).await;

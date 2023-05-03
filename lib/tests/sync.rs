@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{actor, Env, Proto};
+use self::common::{actor, Env, Proto, DEFAULT_REPO};
 use assert_matches::assert_matches;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, StateMonitor, VersionVector,
@@ -10,12 +10,118 @@ use ouisync::{
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Barrier};
 use tracing::{instrument, Instrument};
 
-// Some tests used to fail only on sufficiently large files
-// const LARGE_SIZE: usize = 4 * 1024 * 1024;
+const SMALL_SIZE: usize = 1024;
 const LARGE_SIZE: usize = 2 * 1024 * 1024;
+
+#[test]
+fn sync_two_peers_one_repo_small() {
+    sync_case(2, 1, SMALL_SIZE)
+}
+
+#[test]
+fn sync_three_peers_one_repo_small() {
+    sync_case(3, 1, SMALL_SIZE)
+}
+
+#[test]
+fn sync_two_peers_one_repo_large() {
+    sync_case(2, 1, LARGE_SIZE)
+}
+
+#[test]
+fn sync_three_peers_one_repo_large() {
+    sync_case(3, 1, LARGE_SIZE)
+}
+
+#[test]
+fn sync_two_peers_two_repos_small() {
+    sync_case(2, 2, SMALL_SIZE)
+}
+
+#[test]
+fn sync_two_peers_two_repos_large() {
+    sync_case(2, 2, LARGE_SIZE)
+}
+
+fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
+    assert!(num_peers > 1);
+    assert!(num_repos > 0);
+
+    let mut env = Env::new();
+    let barrier = Arc::new(Barrier::new(num_peers));
+
+    let contents: Vec<_> = (0..num_repos)
+        .map(|_| common::random_content(file_size))
+        .collect();
+
+    // Only one file per repo so we can use the same name.
+    let file_name = "test.dat";
+
+    for actor_index in 0..num_peers {
+        env.actor(&format!("actor-{actor_index}"), {
+            let contents = contents.clone();
+            let barrier = barrier.clone();
+
+            async move {
+                let network = actor::create_network(Proto::Tcp).await;
+
+                // Connect to the others
+                for other_actor_index in 0..num_peers {
+                    if other_actor_index == actor_index {
+                        continue;
+                    }
+
+                    network.add_user_provided_peer(
+                        &actor::lookup_addr(&format!("actor-{other_actor_index}")).await,
+                    );
+                }
+
+                // Create repos and files
+                let mut repos = Vec::with_capacity(num_repos);
+                for repo_index in 0..num_repos {
+                    repos.push(
+                        actor::create_linked_repo(&format!("repo-{repo_index}"), &network).await,
+                    );
+                }
+
+                for (repo_index, (repo, _)) in repos.iter().enumerate() {
+                    // Try to create each file by different actor but if there is more files than
+                    // actors then some actors create more than one file.
+                    if actor_index != repo_index % num_peers {
+                        continue;
+                    }
+
+                    async {
+                        let mut file = repo.create_file(file_name).await.unwrap();
+                        common::write_in_chunks(&mut file, &contents[repo_index], 4096).await;
+                        file.flush().await.unwrap();
+                    }
+                    .instrument(tracing::info_span!(
+                        "write",
+                        repo = repo_index,
+                        name = file_name
+                    ))
+                    .await
+                }
+
+                for (repo_index, content) in contents.iter().enumerate() {
+                    common::expect_file_content(&repos[repo_index].0, file_name, content)
+                        .instrument(tracing::info_span!(
+                            "read",
+                            repo = repo_index,
+                            name = file_name
+                        ))
+                        .await;
+                }
+
+                barrier.wait().await;
+            }
+        });
+    }
+}
 
 #[test]
 fn relink_repository() {
@@ -131,10 +237,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
 
         async move {
             let network = actor::create_network(proto).await;
-            let repo = actor::create_repo_with_secrets(
-                actor::default_secrets().with_mode(relay_access_mode),
-            )
-            .await;
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, relay_access_mode).await;
             let _reg = network.register(repo.store().clone()).await;
 
             rx.recv().await.unwrap();
@@ -165,40 +268,6 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
             common::expect_file_content(&repo, "test.dat", &content).await;
 
             tx.send(()).unwrap();
-        }
-    });
-}
-
-#[test]
-fn transfer_large_file() {
-    let mut env = Env::new();
-    let (tx, mut rx) = mpsc::channel(1); // side-channel
-
-    let file_size = LARGE_SIZE;
-    let content = Arc::new(common::random_content(file_size));
-
-    env.actor("writer", {
-        let content = content.clone();
-
-        async move {
-            let (_network, repo, _reg) = actor::setup().await;
-
-            let mut file = repo.create_file("test.dat").await.unwrap();
-            common::write_in_chunks(&mut file, &content, 4096).await;
-            file.flush().await.unwrap();
-
-            rx.recv().await;
-        }
-    });
-
-    env.actor("reader", {
-        async move {
-            let (network, repo, _reg) = actor::setup().await;
-            network.add_user_provided_peer(&actor::lookup_addr("writer").await);
-
-            common::expect_file_content(&repo, "test.dat", &content).await;
-
-            tx.send(()).await.unwrap();
         }
     });
 }
@@ -411,12 +480,12 @@ fn recreate_local_branch() {
         let network = actor::create_network(proto).await;
 
         // 1. Create the repo but don't link it yet.
-        let repo_path = actor::make_repo_path();
+        let (repo_path, repo_secrets) = actor::get_repo_path_and_secrets(DEFAULT_REPO).await;
         let monitor = StateMonitor::make_root();
         let repo = Repository::create(
             &repo_path,
             actor::device_id(),
-            Access::new(None, None, actor::default_secrets()),
+            Access::new(None, None, repo_secrets),
             &monitor,
         )
         .await
@@ -659,7 +728,7 @@ fn remote_rename_directory_during_conflict() {
 
     env.actor("writer", async move {
         let network = actor::create_network(proto).await;
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo(DEFAULT_REPO).await;
 
         // Create file before linking the repo to ensure we create conflict.
         repo.create_file("dummy.txt").await.unwrap();
@@ -675,7 +744,7 @@ fn remote_rename_directory_during_conflict() {
 
     env.actor("reader", async move {
         let network = actor::create_network(proto).await;
-        let repo = actor::create_repo().await;
+        let repo = actor::create_repo(DEFAULT_REPO).await;
 
         network.add_user_provided_peer(&actor::lookup_addr("writer").await);
 
@@ -759,7 +828,7 @@ fn concurrent_update_and_delete_during_conflict() {
 
         async move {
             let network = actor::create_network(proto).await;
-            let repo = actor::create_repo().await;
+            let repo = actor::create_repo(DEFAULT_REPO).await;
 
             let id_a = *repo.local_branch().unwrap().id();
             let id_b = bob_rx.recv().await.unwrap();
@@ -795,7 +864,7 @@ fn concurrent_update_and_delete_during_conflict() {
             let network = actor::create_network(proto).await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
-            let repo = actor::create_repo().await;
+            let repo = actor::create_repo(DEFAULT_REPO).await;
 
             bob_tx
                 .send(*repo.local_branch().unwrap().id())
@@ -879,10 +948,7 @@ fn content_stays_available_during_sync() {
         async move {
             // Bob is read-only to disable the merger which could otherwise interfere with this test.
             let network = actor::create_network(Proto::Tcp).await;
-            let repo = actor::create_repo_with_secrets(
-                actor::default_secrets().with_mode(AccessMode::Read),
-            )
-            .await;
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
             let _reg = network.register(repo.store().clone()).await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 

@@ -67,6 +67,28 @@ where
             notify.notified().await;
         }
     }
+
+    pub fn get_or_insert_with<F>(&self, key: K, make_value: F) -> V
+    where
+        F: FnOnce() -> V,
+    {
+        match self.inner.lock().unwrap().entry(key) {
+            Entry::Occupied(mut entry) => match entry.get_mut() {
+                Slot::Occupied(value) => value.clone(),
+                Slot::Waiting(notify) => {
+                    let value = make_value();
+                    notify.notify_waiters();
+                    entry.insert(Slot::Occupied(value.clone()));
+                    value
+                }
+            },
+            Entry::Vacant(entry) => {
+                let value = make_value();
+                entry.insert(Slot::Occupied(value.clone()));
+                value
+            }
+        }
+    }
 }
 
 enum Slot<T> {
