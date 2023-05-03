@@ -1,13 +1,12 @@
-use chrono::{DateTime, Local};
 use clap::{value_parser, Parser};
 use serde::Deserialize;
 use std::{
-    env,
+    env, fmt,
     io::{self, BufRead, BufReader},
     process::{self, Command, Output, Stdio},
     sync::mpsc,
     thread,
-    time::SystemTime,
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 
@@ -59,14 +58,15 @@ fn main() {
         });
     }
 
-    for (global_iteration, status) in rx.into_iter().enumerate() {
-        let timestamp: DateTime<Local> = SystemTime::now().into();
+    let start = Instant::now();
 
+    for (global_iteration, status) in rx.into_iter().enumerate() {
         print!(
-            "{} Iteration #{global_iteration}\t({}/{})",
-            timestamp.format("%Y-%m-%d %H:%M:%S"),
+            "{} #{} ({}/{})",
+            DisplayDuration(start.elapsed()),
+            global_iteration,
             status.process,
-            status.iteration
+            status.iteration,
         );
 
         match status.result {
@@ -224,4 +224,19 @@ struct Status {
     process: u64,
     iteration: u64,
     result: Result<(), Output>,
+}
+
+struct DisplayDuration(Duration);
+
+impl fmt::Display for DisplayDuration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = self.0.as_secs();
+        let m = s / 60;
+        let h = m / 60;
+
+        let s = s - m * 60;
+        let m = m - h * 60;
+
+        write!(f, "{h:02}:{m:02}:{s:02}")
+    }
 }
