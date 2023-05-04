@@ -67,7 +67,7 @@ async fn connect(
     dirs: &Dirs,
 ) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
     match addr {
-        HostAddr::Local(addr) => match LocalClient::connect(addr.as_str()).await {
+        HostAddr::Local(path) => match LocalClient::connect(path).await {
             Ok(client) => Ok(Box::new(client)),
             Err(error) => match error.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {

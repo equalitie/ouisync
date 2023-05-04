@@ -17,17 +17,17 @@ pub(crate) async fn run(options: Options) -> Result<()> {
     let state = State::new(&options.dirs, monitor).await;
     let state = Arc::new(state);
 
-    let addr = match options.host {
+    let addr = match &options.host {
         HostAddr::Local(addr) => addr,
         HostAddr::Remote(_) => {
             return Err(format_err!("remote api endpoints not supported yet"));
         }
     };
 
-    let server = LocalServer::bind(addr.clone())?;
+    let server = LocalServer::bind(addr.as_path())?;
     let handle = task::spawn(server.run(Handler::new(state.clone())));
 
-    tracing::info!("API server listening on {}", addr);
+    tracing::info!("API server listening on {}", options.host);
 
     terminated().await?;
 
