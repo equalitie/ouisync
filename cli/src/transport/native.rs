@@ -3,7 +3,7 @@
 //! and doesn't need a separate server component.
 
 use crate::{
-    handler::Handler,
+    handler::LocalHandler,
     options::{Request, Response},
 };
 use async_trait::async_trait;
@@ -14,12 +14,12 @@ use ouisync_bridge::{
 use tokio::sync::mpsc;
 
 pub(crate) struct NativeClient {
-    handler: Handler,
+    handler: LocalHandler,
     notification_tx: NotificationSender,
 }
 
 impl NativeClient {
-    pub fn new(handler: Handler) -> Self {
+    pub fn new(handler: LocalHandler) -> Self {
         let (notification_tx, _notification_rx) = mpsc::channel(1);
 
         Self {

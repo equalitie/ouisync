@@ -1,5 +1,5 @@
 use crate::{
-    handler::Handler,
+    handler::{LocalHandler, RemoteHandler},
     host_addr::HostAddr,
     options::Dirs,
     state::State,
@@ -33,11 +33,11 @@ pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>) -> Result<()> {
         let handle = match &host {
             HostAddr::Local(path) => {
                 let server = LocalServer::bind(path.as_path())?;
-                task::spawn(server.run(Handler::new(state.clone())))
+                task::spawn(server.run(LocalHandler::new(state.clone())))
             }
             HostAddr::Remote(addr) => {
                 let server = RemoteServer::bind(*addr).await?;
-                task::spawn(server.run(Handler::new(state.clone())))
+                task::spawn(server.run(RemoteHandler::new(state.clone())))
             }
         };
 

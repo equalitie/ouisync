@@ -13,11 +13,11 @@ use ouisync_lib::{PeerAddr, ShareToken};
 use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
-pub(crate) struct Handler {
+pub(crate) struct LocalHandler {
     state: Arc<State>,
 }
 
-impl Handler {
+impl LocalHandler {
     pub fn new(state: Arc<State>) -> Self {
         Self { state }
     }
@@ -28,7 +28,7 @@ impl Handler {
 }
 
 #[async_trait]
-impl ouisync_bridge::transport::Handler for Handler {
+impl ouisync_bridge::transport::Handler for LocalHandler {
     type Request = Request;
     type Response = Response;
 
@@ -307,5 +307,32 @@ impl ouisync_bridge::transport::Handler for Handler {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RemoteHandler {
+    state: Arc<State>,
+}
+
+impl RemoteHandler {
+    pub fn new(state: Arc<State>) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl ouisync_bridge::transport::Handler for RemoteHandler {
+    type Request = Request;
+    type Response = Response;
+
+    async fn handle(
+        &self,
+        request: Self::Request,
+        _notification_tx: &NotificationSender,
+    ) -> Result<Self::Response> {
+        tracing::debug!(?request);
+
+        todo!()
     }
 }

@@ -1,7 +1,7 @@
 //! Client and Server than run in different processes on the same device.
 
 use crate::{
-    handler::Handler,
+    handler::LocalHandler,
     options::{Request, Response},
 };
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ impl LocalServer {
         Ok(Self { listener, path })
     }
 
-    pub async fn run(self, handler: Handler) {
+    pub async fn run(self, handler: LocalHandler) {
         let mut connections = JoinSet::new();
 
         loop {

@@ -1,10 +1,7 @@
 //! Client and Server than run on different devices.
 
-// TODO: remove this attr once we actually use this
-#![allow(unused)]
-
 use crate::{
-    handler::Handler,
+    handler::RemoteHandler,
     options::{Request, Response},
 };
 use async_trait::async_trait;
@@ -62,7 +59,7 @@ impl RemoteServer {
         self.local_addr
     }
 
-    pub async fn run(self, handler: Handler) {
+    pub async fn run(self, handler: RemoteHandler) {
         let mut connections = JoinSet::new();
 
         loop {

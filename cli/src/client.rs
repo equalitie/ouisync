@@ -1,5 +1,5 @@
 use crate::{
-    handler::Handler,
+    handler::LocalHandler,
     host_addr::HostAddr,
     options::{Dirs, Request, Response},
     state::State,
@@ -83,7 +83,7 @@ async fn connect(
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                     let state = State::new(dirs, StateMonitor::make_root()).await;
                     let state = Arc::new(state);
-                    let handler = Handler::new(state);
+                    let handler = LocalHandler::new(state);
 
                     Ok(Box::new(NativeClient::new(handler)))
                 }
