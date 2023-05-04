@@ -2,7 +2,7 @@
 
 use crate::{
     handler::RemoteHandler,
-    options::{Request, Response},
+    protocol::{Request, Response},
 };
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};

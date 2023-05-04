@@ -1,5 +1,5 @@
 use crate::{
-    options::{Request, Response},
+    protocol::{Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };

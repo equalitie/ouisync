@@ -2,7 +2,7 @@
 
 use crate::{
     handler::LocalHandler,
-    options::{Request, Response},
+    protocol::{Request, Response},
 };
 use async_trait::async_trait;
 use interprocess::local_socket::{

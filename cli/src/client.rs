@@ -1,7 +1,8 @@
 use crate::{
     handler::LocalHandler,
     host_addr::HostAddr,
-    options::{Dirs, Request, Response},
+    options::Dirs,
+    protocol::{Request, Response},
     state::State,
     transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
 };

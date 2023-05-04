@@ -2,13 +2,14 @@ mod client;
 mod handler;
 mod host_addr;
 mod options;
+mod protocol;
 mod repository;
 mod server;
 mod state;
 mod transport;
 mod utils;
 
-use self::options::{Options, Request};
+use self::{options::Options, protocol::Request};
 use anyhow::Result;
 use clap::Parser;
 
