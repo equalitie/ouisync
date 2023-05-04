@@ -1,29 +1,26 @@
 use crate::{
     options::{Dirs, Request, Response},
-    APP_NAME,
+    repository::{self, RepositoryHolder, RepositoryMap, RepositoryName, OPEN_ON_START},
 };
 use async_trait::async_trait;
 use camino::Utf8PathBuf;
-use dashmap::{mapref::entry::Entry, DashMap};
 use futures_util::future;
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     network::{self, NetworkDefaults},
-    repository,
     transport::NotificationSender,
 };
 use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
-use ouisync_vfs::MountGuard;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::{fs, runtime, time};
+use tokio::time;
 
 pub(crate) struct State {
     config: ConfigStore,
     store_dir: Utf8PathBuf,
     mount_dir: Utf8PathBuf,
     network: Network,
-    repositories: DashMap<String, RepositoryHolder>,
+    repositories: RepositoryMap,
     repositories_monitor: StateMonitor,
 }
 
@@ -46,30 +43,33 @@ impl State {
         )
         .await;
 
+        let repositories_monitor = monitor.make_child("Repositories");
+        let repositories =
+            repository::find_all(dirs, &network, &config, &repositories_monitor).await;
+
         Self {
             config,
             store_dir: dirs.store_dir.clone(),
             mount_dir: dirs.mount_dir.clone(),
             network,
-            repositories: DashMap::new(),
-            repositories_monitor: monitor.make_child("Repositories"),
+            repositories,
+            repositories_monitor,
         }
     }
 
     pub async fn close(&self) {
-        let mut repositories = Vec::with_capacity(self.repositories.len());
-
-        self.repositories.retain(|path, holder| {
-            repositories.push((path.clone(), holder.base.repository.clone()));
-            false
-        });
-
+        // Close repos
         future::join_all(
-            repositories
+            self.repositories
+                .remove_all()
                 .into_iter()
-                .map(|(path, repository)| async move {
-                    if let Err(error) = repository.close().await {
-                        tracing::error!(?error, ?path, "failed to close repository");
+                .map(|holder| async move {
+                    if let Err(error) = holder.repository.close().await {
+                        tracing::error!(
+                            name = %holder.name(),
+                            ?error,
+                            "failed to gracefully close repository"
+                        );
                     }
                 }),
         )
@@ -81,27 +81,7 @@ impl State {
     }
 
     fn store_path(&self, name: &str) -> Utf8PathBuf {
-        self.store_dir
-            .join(name)
-            .with_extension(format!("{APP_NAME}db"))
-    }
-
-    fn mount_path(&self, name: &str) -> Utf8PathBuf {
-        self.mount_dir.join(name)
-    }
-}
-
-struct RepositoryHolder {
-    base: ouisync_bridge::repository::RepositoryHolder,
-    mount_guard: Option<MountGuard>,
-}
-
-impl RepositoryHolder {
-    fn new(base: ouisync_bridge::repository::RepositoryHolder) -> Self {
-        Self {
-            base,
-            mount_guard: None,
-        }
+        repository::store_path(&self.store_dir, name)
     }
 }
 
@@ -153,83 +133,87 @@ impl ouisync_bridge::transport::Handler for Handler {
                     (None, None) => unreachable!(),
                 };
 
-                if self.state.repositories.contains_key(&name) {
+                if self.state.repositories.contains(&name) {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
 
-                let store_path = self.state.store_path(&name);
+                let name = RepositoryName::try_from(name)?;
+
+                let store_path = self.state.store_path(name.as_ref());
                 let read_password = read_password.or_else(|| password.as_ref().cloned());
                 let write_password = write_password.or(password);
 
-                let holder = repository::create(
+                let repository = ouisync_bridge::repository::create(
                     store_path.clone(),
                     read_password,
                     write_password,
                     share_token,
                     &self.state.config,
-                    &self.state.network,
                     &self.state.repositories_monitor,
                 )
                 .await?;
-                let holder = RepositoryHolder::new(holder);
 
-                self.state.repositories.insert(name, holder);
+                repository.metadata().set(OPEN_ON_START, true).await.ok();
+
+                tracing::info!(%name, "repository created");
+
+                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
+                let holder = Arc::new(holder);
+                self.state.repositories.insert(holder);
 
                 Ok(().into())
             }
             Request::Delete { name } => {
-                if let Some((_, holder)) = self.state.repositories.remove(&name) {
-                    if let Err(error) = holder.base.repository.close().await {
-                        tracing::error!(?error, "failed to close repository");
-                    }
-                }
+                self.state.repositories.remove(&name);
 
-                let store_path = self.state.store_path(&name);
+                repository::delete_store(&self.state.store_dir, &name)
+                    .await
+                    .map_err(Error::Io)?;
 
-                // Try to delete all three files even if any of them fail, then return the first
-                // error (if any)
-                future::join_all(
-                    ["", "-wal", "-shm"]
-                        .into_iter()
-                        .map(|suffix| fs::remove_file(format!("{store_path}-{suffix}"))),
-                )
-                .await
-                .into_iter()
-                .find_map(Result::err)
-                .map(Err)
-                .unwrap_or(Ok(().into()))
-                .map_err(Error::Io)
+                Ok(().into())
             }
             Request::Open { name, password } => {
-                if self.state.repositories.contains_key(&name) {
+                if self.state.repositories.contains(&name) {
                     Err(ouisync_lib::Error::EntryExists)?;
                 }
 
+                let name = RepositoryName::try_from(name)?;
+
                 let store_path = self.state.store_path(&name);
 
-                let holder = repository::open(
+                let repository = ouisync_bridge::repository::open(
                     store_path,
                     password,
                     &self.state.config,
-                    &self.state.network,
                     &self.state.repositories_monitor,
                 )
                 .await?;
-                let holder = RepositoryHolder::new(holder);
 
-                match self.state.repositories.entry(name) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(holder);
-                        Ok(().into())
-                    }
-                    Entry::Occupied(_) => Err(ouisync_lib::Error::EntryExists.into()),
-                }
+                repository.metadata().set(OPEN_ON_START, true).await.ok();
+
+                tracing::info!(%name, "repository opened");
+
+                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
+                let holder = Arc::new(holder);
+                holder.mount(&self.state.mount_dir).await.ok();
+
+                self.state.repositories.insert(holder);
+
+                Ok(().into())
             }
             Request::Close { name } => {
-                self.state
+                let holder = self
+                    .state
                     .repositories
                     .remove(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                holder
+                    .repository
+                    .metadata()
+                    .remove(OPEN_ON_START)
+                    .await
+                    .ok();
 
                 Ok(().into())
             }
@@ -238,45 +222,40 @@ impl ouisync_bridge::transport::Handler for Handler {
                 mode,
                 password,
             } => {
-                let repository = self
+                let holder = self
                     .state
                     .repositories
                     .get(&name)
-                    .map(|r| r.value().base.repository.clone())
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                repository::create_share_token(&repository, password, mode, Some(name))
-                    .await
-                    .map(Into::into)
+                ouisync_bridge::repository::create_share_token(
+                    &holder.repository,
+                    password,
+                    mode,
+                    Some(name),
+                )
+                .await
+                .map(Into::into)
             }
             Request::Mount { name, path, all: _ } => {
                 if let Some(name) = name {
-                    let mut holder = self
+                    let holder = self
                         .state
                         .repositories
-                        .get_mut(&name)
+                        .get(&name)
                         .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                    let mount_path = path.unwrap_or_else(|| self.state.mount_path(&name));
-                    holder.mount_guard = Some(ouisync_vfs::mount(
-                        runtime::Handle::current(),
-                        holder.base.repository.clone(),
-                        mount_path,
-                    )?);
+                    let mount_point = path.as_ref().map(|path| path.as_str()).unwrap_or_default();
+                    holder.set_mount_point(Some(mount_point)).await;
+                    holder.mount(&self.state.mount_dir).await?;
                 } else {
-                    for mut entry in self.state.repositories.iter_mut() {
-                        if entry.mount_guard.is_some() {
+                    for holder in self.state.repositories.get_all() {
+                        if holder.is_mounted() {
                             continue;
                         }
 
-                        let mount_path = self.state.mount_path(entry.key());
-                        fs::create_dir_all(&mount_path).await?;
-
-                        entry.mount_guard = Some(ouisync_vfs::mount(
-                            runtime::Handle::current(),
-                            entry.base.repository.clone(),
-                            mount_path,
-                        )?);
+                        holder.set_mount_point(Some("")).await;
+                        holder.mount(&self.state.mount_dir).await?;
                     }
                 }
 
@@ -284,12 +263,14 @@ impl ouisync_bridge::transport::Handler for Handler {
             }
             Request::Unmount { name, all: _ } => {
                 if let Some(name) = name {
-                    if let Some(mut holder) = self.state.repositories.get_mut(&name) {
-                        holder.mount_guard.take();
+                    if let Some(holder) = self.state.repositories.get(&name) {
+                        holder.set_mount_point(None).await;
+                        holder.unmount().await;
                     }
                 } else {
-                    for mut entry in self.state.repositories.iter_mut() {
-                        entry.mount_guard.take();
+                    for holder in self.state.repositories.get_all() {
+                        holder.set_mount_point(None).await;
+                        holder.unmount().await;
                     }
                 }
 
@@ -375,10 +356,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_dht_enabled(enabled).await;
+                    holder.registration.set_dht_enabled(enabled).await;
                     Ok(().into())
                 } else {
-                    Ok(holder.base.registration.is_dht_enabled().into())
+                    Ok(holder.registration.is_dht_enabled().into())
                 }
             }
             Request::Pex {
@@ -392,10 +373,10 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
-                    holder.base.registration.set_pex_enabled(enabled).await;
+                    holder.registration.set_pex_enabled(enabled).await;
                     Ok(().into())
                 } else {
-                    Ok(holder.base.registration.is_pex_enabled().into())
+                    Ok(holder.registration.is_pex_enabled().into())
                 }
             }
         }

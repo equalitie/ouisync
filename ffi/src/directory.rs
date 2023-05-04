@@ -1,6 +1,10 @@
-use crate::{registry::Handle, repository, state::State};
+use crate::{
+    registry::Handle,
+    repository::{self, RepositoryHolder},
+    state::State,
+};
 use camino::Utf8PathBuf;
-use ouisync_bridge::{error::Result, repository::RepositoryHolder};
+use ouisync_bridge::error::Result;
 use serde::{Deserialize, Serialize};
 
 // Currently this is only a read-only snapshot of a directory.

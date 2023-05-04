@@ -58,7 +58,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
-    repository::{Metadata, ReopenToken, Repository},
+    repository::{delete as delete_repository, Metadata, ReopenToken, Repository},
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     store::Store,
     version_vector::VersionVector,

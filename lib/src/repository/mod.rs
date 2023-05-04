@@ -36,9 +36,11 @@ use crate::{
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
+use futures_util::future;
 use scoped_task::ScopedJoinHandle;
-use std::{path::Path, sync::Arc};
+use std::{io, path::Path, sync::Arc};
 use tokio::{
+    fs,
     sync::broadcast::{self, error::RecvError},
     task,
     time::Duration,
@@ -51,6 +53,29 @@ pub struct Repository {
     shared: Arc<Shared>,
     worker_handle: WorkerHandle,
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
+}
+
+/// Delete the repository database
+pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
+    // Sqlite database consists of up to three files: main db (always present), WAL and WAL-index.
+    // Try to delete all of them even if any of them fail then return the first error (if any)
+    future::join_all(["", "-wal", "-shm"].into_iter().map(|suffix| {
+        let mut path = store.as_ref().as_os_str().to_owned();
+        path.push(suffix);
+
+        async move {
+            match fs::remove_file(&path).await {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+    }))
+    .await
+    .into_iter()
+    .find_map(Result::err)
+    .map(Err)
+    .unwrap_or(Ok(()))
 }
 
 impl Repository {

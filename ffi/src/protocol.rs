@@ -1,6 +1,9 @@
-use crate::{directory::Directory, file::FileHolder, registry::Handle, state::SubscriptionHandle};
+use crate::{
+    directory::Directory, file::FileHolder, registry::Handle, repository::RepositoryHolder,
+    state::SubscriptionHandle,
+};
 use camino::Utf8PathBuf;
-use ouisync_bridge::{error::Result, network::NetworkDefaults, repository::RepositoryHolder};
+use ouisync_bridge::{error::Result, network::NetworkDefaults};
 use ouisync_lib::{AccessMode, MonitorId, PeerAddr, PeerInfo, Progress, ShareToken, StateMonitor};
 use serde::{Deserialize, Serialize};
 use std::{

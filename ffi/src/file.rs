@@ -1,9 +1,6 @@
-use crate::{registry::Handle, state::State};
+use crate::{registry::Handle, repository::RepositoryHolder, state::State};
 use camino::Utf8PathBuf;
-use ouisync_bridge::{
-    error::{Error, Result},
-    repository::RepositoryHolder,
-};
+use ouisync_bridge::error::{Error, Result};
 use ouisync_lib::{deadlock::AsyncMutex, Branch, File};
 use std::{convert::TryInto, io::SeekFrom};
 
