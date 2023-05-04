@@ -33,17 +33,19 @@ pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>) -> Result<()> {
         let handle = match &host {
             HostAddr::Local(path) => {
                 let server = LocalServer::bind(path.as_path())?;
+                tracing::info!("API server listening on {}", path.display());
+
                 task::spawn(server.run(LocalHandler::new(state.clone())))
             }
             HostAddr::Remote(addr) => {
                 let server = RemoteServer::bind(*addr).await?;
+                tracing::info!("API server listening on {}", server.local_addr());
+
                 task::spawn(server.run(RemoteHandler::new(state.clone())))
             }
         };
 
         server_handles.push(handle);
-
-        tracing::info!("API server listening on {}", host);
     }
 
     terminated().await?;
