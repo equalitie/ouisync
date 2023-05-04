@@ -12,27 +12,12 @@ pub(crate) async fn run(dirs: Dirs, host: String) -> Result<()> {
     let state = State::new(&dirs, monitor).await;
     let state = Arc::new(state);
 
-    let mut server_handles = Vec::new();
-
     let server = LocalServer::bind(Path::new(&host))?;
-    tracing::info!("API server listening on {}", host);
-
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
-    server_handles.push(handle);
-
-    // HostAddr::Remote(addr) => {
-    //     let server = RemoteServer::bind(*addr).await?;
-    //     tracing::info!("API server listening on {}", server.local_addr());
-
-    //     task::spawn(server.run(RemoteHandler::new(state.clone())))
-    // }
 
     terminated().await?;
 
-    for handle in server_handles {
-        handle.abort();
-    }
-
+    handle.abort();
     state.close().await;
 
     Ok(())

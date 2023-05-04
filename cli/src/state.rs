@@ -1,6 +1,8 @@
 use crate::{
+    handler::RemoteHandler,
     options::Dirs,
     repository::{self, RepositoryMap},
+    transport::remote::RemoteServer,
 };
 use camino::Utf8PathBuf;
 use futures_util::future;
@@ -9,8 +11,13 @@ use ouisync_bridge::{
     network::{self, NetworkDefaults},
 };
 use ouisync_lib::{network::Network, StateMonitor};
-use std::time::Duration;
-use tokio::time;
+use scoped_task::ScopedAbortHandle;
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{task, time};
 
 pub(crate) struct State {
     pub config: ConfigStore,
@@ -19,6 +26,7 @@ pub(crate) struct State {
     pub network: Network,
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
+    pub servers: ServerContainer,
 }
 
 impl State {
@@ -51,10 +59,16 @@ impl State {
             network,
             repositories,
             repositories_monitor,
+            servers: ServerContainer::new(),
         }
     }
 
     pub async fn close(&self) {
+        // TODO: run this in the destructor (in a spawned task) instead
+
+        // Kill remote servers
+        self.servers.clear();
+
         // Close repos
         future::join_all(
             self.repositories
@@ -82,6 +96,39 @@ impl State {
     }
 }
 
-// pub(crate) struct ServerMap {
-//     inner: Mutex<HashMap<SocketAddr, AbortHandle>>,
-// }
+#[derive(Default)]
+pub(crate) struct ServerContainer {
+    inner: Mutex<Vec<ScopedAbortHandle>>,
+}
+
+impl ServerContainer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn set(&self, addrs: Vec<SocketAddr>, state: Arc<State>) -> Vec<SocketAddr> {
+        let mut handles = Vec::with_capacity(addrs.len());
+        let mut local_addrs = Vec::with_capacity(addrs.len());
+
+        for addr in addrs {
+            let Ok(server) = RemoteServer::bind(addr).await else {
+                continue;
+            };
+
+            local_addrs.push(server.local_addr());
+            handles.push(
+                task::spawn(server.run(RemoteHandler::new(state.clone())))
+                    .abort_handle()
+                    .into(),
+            );
+        }
+
+        *self.inner.lock().unwrap() = handles;
+
+        local_addrs
+    }
+
+    pub fn clear(&self) {
+        self.inner.lock().unwrap().clear();
+    }
+}

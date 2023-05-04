@@ -10,7 +10,10 @@ use ouisync_bridge::{
     transport::NotificationSender,
 };
 use ouisync_lib::{AccessMode, PeerAddr, ShareToken};
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Weak},
+};
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -40,7 +43,13 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         tracing::debug!(?request);
 
         match request {
-            Request::Serve { .. } => Err(Error::ForbiddenRequest),
+            Request::Start => Err(Error::ForbiddenRequest),
+            Request::BindRpc { addrs } => Ok(self
+                .state
+                .servers
+                .set(addrs, self.state.clone())
+                .await
+                .into()),
             Request::Create {
                 name,
                 share_token,
@@ -312,12 +321,14 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
 #[derive(Clone)]
 pub(crate) struct RemoteHandler {
-    state: Arc<State>,
+    state: Weak<State>,
 }
 
 impl RemoteHandler {
     pub fn new(state: Arc<State>) -> Self {
-        Self { state }
+        Self {
+            state: Arc::downgrade(&state),
+        }
     }
 }
 
@@ -332,6 +343,12 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         _notification_tx: &NotificationSender,
     ) -> Result<Self::Response> {
         tracing::debug!(?request);
+
+        let Some(state) = self.state.upgrade() else {
+            tracing::error!("can't handle request - shutting down");
+            // TODO: return more appropriate error (ShuttingDown or similar)
+            return Err(Error::ForbiddenRequest);
+        };
 
         match request {
             Request::Create {
@@ -357,15 +374,15 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 // always a valid name.
                 let name = RepositoryName::try_from(name).unwrap();
 
-                let store_path = self.state.store_path(name.as_ref());
+                let store_path = state.store_path(name.as_ref());
 
                 let repository = ouisync_bridge::repository::create(
                     store_path.clone(),
                     None,
                     None,
                     Some(share_token),
-                    &self.state.config,
-                    &self.state.repositories_monitor,
+                    &state.config,
+                    &state.repositories_monitor,
                 )
                 .await?;
 
@@ -373,9 +390,9 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
 
                 tracing::info!(%name, "repository created");
 
-                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
+                let holder = RepositoryHolder::new(repository, name, &state.network).await;
                 let holder = Arc::new(holder);
-                self.state.repositories.insert(holder);
+                state.repositories.insert(holder);
 
                 Ok(().into())
             }

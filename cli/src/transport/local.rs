@@ -27,16 +27,19 @@ pub(crate) struct LocalServer {
 
 impl LocalServer {
     pub fn bind<'a>(name: impl ToLocalSocketName<'a> + Clone) -> io::Result<Self> {
-        let path = {
-            let name = name.clone().to_local_socket_name()?;
-            if name.is_path() {
-                Some(name.into_inner().into())
-            } else {
-                None
-            }
+        let listener = LocalSocketListener::bind(name.clone())?;
+
+        let name = name.to_local_socket_name()?;
+        let path = if name.is_path() {
+            Some(name.inner().into())
+        } else {
+            None
         };
 
-        let listener = LocalSocketListener::bind(name)?;
+        tracing::info!(
+            "local API server listening on {}",
+            name.inner().to_string_lossy()
+        );
 
         Ok(Self { listener, path })
     }

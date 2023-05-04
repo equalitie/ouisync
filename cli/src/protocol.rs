@@ -2,13 +2,22 @@ use camino::Utf8PathBuf;
 use clap::{builder::BoolishValueParser, Subcommand};
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{fmt, net::SocketAddr};
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
-    /// Start a server
-    Serve,
+    /// Start the server
+    Start,
+    /// Bind the remote API to the specified addresses. Overwrites any previously specified
+    /// addresses.
+    BindRpc {
+        /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
+        /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
+        /// disables the remote API.
+        #[arg(value_name = "IP:PORT")]
+        addrs: Vec<SocketAddr>,
+    },
     /// Create a new repository
     Create {
         /// Name of the repository
@@ -88,12 +97,14 @@ pub(crate) enum Request {
         #[arg(short, long)]
         all: bool,
     },
-    /// Bind to the specified addresses
+    /// Bind the sync protocol to the specified addresses
     Bind {
-        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
-        /// a IPv4 or IPv6 address and PORT is a port number.
-        /// If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port.
+        /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and
+        /// PORT is a port number. If IP is 0.0.0.0 or [::] binds to all interfaces. If PORT is 0
+        /// binds to a random port.
+        ///
         /// Examples: quic/0.0.0.0:0, quic/[::]:0, tcp/192.168.0.100:55555
+        #[arg(value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
     /// List protocol ports we are listening on
@@ -113,16 +124,12 @@ pub(crate) enum Request {
     },
     /// Manually add peers.
     AddPeers {
-        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
-        /// a IPv4 or IPv6 address and PORT is a port number.
-        #[arg(required = true)]
+        #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
     /// Remove manually added peers.
     RemovePeers {
-        /// Addresses of the form "PROTO/IP:PORT" where PROTO is one of "quic" or "tcp", IP is
-        /// a IPv4 or IPv6 address and PORT is a port number.
-        #[arg(required = true)]
+        #[arg(required = true, value_name = "PROTO/IP:PORT")]
         addrs: Vec<PeerAddr>,
     },
     /// List all known peers
@@ -154,6 +161,7 @@ pub(crate) enum Response {
     String(String),
     Strings(Vec<String>),
     PeerInfo(Vec<PeerInfo>),
+    SocketAddrs(Vec<SocketAddr>),
 }
 
 impl From<()> for Response {
@@ -186,6 +194,12 @@ impl From<Vec<PeerInfo>> for Response {
     }
 }
 
+impl From<Vec<SocketAddr>> for Response {
+    fn from(value: Vec<SocketAddr>) -> Self {
+        Self::SocketAddrs(value)
+    }
+}
+
 impl fmt::Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -206,6 +220,13 @@ impl fmt::Display for Response {
                         "{}:{} ({:?}, {:?})",
                         peer.ip, peer.port, peer.source, peer.state
                     )?;
+                }
+
+                Ok(())
+            }
+            Self::SocketAddrs(value) => {
+                for addr in value {
+                    writeln!(f, "{addr}")?;
                 }
 
                 Ok(())
