@@ -1,73 +1,54 @@
-use crate::APP_NAME;
-use anyhow::{format_err, Error};
-use std::{fmt, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{convert::Infallible, fmt, net::SocketAddr, path::PathBuf, str::FromStr};
 use url::Url;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum HostAddr {
+pub enum HostAddr<R> {
     Local(PathBuf),
-    Remote(Url),
+    Remote(R),
 }
 
-impl FromStr for HostAddr {
-    type Err = Error;
+impl FromStr for HostAddr<Url> {
+    type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // First try to parse it as a ws:// or wss:// url.
+        // First try to parse it as url.
         if let Ok(url) = Url::parse(s) {
-            if url.scheme() == "ws" || url.scheme() == "wss" {
-                return Ok(Self::Remote(url));
-            } else {
-                return Err(format_err!("unsupported url scheme '{}'", url.scheme()));
-            }
+            return Ok(Self::Remote(url));
         }
 
         // Then try to parse it as a raw socket address with implied 'ws://' scheme.
         if let Ok(addr) = SocketAddr::from_str(s) {
+            // unwrap ok because the url is valid
             return Ok(Self::Remote(Url::parse(&format!("ws://{addr}")).unwrap()));
         }
 
-        // Otherwise assume local path but reject invalid windows named pipe paths
-        let s = s.trim_start();
-        if s.starts_with(r"\\") && !s.starts_with(r"\\.\pipe\") {
-            return Err(format_err!("unsupported named pipe path '{}'", s));
-        }
-
+        // Otherwise assume local path
         Ok(Self::Local(PathBuf::from(s)))
     }
 }
 
-impl fmt::Display for HostAddr {
+impl FromStr for HostAddr<SocketAddr> {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(addr) = SocketAddr::from_str(s) {
+            Ok(Self::Remote(addr))
+        } else {
+            Ok(Self::Local(PathBuf::from(s)))
+        }
+    }
+}
+
+impl<R> fmt::Display for HostAddr<R>
+where
+    R: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local(path) => write!(f, "{}", path.display()),
             Self::Remote(url) => write!(f, "{url}"),
         }
     }
-}
-
-impl Default for HostAddr {
-    fn default() -> Self {
-        Self::Local(default_local())
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn default_local() -> PathBuf {
-    socket_dir().join(APP_NAME).with_extension("sock")
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn default_local() -> PathBuf {
-    PathBuf::from(format!(r"\\.\pipe\{APP_NAME}"))
-}
-
-#[cfg(target_os = "linux")]
-fn socket_dir() -> PathBuf {
-    // FIXME: when running as root, we should use `/run`
-    dirs::runtime_dir()
-        .or_else(dirs::cache_dir)
-        .expect("neither runtime dir nor cache dir defined")
 }
 
 // TODO: macos
@@ -79,36 +60,48 @@ mod tests {
     #[test]
     fn parse() {
         assert_eq!(
-            HostAddr::from_str("/home/alice/ouisync.sock").unwrap(),
-            HostAddr::Local(PathBuf::from("/home/alice/ouisync.sock"))
+            HostAddr::<Url>::from_str("/home/alice/.cache/ouisync.sock").unwrap(),
+            HostAddr::<Url>::Local(PathBuf::from("/home/alice/.cache/ouisync.sock"))
         );
 
         assert_eq!(
-            HostAddr::from_str(r"\\.\pipe\ouisync").unwrap(),
-            HostAddr::Local(PathBuf::from(r"\\.\pipe\ouisync")),
+            HostAddr::<Url>::from_str("server/ouisync.sock").unwrap(),
+            HostAddr::<Url>::Local(PathBuf::from("server/ouisync.sock"))
         );
 
         assert_eq!(
-            HostAddr::from_str("ws://example.com/api").unwrap(),
-            HostAddr::Remote(Url::parse("ws://example.com/api").unwrap())
+            HostAddr::<Url>::from_str(r"\\.\pipe\ouisync").unwrap(),
+            HostAddr::<Url>::Local(PathBuf::from(r"\\.\pipe\ouisync")),
         );
 
         assert_eq!(
-            HostAddr::from_str("wss://example.com/api").unwrap(),
-            HostAddr::Remote(Url::parse("wss://example.com/api").unwrap())
+            HostAddr::<Url>::from_str(r"\\server\pipe\ouisync").unwrap(),
+            HostAddr::<Url>::Local(PathBuf::from(r"\\server\pipe\ouisync")),
         );
 
         assert_eq!(
-            HostAddr::from_str("192.168.1.40:54321").unwrap(),
-            HostAddr::Remote(Url::parse("ws://192.168.1.40:54321").unwrap())
+            HostAddr::<Url>::from_str("ws://example.com/api").unwrap(),
+            HostAddr::<Url>::Remote(Url::parse("ws://example.com/api").unwrap())
         );
 
-        // Invalid scheme
-        assert!(HostAddr::from_str("http://example.com/api").is_err());
+        assert_eq!(
+            HostAddr::<Url>::from_str("wss://example.com/api").unwrap(),
+            HostAddr::<Url>::Remote(Url::parse("wss://example.com/api").unwrap())
+        );
 
-        // Invalid windows named pipe paths
-        assert!(HostAddr::from_str(r"\\.\invalid\ousiync").is_err());
-        assert!(HostAddr::from_str(r"\\.\invalid\pipe\ousiync").is_err());
-        assert!(HostAddr::from_str(r"\\remote\pipe\ousiync").is_err());
+        assert_eq!(
+            HostAddr::<Url>::from_str("https://example.com/api").unwrap(),
+            HostAddr::<Url>::Remote(Url::parse("https://example.com/api").unwrap())
+        );
+
+        assert_eq!(
+            HostAddr::<Url>::from_str("192.168.1.40:54321").unwrap(),
+            HostAddr::<Url>::Remote(Url::parse("ws://192.168.1.40:54321").unwrap())
+        );
+
+        assert_eq!(
+            HostAddr::<SocketAddr>::from_str("192.168.1.40:54321").unwrap(),
+            HostAddr::<SocketAddr>::Remote(SocketAddr::from(([192, 168, 1, 40], 54321))),
+        );
     }
 }

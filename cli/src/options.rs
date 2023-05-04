@@ -1,9 +1,9 @@
-use crate::{host_addr::HostAddr, APP_NAME};
+use crate::APP_NAME;
 use camino::Utf8PathBuf;
 use clap::{builder::BoolishValueParser, Args, Parser, Subcommand};
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = APP_NAME, version, about)]
@@ -11,9 +11,9 @@ pub(crate) struct Options {
     #[command(flatten)]
     pub dirs: Dirs,
 
-    /// Host socket to connect to
-    #[arg(short = 'H', long, default_value_t, value_name = "ADDR")]
-    pub host: HostAddr,
+    /// Host socket to connect to (if client) or to bind to (if server)
+    #[arg(short = 'H', long, default_values_t = [default_host()], value_name = "ADDR")]
+    pub host: Vec<String>,
 
     #[command(subcommand)]
     pub request: Request,
@@ -267,4 +267,28 @@ fn default_mount_dir() -> Utf8PathBuf {
         .join(APP_NAME)
         .try_into()
         .expect("invalid utf8 path")
+}
+
+#[cfg(target_os = "linux")]
+fn socket_dir() -> PathBuf {
+    // FIXME: when running as root, we should use `/run`
+
+    dirs::runtime_dir()
+        .or_else(dirs::cache_dir)
+        .expect("neither runtime dir nor cache dir defined")
+}
+
+#[cfg(target_os = "linux")]
+fn default_host() -> String {
+    socket_dir()
+        .join(APP_NAME)
+        .with_extension("sock")
+        .into_os_string()
+        .into_string()
+        .expect("invalid utf8")
+}
+
+#[cfg(target_os = "windows")]
+fn default_host() -> String {
+    format!(r"\\.\pipe\{APP_NAME}")
 }

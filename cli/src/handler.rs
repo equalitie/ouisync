@@ -113,7 +113,7 @@ impl ouisync_bridge::transport::Handler for Handler {
         tracing::debug!(?request);
 
         match request {
-            Request::Serve => Err(Error::ForbiddenRequest),
+            Request::Serve { .. } => Err(Error::ForbiddenRequest),
             Request::Create {
                 name,
                 share_token,

@@ -1,37 +1,56 @@
 use crate::{
     handler::{Handler, State},
     host_addr::HostAddr,
-    options::Options,
-    transport::local::LocalServer,
+    options::Dirs,
+    transport::{local::LocalServer, remote::RemoteServer},
 };
 use anyhow::{format_err, Result};
 use ouisync_bridge::logger;
 use ouisync_lib::StateMonitor;
-use std::{io, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 use tokio::task;
 
-pub(crate) async fn run(options: Options) -> Result<()> {
+pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>) -> Result<()> {
+    let hosts: Vec<HostAddr<SocketAddr>> = hosts
+        .into_iter()
+        .map(|host| Ok(host.parse()?))
+        .collect::<Result<_>>()?;
+
+    if hosts.is_empty() {
+        return Err(format_err!("host required"));
+    }
+
     let monitor = StateMonitor::make_root();
     let _logger = logger::new(Some(monitor.clone()));
 
-    let state = State::new(&options.dirs, monitor).await;
+    let state = State::new(&dirs, monitor).await;
     let state = Arc::new(state);
 
-    let addr = match &options.host {
-        HostAddr::Local(addr) => addr,
-        HostAddr::Remote(_) => {
-            return Err(format_err!("remote api endpoints not supported yet"));
-        }
-    };
+    let mut server_handles = Vec::new();
 
-    let server = LocalServer::bind(addr.as_path())?;
-    let handle = task::spawn(server.run(Handler::new(state.clone())));
+    for host in hosts {
+        let handle = match &host {
+            HostAddr::Local(path) => {
+                let server = LocalServer::bind(path.as_path())?;
+                task::spawn(server.run(Handler::new(state.clone())))
+            }
+            HostAddr::Remote(addr) => {
+                let server = RemoteServer::bind(*addr).await?;
+                task::spawn(server.run(Handler::new(state.clone())))
+            }
+        };
 
-    tracing::info!("API server listening on {}", options.host);
+        server_handles.push(handle);
+
+        tracing::info!("API server listening on {}", host);
+    }
 
     terminated().await?;
 
-    handle.abort();
+    for handle in server_handles {
+        handle.abort();
+    }
+
     state.close().await;
 
     Ok(())

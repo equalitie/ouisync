@@ -1,19 +1,28 @@
 use crate::{
     handler::{Handler, State},
     host_addr::HostAddr,
-    options::{Dirs, Options, Request, Response},
+    options::{Dirs, Request, Response},
     transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
 };
-use anyhow::Result;
+use anyhow::{format_err, Result};
 use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
 use std::{io, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use url::Url;
 
-pub(crate) async fn run(options: Options) -> Result<()> {
-    let client = connect(options.host, &options.dirs).await?;
+pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>, request: Request) -> Result<()> {
+    if hosts.len() > 1 {
+        return Err(format_err!(
+            "connecting to more than one host not supported"
+        ));
+    }
 
-    let request = options.request;
+    let host = hosts.first().ok_or(format_err!("host required"))?;
+    let host: HostAddr<Url> = host.parse()?;
+
+    let client = connect(host, &dirs).await?;
+
     let request = match request {
         Request::Create {
             name,
@@ -63,7 +72,7 @@ pub(crate) async fn run(options: Options) -> Result<()> {
 }
 
 async fn connect(
-    addr: HostAddr,
+    addr: HostAddr<Url>,
     dirs: &Dirs,
 ) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
     match addr {
