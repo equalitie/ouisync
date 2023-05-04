@@ -1,26 +1,11 @@
-use crate::{
-    handler::{LocalHandler, RemoteHandler},
-    host_addr::HostAddr,
-    options::Dirs,
-    state::State,
-    transport::{local::LocalServer, remote::RemoteServer},
-};
-use anyhow::{format_err, Result};
+use crate::{handler::LocalHandler, options::Dirs, state::State, transport::local::LocalServer};
+use anyhow::Result;
 use ouisync_bridge::logger;
 use ouisync_lib::StateMonitor;
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, path::Path, sync::Arc};
 use tokio::task;
 
-pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>) -> Result<()> {
-    let hosts: Vec<HostAddr<SocketAddr>> = hosts
-        .into_iter()
-        .map(|host| Ok(host.parse()?))
-        .collect::<Result<_>>()?;
-
-    if hosts.is_empty() {
-        return Err(format_err!("host required"));
-    }
-
+pub(crate) async fn run(dirs: Dirs, host: String) -> Result<()> {
     let monitor = StateMonitor::make_root();
     let _logger = logger::new(Some(monitor.clone()));
 
@@ -29,24 +14,18 @@ pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>) -> Result<()> {
 
     let mut server_handles = Vec::new();
 
-    for host in hosts {
-        let handle = match &host {
-            HostAddr::Local(path) => {
-                let server = LocalServer::bind(path.as_path())?;
-                tracing::info!("API server listening on {}", path.display());
+    let server = LocalServer::bind(Path::new(&host))?;
+    tracing::info!("API server listening on {}", host);
 
-                task::spawn(server.run(LocalHandler::new(state.clone())))
-            }
-            HostAddr::Remote(addr) => {
-                let server = RemoteServer::bind(*addr).await?;
-                tracing::info!("API server listening on {}", server.local_addr());
+    let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
+    server_handles.push(handle);
 
-                task::spawn(server.run(RemoteHandler::new(state.clone())))
-            }
-        };
+    // HostAddr::Remote(addr) => {
+    //     let server = RemoteServer::bind(*addr).await?;
+    //     tracing::info!("API server listening on {}", server.local_addr());
 
-        server_handles.push(handle);
-    }
+    //     task::spawn(server.run(RemoteHandler::new(state.clone())))
+    // }
 
     terminated().await?;
 

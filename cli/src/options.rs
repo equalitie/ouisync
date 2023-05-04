@@ -10,8 +10,8 @@ pub(crate) struct Options {
     pub dirs: Dirs,
 
     /// Host socket to connect to (if client) or to bind to (if server)
-    #[arg(short = 'H', long, default_values_t = [default_host()], value_name = "ADDR")]
-    pub host: Vec<String>,
+    #[arg(short = 'H', long, default_value_t = default_host(), value_name = "ADDR")]
+    pub host: String,
 
     #[command(subcommand)]
     pub request: Request,

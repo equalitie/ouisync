@@ -6,23 +6,14 @@ use crate::{
     state::State,
     transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
 };
-use anyhow::{format_err, Result};
+use anyhow::Result;
 use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
 use std::{io, sync::Arc};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
-use url::Url;
 
-pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>, request: Request) -> Result<()> {
-    if hosts.len() > 1 {
-        return Err(format_err!(
-            "connecting to more than one host not supported"
-        ));
-    }
-
-    let host = hosts.first().ok_or(format_err!("host required"))?;
-    let host: HostAddr<Url> = host.parse()?;
-
+pub(crate) async fn run(dirs: Dirs, host: String, request: Request) -> Result<()> {
+    let host: HostAddr = host.parse()?;
     let client = connect(host, &dirs).await?;
 
     let request = match request {
@@ -74,7 +65,7 @@ pub(crate) async fn run(dirs: Dirs, hosts: Vec<String>, request: Request) -> Res
 }
 
 async fn connect(
-    addr: HostAddr<Url>,
+    addr: HostAddr,
     dirs: &Dirs,
 ) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
     match addr {

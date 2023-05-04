@@ -81,3 +81,7 @@ impl State {
         repository::store_path(&self.store_dir, name)
     }
 }
+
+// pub(crate) struct ServerMap {
+//     inner: Mutex<HashMap<SocketAddr, AbortHandle>>,
+// }
