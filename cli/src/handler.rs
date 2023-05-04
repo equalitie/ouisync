@@ -1,89 +1,16 @@
 use crate::{
-    options::{Dirs, Request, Response},
-    repository::{self, RepositoryHolder, RepositoryMap, RepositoryName, OPEN_ON_START},
+    options::{Request, Response},
+    repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
+    state::State,
 };
 use async_trait::async_trait;
-use camino::Utf8PathBuf;
-use futures_util::future;
 use ouisync_bridge::{
-    config::ConfigStore,
     error::{Error, Result},
-    network::{self, NetworkDefaults},
+    network,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::time;
-
-pub(crate) struct State {
-    config: ConfigStore,
-    store_dir: Utf8PathBuf,
-    mount_dir: Utf8PathBuf,
-    network: Network,
-    repositories: RepositoryMap,
-    repositories_monitor: StateMonitor,
-}
-
-impl State {
-    pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
-        let config = ConfigStore::new(&dirs.config_dir);
-
-        let network = Network::new(
-            Some(config.dht_contacts_store()),
-            monitor.make_child("Network"),
-        );
-
-        network::init(
-            &network,
-            &config,
-            NetworkDefaults {
-                port_forwarding_enabled: false,
-                local_discovery_enabled: false,
-            },
-        )
-        .await;
-
-        let repositories_monitor = monitor.make_child("Repositories");
-        let repositories =
-            repository::find_all(dirs, &network, &config, &repositories_monitor).await;
-
-        Self {
-            config,
-            store_dir: dirs.store_dir.clone(),
-            mount_dir: dirs.mount_dir.clone(),
-            network,
-            repositories,
-            repositories_monitor,
-        }
-    }
-
-    pub async fn close(&self) {
-        // Close repos
-        future::join_all(
-            self.repositories
-                .remove_all()
-                .into_iter()
-                .map(|holder| async move {
-                    if let Err(error) = holder.repository.close().await {
-                        tracing::error!(
-                            name = %holder.name(),
-                            ?error,
-                            "failed to gracefully close repository"
-                        );
-                    }
-                }),
-        )
-        .await;
-
-        time::timeout(Duration::from_secs(1), self.network.shutdown())
-            .await
-            .ok();
-    }
-
-    fn store_path(&self, name: &str) -> Utf8PathBuf {
-        repository::store_path(&self.store_dir, name)
-    }
-}
+use ouisync_lib::{PeerAddr, ShareToken};
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct Handler {

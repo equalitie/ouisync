@@ -1,7 +1,8 @@
 use crate::{
-    handler::{Handler, State},
+    handler::Handler,
     host_addr::HostAddr,
     options::Dirs,
+    state::State,
     transport::{local::LocalServer, remote::RemoteServer},
 };
 use anyhow::{format_err, Result};

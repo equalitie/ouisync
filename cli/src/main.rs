@@ -4,6 +4,7 @@ mod host_addr;
 mod options;
 mod repository;
 mod server;
+mod state;
 mod transport;
 mod utils;
 
