@@ -5,7 +5,7 @@ use std::{
     cell::Cell,
     env, fmt, fs,
     io::{self, BufRead, BufReader, Read, Write},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     str::{self, FromStr},
@@ -149,6 +149,37 @@ impl Bin {
                 .output()
                 .unwrap(),
         )
+    }
+
+    #[track_caller]
+    pub fn bind_rpc(&self) -> u16 {
+        let addr: SocketAddr = parse_prefixed_line(
+            &self.id,
+            "",
+            self.client_command()
+                .arg("bind-rpc")
+                .arg(&format!("{}:0", Ipv4Addr::LOCALHOST))
+                .output()
+                .unwrap(),
+        );
+
+        addr.port()
+    }
+
+    #[track_caller]
+    pub fn mirror(&self, mirror_port: u16) {
+        expect_output(
+            &self.id,
+            "OK",
+            self.client_command()
+                .arg("mirror")
+                .arg("--name")
+                .arg(DEFAULT_REPO)
+                .arg("--host")
+                .arg(&format!("{}:{mirror_port}", Ipv4Addr::LOCALHOST))
+                .output()
+                .unwrap(),
+        );
     }
 
     #[track_caller]
