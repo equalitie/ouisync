@@ -1,6 +1,10 @@
+mod remote;
 mod socket;
 
-pub use self::socket::{server_connection as socket_server_connection, SocketClient};
+pub use self::{
+    remote::{RemoteClient, RemoteServer},
+    socket::{server_connection as socket_server_connection, SocketClient},
+};
 
 use crate::{error::Result, protocol::Notification};
 use async_trait::async_trait;

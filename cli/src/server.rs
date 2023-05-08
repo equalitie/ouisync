@@ -2,10 +2,10 @@ use crate::{
     handler::{local::LocalHandler, remote::RemoteHandler},
     options::Dirs,
     state::State,
-    transport::{local::LocalServer, remote::RemoteServer},
+    transport::local::LocalServer,
 };
 use anyhow::Result;
-use ouisync_bridge::{config::ConfigKey, logger};
+use ouisync_bridge::{config::ConfigKey, logger, transport::RemoteServer};
 use ouisync_lib::StateMonitor;
 use scoped_task::ScopedAbortHandle;
 use std::{

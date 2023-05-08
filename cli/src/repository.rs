@@ -1,9 +1,10 @@
-use crate::{options::Dirs, transport::remote::RemoteClient, utils, DB_EXTENSION};
+use crate::{options::Dirs, utils, DB_EXTENSION};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     protocol::remote::{Request, Response},
+    transport::RemoteClient,
 };
 use ouisync_lib::{
     network::{Network, Registration},

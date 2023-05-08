@@ -1,13 +1,12 @@
 //! Client and Server than run on different devices.
 
-use crate::handler::remote::RemoteHandler;
-use bytes::{Bytes, BytesMut};
-use futures_util::{SinkExt, StreamExt};
-use ouisync_bridge::{
+use super::{socket_server_connection, Handler, SocketClient};
+use crate::{
     error::Result,
     protocol::remote::{Request, Response},
-    transport::{socket_server_connection, SocketClient},
 };
+use bytes::{Bytes, BytesMut};
+use futures_util::{SinkExt, StreamExt};
 use std::{
     io,
     net::SocketAddr,
@@ -26,7 +25,7 @@ use tokio_tungstenite::{
 
 // TODO: Implement TLS
 
-pub(crate) struct RemoteServer {
+pub struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
 }
@@ -55,7 +54,7 @@ impl RemoteServer {
         self.local_addr
     }
 
-    pub async fn run(self, handler: RemoteHandler) {
+    pub async fn run<H: Handler>(self, handler: H) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -87,7 +86,7 @@ impl RemoteServer {
     }
 }
 
-pub(crate) struct RemoteClient {
+pub struct RemoteClient {
     inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
