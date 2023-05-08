@@ -1,3 +1,5 @@
+pub mod remote;
+
 use crate::{
     constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
     error::{Error, ErrorCode, Result},

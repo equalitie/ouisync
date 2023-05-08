@@ -1,7 +1,7 @@
 //! Client and Server than run on different devices.
 
 use crate::{
-    handler::RemoteHandler,
+    handler::remote::RemoteHandler,
     protocol::{Request, Response},
 };
 use async_trait::async_trait;

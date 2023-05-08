@@ -1,5 +1,5 @@
 use crate::{
-    handler::LocalHandler,
+    handler::local::LocalHandler,
     host_addr::HostAddr,
     options::Dirs,
     protocol::{Request, Response},

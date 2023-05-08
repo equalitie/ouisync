@@ -3,7 +3,7 @@
 //! and doesn't need a separate server component.
 
 use crate::{
-    handler::LocalHandler,
+    handler::local::LocalHandler,
     protocol::{Request, Response},
 };
 use async_trait::async_trait;

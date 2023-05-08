@@ -1,5 +1,5 @@
 use crate::{
-    handler::{LocalHandler, RemoteHandler},
+    handler::{local::LocalHandler, remote::RemoteHandler},
     options::Dirs,
     state::State,
     transport::{local::LocalServer, remote::RemoteServer},

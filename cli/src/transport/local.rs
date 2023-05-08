@@ -1,7 +1,7 @@
 //! Client and Server than run in different processes on the same device.
 
 use crate::{
-    handler::LocalHandler,
+    handler::local::LocalHandler,
     protocol::{Request, Response},
 };
 use async_trait::async_trait;
