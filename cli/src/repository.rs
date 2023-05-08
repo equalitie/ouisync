@@ -12,7 +12,7 @@ use ouisync_lib::{
 use ouisync_vfs::MountGuard;
 use std::{
     borrow::{Borrow, Cow},
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     fmt, io, mem,
     ops::Deref,
     sync::{Arc, Mutex, RwLock},
@@ -323,11 +323,15 @@ impl RepositoryMap {
         Self::default()
     }
 
-    pub fn insert(&self, holder: Arc<RepositoryHolder>) -> Option<Arc<RepositoryHolder>> {
-        self.inner
-            .write()
-            .unwrap()
-            .insert(holder.name.clone(), holder)
+    /// Inserts the holder unless already exists. Returns whether the holder was inserted.
+    pub fn try_insert(&self, holder: Arc<RepositoryHolder>) -> bool {
+        match self.inner.write().unwrap().entry(holder.name.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(holder);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     pub fn remove(&self, name: &str) -> Option<Arc<RepositoryHolder>> {
@@ -419,7 +423,7 @@ pub(crate) async fn find_all(
         let holder = Arc::new(holder);
         holder.mount(&dirs.mount_dir).await.ok();
 
-        repositories.insert(holder);
+        assert!(repositories.try_insert(holder));
     }
 
     repositories

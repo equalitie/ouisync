@@ -86,13 +86,22 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 )
                 .await?;
 
-                repository.metadata().set(OPEN_ON_START, true).await.ok();
+                let holder =
+                    RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
+                let holder = Arc::new(holder);
+
+                if !self.state.repositories.try_insert(holder.clone()) {
+                    Err(ouisync_lib::Error::EntryExists)?;
+                }
+
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, true)
+                    .await
+                    .ok();
 
                 tracing::info!(%name, "repository created");
-
-                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
-                let holder = Arc::new(holder);
-                self.state.repositories.insert(holder);
 
                 Ok(().into())
             }
@@ -122,15 +131,22 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 )
                 .await?;
 
-                repository.metadata().set(OPEN_ON_START, true).await.ok();
+                let holder =
+                    RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
+                let holder = Arc::new(holder);
+                if !self.state.repositories.try_insert(holder.clone()) {
+                    Err(ouisync_lib::Error::EntryExists)?;
+                }
 
                 tracing::info!(%name, "repository opened");
 
-                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
-                let holder = Arc::new(holder);
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, true)
+                    .await
+                    .ok();
                 holder.mount(&self.state.mount_dir).await.ok();
-
-                self.state.repositories.insert(holder);
 
                 Ok(().into())
             }

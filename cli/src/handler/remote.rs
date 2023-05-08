@@ -84,8 +84,8 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 let holder = RepositoryHolder::new(repository, name, &state.network).await;
                 let holder = Arc::new(holder);
 
-                // TODO: insert only if not exists
-                state.repositories.insert(holder);
+                // Mirror is idempotent - ignore when already exists
+                state.repositories.try_insert(holder);
 
                 // TODO: enable DHT, PEX
 
