@@ -7,7 +7,7 @@ use ouisync_bridge::{
 };
 use ouisync_lib::{
     network::{Network, Registration},
-    AccessMode, Repository, ShareToken, StateMonitor,
+    AccessMode, Repository, StateMonitor,
 };
 use ouisync_vfs::MountGuard;
 use std::{
@@ -204,13 +204,12 @@ impl RepositoryHolder {
     /// Create a mirror of the repository on the given remote host.
     pub async fn mirror(&self, host: &str) -> Result<()> {
         let client = RemoteClient::connect(host).await?;
-        let share_token: ShareToken = self
-            .repository
-            .secrets()
-            .with_mode(AccessMode::Blind)
-            .into();
         let request = Request::Mirror {
-            share_token: share_token.to_string(),
+            share_token: self
+                .repository
+                .secrets()
+                .with_mode(AccessMode::Blind)
+                .into(),
         };
         let response = client.invoke(request).await?;
 

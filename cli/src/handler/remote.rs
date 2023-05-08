@@ -44,8 +44,6 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
 
         match request {
             Request::Mirror { share_token } => {
-                let share_token: ShareToken =
-                    share_token.parse().map_err(|_| Error::InvalidArgument)?;
                 // Mirroring is supported for blind replicas only.
                 let share_token: ShareToken = share_token
                     .into_secrets()

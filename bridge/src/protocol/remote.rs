@@ -1,12 +1,10 @@
+use ouisync_lib::ShareToken;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     /// Mirror repository on a remote server
-    Mirror {
-        // TODO: change type to ShareToken
-        share_token: String,
-    },
+    Mirror { share_token: ShareToken },
 }
 
 #[derive(Serialize, Deserialize)]
