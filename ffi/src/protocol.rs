@@ -20,7 +20,6 @@ pub(crate) enum Request {
         path: Utf8PathBuf,
         read_password: Option<String>,
         write_password: Option<String>,
-        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositoryOpen {
@@ -38,14 +37,12 @@ pub(crate) enum Request {
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         password: Option<String>,
-        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositorySetReadAndWriteAccess {
         repository: Handle<RepositoryHolder>,
         old_password: Option<String>,
         new_password: Option<String>,
-        #[serde(with = "as_option_str")]
         share_token: Option<ShareToken>,
     },
     RepositoryRemoveReadKey(Handle<RepositoryHolder>),
@@ -81,6 +78,10 @@ pub(crate) enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
+    RepositoryMirror {
+        repository: Handle<RepositoryHolder>,
+        host: String,
+    },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),

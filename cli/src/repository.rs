@@ -3,15 +3,17 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
+    protocol::remote::{Request, Response},
+    transport::RemoteClient,
 };
 use ouisync_lib::{
     network::{Network, Registration},
-    Repository, StateMonitor,
+    AccessMode, Repository, StateMonitor,
 };
 use ouisync_vfs::MountGuard;
 use std::{
     borrow::{Borrow, Cow},
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     fmt, io, mem,
     ops::Deref,
     sync::{Arc, Mutex, RwLock},
@@ -200,6 +202,30 @@ impl RepositoryHolder {
         self.mount.lock().unwrap().is_some()
     }
 
+    /// Create a mirror of the repository on the given remote host.
+    pub async fn mirror(&self, host: &str) -> Result<()> {
+        // TODO: use wss:// only
+        let host = if host.contains("://") {
+            Cow::Borrowed(host)
+        } else {
+            Cow::Owned(format!("ws://{host}"))
+        };
+
+        let client = RemoteClient::connect(host.as_ref()).await?;
+        let request = Request::Mirror {
+            share_token: self
+                .repository
+                .secrets()
+                .with_mode(AccessMode::Blind)
+                .into(),
+        };
+        let response = client.invoke(request).await?;
+
+        match response {
+            Response::None => Ok(()),
+        }
+    }
+
     fn resolve_mount_point(&self, mount_point: String, mount_dir: &Utf8Path) -> Utf8PathBuf {
         if mount_point.is_empty() {
             mount_dir.join(&self.name)
@@ -304,11 +330,15 @@ impl RepositoryMap {
         Self::default()
     }
 
-    pub fn insert(&self, holder: Arc<RepositoryHolder>) -> Option<Arc<RepositoryHolder>> {
-        self.inner
-            .write()
-            .unwrap()
-            .insert(holder.name.clone(), holder)
+    /// Inserts the holder unless already exists. Returns whether the holder was inserted.
+    pub fn try_insert(&self, holder: Arc<RepositoryHolder>) -> bool {
+        match self.inner.write().unwrap().entry(holder.name.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(holder);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     pub fn remove(&self, name: &str) -> Option<Arc<RepositoryHolder>> {
@@ -400,7 +430,7 @@ pub(crate) async fn find_all(
         let holder = Arc::new(holder);
         holder.mount(&dirs.mount_dir).await.ok();
 
-        repositories.insert(holder);
+        assert!(repositories.try_insert(holder));
     }
 
     repositories

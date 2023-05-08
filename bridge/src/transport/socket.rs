@@ -1,12 +1,11 @@
 //! Low-level Client and Server tha wraps Stream/Sink of bytes. Used to implement some higher-level
 //! clients/servers
 
-use super::{Client, Handler};
+use super::Handler;
 use crate::{
     error::{Error, ErrorCode, Result},
     protocol::ServerMessage,
 };
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{de::DeserializeOwned, Serialize};
@@ -93,23 +92,8 @@ where
             _socket: PhantomData,
         }
     }
-}
 
-#[async_trait(?Send)]
-impl<Socket, Request, Response> Client for SocketClient<Socket, Request, Response>
-where
-    Socket: Stream<Item = io::Result<BytesMut>>
-        + Sink<Bytes, Error = io::Error>
-        + Unpin
-        + Send
-        + 'static,
-    Request: Serialize + Send,
-    Response: DeserializeOwned,
-{
-    type Request = Request;
-    type Response = Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response> {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
@@ -158,6 +142,11 @@ where
                 response = receive(&mut self.socket) => self.handle_server_message(response).await,
             }
         }
+
+        match self.socket.close().await {
+            Ok(()) => tracing::debug!("client closed"),
+            Err(error) => tracing::error!(?error, "failed to close client"),
+        }
     }
 
     async fn handle_request(
@@ -165,7 +154,6 @@ where
         request: Option<(Request, oneshot::Sender<Result<Response>>)>,
     ) {
         let Some((request, response_tx)) = request else {
-            tracing::debug!("client closed");
             self.running = false;
             return;
         };

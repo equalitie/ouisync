@@ -150,6 +150,11 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
+            Request::RepositoryMirror { repository, host } => {
+                repository::mirror(&self.state, repository, host)
+                    .await?
+                    .into()
+            }
             Request::ShareTokenMode(token) => share_token::mode(token).into(),
             Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
             Request::ShareTokenSuggestedName(token) => share_token::suggested_name(token).into(),

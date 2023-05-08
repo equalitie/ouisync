@@ -1,19 +1,18 @@
 use crate::{
-    handler::{Handler, State},
-    host_addr::HostAddr,
-    options::{Dirs, Options, Request, Response},
-    transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
+    handler::local::LocalHandler,
+    options::Dirs,
+    protocol::{Request, Response},
+    state::State,
+    transport::{local::LocalClient, native::NativeClient},
 };
 use anyhow::Result;
-use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
-use std::{io, sync::Arc};
+use std::{io, path::Path};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub(crate) async fn run(options: Options) -> Result<()> {
-    let client = connect(options.host, &options.dirs).await?;
+pub(crate) async fn run(dirs: Dirs, socket: String, request: Request) -> Result<()> {
+    let client = connect(Path::new(&socket), &dirs).await?;
 
-    let request = options.request;
     let request = match request {
         Request::Create {
             name,
@@ -62,25 +61,39 @@ pub(crate) async fn run(options: Options) -> Result<()> {
     Ok(())
 }
 
-async fn connect(
-    addr: HostAddr,
-    dirs: &Dirs,
-) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
-    match addr {
-        HostAddr::Local(addr) => match LocalClient::connect(addr.as_str()).await {
-            Ok(client) => Ok(Box::new(client)),
-            Err(error) => match error.kind() {
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let state = State::new(dirs, StateMonitor::make_root()).await;
-                    let state = Arc::new(state);
-                    let handler = Handler::new(state);
+async fn connect(path: &Path, dirs: &Dirs) -> io::Result<Client> {
+    match LocalClient::connect(path).await {
+        Ok(client) => Ok(Client::Local(client)),
+        Err(error) => match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                let state = State::init(dirs, StateMonitor::make_root()).await;
+                let handler = LocalHandler::new(state);
 
-                    Ok(Box::new(NativeClient::new(handler)))
-                }
-                _ => Err(error),
-            },
+                Ok(Client::Native(NativeClient::new(handler)))
+            }
+            _ => Err(error),
         },
-        HostAddr::Remote(addr) => Ok(Box::new(RemoteClient::connect(addr).await?)),
+    }
+}
+
+enum Client {
+    Local(LocalClient),
+    Native(NativeClient),
+}
+
+impl Client {
+    async fn invoke(&self, request: Request) -> ouisync_bridge::error::Result<Response> {
+        match self {
+            Self::Local(client) => client.invoke(request).await,
+            Self::Native(client) => client.invoke(request).await,
+        }
+    }
+
+    async fn close(&self) {
+        match self {
+            Self::Native(client) => client.close().await,
+            Self::Local(_) => (),
+        }
     }
 }
 

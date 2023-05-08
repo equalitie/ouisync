@@ -1,20 +1,15 @@
+mod remote;
 mod socket;
 
-pub use self::socket::{server_connection as socket_server_connection, SocketClient};
+pub use self::{
+    remote::{RemoteClient, RemoteServer},
+    socket::{server_connection as socket_server_connection, SocketClient},
+};
 
 use crate::{error::Result, protocol::Notification};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::mpsc;
-
-#[async_trait(?Send)]
-pub trait Client {
-    type Request;
-    type Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response>;
-    async fn close(&self) {}
-}
 
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {

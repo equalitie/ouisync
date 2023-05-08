@@ -26,9 +26,9 @@ interprocess = { version = "1.2.1", features = ["tokio_support"] }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
+scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
-tokio-tungstenite = "0.18.0"
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }

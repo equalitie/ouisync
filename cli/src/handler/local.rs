@@ -1,96 +1,23 @@
 use crate::{
-    options::{Dirs, Request, Response},
-    repository::{self, RepositoryHolder, RepositoryMap, RepositoryName, OPEN_ON_START},
+    protocol::{Request, Response},
+    repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
+    state::State,
 };
 use async_trait::async_trait;
-use camino::Utf8PathBuf;
-use futures_util::future;
 use ouisync_bridge::{
-    config::ConfigStore,
     error::{Error, Result},
-    network::{self, NetworkDefaults},
+    network,
     transport::NotificationSender,
 };
-use ouisync_lib::{network::Network, PeerAddr, ShareToken, StateMonitor};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::time;
-
-pub(crate) struct State {
-    config: ConfigStore,
-    store_dir: Utf8PathBuf,
-    mount_dir: Utf8PathBuf,
-    network: Network,
-    repositories: RepositoryMap,
-    repositories_monitor: StateMonitor,
-}
-
-impl State {
-    pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
-        let config = ConfigStore::new(&dirs.config_dir);
-
-        let network = Network::new(
-            Some(config.dht_contacts_store()),
-            monitor.make_child("Network"),
-        );
-
-        network::init(
-            &network,
-            &config,
-            NetworkDefaults {
-                port_forwarding_enabled: false,
-                local_discovery_enabled: false,
-            },
-        )
-        .await;
-
-        let repositories_monitor = monitor.make_child("Repositories");
-        let repositories =
-            repository::find_all(dirs, &network, &config, &repositories_monitor).await;
-
-        Self {
-            config,
-            store_dir: dirs.store_dir.clone(),
-            mount_dir: dirs.mount_dir.clone(),
-            network,
-            repositories,
-            repositories_monitor,
-        }
-    }
-
-    pub async fn close(&self) {
-        // Close repos
-        future::join_all(
-            self.repositories
-                .remove_all()
-                .into_iter()
-                .map(|holder| async move {
-                    if let Err(error) = holder.repository.close().await {
-                        tracing::error!(
-                            name = %holder.name(),
-                            ?error,
-                            "failed to gracefully close repository"
-                        );
-                    }
-                }),
-        )
-        .await;
-
-        time::timeout(Duration::from_secs(1), self.network.shutdown())
-            .await
-            .ok();
-    }
-
-    fn store_path(&self, name: &str) -> Utf8PathBuf {
-        repository::store_path(&self.store_dir, name)
-    }
-}
+use ouisync_lib::{PeerAddr, ShareToken};
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
-pub(crate) struct Handler {
+pub(crate) struct LocalHandler {
     state: Arc<State>,
 }
 
-impl Handler {
+impl LocalHandler {
     pub fn new(state: Arc<State>) -> Self {
         Self { state }
     }
@@ -101,7 +28,7 @@ impl Handler {
 }
 
 #[async_trait]
-impl ouisync_bridge::transport::Handler for Handler {
+impl ouisync_bridge::transport::Handler for LocalHandler {
     type Request = Request;
     type Response = Response;
 
@@ -113,7 +40,13 @@ impl ouisync_bridge::transport::Handler for Handler {
         tracing::debug!(?request);
 
         match request {
-            Request::Serve => Err(Error::ForbiddenRequest),
+            Request::Start => Err(Error::ForbiddenRequest),
+            Request::BindRpc { addrs } => Ok(self
+                .state
+                .servers
+                .set(&addrs, self.state.clone())
+                .await
+                .into()),
             Request::Create {
                 name,
                 share_token,
@@ -153,13 +86,22 @@ impl ouisync_bridge::transport::Handler for Handler {
                 )
                 .await?;
 
-                repository.metadata().set(OPEN_ON_START, true).await.ok();
+                let holder =
+                    RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
+                let holder = Arc::new(holder);
+
+                if !self.state.repositories.try_insert(holder.clone()) {
+                    Err(ouisync_lib::Error::EntryExists)?;
+                }
+
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, true)
+                    .await
+                    .ok();
 
                 tracing::info!(%name, "repository created");
-
-                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
-                let holder = Arc::new(holder);
-                self.state.repositories.insert(holder);
 
                 Ok(().into())
             }
@@ -189,15 +131,22 @@ impl ouisync_bridge::transport::Handler for Handler {
                 )
                 .await?;
 
-                repository.metadata().set(OPEN_ON_START, true).await.ok();
+                let holder =
+                    RepositoryHolder::new(repository, name.clone(), &self.state.network).await;
+                let holder = Arc::new(holder);
+                if !self.state.repositories.try_insert(holder.clone()) {
+                    Err(ouisync_lib::Error::EntryExists)?;
+                }
 
                 tracing::info!(%name, "repository opened");
 
-                let holder = RepositoryHolder::new(repository, name, &self.state.network).await;
-                let holder = Arc::new(holder);
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, true)
+                    .await
+                    .ok();
                 holder.mount(&self.state.mount_dir).await.ok();
-
-                self.state.repositories.insert(holder);
 
                 Ok(().into())
             }
@@ -273,6 +222,16 @@ impl ouisync_bridge::transport::Handler for Handler {
                         holder.unmount().await;
                     }
                 }
+
+                Ok(().into())
+            }
+            Request::Mirror { name, host } => {
+                let holder = self
+                    .state
+                    .repositories
+                    .get(&name)
+                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                holder.mirror(&host).await?;
 
                 Ok(().into())
             }

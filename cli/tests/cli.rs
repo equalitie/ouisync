@@ -339,6 +339,49 @@ fn check_concurrent_versions(file_path: &Path, expected_contents: &[&[u8]]) -> R
     Ok(())
 }
 
+// This test is similar to the `relay` test but using a "mirror server" for the relay node instead
+// of a regular peer.
+#[test]
+fn mirror() {
+    // mirror server
+    let m = Bin::start();
+    m.bind();
+    let m_sync_port = m.get_port();
+    let m_rpc_port = m.bind_rpc();
+
+    let a = Bin::start();
+    a.add_peer(m_sync_port);
+    a.create(None);
+    let share_token = a.share();
+    a.mount();
+
+    let b = Bin::start();
+    b.add_peer(m_sync_port);
+    b.create(Some(&share_token));
+    b.mount();
+
+    a.mirror(m_rpc_port);
+
+    let file_name = "test.dat";
+    let size = 1024;
+
+    // Create the file by A
+    {
+        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut dst = File::create(a.root().join(file_name)).unwrap();
+        io::copy(&mut src, &mut dst).unwrap();
+    }
+
+    // Wait until it's fully received by B
+    eventually(|| {
+        let mut src = File::open(b.root().join(file_name))?;
+        let mut dst = CountWrite(0);
+        io::copy(&mut src, &mut dst)?;
+
+        check_eq(dst.0, size)
+    });
+}
+
 fn setup() -> (Bin, Bin) {
     let a = Bin::start();
     a.bind();

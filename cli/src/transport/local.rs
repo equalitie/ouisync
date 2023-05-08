@@ -1,17 +1,16 @@
 //! Client and Server than run in different processes on the same device.
 
 use crate::{
-    handler::Handler,
-    options::{Request, Response},
+    handler::local::LocalHandler,
+    protocol::{Request, Response},
 };
-use async_trait::async_trait;
 use interprocess::local_socket::{
     tokio::{LocalSocketListener, LocalSocketStream},
     ToLocalSocketName,
 };
 use ouisync_bridge::{
     error::Result,
-    transport::{socket_server_connection, Client, SocketClient},
+    transport::{socket_server_connection, SocketClient},
 };
 use std::{fs, io, path::PathBuf};
 use tokio::task::JoinSet;
@@ -27,21 +26,24 @@ pub(crate) struct LocalServer {
 
 impl LocalServer {
     pub fn bind<'a>(name: impl ToLocalSocketName<'a> + Clone) -> io::Result<Self> {
-        let path = {
-            let name = name.clone().to_local_socket_name()?;
-            if name.is_path() {
-                Some(name.into_inner().into())
-            } else {
-                None
-            }
+        let listener = LocalSocketListener::bind(name.clone())?;
+
+        let name = name.to_local_socket_name()?;
+        let path = if name.is_path() {
+            Some(name.inner().into())
+        } else {
+            None
         };
 
-        let listener = LocalSocketListener::bind(name)?;
+        tracing::info!(
+            "local API server listening on {}",
+            name.inner().to_string_lossy()
+        );
 
         Ok(Self { listener, path })
     }
 
-    pub async fn run(self, handler: Handler) {
+    pub async fn run(self, handler: LocalHandler) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -82,14 +84,8 @@ impl LocalClient {
             inner: SocketClient::new(socket),
         })
     }
-}
 
-#[async_trait(?Send)]
-impl Client for LocalClient {
-    type Request = Request;
-    type Response = Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response> {
         self.inner.invoke(request).await
     }
 }

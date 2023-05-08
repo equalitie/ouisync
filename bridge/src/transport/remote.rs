@@ -1,19 +1,12 @@
 //! Client and Server than run on different devices.
 
-// TODO: remove this attr once we actually use this
-#![allow(unused)]
-
+use super::{socket_server_connection, Handler, SocketClient};
 use crate::{
-    handler::Handler,
-    options::{Request, Response},
+    error::Result,
+    protocol::remote::{Request, Response},
 };
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use ouisync_bridge::{
-    error::Result,
-    transport::{socket_server_connection, Client, SocketClient},
-};
 use std::{
     io,
     net::SocketAddr,
@@ -32,25 +25,24 @@ use tokio_tungstenite::{
 
 // TODO: Implement TLS
 
-pub(crate) struct RemoteServer {
+pub struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
 }
 
 impl RemoteServer {
     pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr).await?;
+        let listener = TcpListener::bind(addr).await.map_err(|error| {
+            tracing::error!(?error, "failed to bind to {}", addr);
+            error
+        })?;
 
-        let local_addr = match listener.local_addr() {
-            Ok(addr) => {
-                tracing::debug!("server bound to {:?}", addr);
-                addr
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to retrieve server address");
-                return Err(error);
-            }
-        };
+        let local_addr = listener.local_addr().map_err(|error| {
+            tracing::error!(?error, "failed to retrieve local address");
+            error
+        })?;
+
+        tracing::info!("remote API server listening on {}", local_addr);
 
         Ok(Self {
             listener,
@@ -62,7 +54,7 @@ impl RemoteServer {
         self.local_addr
     }
 
-    pub async fn run(self, handler: Handler) {
+    pub async fn run<H: Handler>(self, handler: H) {
         let mut connections = JoinSet::new();
 
         loop {
@@ -94,7 +86,7 @@ impl RemoteServer {
     }
 }
 
-pub(crate) struct RemoteClient {
+pub struct RemoteClient {
     inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
@@ -108,14 +100,8 @@ impl RemoteClient {
 
         Ok(Self { inner })
     }
-}
 
-#[async_trait(?Send)]
-impl Client for RemoteClient {
-    type Request = Request;
-    type Response = Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response> {
         self.inner.invoke(request).await
     }
 }
@@ -134,11 +120,11 @@ where
                 Some(Ok(Message::Binary(payload))) => {
                     return Poll::Ready(Some(Ok(payload.into_iter().collect())));
                 }
+                Some(Ok(Message::Close(_))) => continue,
                 Some(Ok(
                     message @ (Message::Text(_)
                     | Message::Ping(_)
                     | Message::Pong(_)
-                    | Message::Close(_)
                     | Message::Frame(_)),
                 )) => {
                     tracing::debug!(?message, "unexpected message type");

@@ -1,6 +1,7 @@
 use super::{AccessMode, AccessSecrets, DecodeError};
 use crate::repository::RepositoryId;
 use bincode::Options;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     borrow::Cow,
     fmt,
@@ -140,6 +141,26 @@ impl fmt::Display for ShareToken {
         }
 
         Ok(())
+    }
+}
+
+impl Serialize for ShareToken {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_string().serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ShareToken {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <&str>::deserialize(d)?;
+        let v = s.parse().map_err(serde::de::Error::custom)?;
+        Ok(v)
     }
 }
 
