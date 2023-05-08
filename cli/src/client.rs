@@ -1,20 +1,18 @@
 use crate::{
     handler::local::LocalHandler,
-    host_addr::HostAddr,
     options::Dirs,
     protocol::{Request, Response},
     state::State,
-    transport::{local::LocalClient, native::NativeClient, remote::RemoteClient},
+    transport::{local::LocalClient, native::NativeClient},
 };
 use anyhow::Result;
 use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
-use std::io;
+use std::{io, path::Path};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub(crate) async fn run(dirs: Dirs, host: String, request: Request) -> Result<()> {
-    let host: HostAddr = host.parse()?;
-    let client = connect(host, &dirs).await?;
+pub(crate) async fn run(dirs: Dirs, socket: String, request: Request) -> Result<()> {
+    let client = connect(Path::new(&socket), &dirs).await?;
 
     let request = match request {
         Request::Create {
@@ -65,23 +63,20 @@ pub(crate) async fn run(dirs: Dirs, host: String, request: Request) -> Result<()
 }
 
 async fn connect(
-    addr: HostAddr,
+    path: &Path,
     dirs: &Dirs,
 ) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
-    match addr {
-        HostAddr::Local(path) => match LocalClient::connect(path).await {
-            Ok(client) => Ok(Box::new(client)),
-            Err(error) => match error.kind() {
-                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let state = State::init(dirs, StateMonitor::make_root()).await;
-                    let handler = LocalHandler::new(state);
+    match LocalClient::connect(path).await {
+        Ok(client) => Ok(Box::new(client)),
+        Err(error) => match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                let state = State::init(dirs, StateMonitor::make_root()).await;
+                let handler = LocalHandler::new(state);
 
-                    Ok(Box::new(NativeClient::new(handler)))
-                }
-                _ => Err(error),
-            },
+                Ok(Box::new(NativeClient::new(handler)))
+            }
+            _ => Err(error),
         },
-        HostAddr::Remote(addr) => Ok(Box::new(RemoteClient::connect(addr).await?)),
     }
 }
 

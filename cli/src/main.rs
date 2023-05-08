@@ -1,6 +1,5 @@
 mod client;
 mod handler;
-mod host_addr;
 mod options;
 mod protocol;
 mod repository;
@@ -22,8 +21,8 @@ async fn main() -> Result<()> {
     let options = Options::parse();
 
     if let Request::Start = &options.request {
-        server::run(options.dirs, options.host).await
+        server::run(options.dirs, options.socket).await
     } else {
-        client::run(options.dirs, options.host, options.request).await
+        client::run(options.dirs, options.socket, options.request).await
     }
 }

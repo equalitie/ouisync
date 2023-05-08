@@ -9,9 +9,10 @@ pub(crate) struct Options {
     #[command(flatten)]
     pub dirs: Dirs,
 
-    /// Host socket to connect to (if client) or to bind to (if server)
-    #[arg(short = 'H', long, default_value_t = default_host(), value_name = "ADDR")]
-    pub host: String,
+    /// Local socket (unix domain socket or windows named pipe) to connect to (if client) or to
+    /// bind to (if server)
+    #[arg(short, long, default_value_t = default_socket(), value_name = "PATH")]
+    pub socket: String,
 
     #[command(subcommand)]
     pub request: Request,
@@ -67,7 +68,7 @@ fn socket_dir() -> PathBuf {
 }
 
 #[cfg(target_os = "linux")]
-fn default_host() -> String {
+fn default_socket() -> String {
     socket_dir()
         .join(APP_NAME)
         .with_extension("sock")
@@ -77,6 +78,6 @@ fn default_host() -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn default_host() -> String {
+fn default_socket() -> String {
     format!(r"\\.\pipe\{APP_NAME}")
 }

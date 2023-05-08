@@ -16,12 +16,12 @@ use std::{
 };
 use tokio::task;
 
-pub(crate) async fn run(dirs: Dirs, host: String) -> Result<()> {
+pub(crate) async fn run(dirs: Dirs, socket: String) -> Result<()> {
     let monitor = StateMonitor::make_root();
     let _logger = logger::new(Some(monitor.clone()));
 
     let state = State::init(&dirs, monitor).await;
-    let server = LocalServer::bind(Path::new(&host))?;
+    let server = LocalServer::bind(Path::new(&socket))?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 
     terminated().await?;
