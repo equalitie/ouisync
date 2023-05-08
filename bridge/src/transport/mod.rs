@@ -7,15 +7,6 @@ use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::mpsc;
 
-#[async_trait(?Send)]
-pub trait Client {
-    type Request;
-    type Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response>;
-    async fn close(&self) {}
-}
-
 #[async_trait]
 pub trait Handler: Clone + Send + Sync + 'static {
     type Request: DeserializeOwned + Send;

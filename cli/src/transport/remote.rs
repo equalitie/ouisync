@@ -4,12 +4,11 @@ use crate::{
     handler::remote::RemoteHandler,
     protocol::{Request, Response},
 };
-use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use ouisync_bridge::{
     error::Result,
-    transport::{socket_server_connection, Client, SocketClient},
+    transport::{socket_server_connection, SocketClient},
 };
 use std::{
     io,
@@ -104,14 +103,8 @@ impl RemoteClient {
 
         Ok(Self { inner })
     }
-}
 
-#[async_trait(?Send)]
-impl Client for RemoteClient {
-    type Request = Request;
-    type Response = Response;
-
-    async fn invoke(&self, request: Self::Request) -> Result<Self::Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response> {
         self.inner.invoke(request).await
     }
 }

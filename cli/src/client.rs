@@ -6,7 +6,6 @@ use crate::{
     transport::{local::LocalClient, native::NativeClient},
 };
 use anyhow::Result;
-use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
 use std::{io, path::Path};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -62,21 +61,39 @@ pub(crate) async fn run(dirs: Dirs, socket: String, request: Request) -> Result<
     Ok(())
 }
 
-async fn connect(
-    path: &Path,
-    dirs: &Dirs,
-) -> io::Result<Box<dyn Client<Request = Request, Response = Response>>> {
+async fn connect(path: &Path, dirs: &Dirs) -> io::Result<Client> {
     match LocalClient::connect(path).await {
-        Ok(client) => Ok(Box::new(client)),
+        Ok(client) => Ok(Client::Local(client)),
         Err(error) => match error.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                 let state = State::init(dirs, StateMonitor::make_root()).await;
                 let handler = LocalHandler::new(state);
 
-                Ok(Box::new(NativeClient::new(handler)))
+                Ok(Client::Native(NativeClient::new(handler)))
             }
             _ => Err(error),
         },
+    }
+}
+
+enum Client {
+    Local(LocalClient),
+    Native(NativeClient),
+}
+
+impl Client {
+    async fn invoke(&self, request: Request) -> ouisync_bridge::error::Result<Response> {
+        match self {
+            Self::Local(client) => client.invoke(request).await,
+            Self::Native(client) => client.invoke(request).await,
+        }
+    }
+
+    async fn close(&self) {
+        match self {
+            Self::Native(client) => client.close().await,
+            Self::Local(_) => (),
+        }
     }
 }
 
