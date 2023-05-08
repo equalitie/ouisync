@@ -63,31 +63,29 @@ impl State {
     }
 
     pub async fn close(&self) {
-        // TODO: run this in the destructor (in a spawned task) instead
-
         // Kill remote servers
         self.servers.close();
 
         // Close repos
-        future::join_all(
-            self.repositories
-                .remove_all()
-                .into_iter()
-                .map(|holder| async move {
-                    if let Err(error) = holder.repository.close().await {
-                        tracing::error!(
-                            name = %holder.name(),
-                            ?error,
-                            "failed to gracefully close repository"
-                        );
-                    }
-                }),
-        )
-        .await;
+        let close_repositories = future::join_all(self.repositories.remove_all().into_iter().map(
+            |holder| async move {
+                if let Err(error) = holder.repository.close().await {
+                    tracing::error!(
+                        name = %holder.name(),
+                        ?error,
+                        "failed to gracefully close repository"
+                    );
+                }
+            },
+        ));
 
-        time::timeout(Duration::from_secs(1), self.network.shutdown())
-            .await
-            .ok();
+        let shutdown_network = async move {
+            time::timeout(Duration::from_secs(1), self.network.shutdown())
+                .await
+                .ok();
+        };
+
+        future::join(close_repositories, shutdown_network).await;
     }
 
     pub fn store_path(&self, name: &str) -> Utf8PathBuf {
