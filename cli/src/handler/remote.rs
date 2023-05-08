@@ -75,17 +75,24 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 )
                 .await?;
 
-                repository.metadata().set(OPEN_ON_START, true).await.ok();
-
                 tracing::info!(%name, "repository created");
 
                 let holder = RepositoryHolder::new(repository, name, &state.network).await;
                 let holder = Arc::new(holder);
 
-                // Mirror is idempotent - ignore when already exists
-                state.repositories.try_insert(holder);
+                // Mirror is idempotent
+                if !state.repositories.try_insert(holder.clone()) {
+                    return Ok(().into());
+                }
 
-                // TODO: enable DHT, PEX
+                holder
+                    .repository
+                    .metadata()
+                    .set(OPEN_ON_START, true)
+                    .await
+                    .ok();
+                holder.registration.set_dht_enabled(true).await;
+                holder.registration.set_pex_enabled(true).await;
 
                 Ok(().into())
             }
