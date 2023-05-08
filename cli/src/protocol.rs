@@ -104,7 +104,7 @@ pub(crate) enum Request {
         name: String,
 
         /// Domain name or network address of the server to host the mirror
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         host: String,
     },
     /// Bind the sync protocol to the specified addresses
