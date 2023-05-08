@@ -7,7 +7,7 @@ mod common;
 
 use self::common::{actor, Env, Proto, DEFAULT_REPO, TEST_TIMEOUT};
 use ouisync::network::{Network, PeerState};
-use std::{net::Ipv4Addr, sync::Arc};
+use std::sync::Arc;
 use tokio::{sync::Barrier, time};
 
 // This test requires QUIC which is not yet supported in simulation
@@ -90,16 +90,14 @@ fn local_discovery() {
     // The peers are initially disconnected and don't know each other's socket addesses.
     // They eventually discover each other via local discovery.
 
-    for (src_port, dst_port) in [(7001, 7002), (7002, 7001)] {
+    for (src, dst) in [("alice", "bob"), ("bob", "alice")] {
         let barrier = barrier.clone();
 
-        env.actor(&format!("node-{src_port}"), async move {
-            let network = actor::create_unbound_network();
-            network
-                .bind(&[proto.wrap((Ipv4Addr::LOCALHOST, src_port))])
-                .await;
-
+        env.actor(src, async move {
+            let network = actor::create_network(proto).await;
             network.set_local_discovery_enabled(true);
+
+            let dst_port = actor::lookup_addr(dst).await.port();
 
             // Note we compare only the ports because we bind to `LOCALHOST` (127.0.0.1) but local
             // discovery produces the actual LAN addresses which we don't know in advance (or
