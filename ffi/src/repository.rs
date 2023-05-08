@@ -6,9 +6,12 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::{
     constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
     error::Result,
-    protocol::Notification,
+    protocol::{
+        remote::{Request, Response},
+        Notification,
+    },
     repository,
-    transport::NotificationSender,
+    transport::{NotificationSender, RemoteClient},
 };
 use ouisync_lib::{
     network::{self, Registration},
@@ -335,6 +338,28 @@ pub(crate) async fn sync_progress(
         .repository
         .sync_progress()
         .await?)
+}
+
+/// Mirror the repository to the specified server
+pub(crate) async fn mirror(
+    state: &State,
+    handle: Handle<RepositoryHolder>,
+    host: String,
+) -> Result<()> {
+    let holder = state.repositories.get(handle);
+    let share_token = holder
+        .repository
+        .secrets()
+        .with_mode(AccessMode::Blind)
+        .into();
+
+    let client = RemoteClient::connect(host).await?;
+    let request = Request::Mirror { share_token };
+    let response = client.invoke(request).await?;
+
+    match response {
+        Response::None => Ok(()),
+    }
 }
 
 pub(crate) fn entry_type_to_num(entry_type: EntryType) -> u8 {

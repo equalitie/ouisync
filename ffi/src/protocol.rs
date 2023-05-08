@@ -78,6 +78,10 @@ pub(crate) enum Request {
     },
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
+    RepositoryMirror {
+        repository: Handle<RepositoryHolder>,
+        host: String,
+    },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
