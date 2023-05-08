@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    /// Create repository on a remote server
-    Create {
+    /// Mirror repository on a remote server
+    Mirror {
         // TODO: change type to ShareToken
         share_token: String,
     },

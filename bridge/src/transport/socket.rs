@@ -142,6 +142,11 @@ where
                 response = receive(&mut self.socket) => self.handle_server_message(response).await,
             }
         }
+
+        match self.socket.close().await {
+            Ok(()) => tracing::debug!("client closed"),
+            Err(error) => tracing::error!(?error, "failed to close client"),
+        }
     }
 
     async fn handle_request(
@@ -149,7 +154,6 @@ where
         request: Option<(Request, oneshot::Sender<Result<Response>>)>,
     ) {
         let Some((request, response_tx)) = request else {
-            tracing::debug!("client closed");
             self.running = false;
             return;
         };

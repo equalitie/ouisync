@@ -4,7 +4,6 @@ use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     protocol::remote::{Request, Response},
-    transport::Client,
 };
 use ouisync_lib::{
     network::{Network, Registration},
@@ -210,7 +209,7 @@ impl RepositoryHolder {
             .secrets()
             .with_mode(AccessMode::Blind)
             .into();
-        let request = Request::Create {
+        let request = Request::Mirror {
             share_token: share_token.to_string(),
         };
         let response = client.invoke(request).await?;

@@ -43,10 +43,10 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
         };
 
         match request {
-            Request::Create { share_token } => {
+            Request::Mirror { share_token } => {
                 let share_token: ShareToken =
                     share_token.parse().map_err(|_| Error::InvalidArgument)?;
-                // We support remote creation of blind replicas only.
+                // Mirroring is supported for blind replicas only.
                 let share_token: ShareToken = share_token
                     .into_secrets()
                     .with_mode(AccessMode::Blind)
@@ -59,6 +59,11 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 // unwrap ok because the name is just a string of hexadecimal digits which is
                 // always a valid name.
                 let name = RepositoryName::try_from(name).unwrap();
+
+                // Mirror is idempotent
+                if state.repositories.contains(&name) {
+                    return Ok(().into());
+                }
 
                 let store_path = state.store_path(name.as_ref());
 
@@ -78,6 +83,8 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
 
                 let holder = RepositoryHolder::new(repository, name, &state.network).await;
                 let holder = Arc::new(holder);
+
+                // TODO: insert only if not exists
                 state.repositories.insert(holder);
 
                 // TODO: enable DHT, PEX
