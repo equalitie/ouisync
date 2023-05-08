@@ -1,12 +1,14 @@
-use crate::{options::Dirs, utils, DB_EXTENSION};
+use crate::{options::Dirs, transport::remote::RemoteClient, utils, DB_EXTENSION};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
+    protocol::remote::{Request, Response},
+    transport::Client,
 };
 use ouisync_lib::{
     network::{Network, Registration},
-    Repository, StateMonitor,
+    AccessMode, Repository, ShareToken, StateMonitor,
 };
 use ouisync_vfs::MountGuard;
 use std::{
@@ -198,6 +200,24 @@ impl RepositoryHolder {
 
     pub fn is_mounted(&self) -> bool {
         self.mount.lock().unwrap().is_some()
+    }
+
+    /// Create a mirror of the repository on the given remote host.
+    pub async fn mirror(&self, host: &str) -> Result<()> {
+        let client = RemoteClient::connect(host).await?;
+        let share_token: ShareToken = self
+            .repository
+            .secrets()
+            .with_mode(AccessMode::Blind)
+            .into();
+        let request = Request::Create {
+            share_token: share_token.to_string(),
+        };
+        let response = client.invoke(request).await?;
+
+        match response {
+            Response::None => Ok(()),
+        }
     }
 
     fn resolve_mount_point(&self, mount_point: String, mount_dir: &Utf8Path) -> Utf8PathBuf {

@@ -97,6 +97,16 @@ pub(crate) enum Request {
         #[arg(short, long)]
         all: bool,
     },
+    /// Mirror repository
+    Mirror {
+        /// Name of the repository to mirror
+        #[arg(short, long)]
+        name: String,
+
+        /// Domain name or network address of the server to host the mirror
+        #[arg(short, long)]
+        host: String,
+    },
     /// Bind the sync protocol to the specified addresses
     Bind {
         /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and

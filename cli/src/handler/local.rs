@@ -209,6 +209,16 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
+            Request::Mirror { name, host } => {
+                let holder = self
+                    .state
+                    .repositories
+                    .get(&name)
+                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                holder.mirror(&host).await?;
+
+                Ok(().into())
+            }
             Request::Bind { addrs } => {
                 network::bind(&self.state.network, &self.state.config, &addrs).await;
                 Ok(().into())

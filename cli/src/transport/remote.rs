@@ -1,13 +1,11 @@
 //! Client and Server than run on different devices.
 
-use crate::{
-    handler::remote::RemoteHandler,
-    protocol::{Request, Response},
-};
+use crate::handler::remote::RemoteHandler;
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use ouisync_bridge::{
     error::Result,
+    protocol::remote::{Request, Response},
     transport::{socket_server_connection, SocketClient},
 };
 use std::{
