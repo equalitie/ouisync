@@ -1,8 +1,7 @@
 use crate::{
-    handler::RemoteHandler,
     options::Dirs,
     repository::{self, RepositoryMap},
-    transport::remote::RemoteServer,
+    server::ServerContainer,
 };
 use camino::Utf8PathBuf;
 use futures_util::future;
@@ -11,13 +10,8 @@ use ouisync_bridge::{
     network::{self, NetworkDefaults},
 };
 use ouisync_lib::{network::Network, StateMonitor};
-use scoped_task::ScopedAbortHandle;
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-use tokio::{task, time};
+use std::{sync::Arc, time::Duration};
+use tokio::time;
 
 pub(crate) struct State {
     pub config: ConfigStore,
@@ -30,7 +24,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub async fn new(dirs: &Dirs, monitor: StateMonitor) -> Self {
+    pub async fn init(dirs: &Dirs, monitor: StateMonitor) -> Arc<Self> {
         let config = ConfigStore::new(&dirs.config_dir);
 
         let network = Network::new(
@@ -52,7 +46,7 @@ impl State {
         let repositories =
             repository::find_all(dirs, &network, &config, &repositories_monitor).await;
 
-        Self {
+        let state = Self {
             config,
             store_dir: dirs.store_dir.clone(),
             mount_dir: dirs.mount_dir.clone(),
@@ -60,14 +54,19 @@ impl State {
             repositories,
             repositories_monitor,
             servers: ServerContainer::new(),
-        }
+        };
+        let state = Arc::new(state);
+
+        state.servers.init(state.clone()).await;
+
+        state
     }
 
     pub async fn close(&self) {
         // TODO: run this in the destructor (in a spawned task) instead
 
         // Kill remote servers
-        self.servers.clear();
+        self.servers.close();
 
         // Close repos
         future::join_all(
@@ -93,42 +92,5 @@ impl State {
 
     pub fn store_path(&self, name: &str) -> Utf8PathBuf {
         repository::store_path(&self.store_dir, name)
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ServerContainer {
-    inner: Mutex<Vec<ScopedAbortHandle>>,
-}
-
-impl ServerContainer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn set(&self, addrs: Vec<SocketAddr>, state: Arc<State>) -> Vec<SocketAddr> {
-        let mut handles = Vec::with_capacity(addrs.len());
-        let mut local_addrs = Vec::with_capacity(addrs.len());
-
-        for addr in addrs {
-            let Ok(server) = RemoteServer::bind(addr).await else {
-                continue;
-            };
-
-            local_addrs.push(server.local_addr());
-            handles.push(
-                task::spawn(server.run(RemoteHandler::new(state.clone())))
-                    .abort_handle()
-                    .into(),
-            );
-        }
-
-        *self.inner.lock().unwrap() = handles;
-
-        local_addrs
-    }
-
-    pub fn clear(&self) {
-        self.inner.lock().unwrap().clear();
     }
 }

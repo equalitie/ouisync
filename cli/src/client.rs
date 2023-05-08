@@ -9,7 +9,7 @@ use crate::{
 use anyhow::Result;
 use ouisync_bridge::transport::Client;
 use ouisync_lib::StateMonitor;
-use std::{io, sync::Arc};
+use std::io;
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub(crate) async fn run(dirs: Dirs, host: String, request: Request) -> Result<()> {
@@ -73,8 +73,7 @@ async fn connect(
             Ok(client) => Ok(Box::new(client)),
             Err(error) => match error.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                    let state = State::new(dirs, StateMonitor::make_root()).await;
-                    let state = Arc::new(state);
+                    let state = State::init(dirs, StateMonitor::make_root()).await;
                     let handler = LocalHandler::new(state);
 
                     Ok(Box::new(NativeClient::new(handler)))

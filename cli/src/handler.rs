@@ -47,7 +47,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             Request::BindRpc { addrs } => Ok(self
                 .state
                 .servers
-                .set(addrs, self.state.clone())
+                .set(&addrs, self.state.clone())
                 .await
                 .into()),
             Request::Create {
