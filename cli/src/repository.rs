@@ -203,7 +203,14 @@ impl RepositoryHolder {
 
     /// Create a mirror of the repository on the given remote host.
     pub async fn mirror(&self, host: &str) -> Result<()> {
-        let client = RemoteClient::connect(host).await?;
+        // TODO: use wss:// only
+        let host = if host.contains("://") {
+            Cow::Borrowed(host)
+        } else {
+            Cow::Owned(format!("ws://{host}"))
+        };
+
+        let client = RemoteClient::connect(host.as_ref()).await?;
         let request = Request::Mirror {
             share_token: self
                 .repository

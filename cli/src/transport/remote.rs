@@ -121,11 +121,11 @@ where
                 Some(Ok(Message::Binary(payload))) => {
                     return Poll::Ready(Some(Ok(payload.into_iter().collect())));
                 }
+                Some(Ok(Message::Close(_))) => continue,
                 Some(Ok(
                     message @ (Message::Text(_)
                     | Message::Ping(_)
                     | Message::Pong(_)
-                    | Message::Close(_)
                     | Message::Frame(_)),
                 )) => {
                     tracing::debug!(?message, "unexpected message type");
