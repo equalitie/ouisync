@@ -36,6 +36,7 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 tracing = { workspace = true }
 walkdir = "2.3.3"
+webpki-roots = "0.22.6"
 
 [dev-dependencies]
 backoff = "0.4.0"

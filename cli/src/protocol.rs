@@ -105,11 +105,6 @@ pub(crate) enum Request {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
-
-        /// Path(s) to pem-encoded root certificates to use for TLS. If omitted, uses the default
-        /// certificates.
-        #[arg(long)]
-        root_certificates: Vec<PathBuf>,
     },
     /// Bind the sync protocol to the specified addresses
     Bind {

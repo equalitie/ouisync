@@ -2,7 +2,6 @@ use crate::{
     protocol::{Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
-    transport::tls,
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
@@ -11,8 +10,7 @@ use ouisync_bridge::{
     transport::NotificationSender,
 };
 use ouisync_lib::{PeerAddr, ShareToken};
-use rustls::{ClientConfig, RootCertStore};
-use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -232,22 +230,13 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
-            Request::Mirror {
-                name,
-                host,
-                root_certificates,
-            } => {
+            Request::Mirror { name, host } => {
                 let holder = self
                     .state
                     .repositories
                     .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
-
-                let config = if root_certificates.is_empty() {
-                    None
-                } else {
-                    Some(make_client_config(root_certificates).await?)
-                };
+                let config = self.state.get_tls_client_config().await?;
 
                 holder.mirror(&host, config).await?;
 
@@ -358,25 +347,4 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
         }
     }
-}
-
-async fn make_client_config(root_cert_paths: Vec<PathBuf>) -> Result<Arc<ClientConfig>> {
-    let mut root_cert_store = RootCertStore::empty();
-
-    for path in root_cert_paths {
-        let certs = tls::load_certificates(path).await?;
-
-        for cert in certs {
-            root_cert_store
-                .add(&cert)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        }
-    }
-
-    let config = ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(root_cert_store)
-        .with_no_client_auth();
-
-    Ok(Arc::new(config))
 }

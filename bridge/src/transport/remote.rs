@@ -8,6 +8,7 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
+    borrow::Cow,
     io::{self, IoSlice},
     net::SocketAddr,
     pin::Pin,
@@ -24,7 +25,7 @@ use tokio_rustls::{
     TlsAcceptor,
 };
 use tokio_tungstenite::{
-    tungstenite::{self, client::IntoClientRequest, Message},
+    tungstenite::{self, Message},
     Connector, WebSocketStream,
 };
 use tracing::Instrument;
@@ -119,15 +120,20 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    pub async fn connect(
-        request: impl IntoClientRequest + Unpin,
-        config: Option<Arc<ClientConfig>>,
-    ) -> io::Result<Self> {
-        let connector = config.map(Connector::Rustls);
-        let (stream, _) =
-            tokio_tungstenite::connect_async_tls_with_config(request, None, connector)
-                .await
-                .map_err(into_io_error)?;
+    pub async fn connect(host: &str, config: Arc<ClientConfig>) -> io::Result<Self> {
+        let host = if host.contains("://") {
+            Cow::Borrowed(host)
+        } else {
+            Cow::Owned(format!("wss://{host}"))
+        };
+
+        let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
+            host.as_ref(),
+            None,
+            Some(Connector::Rustls(config)),
+        )
+        .await
+        .map_err(into_io_error)?;
         let inner = SocketClient::new(Socket(stream));
 
         Ok(Self { inner })

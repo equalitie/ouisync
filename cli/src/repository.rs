@@ -218,14 +218,8 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str, config: Option<Arc<ClientConfig>>) -> Result<()> {
-        let host = if host.contains("://") {
-            Cow::Borrowed(host)
-        } else {
-            Cow::Owned(format!("wss://{host}"))
-        };
-
-        let client = RemoteClient::connect(host.as_ref(), config).await?;
+    pub async fn mirror(&self, host: &str, config: Arc<ClientConfig>) -> Result<()> {
+        let client = RemoteClient::connect(host, config).await?;
         let request = Request::Mirror {
             share_token: self
                 .repository
@@ -389,8 +383,13 @@ pub(crate) async fn find_all(
     config: &ConfigStore,
     monitor: &StateMonitor,
 ) -> RepositoryMap {
-    let mut walkdir = utils::walk_dir(&dirs.store_dir);
     let repositories = RepositoryMap::new();
+
+    if !fs::try_exists(&dirs.store_dir).await.unwrap_or(false) {
+        return repositories;
+    }
+
+    let mut walkdir = utils::walk_dir(&dirs.store_dir);
 
     while let Some(entry) = walkdir.next().await {
         let entry = match entry {

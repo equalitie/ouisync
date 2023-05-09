@@ -11,7 +11,7 @@ use ouisync_bridge::{
     network::{self, NetworkDefaults},
 };
 use ouisync_lib::{network::Network, StateMonitor};
-use rustls::ServerConfig;
+use rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore, ServerConfig};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -29,6 +29,7 @@ pub(crate) struct State {
     pub repositories_monitor: StateMonitor,
     pub servers: ServerContainer,
     pub tls_server_config: OnceCell<Option<Arc<ServerConfig>>>,
+    pub tls_client_config: OnceCell<Arc<ClientConfig>>,
 }
 
 impl State {
@@ -63,6 +64,7 @@ impl State {
             repositories_monitor,
             servers: ServerContainer::new(),
             tls_server_config: OnceCell::new(),
+            tls_client_config: OnceCell::new(),
         };
         let state = Arc::new(state);
 
@@ -107,6 +109,13 @@ impl State {
             .await
             .map(|config| config.as_ref().cloned())
     }
+
+    pub async fn get_tls_client_config(&self) -> Result<Arc<ClientConfig>> {
+        self.tls_client_config
+            .get_or_try_init(|| make_tls_client_config(self.config.dir()))
+            .await
+            .cloned()
+    }
 }
 
 async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerConfig>>> {
@@ -147,4 +156,58 @@ async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerCo
     tracing::info!("TLS enabled");
 
     Ok(Some(Arc::new(config)))
+}
+
+async fn make_tls_client_config(config_dir: &Path) -> Result<Arc<ClientConfig>> {
+    let mut root_cert_store = RootCertStore::empty();
+
+    // Add default certificates
+    root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
+
+    // Add custom root certificates (if any)
+    for cert in load_certificates(&config_dir.join("root_certs")).await? {
+        root_cert_store
+            .add(&cert)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    }
+
+    let config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    Ok(Arc::new(config))
+}
+
+async fn load_certificates(root_dir: &Path) -> Result<Vec<Certificate>> {
+    let mut read_dir = match fs::read_dir(root_dir).await {
+        Ok(read_dir) => read_dir,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+
+    let mut certs = Vec::new();
+
+    while let Some(entry) = read_dir.next_entry().await? {
+        if !entry.file_type().await?.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("pem" | "crt") => (),
+            Some(_) | None => continue,
+        }
+
+        certs.extend(tls::load_certificates(entry.path()).await?);
+    }
+
+    Ok(certs)
 }
