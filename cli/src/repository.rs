@@ -11,6 +11,7 @@ use ouisync_lib::{
     AccessMode, Repository, StateMonitor,
 };
 use ouisync_vfs::MountGuard;
+use rustls::ClientConfig;
 use std::{
     borrow::{Borrow, Cow},
     collections::{hash_map::Entry, HashMap},
@@ -217,15 +218,14 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str) -> Result<()> {
-        // TODO: use wss:// only
+    pub async fn mirror(&self, host: &str, config: Option<Arc<ClientConfig>>) -> Result<()> {
         let host = if host.contains("://") {
             Cow::Borrowed(host)
         } else {
-            Cow::Owned(format!("ws://{host}"))
+            Cow::Owned(format!("wss://{host}"))
         };
 
-        let client = RemoteClient::connect(host.as_ref()).await?;
+        let client = RemoteClient::connect(host.as_ref(), config).await?;
         let request = Request::Mirror {
             share_token: self
                 .repository

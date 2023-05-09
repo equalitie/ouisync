@@ -27,6 +27,8 @@ once_cell = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
+pem = "2.0.1"
+rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }

@@ -2,6 +2,7 @@ use crate::{
     protocol::{Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
+    transport::tls,
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
@@ -10,7 +11,8 @@ use ouisync_bridge::{
     transport::NotificationSender,
 };
 use ouisync_lib::{PeerAddr, ShareToken};
-use std::{net::SocketAddr, sync::Arc};
+use rustls::{ClientConfig, RootCertStore};
+use std::{io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -45,7 +47,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .state
                 .servers
                 .set(&addrs, self.state.clone())
-                .await
+                .await?
                 .into()),
             Request::Create {
                 name,
@@ -194,7 +196,12 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                         .get(&name)
                         .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                    let mount_point = path.as_ref().map(|path| path.as_str()).unwrap_or_default();
+                    let mount_point = if let Some(path) = &path {
+                        path.to_str().ok_or(Error::InvalidArgument)?
+                    } else {
+                        ""
+                    };
+
                     holder.set_mount_point(Some(mount_point)).await;
                     holder.mount(&self.state.mount_dir).await?;
                 } else {
@@ -225,13 +232,24 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
-            Request::Mirror { name, host } => {
+            Request::Mirror {
+                name,
+                host,
+                root_certificates,
+            } => {
                 let holder = self
                     .state
                     .repositories
                     .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
-                holder.mirror(&host).await?;
+
+                let config = if root_certificates.is_empty() {
+                    None
+                } else {
+                    Some(make_client_config(root_certificates).await?)
+                };
+
+                holder.mirror(&host, config).await?;
 
                 Ok(().into())
             }
@@ -340,4 +358,25 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
         }
     }
+}
+
+async fn make_client_config(root_cert_paths: Vec<PathBuf>) -> Result<Arc<ClientConfig>> {
+    let mut root_cert_store = RootCertStore::empty();
+
+    for path in root_cert_paths {
+        let certs = tls::load_certificates(path).await?;
+
+        for cert in certs {
+            root_cert_store
+                .add(&cert)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        }
+    }
+
+    let config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+
+    Ok(Arc::new(config))
 }

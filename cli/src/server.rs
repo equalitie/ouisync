@@ -5,7 +5,7 @@ use crate::{
     transport::local::LocalServer,
 };
 use anyhow::Result;
-use ouisync_bridge::{config::ConfigKey, logger, transport::RemoteServer};
+use ouisync_bridge::{config::ConfigKey, error::Error, logger, transport::RemoteServer};
 use ouisync_lib::StateMonitor;
 use scoped_task::ScopedAbortHandle;
 use std::{
@@ -20,7 +20,7 @@ pub(crate) async fn run(dirs: Dirs, socket: String) -> Result<()> {
     let monitor = StateMonitor::make_root();
     let _logger = logger::new(Some(monitor.clone()));
 
-    let state = State::init(&dirs, monitor).await;
+    let state = State::init(&dirs, monitor).await?;
     let server = LocalServer::bind(Path::new(&socket))?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 
@@ -70,30 +70,26 @@ impl ServerContainer {
         Self::default()
     }
 
-    pub async fn init(&self, state: Arc<State>) {
+    pub async fn init(&self, state: Arc<State>) -> Result<(), Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
-        let addrs = match entry.get().await {
-            Ok(addrs) => addrs,
-            Err(error) => {
-                tracing::error!(?error, "failed to get bind_rpc config");
-                return;
-            }
-        };
-
-        let (handles, _) = start(&addrs, state).await;
+        let addrs = entry.get().await?;
+        let (handles, _) = start(&addrs, state).await?;
         *self.handles.lock().unwrap() = handles;
+
+        Ok(())
     }
 
-    pub async fn set(&self, addrs: &[SocketAddr], state: Arc<State>) -> Vec<SocketAddr> {
+    pub async fn set(
+        &self,
+        addrs: &[SocketAddr],
+        state: Arc<State>,
+    ) -> Result<Vec<SocketAddr>, Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
-        let (handles, local_addrs) = start(addrs, state).await;
+        let (handles, local_addrs) = start(addrs, state).await?;
         *self.handles.lock().unwrap() = handles;
+        entry.set(&local_addrs).await?;
 
-        if let Err(error) = entry.set(&local_addrs).await {
-            tracing::error!(?error, "failed to set bind_rpc config");
-        }
-
-        local_addrs
+        Ok(local_addrs)
     }
 
     pub fn close(&self) {
@@ -104,16 +100,17 @@ impl ServerContainer {
 async fn start(
     addrs: &[SocketAddr],
     state: Arc<State>,
-) -> (Vec<ScopedAbortHandle>, Vec<SocketAddr>) {
+) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>), Error> {
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());
 
     for addr in addrs {
-        let Ok(server) = RemoteServer::bind(*addr).await else {
+        let Ok(server) = RemoteServer::bind(*addr, state.get_tls_server_config().await?).await else {
                 continue;
             };
 
         local_addrs.push(server.local_addr());
+
         handles.push(
             task::spawn(server.run(RemoteHandler::new(state.clone())))
                 .abort_handle()
@@ -121,5 +118,5 @@ async fn start(
         );
     }
 
-    (handles, local_addrs)
+    Ok((handles, local_addrs))
 }

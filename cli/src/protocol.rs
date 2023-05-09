@@ -1,8 +1,7 @@
-use camino::Utf8PathBuf;
 use clap::{builder::BoolishValueParser, Subcommand};
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr};
+use std::{fmt, net::SocketAddr, path::PathBuf};
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -85,7 +84,7 @@ pub(crate) enum Request {
         all: bool,
 
         #[arg(short, long, conflicts_with = "all")]
-        path: Option<Utf8PathBuf>,
+        path: Option<PathBuf>,
     },
     /// Unmount repository
     #[command(alias = "umount")]
@@ -106,6 +105,11 @@ pub(crate) enum Request {
         /// Domain name or network address of the server to host the mirror
         #[arg(short = 'H', long)]
         host: String,
+
+        /// Path(s) to pem-encoded root certificates to use for TLS. If omitted, uses the default
+        /// certificates.
+        #[arg(long)]
+        root_certificates: Vec<PathBuf>,
     },
     /// Bind the sync protocol to the specified addresses
     Bind {
