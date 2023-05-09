@@ -5,7 +5,12 @@ use crate::{
     transport::local::LocalServer,
 };
 use anyhow::Result;
-use ouisync_bridge::{config::ConfigKey, error::Error, logger, transport::RemoteServer};
+use ouisync_bridge::{
+    config::{ConfigError, ConfigKey},
+    error::Error,
+    logger,
+    transport::RemoteServer,
+};
 use ouisync_lib::StateMonitor;
 use scoped_task::ScopedAbortHandle;
 use std::{
@@ -72,7 +77,12 @@ impl ServerContainer {
 
     pub async fn init(&self, state: Arc<State>) -> Result<(), Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
-        let addrs = entry.get().await?;
+        let addrs = match entry.get().await {
+            Ok(addrs) => addrs,
+            Err(ConfigError::NotFound) => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+
         let (handles, _) = start(&addrs, state).await?;
         *self.handles.lock().unwrap() = handles;
 

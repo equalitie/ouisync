@@ -114,7 +114,10 @@ async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerCo
     let key_path = config_dir.join("key.pem");
 
     if !fs::try_exists(&cert_path).await? {
-        tracing::warn!("{} not found - continuing without TLS", cert_path.display());
+        tracing::warn!(
+            "certificate file not found at {} - continuing without TLS",
+            cert_path.display()
+        );
         return Ok(None);
     }
 
