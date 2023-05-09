@@ -114,6 +114,11 @@ async fn start(
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());
 
+    // Avoid loading the TLS config if not needed
+    if addrs.is_empty() {
+        return Ok((handles, local_addrs));
+    }
+
     let config = state.get_tls_server_config().await?;
 
     for addr in addrs {
