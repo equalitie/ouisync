@@ -1,6 +1,6 @@
 use crate::{protocol::Request, APP_NAME};
-use camino::Utf8PathBuf;
 use clap::{Args, Parser};
+use once_cell::sync::Lazy;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -21,42 +21,36 @@ pub(crate) struct Options {
 #[derive(Args, Debug)]
 pub(crate) struct Dirs {
     /// Config directory
-    #[arg(long, default_value_t = default_config_dir(), value_name = "PATH")]
-    pub config_dir: Utf8PathBuf,
+    #[arg(long, default_value = DEFAULT_CONFIG_DIR.as_os_str(), value_name = "PATH")]
+    pub config_dir: PathBuf,
 
     /// Repositories storage directory
-    #[arg(long, default_value_t = default_data_dir(), value_name = "PATH")]
-    pub store_dir: Utf8PathBuf,
+    #[arg(long, default_value = DEFAULT_DATA_DIR.as_os_str(), value_name = "PATH")]
+    pub store_dir: PathBuf,
 
     /// Mount directory
-    #[arg(long, default_value_t = default_mount_dir(), value_name = "PATH")]
-    pub mount_dir: Utf8PathBuf,
+    #[arg(long, default_value = DEFAULT_MOUNT_DIR.as_os_str(), value_name = "PATH")]
+    pub mount_dir: PathBuf,
 }
 
 /// Path to the config directory.
-fn default_config_dir() -> Utf8PathBuf {
+static DEFAULT_CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
     dirs::config_dir()
         .expect("config dir not defined")
         .join(APP_NAME)
-        .try_into()
-        .expect("invalid utf8 path")
-}
+});
 
-fn default_data_dir() -> Utf8PathBuf {
+static DEFAULT_DATA_DIR: Lazy<PathBuf> = Lazy::new(|| {
     dirs::data_dir()
         .expect("data dir not defined")
         .join(APP_NAME)
-        .try_into()
-        .expect("invalid utf8 path")
-}
+});
 
-fn default_mount_dir() -> Utf8PathBuf {
+static DEFAULT_MOUNT_DIR: Lazy<PathBuf> = Lazy::new(|| {
     dirs::home_dir()
         .expect("home dir not defined")
         .join(APP_NAME)
-        .try_into()
-        .expect("invalid utf8 path")
-}
+});
 
 #[cfg(target_os = "linux")]
 fn socket_dir() -> PathBuf {

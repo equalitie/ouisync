@@ -23,6 +23,7 @@ clap = { version = "4.1.8", features = ["derive"] }
 dirs = "4.0.0"
 futures-util = { workspace = true }
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
+once_cell = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }

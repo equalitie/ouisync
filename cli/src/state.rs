@@ -3,20 +3,19 @@ use crate::{
     repository::{self, RepositoryMap},
     server::ServerContainer,
 };
-use camino::Utf8PathBuf;
 use futures_util::future;
 use ouisync_bridge::{
     config::ConfigStore,
     network::{self, NetworkDefaults},
 };
 use ouisync_lib::{network::Network, StateMonitor};
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::time;
 
 pub(crate) struct State {
     pub config: ConfigStore,
-    pub store_dir: Utf8PathBuf,
-    pub mount_dir: Utf8PathBuf,
+    pub store_dir: PathBuf,
+    pub mount_dir: PathBuf,
     pub network: Network,
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
@@ -88,7 +87,7 @@ impl State {
         future::join(close_repositories, shutdown_network).await;
     }
 
-    pub fn store_path(&self, name: &str) -> Utf8PathBuf {
+    pub fn store_path(&self, name: &str) -> PathBuf {
         repository::store_path(&self.store_dir, name)
     }
 }

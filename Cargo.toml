@@ -28,6 +28,7 @@ bytes = "1.4.0"
 camino = "1.0.9"
 futures-util = { version = "0.3.27", default-features = false }
 num_enum = { version = "0.5.11", default-features = false }
+once_cell = "1.12.0"
 rand = { package = "ouisync-rand", path = "rand" }
 rmp-serde = "1.1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }

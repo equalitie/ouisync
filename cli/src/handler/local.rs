@@ -77,7 +77,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let write_password = write_password.or(password);
 
                 let repository = ouisync_bridge::repository::create(
-                    store_path.clone(),
+                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
                     read_password,
                     write_password,
                     share_token,
@@ -124,7 +124,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let store_path = self.state.store_path(&name);
 
                 let repository = ouisync_bridge::repository::open(
-                    store_path,
+                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
                     password,
                     &self.state.config,
                     &self.state.repositories_monitor,
