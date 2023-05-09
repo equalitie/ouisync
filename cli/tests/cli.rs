@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     thread,
 };
+use tempfile::TempDir;
 
 #[test]
 fn transfer_single_small_file() {
@@ -360,7 +361,8 @@ fn mirror() {
     b.create(Some(&share_token));
     b.mount();
 
-    a.mirror(m_rpc_port);
+    // Use explicit 'ws' scheme to disable TLS
+    a.mirror(&format!("ws://localhost:{m_rpc_port}"), &[]);
 
     let file_name = "test.dat";
     let size = 1024;
@@ -380,6 +382,40 @@ fn mirror() {
 
         check_eq(dst.0, size)
     });
+}
+
+#[test]
+fn tls() {
+    let server_dir = TempDir::new().unwrap();
+    let server_config_dir = server_dir.path().join("config");
+
+    // Create self-signed ceertificate + private key and put them into the config directory of the
+    // server instance.
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+
+    fs::create_dir(&server_config_dir).unwrap();
+    fs::write(
+        server_config_dir.join("cert.pem"),
+        cert.serialize_pem().unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        server_config_dir.join("key.pem"),
+        cert.serialize_private_key_pem(),
+    )
+    .unwrap();
+
+    let server = Bin::start_in(server_dir);
+    let server_rpc_port = server.bind_rpc();
+
+    let client = Bin::start();
+    client.create(None);
+
+    // Use the previusly generated certificate as a custom root certificate
+    client.mirror(
+        &format!("localhost:{server_rpc_port}"),
+        &[&server_config_dir.join("cert.pem")],
+    );
 }
 
 fn setup() -> (Bin, Bin) {

@@ -29,8 +29,11 @@ const DEFAULT_REPO: &str = "test";
 impl Bin {
     /// Start ouisync as server
     pub fn start() -> Self {
+        Self::start_in(TempDir::new().unwrap())
+    }
+
+    pub fn start_in(base_dir: TempDir) -> Self {
         let id = Id::new();
-        let base_dir = TempDir::new().unwrap();
         let socket_path = base_dir.path().join(API_SOCKET);
         let mount_dir = base_dir.path().join(MOUNT_DIR);
 
@@ -167,19 +170,21 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn mirror(&self, mirror_port: u16) {
-        expect_output(
-            &self.id,
-            "OK",
-            self.client_command()
-                .arg("mirror")
-                .arg("--name")
-                .arg(DEFAULT_REPO)
-                .arg("--host")
-                .arg(&format!("{}:{mirror_port}", Ipv4Addr::LOCALHOST))
-                .output()
-                .unwrap(),
-        );
+    pub fn mirror(&self, host: &str, root_certificate_paths: &[&Path]) {
+        let mut command = self.client_command();
+        command
+            .arg("mirror")
+            .arg("--name")
+            .arg(DEFAULT_REPO)
+            .arg("--host")
+            .arg(host);
+
+        for path in root_certificate_paths {
+            command.arg("--root-certificates");
+            command.arg(path);
+        }
+
+        expect_output(&self.id, "OK", command.output().unwrap());
     }
 
     #[track_caller]
