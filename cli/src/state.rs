@@ -28,7 +28,7 @@ pub(crate) struct State {
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
     pub servers: ServerContainer,
-    pub tls_server_config: OnceCell<Option<Arc<ServerConfig>>>,
+    pub tls_server_config: OnceCell<Arc<ServerConfig>>,
     pub tls_client_config: OnceCell<Arc<ClientConfig>>,
 }
 
@@ -103,11 +103,11 @@ impl State {
         repository::store_path(&self.store_dir, name)
     }
 
-    pub async fn get_tls_server_config(&self) -> Result<Option<Arc<ServerConfig>>> {
+    pub async fn get_tls_server_config(&self) -> Result<Arc<ServerConfig>> {
         self.tls_server_config
             .get_or_try_init(|| make_tls_server_config(self.config.dir()))
             .await
-            .map(|config| config.as_ref().cloned())
+            .cloned()
     }
 
     pub async fn get_tls_client_config(&self) -> Result<Arc<ClientConfig>> {
@@ -118,20 +118,25 @@ impl State {
     }
 }
 
-async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerConfig>>> {
+async fn make_tls_server_config(config_dir: &Path) -> Result<Arc<ServerConfig>> {
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
 
-    if !fs::try_exists(&cert_path).await? {
-        tracing::warn!(
-            "certificate file not found at {} - continuing without TLS",
+    let certs = tls::load_certificates(&cert_path).await.map_err(|error| {
+        tracing::error!(
+            "failed to load TLS certificate from {}: {}",
+            cert_path.display(),
+            error,
+        );
+        error
+    })?;
+
+    if certs.is_empty() {
+        tracing::error!(
+            "failed to load TLS certificate from {}: no certificates found",
             cert_path.display()
         );
-        return Ok(None);
-    }
 
-    let certs = tls::load_certificates(&cert_path).await?;
-    if certs.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("no certificates found in {}", cert_path.display()),
@@ -139,8 +144,21 @@ async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerCo
         .into());
     }
 
-    let keys = tls::load_keys(&key_path).await?;
+    let keys = tls::load_keys(&key_path).await.map_err(|error| {
+        tracing::error!(
+            "failed to load TLS key from {}: {}",
+            key_path.display(),
+            error
+        );
+        error
+    })?;
+
     let key = keys.into_iter().next().ok_or_else(|| {
+        tracing::error!(
+            "failed to load TLS key from {}: no keys found",
+            cert_path.display()
+        );
+
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("no keys found in {}", key_path.display()),
@@ -153,15 +171,13 @@ async fn make_tls_server_config(config_dir: &Path) -> Result<Option<Arc<ServerCo
         .with_single_cert(certs, key)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
-    tracing::info!("TLS enabled");
-
-    Ok(Some(Arc::new(config)))
+    Ok(Arc::new(config))
 }
 
 async fn make_tls_client_config(config_dir: &Path) -> Result<Arc<ClientConfig>> {
     let mut root_cert_store = RootCertStore::empty();
 
-    // Add default certificates
+    // Add default root certificates
     root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
         OwnedTrustAnchor::from_subject_spki_name_constraints(
             ta.subject,

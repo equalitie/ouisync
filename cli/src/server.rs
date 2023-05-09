@@ -114,10 +114,12 @@ async fn start(
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());
 
+    let config = state.get_tls_server_config().await?;
+
     for addr in addrs {
-        let Ok(server) = RemoteServer::bind(*addr, state.get_tls_server_config().await?).await else {
-                continue;
-            };
+        let Ok(server) = RemoteServer::bind(*addr, config.clone()).await else {
+            continue;
+        };
 
         local_addrs.push(server.local_addr());
 

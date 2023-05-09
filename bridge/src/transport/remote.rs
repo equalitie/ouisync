@@ -9,14 +9,14 @@ use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     borrow::Cow,
-    io::{self, IoSlice},
+    io,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
@@ -26,18 +26,18 @@ use tokio_rustls::{
 };
 use tokio_tungstenite::{
     tungstenite::{self, Message},
-    Connector, WebSocketStream,
+    Connector, MaybeTlsStream, WebSocketStream,
 };
 use tracing::Instrument;
 
 pub struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
-    tls_acceptor: Option<TlsAcceptor>,
+    tls_acceptor: TlsAcceptor,
 }
 
 impl RemoteServer {
-    pub async fn bind(addr: SocketAddr, config: Option<Arc<ServerConfig>>) -> io::Result<Self> {
+    pub async fn bind(addr: SocketAddr, config: Arc<ServerConfig>) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(|error| {
             tracing::error!(?error, "failed to bind to {}", addr);
             error
@@ -50,12 +50,10 @@ impl RemoteServer {
 
         tracing::info!("remote API server listening on {}", local_addr);
 
-        let tls_acceptor = config.map(TlsAcceptor::from);
-
         Ok(Self {
             listener,
             local_addr,
-            tls_acceptor,
+            tls_acceptor: TlsAcceptor::from(config),
         })
     }
 
@@ -83,22 +81,14 @@ impl RemoteServer {
     }
 }
 
-async fn run_connection<H: Handler>(
-    stream: TcpStream,
-    tls_acceptor: Option<TlsAcceptor>,
-    handler: H,
-) {
+async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor, handler: H) {
     // Upgrade to TLS
-    let stream = if let Some(tls_acceptor) = tls_acceptor {
-        match tls_acceptor.accept(stream).await {
-            Ok(stream) => MaybeTlsServerStream::Rustls(stream),
-            Err(error) => {
-                tracing::error!(?error, "failed to upgrade to tls");
-                return;
-            }
+    let stream = match tls_acceptor.accept(stream).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::error!(?error, "failed to upgrade to tls");
+            return;
         }
-    } else {
-        MaybeTlsServerStream::Plain(stream)
     };
 
     // Upgrade to websocket
@@ -116,7 +106,7 @@ async fn run_connection<H: Handler>(
 }
 
 pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsClientStream>, Request, Response>,
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
 impl RemoteClient {
@@ -141,71 +131,6 @@ impl RemoteClient {
 
     pub async fn invoke(&self, request: Request) -> Result<Response> {
         self.inner.invoke(request).await
-    }
-}
-
-type MaybeTlsClientStream = tokio_tungstenite::MaybeTlsStream<TcpStream>;
-
-enum MaybeTlsServerStream {
-    Plain(TcpStream),
-    Rustls(tokio_rustls::server::TlsStream<TcpStream>),
-}
-
-impl AsyncRead for MaybeTlsServerStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
-            Self::Rustls(stream) => Pin::new(stream).poll_read(cx, buf),
-        }
-    }
-}
-
-impl AsyncWrite for MaybeTlsServerStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Self::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
-            Self::Rustls(stream) => Pin::new(stream).poll_write(cx, buf),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Plain(stream) => Pin::new(stream).poll_flush(cx),
-            Self::Rustls(stream) => Pin::new(stream).poll_flush(cx),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
-            Self::Rustls(stream) => Pin::new(stream).poll_shutdown(cx),
-        }
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Self::Plain(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
-            Self::Rustls(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
-        }
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        match self {
-            Self::Plain(stream) => stream.is_write_vectored(),
-            Self::Rustls(stream) => stream.is_write_vectored(),
-        }
     }
 }
 
