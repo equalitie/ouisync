@@ -83,7 +83,7 @@ impl ServerContainer {
             Err(error) => return Err(error.into()),
         };
 
-        let (handles, _) = start(&addrs, state).await?;
+        let (handles, _) = start(state, &addrs).await?;
         *self.handles.lock().unwrap() = handles;
 
         Ok(())
@@ -91,15 +91,21 @@ impl ServerContainer {
 
     pub async fn set(
         &self,
-        addrs: &[SocketAddr],
         state: Arc<State>,
+        addrs: &[SocketAddr],
+        delay_start: bool,
     ) -> Result<Vec<SocketAddr>, Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
-        let (handles, local_addrs) = start(addrs, state).await?;
-        *self.handles.lock().unwrap() = handles;
-        entry.set(&local_addrs).await?;
 
-        Ok(local_addrs)
+        if delay_start {
+            entry.set(addrs).await?;
+            Ok(Vec::new())
+        } else {
+            let (handles, addrs) = start(state, addrs).await?;
+            *self.handles.lock().unwrap() = handles;
+            entry.set(&addrs).await?;
+            Ok(addrs)
+        }
     }
 
     pub fn close(&self) {
@@ -108,8 +114,8 @@ impl ServerContainer {
 }
 
 async fn start(
-    addrs: &[SocketAddr],
     state: Arc<State>,
+    addrs: &[SocketAddr],
 ) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>), Error> {
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());

@@ -8,14 +8,21 @@ use std::{fmt, net::SocketAddr, path::PathBuf};
 pub(crate) enum Request {
     /// Start the server
     Start,
-    /// Bind the remote API to the specified addresses. Overwrites any previously specified
-    /// addresses.
+    /// Bind the remote API to the specified addresses.
+    ///
+    /// Overwrites any previously specified addresses.
     BindRpc {
         /// Addresses to bind to. IP is a IPv4 or IPv6 address and PORT is a port number. If IP is
         /// 0.0.0.0 or [::] binds to all interfaces. If PORT is 0 binds to a random port. If empty
         /// disables the remote API.
         #[arg(value_name = "IP:PORT")]
         addrs: Vec<SocketAddr>,
+
+        /// Store the bind addresses in the config but delay starting the listeners until the next
+        /// time the server is started. (This option is useful if you want to specify the RPC
+        /// bind address before you have the SSL certificate, e.g. when building a Docker image)
+        #[arg(long)]
+        delay: bool,
     },
     /// Create a new repository
     Create {
