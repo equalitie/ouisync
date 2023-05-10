@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  ouisync:
+    image: ouisync:latest
+    container_name: ouisync
+    ports:
+      - "433:433/tcp"
+      - "2000:2000/tcp"
+      - "2000:2000/udp"
+    volumes:
+      - "config:/config"
+      - "store:/store"
+      - "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem:/config/cert.pem"
+      - "/etc/letsencrypt/live/${DOMAIN}/privkey.pem:/config/key.pem"
+
+volumes:
+  config:
+  store:

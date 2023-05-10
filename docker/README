@@ -1,0 +1,3 @@
+Build the image from the project root with:
+
+    docker build -t ouisync docker
