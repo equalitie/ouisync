@@ -16,17 +16,17 @@ use scoped_task::ScopedAbortHandle;
 use std::{
     io,
     net::SocketAddr,
-    path::Path,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::task;
 
-pub(crate) async fn run(dirs: Dirs, socket: String) -> Result<()> {
+pub(crate) async fn run(dirs: Dirs, socket: PathBuf) -> Result<()> {
     let monitor = StateMonitor::make_root();
     let _logger = logger::new(Some(monitor.clone()));
 
     let state = State::init(&dirs, monitor).await?;
-    let server = LocalServer::bind(Path::new(&socket))?;
+    let server = LocalServer::bind(socket.as_path())?;
     let handle = task::spawn(server.run(LocalHandler::new(state.clone())));
 
     terminated().await?;

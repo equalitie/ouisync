@@ -7,11 +7,14 @@ use crate::{
 };
 use anyhow::Result;
 use ouisync_lib::StateMonitor;
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub(crate) async fn run(dirs: Dirs, socket: String, request: Request) -> Result<()> {
-    let client = connect(Path::new(&socket), &dirs).await?;
+pub(crate) async fn run(dirs: Dirs, socket: PathBuf, request: Request) -> Result<()> {
+    let client = connect(&socket, &dirs).await?;
 
     let request = match request {
         Request::Create {
