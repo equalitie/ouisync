@@ -20,15 +20,69 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
-use tokio_rustls::{
-    rustls::{ClientConfig, ServerConfig},
-    TlsAcceptor,
-};
+use tokio_rustls::{rustls, TlsAcceptor};
 use tokio_tungstenite::{
     tungstenite::{self, Message},
     Connector, MaybeTlsStream, WebSocketStream,
 };
 use tracing::Instrument;
+
+/// Shared config for `RemoteServer`
+#[derive(Clone)]
+pub struct ServerConfig {
+    inner: Arc<rustls::ServerConfig>,
+}
+
+impl ServerConfig {
+    pub fn new(cert_chain: Vec<rustls::Certificate>, key: rustls::PrivateKey) -> Result<Self> {
+        let inner = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let inner = Arc::new(inner);
+
+        Ok(Self { inner })
+    }
+}
+
+/// Shared config for `RemoteClient`
+#[derive(Clone)]
+pub struct ClientConfig {
+    inner: Arc<rustls::ClientConfig>,
+}
+
+impl ClientConfig {
+    pub fn new(additional_root_certs: &[rustls::Certificate]) -> Result<Self> {
+        let mut root_cert_store = rustls::RootCertStore::empty();
+
+        // Add default root certificates
+        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+            |ta| {
+                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            },
+        ));
+
+        // Add custom root certificates (if any)
+        for cert in additional_root_certs {
+            root_cert_store
+                .add(cert)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        }
+
+        let inner = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        let inner = Arc::new(inner);
+
+        Ok(Self { inner })
+    }
+}
 
 pub struct RemoteServer {
     listener: TcpListener,
@@ -37,7 +91,7 @@ pub struct RemoteServer {
 }
 
 impl RemoteServer {
-    pub async fn bind(addr: SocketAddr, config: Arc<ServerConfig>) -> io::Result<Self> {
+    pub async fn bind(addr: SocketAddr, config: ServerConfig) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(|error| {
             tracing::error!(?error, "failed to bind to {}", addr);
             error
@@ -53,7 +107,7 @@ impl RemoteServer {
         Ok(Self {
             listener,
             local_addr,
-            tls_acceptor: TlsAcceptor::from(config),
+            tls_acceptor: TlsAcceptor::from(config.inner),
         })
     }
 
@@ -110,7 +164,7 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    pub async fn connect(host: &str, config: Arc<ClientConfig>) -> io::Result<Self> {
+    pub async fn connect(host: &str, config: ClientConfig) -> io::Result<Self> {
         let host = if host.contains("://") {
             Cow::Borrowed(host)
         } else {
@@ -120,7 +174,7 @@ impl RemoteClient {
         let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
             host.as_ref(),
             None,
-            Some(Connector::Rustls(config)),
+            Some(Connector::Rustls(config.inner)),
         )
         .await
         .map_err(into_io_error)?;

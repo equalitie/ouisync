@@ -236,7 +236,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     .repositories
                     .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
-                let config = self.state.get_tls_client_config().await?;
+                let config = self.state.get_client_config().await?;
 
                 holder.mirror(&host, config).await?;
 

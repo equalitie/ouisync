@@ -9,9 +9,10 @@ use ouisync_bridge::{
     config::ConfigStore,
     error::Result,
     network::{self, NetworkDefaults},
+    transport::{ClientConfig, ServerConfig},
 };
 use ouisync_lib::{network::Network, StateMonitor};
-use rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore, ServerConfig};
+use rustls::Certificate;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -28,8 +29,8 @@ pub(crate) struct State {
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
     pub servers: ServerContainer,
-    pub tls_server_config: OnceCell<Arc<ServerConfig>>,
-    pub tls_client_config: OnceCell<Arc<ClientConfig>>,
+    pub server_config: OnceCell<ServerConfig>,
+    pub client_config: OnceCell<ClientConfig>,
 }
 
 impl State {
@@ -63,8 +64,8 @@ impl State {
             repositories,
             repositories_monitor,
             servers: ServerContainer::new(),
-            tls_server_config: OnceCell::new(),
-            tls_client_config: OnceCell::new(),
+            server_config: OnceCell::new(),
+            client_config: OnceCell::new(),
         };
         let state = Arc::new(state);
 
@@ -103,22 +104,22 @@ impl State {
         repository::store_path(&self.store_dir, name)
     }
 
-    pub async fn get_tls_server_config(&self) -> Result<Arc<ServerConfig>> {
-        self.tls_server_config
-            .get_or_try_init(|| make_tls_server_config(self.config.dir()))
+    pub async fn get_server_config(&self) -> Result<ServerConfig> {
+        self.server_config
+            .get_or_try_init(|| make_server_config(self.config.dir()))
             .await
             .cloned()
     }
 
-    pub async fn get_tls_client_config(&self) -> Result<Arc<ClientConfig>> {
-        self.tls_client_config
-            .get_or_try_init(|| make_tls_client_config(self.config.dir()))
+    pub async fn get_client_config(&self) -> Result<ClientConfig> {
+        self.client_config
+            .get_or_try_init(|| make_client_config(self.config.dir()))
             .await
             .cloned()
     }
 }
 
-async fn make_tls_server_config(config_dir: &Path) -> Result<Arc<ServerConfig>> {
+async fn make_server_config(config_dir: &Path) -> Result<ServerConfig> {
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
 
@@ -165,40 +166,13 @@ async fn make_tls_server_config(config_dir: &Path) -> Result<Arc<ServerConfig>> 
         )
     })?;
 
-    let config = ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-
-    Ok(Arc::new(config))
+    ServerConfig::new(certs, key)
 }
 
-async fn make_tls_client_config(config_dir: &Path) -> Result<Arc<ClientConfig>> {
-    let mut root_cert_store = RootCertStore::empty();
-
-    // Add default root certificates
-    root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-        OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject,
-            ta.spki,
-            ta.name_constraints,
-        )
-    }));
-
-    // Add custom root certificates (if any)
-    for cert in load_certificates(&config_dir.join("root_certs")).await? {
-        root_cert_store
-            .add(&cert)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    }
-
-    let config = ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(root_cert_store)
-        .with_no_client_auth();
-
-    Ok(Arc::new(config))
+async fn make_client_config(config_dir: &Path) -> Result<ClientConfig> {
+    // Load custom root certificates (if any)
+    let additional_root_certs = load_certificates(&config_dir.join("root_certs")).await?;
+    ClientConfig::new(&additional_root_certs)
 }
 
 async fn load_certificates(root_dir: &Path) -> Result<Vec<Certificate>> {

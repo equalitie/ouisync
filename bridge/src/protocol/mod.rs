@@ -21,6 +21,7 @@ impl<T> ServerMessage<T> {
             Ok(response) => Self::Success(response),
             Err(error) => Self::Failure {
                 code: error.to_error_code(),
+                // TODO: include also sources
                 message: match error {
                     Error::Io(inner) => inner.to_string(),
                     _ => error.to_string(),

@@ -119,7 +119,7 @@ async fn start(
         return Ok((handles, local_addrs));
     }
 
-    let config = state.get_tls_server_config().await?;
+    let config = state.get_server_config().await?;
 
     for addr in addrs {
         let Ok(server) = RemoteServer::bind(*addr, config.clone()).await else {
