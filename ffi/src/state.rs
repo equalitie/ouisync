@@ -3,7 +3,8 @@ use crate::{
     registry::{Handle, Registry},
     repository::RepositoryHolder,
 };
-use ouisync_bridge::config::ConfigStore;
+use once_cell::sync::OnceCell;
+use ouisync_bridge::{config::ConfigStore, error::Result, transport::ClientConfig};
 use ouisync_lib::{network::Network, StateMonitor};
 use scoped_task::ScopedJoinHandle;
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ pub(crate) struct State {
     pub repositories: Registry<RepositoryHolder>,
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
+    pub remote_client_config: OnceCell<ClientConfig>,
 }
 
 impl State {
@@ -37,12 +39,19 @@ impl State {
             repositories: Registry::new(),
             files: Registry::new(),
             tasks: Registry::new(),
+            remote_client_config: OnceCell::new(),
         }
     }
 
     /// Cancel a notification subscription.
     pub fn unsubscribe(&self, handle: SubscriptionHandle) {
         self.tasks.remove(handle);
+    }
+
+    pub fn get_remote_client_config(&self) -> Result<ClientConfig> {
+        self.remote_client_config
+            .get_or_try_init(|| ClientConfig::new(&[]))
+            .cloned()
     }
 }
 
