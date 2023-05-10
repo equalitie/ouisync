@@ -353,7 +353,8 @@ pub(crate) async fn mirror(
         .with_mode(AccessMode::Blind)
         .into();
 
-    let client = RemoteClient::connect(host).await?;
+    let config = state.get_remote_client_config()?;
+    let client = RemoteClient::connect(&host, config).await?;
     let request = Request::Mirror { share_token };
     let response = client.invoke(request).await?;
 

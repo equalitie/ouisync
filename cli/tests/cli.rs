@@ -360,7 +360,7 @@ fn mirror() {
     b.create(Some(&share_token));
     b.mount();
 
-    a.mirror(m_rpc_port);
+    a.mirror(&format!("localhost:{m_rpc_port}"));
 
     let file_name = "test.dat";
     let size = 1024;

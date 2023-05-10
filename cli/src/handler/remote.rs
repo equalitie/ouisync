@@ -66,7 +66,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 let store_path = state.store_path(name.as_ref());
 
                 let repository = ouisync_bridge::repository::create(
-                    store_path.clone(),
+                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
                     None,
                     None,
                     Some(share_token),

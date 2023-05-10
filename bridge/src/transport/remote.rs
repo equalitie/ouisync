@@ -8,9 +8,11 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
+    borrow::Cow,
     io,
     net::SocketAddr,
     pin::Pin,
+    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tokio::{
@@ -18,20 +20,78 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
+use tokio_rustls::{rustls, TlsAcceptor};
 use tokio_tungstenite::{
-    tungstenite::{self, client::IntoClientRequest, Message},
-    MaybeTlsStream, WebSocketStream,
+    tungstenite::{self, Message},
+    Connector, MaybeTlsStream, WebSocketStream,
 };
+use tracing::Instrument;
 
-// TODO: Implement TLS
+/// Shared config for `RemoteServer`
+#[derive(Clone)]
+pub struct ServerConfig {
+    inner: Arc<rustls::ServerConfig>,
+}
+
+impl ServerConfig {
+    pub fn new(cert_chain: Vec<rustls::Certificate>, key: rustls::PrivateKey) -> Result<Self> {
+        let inner = rustls::ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let inner = Arc::new(inner);
+
+        Ok(Self { inner })
+    }
+}
+
+/// Shared config for `RemoteClient`
+#[derive(Clone)]
+pub struct ClientConfig {
+    inner: Arc<rustls::ClientConfig>,
+}
+
+impl ClientConfig {
+    pub fn new(additional_root_certs: &[rustls::Certificate]) -> Result<Self> {
+        let mut root_cert_store = rustls::RootCertStore::empty();
+
+        // Add default root certificates
+        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+            |ta| {
+                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            },
+        ));
+
+        // Add custom root certificates (if any)
+        for cert in additional_root_certs {
+            root_cert_store
+                .add(cert)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        }
+
+        let inner = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        let inner = Arc::new(inner);
+
+        Ok(Self { inner })
+    }
+}
 
 pub struct RemoteServer {
     listener: TcpListener,
     local_addr: SocketAddr,
+    tls_acceptor: TlsAcceptor,
 }
 
 impl RemoteServer {
-    pub async fn bind(addr: SocketAddr) -> io::Result<Self> {
+    pub async fn bind(addr: SocketAddr, config: ServerConfig) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(|error| {
             tracing::error!(?error, "failed to bind to {}", addr);
             error
@@ -47,6 +107,7 @@ impl RemoteServer {
         Ok(Self {
             listener,
             local_addr,
+            tls_acceptor: TlsAcceptor::from(config.inner),
         })
     }
 
@@ -60,22 +121,10 @@ impl RemoteServer {
         loop {
             match self.listener.accept().await {
                 Ok((stream, addr)) => {
-                    // Convert to websocket
-                    let socket = match tokio_tungstenite::accept_async(stream).await {
-                        Ok(socket) => socket,
-                        Err(error) => {
-                            tracing::error!(
-                                ?error,
-                                "failed to upgrade tcp socket to websocket socket"
-                            );
-                            continue;
-                        }
-                    };
-
-                    tracing::debug!("client accepted at {:?}", addr);
-
-                    let socket = Socket(socket);
-                    connections.spawn(socket_server_connection::run(socket, handler.clone()));
+                    connections.spawn(
+                        run_connection(stream, self.tls_acceptor.clone(), handler.clone())
+                            .instrument(tracing::info_span!("remote client", %addr)),
+                    );
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
@@ -86,17 +135,50 @@ impl RemoteServer {
     }
 }
 
+async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor, handler: H) {
+    // Upgrade to TLS
+    let stream = match tls_acceptor.accept(stream).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::error!(?error, "failed to upgrade to tls");
+            return;
+        }
+    };
+
+    // Upgrade to websocket
+    let stream = match tokio_tungstenite::accept_async(stream).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::error!(?error, "failed to upgrade to websocket");
+            return;
+        }
+    };
+
+    tracing::debug!("accepted");
+
+    socket_server_connection::run(Socket(stream), handler).await;
+}
+
 pub struct RemoteClient {
     inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
 }
 
 impl RemoteClient {
-    pub async fn connect(request: impl IntoClientRequest + Unpin) -> io::Result<Self> {
-        let (inner, _) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(into_io_error)?;
-        let inner = Socket(inner);
-        let inner = SocketClient::new(inner);
+    pub async fn connect(host: &str, config: ClientConfig) -> io::Result<Self> {
+        let host = if host.contains("://") {
+            Cow::Borrowed(host)
+        } else {
+            Cow::Owned(format!("wss://{host}"))
+        };
+
+        let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
+            host.as_ref(),
+            None,
+            Some(Connector::Rustls(config.inner)),
+        )
+        .await
+        .map_err(into_io_error)?;
+        let inner = SocketClient::new(Socket(stream));
 
         Ok(Self { inner })
     }

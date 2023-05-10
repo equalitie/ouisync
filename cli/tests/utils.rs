@@ -1,5 +1,6 @@
 use anyhow::{format_err, Error};
 use backoff::{self, ExponentialBackoffBuilder};
+use once_cell::sync::Lazy;
 use rand::Rng;
 use std::{
     cell::Cell,
@@ -23,26 +24,40 @@ pub struct Bin {
 
 const COMMAND: &str = env!("CARGO_BIN_EXE_ouisync");
 const MOUNT_DIR: &str = "mnt";
+const CONFIG_DIR: &str = "config";
 const API_SOCKET: &str = "api.sock";
 const DEFAULT_REPO: &str = "test";
+
+static CERT: Lazy<rcgen::Certificate> =
+    Lazy::new(|| rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap());
 
 impl Bin {
     /// Start ouisync as server
     pub fn start() -> Self {
         let id = Id::new();
         let base_dir = TempDir::new().unwrap();
+        let config_dir = base_dir.path().join(CONFIG_DIR);
         let socket_path = base_dir.path().join(API_SOCKET);
         let mount_dir = base_dir.path().join(MOUNT_DIR);
 
         fs::create_dir_all(mount_dir.join(DEFAULT_REPO)).unwrap();
+        fs::create_dir_all(config_dir.join("root_certs")).unwrap();
+
+        // Install the certificate
+        let cert = CERT.serialize_pem().unwrap();
+
+        // For server:
+        fs::write(config_dir.join("cert.pem"), &cert).unwrap();
+        fs::write(config_dir.join("key.pem"), CERT.serialize_private_key_pem()).unwrap();
+
+        // For client:
+        fs::write(config_dir.join("root_certs").join("localhost.pem"), &cert).unwrap();
 
         let mut command = Command::new(COMMAND);
         command
             .arg("--store-dir")
             .arg(base_dir.path().join("store"));
-        command
-            .arg("--config-dir")
-            .arg(base_dir.path().join("config"));
+        command.arg("--config-dir").arg(&config_dir);
         command.arg("--mount-dir").arg(&mount_dir);
         command.arg("--socket").arg(&socket_path);
         command.arg("start");
@@ -167,7 +182,7 @@ impl Bin {
     }
 
     #[track_caller]
-    pub fn mirror(&self, mirror_port: u16) {
+    pub fn mirror(&self, host: &str) {
         expect_output(
             &self.id,
             "OK",
@@ -176,7 +191,7 @@ impl Bin {
                 .arg("--name")
                 .arg(DEFAULT_REPO)
                 .arg("--host")
-                .arg(&format!("{}:{mirror_port}", Ipv4Addr::LOCALHOST))
+                .arg(host)
                 .output()
                 .unwrap(),
         );

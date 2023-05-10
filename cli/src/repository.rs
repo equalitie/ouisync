@@ -1,10 +1,10 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     protocol::remote::{Request, Response},
-    transport::RemoteClient,
+    transport::{ClientConfig, RemoteClient},
 };
 use ouisync_lib::{
     network::{Network, Registration},
@@ -16,6 +16,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt, io, mem,
     ops::Deref,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
 use tokio::{fs, runtime, task};
@@ -62,8 +63,8 @@ impl AsRef<str> for RepositoryName {
     }
 }
 
-impl AsRef<Utf8Path> for RepositoryName {
-    fn as_ref(&self) -> &Utf8Path {
+impl AsRef<Path> for RepositoryName {
+    fn as_ref(&self) -> &Path {
         self.as_str().as_ref()
     }
 }
@@ -125,7 +126,7 @@ impl RepositoryHolder {
         }
     }
 
-    pub async fn mount(&self, mount_dir: &Utf8Path) -> Result<()> {
+    pub async fn mount(&self, mount_dir: &Path) -> Result<()> {
         let point: Option<String> = self.repository.metadata().get(MOUNT_POINT).await.ok();
         let point = point.map(|point| self.resolve_mount_point(point, mount_dir));
 
@@ -135,7 +136,7 @@ impl RepositoryHolder {
                 Err(error) => {
                     tracing::error!(
                         name = %self.name,
-                        mount_point = %point,
+                        mount_point = %point.display(),
                         ?error,
                         "failed to create mount point"
                     );
@@ -150,13 +151,17 @@ impl RepositoryHolder {
                 point.clone(),
             ) {
                 Ok(mount_guard) => {
-                    tracing::info!(name = %self.name, mount_point = %point, "repository mounted");
+                    tracing::info!(
+                        name = %self.name,
+                        mount_point = %point.display(),
+                        "repository mounted"
+                    );
                     mount_guard
                 }
                 Err(error) => {
                     tracing::error!(
                         name = %self.name,
-                        mount_point = %point,
+                        mount_point = %point.display(),
                         ?error,
                         "failed to mount repository"
                     );
@@ -191,10 +196,19 @@ impl RepositoryHolder {
             drop(guard);
 
             if let Err(error) = remove_mount_point(&point, depth).await {
-                tracing::error!(name = %self.name, mount_point = %point, ?error, "failed to remove mount point");
+                tracing::error!(
+                    name = %self.name,
+                    mount_point = %point.display(),
+                    ?error,
+                    "failed to remove mount point"
+                );
             }
 
-            tracing::info!(name = %self.name, mount_point = %point, "repository unmounted");
+            tracing::info!(
+                name = %self.name,
+                mount_point = %point.display(),
+                "repository unmounted"
+            );
         }
     }
 
@@ -203,15 +217,8 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str) -> Result<()> {
-        // TODO: use wss:// only
-        let host = if host.contains("://") {
-            Cow::Borrowed(host)
-        } else {
-            Cow::Owned(format!("ws://{host}"))
-        };
-
-        let client = RemoteClient::connect(host.as_ref()).await?;
+    pub async fn mirror(&self, host: &str, config: ClientConfig) -> Result<()> {
+        let client = RemoteClient::connect(host, config).await?;
         let request = Request::Mirror {
             share_token: self
                 .repository
@@ -226,7 +233,7 @@ impl RepositoryHolder {
         }
     }
 
-    fn resolve_mount_point(&self, mount_point: String, mount_dir: &Utf8Path) -> Utf8PathBuf {
+    fn resolve_mount_point(&self, mount_point: String, mount_dir: &Path) -> PathBuf {
         if mount_point.is_empty() {
             mount_dir.join(&self.name)
         } else {
@@ -249,7 +256,12 @@ impl Drop for RepositoryHolder {
         task::spawn(async move {
             if let Some((point, depth)) = mount {
                 if let Err(error) = remove_mount_point(&point, depth).await {
-                    tracing::error!(%name, mount_point = %point, ?error, "failed to remove mount point");
+                    tracing::error!(
+                        %name,
+                        mount_point = %point.display(),
+                        ?error,
+                        "failed to remove mount point"
+                    );
                 }
             }
 
@@ -266,7 +278,7 @@ impl Drop for RepositoryHolder {
 }
 
 struct Mount {
-    point: Utf8PathBuf,
+    point: PathBuf,
     // Number of trailing path components of `point` that were created by us. This is used to
     // delete only the directories we created on unmount.
     depth: u32,
@@ -276,7 +288,7 @@ struct Mount {
 /// Create the mount point directory and returns the number of trailing path components that were
 /// actually created. For example, if `path` is "/foo/bar/baz" and "/foo" already exists but not
 /// "/foo/bar" then it returns 2 (because it created "/foo/bar" and "/foo/bar/baz").
-async fn create_mount_point(path: &Utf8Path) -> io::Result<u32> {
+async fn create_mount_point(path: &Path) -> io::Result<u32> {
     let depth = {
         let mut depth = 0;
         let mut path = path;
@@ -304,7 +316,7 @@ async fn create_mount_point(path: &Utf8Path) -> io::Result<u32> {
 
 /// Remove the last `depth` components from `path`. For example, if `path` is "/foo/bar/baz" and
 /// `depth` is 2, it removes "/foo/bar/baz" and then "/foo/bar" but not "/foo".
-async fn remove_mount_point(path: &Utf8Path, depth: u32) -> io::Result<()> {
+async fn remove_mount_point(path: &Path, depth: u32) -> io::Result<()> {
     let mut path = path;
 
     for _ in 0..depth {
@@ -370,8 +382,13 @@ pub(crate) async fn find_all(
     config: &ConfigStore,
     monitor: &StateMonitor,
 ) -> RepositoryMap {
-    let mut walkdir = utils::walk_dir(&dirs.store_dir);
     let repositories = RepositoryMap::new();
+
+    if !fs::try_exists(&dirs.store_dir).await.unwrap_or(false) {
+        return repositories;
+    }
+
+    let mut walkdir = utils::walk_dir(&dirs.store_dir);
 
     while let Some(entry) = walkdir.next().await {
         let entry = match entry {
@@ -436,7 +453,7 @@ pub(crate) async fn find_all(
     repositories
 }
 
-pub(crate) async fn delete_store(store_dir: &Utf8Path, repository_name: &str) -> io::Result<()> {
+pub(crate) async fn delete_store(store_dir: &Path, repository_name: &str) -> io::Result<()> {
     ouisync_lib::delete_repository(store_path(store_dir, repository_name)).await?;
 
     // Remove ancestors directories up to `store_dir` but only if they are empty.
@@ -452,7 +469,7 @@ pub(crate) async fn delete_store(store_dir: &Utf8Path, repository_name: &str) ->
         if let Err(error) = fs::remove_dir(&path).await {
             tracing::error!(
                 name = repository_name,
-                %path,
+                path = %path.display(),
                 ?error,
                 "failed to remove repository store subdirectory"
             );
@@ -463,12 +480,16 @@ pub(crate) async fn delete_store(store_dir: &Utf8Path, repository_name: &str) ->
     Ok(())
 }
 
-pub(crate) fn store_path(store_dir: &Utf8Path, repository_name: &str) -> Utf8PathBuf {
-    let suffix = Utf8Path::new(repository_name);
+pub(crate) fn store_path(store_dir: &Path, repository_name: &str) -> PathBuf {
+    let suffix = Path::new(repository_name);
     let extension = if let Some(extension) = suffix.extension() {
-        Cow::Owned(format!("{extension}.{DB_EXTENSION}"))
+        let mut extension = extension.to_owned();
+        extension.push(".");
+        extension.push(DB_EXTENSION);
+
+        Cow::Owned(extension)
     } else {
-        Cow::Borrowed(DB_EXTENSION)
+        Cow::Borrowed(DB_EXTENSION.as_ref())
     };
 
     store_dir.join(suffix).with_extension(extension)
@@ -480,21 +501,21 @@ mod tests {
 
     #[test]
     fn store_path_sanity_check() {
-        let store_dir = Utf8Path::new("/home/alice/ouisync/store");
+        let store_dir = Path::new("/home/alice/ouisync/store");
 
         assert_eq!(
             store_path(store_dir, "foo"),
-            "/home/alice/ouisync/store/foo.ouisyncdb"
+            Path::new("/home/alice/ouisync/store/foo.ouisyncdb")
         );
 
         assert_eq!(
             store_path(store_dir, "foo/bar"),
-            "/home/alice/ouisync/store/foo/bar.ouisyncdb"
+            Path::new("/home/alice/ouisync/store/foo/bar.ouisyncdb")
         );
 
         assert_eq!(
             store_path(store_dir, "foo/bar.baz"),
-            "/home/alice/ouisync/store/foo/bar.baz.ouisyncdb"
+            Path::new("/home/alice/ouisync/store/foo/bar.baz.ouisyncdb")
         );
     }
 }

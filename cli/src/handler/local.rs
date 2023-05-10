@@ -45,7 +45,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .state
                 .servers
                 .set(&addrs, self.state.clone())
-                .await
+                .await?
                 .into()),
             Request::Create {
                 name,
@@ -77,7 +77,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let write_password = write_password.or(password);
 
                 let repository = ouisync_bridge::repository::create(
-                    store_path.clone(),
+                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
                     read_password,
                     write_password,
                     share_token,
@@ -124,7 +124,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let store_path = self.state.store_path(&name);
 
                 let repository = ouisync_bridge::repository::open(
-                    store_path,
+                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
                     password,
                     &self.state.config,
                     &self.state.repositories_monitor,
@@ -194,7 +194,12 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                         .get(&name)
                         .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
-                    let mount_point = path.as_ref().map(|path| path.as_str()).unwrap_or_default();
+                    let mount_point = if let Some(path) = &path {
+                        path.to_str().ok_or(Error::InvalidArgument)?
+                    } else {
+                        ""
+                    };
+
                     holder.set_mount_point(Some(mount_point)).await;
                     holder.mount(&self.state.mount_dir).await?;
                 } else {
@@ -231,7 +236,9 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     .repositories
                     .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
-                holder.mirror(&host).await?;
+                let config = self.state.get_client_config().await?;
+
+                holder.mirror(&host, config).await?;
 
                 Ok(().into())
             }

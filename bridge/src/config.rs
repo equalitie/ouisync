@@ -33,6 +33,10 @@ impl ConfigStore {
         }
     }
 
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// Obtain the config entry for the specified key.
     pub fn entry<T>(&self, key: ConfigKey<T>) -> ConfigEntry<T> {
         ConfigEntry {

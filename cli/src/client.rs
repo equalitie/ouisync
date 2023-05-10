@@ -61,17 +61,17 @@ pub(crate) async fn run(dirs: Dirs, socket: String, request: Request) -> Result<
     Ok(())
 }
 
-async fn connect(path: &Path, dirs: &Dirs) -> io::Result<Client> {
+async fn connect(path: &Path, dirs: &Dirs) -> Result<Client> {
     match LocalClient::connect(path).await {
         Ok(client) => Ok(Client::Local(client)),
         Err(error) => match error.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
-                let state = State::init(dirs, StateMonitor::make_root()).await;
+                let state = State::init(dirs, StateMonitor::make_root()).await?;
                 let handler = LocalHandler::new(state);
 
                 Ok(Client::Native(NativeClient::new(handler)))
             }
-            _ => Err(error),
+            _ => Err(error.into()),
         },
     }
 }

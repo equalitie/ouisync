@@ -13,8 +13,8 @@ futures-util = { workspace = true }
 quinn = "0.9.3"
 quinn-udp = "0.3.1"
 quinn-proto = "0.9.2"
-rcgen = "0.9.1"
-rustls = { version = "0.20.3", default-features = false, features = ["quic", "dangerous_configuration"] }
+rcgen = { workspace = true }
+rustls = { workspace = true, features = ["quic", "dangerous_configuration"] }
 socket2 = "0.4.4" # To be able to setsockopts before a socket is bound
 thiserror = "1.0.31"
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "sync"] }

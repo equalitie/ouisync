@@ -18,6 +18,7 @@ use tokio_util::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
     compat::{Compat, FuturesAsyncReadCompatExt},
 };
+use tracing::Instrument;
 
 pub(crate) struct LocalServer {
     listener: LocalSocketListener,
@@ -50,7 +51,10 @@ impl LocalServer {
             match self.listener.accept().await {
                 Ok(socket) => {
                     let socket = make_socket(socket);
-                    connections.spawn(socket_server_connection::run(socket, handler.clone()));
+                    connections.spawn(
+                        socket_server_connection::run(socket, handler.clone())
+                            .instrument(tracing::info_span!("local client")),
+                    );
                 }
                 Err(error) => {
                     tracing::error!(?error, "failed to accept client");
