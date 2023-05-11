@@ -2,10 +2,10 @@ version: "3.9"
 
 services:
   ouisync:
-    image: ouisync:latest
+    image: equalitie/ouisync:latest
     container_name: ouisync
     ports:
-      - "433:433/tcp"
+      - "443:443/tcp"
       - "2000:2000/tcp"
       - "2000:2000/udp"
     volumes:
