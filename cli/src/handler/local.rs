@@ -242,6 +242,16 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
                 Ok(().into())
             }
+            Request::ListRepositories => {
+                let names: Vec<_> = self
+                    .state
+                    .repositories
+                    .get_all()
+                    .into_iter()
+                    .map(|holder| holder.name().to_string())
+                    .collect();
+                Ok(names.into())
+            }
             Request::Bind { addrs } => {
                 network::bind(&self.state.network, &self.state.config, &addrs).await;
                 Ok(().into())

@@ -113,6 +113,9 @@ pub(crate) enum Request {
         #[arg(short = 'H', long)]
         host: String,
     },
+    /// List open repositories
+    #[command(visible_alias = "ls")]
+    ListRepositories,
     /// Bind the sync protocol to the specified addresses
     Bind {
         /// Addresses to bind to. PROTO is one of "quic" or "tcp", IP is a IPv4 or IPv6 address and
