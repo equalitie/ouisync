@@ -114,7 +114,7 @@ pub(crate) enum Request {
         host: String,
     },
     /// List open repositories
-    #[command(visible_alias = "ls")]
+    #[command(visible_alias = "ls", alias = "list-repos")]
     ListRepositories,
     /// Bind the sync protocol to the specified addresses
     Bind {
