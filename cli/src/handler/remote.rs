@@ -8,8 +8,11 @@ use ouisync_bridge::{
     protocol::remote::{Request, Response},
     transport::NotificationSender,
 };
-use ouisync_lib::{AccessMode, ShareToken};
-use std::sync::{Arc, Weak};
+use ouisync_lib::{AccessMode, RepositoryId, ShareToken};
+use std::{
+    iter,
+    sync::{Arc, Weak},
+};
 
 #[derive(Clone)]
 pub(crate) struct RemoteHandler {
@@ -50,13 +53,7 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                     .with_mode(AccessMode::Blind)
                     .into();
 
-                let name = share_token
-                    .id()
-                    .salted_hash(b"ouisync server repository name")
-                    .to_string();
-                // unwrap ok because the name is just a string of hexadecimal digits which is
-                // always a valid name.
-                let name = RepositoryName::try_from(name).unwrap();
+                let name = make_name(share_token.id());
 
                 // Mirror is idempotent
                 if state.repositories.contains(&name) {
@@ -97,5 +94,56 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 Ok(().into())
             }
         }
+    }
+}
+
+// Derive name from the hash of repository id
+fn make_name(id: &RepositoryId) -> RepositoryName {
+    RepositoryName::try_from(insert_separators(
+        &id.salted_hash(b"ouisync server repository name")
+            .to_string(),
+    ))
+    .unwrap()
+}
+
+fn insert_separators(input: &str) -> String {
+    let chunk_count = 4;
+    let chunk_len = 2;
+    let sep = '/';
+
+    let (head, tail) = input.split_at(chunk_count * chunk_len);
+
+    head.chars()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            (i > 0 && i < chunk_count * chunk_len && i % chunk_len == 0)
+                .then_some(sep)
+                .into_iter()
+                .chain(iter::once(c))
+        })
+        .chain(iter::once(sep))
+        .chain(tail.chars())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_separators_test() {
+        let input = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+        let expected_output = format!(
+            "{}/{}/{}/{}/{}",
+            &input[0..2],
+            &input[2..4],
+            &input[4..6],
+            &input[6..8],
+            &input[8..],
+        );
+        let actual_output = insert_separators(input);
+
+        assert_eq!(actual_output, expected_output);
     }
 }
