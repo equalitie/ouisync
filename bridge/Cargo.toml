@@ -41,4 +41,5 @@ paranoid-android = "0.2.1"
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
+rcgen = { workspace = true }
 tempfile = "3.2"

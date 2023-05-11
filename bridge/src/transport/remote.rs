@@ -11,6 +11,7 @@ use std::{
     borrow::Cow,
     io,
     net::SocketAddr,
+    ops::RangeInclusive,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
@@ -27,6 +28,10 @@ use tokio_tungstenite::{
 };
 use tracing::Instrument;
 
+// Range (inclusive) of supported protocol versions.
+const MIN_VERSION: u64 = 0;
+const MAX_VERSION: u64 = 0;
+
 /// Shared config for `RemoteServer`
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -35,14 +40,27 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     pub fn new(cert_chain: Vec<rustls::Certificate>, key: rustls::PrivateKey) -> Result<Self> {
-        let inner = rustls::ServerConfig::builder()
+        Self::with_versions(cert_chain, key, MIN_VERSION..=MAX_VERSION)
+    }
+
+    fn with_versions(
+        cert_chain: Vec<rustls::Certificate>,
+        key: rustls::PrivateKey,
+        versions: RangeInclusive<u64>,
+    ) -> Result<Self> {
+        let mut inner = rustls::ServerConfig::builder()
             .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert_chain, key)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        let inner = Arc::new(inner);
 
-        Ok(Self { inner })
+        // (ab)use ALPN (https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation) for
+        // protocol version negotation
+        inner.alpn_protocols = to_alpn_protocols(versions);
+
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 }
 
@@ -54,6 +72,13 @@ pub struct ClientConfig {
 
 impl ClientConfig {
     pub fn new(additional_root_certs: &[rustls::Certificate]) -> Result<Self> {
+        Self::with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
+    }
+
+    fn with_versions(
+        additional_root_certs: &[rustls::Certificate],
+        versions: RangeInclusive<u64>,
+    ) -> Result<Self> {
         let mut root_cert_store = rustls::RootCertStore::empty();
 
         // Add default root certificates
@@ -74,13 +99,15 @@ impl ClientConfig {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         }
 
-        let inner = rustls::ClientConfig::builder()
+        let mut inner = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth();
-        let inner = Arc::new(inner);
+        inner.alpn_protocols = to_alpn_protocols(versions);
 
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 }
 
@@ -250,5 +277,138 @@ fn into_io_error(src: tungstenite::Error) -> io::Error {
     match src {
         tungstenite::Error::Io(error) => error,
         _ => io::Error::new(io::ErrorKind::Other, src),
+    }
+}
+
+fn to_alpn_protocols(versions: RangeInclusive<u64>) -> Vec<Vec<u8>> {
+    versions
+        .map(|version| version.to_be_bytes().to_vec())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::NotificationSender;
+    use async_trait::async_trait;
+    use ouisync_lib::{AccessMode, AccessSecrets, ShareToken};
+    use std::{
+        net::Ipv4Addr,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::task;
+
+    #[tokio::test]
+    async fn basic() {
+        let (server_config, client_config) =
+            make_configs(MIN_VERSION..=MAX_VERSION, MIN_VERSION..=MAX_VERSION);
+        let handler = TestHandler::default();
+
+        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
+            .await
+            .unwrap();
+        let port = server.local_addr().port();
+        task::spawn(server.run(handler.clone()));
+
+        let client = RemoteClient::connect(&format!("localhost:{port}"), client_config)
+            .await
+            .unwrap();
+
+        let share_token =
+            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
+
+        match client
+            .invoke(Request::Mirror { share_token })
+            .await
+            .unwrap()
+        {
+            Response::None => (),
+        }
+
+        assert_eq!(handler.received(), 1);
+    }
+
+    #[tokio::test]
+    async fn version_overlap() {
+        let (server_config, client_config) = make_configs(1..=2, 0..=1);
+        let handler = TestHandler::default();
+
+        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
+            .await
+            .unwrap();
+        let port = server.local_addr().port();
+        task::spawn(server.run(handler.clone()));
+
+        let client = RemoteClient::connect(&format!("localhost:{port}"), client_config)
+            .await
+            .unwrap();
+
+        let share_token =
+            ShareToken::from(AccessSecrets::random_write().with_mode(AccessMode::Blind));
+
+        match client
+            .invoke(Request::Mirror { share_token })
+            .await
+            .unwrap()
+        {
+            Response::None => (),
+        }
+
+        assert_eq!(handler.received(), 1);
+    }
+
+    #[tokio::test]
+    async fn version_mismatch() {
+        let (server_config, client_config) = make_configs(2..=3, 0..=1);
+        let handler = TestHandler::default();
+
+        let server = RemoteServer::bind((Ipv4Addr::LOCALHOST, 0).into(), server_config)
+            .await
+            .unwrap();
+        let port = server.local_addr().port();
+        task::spawn(server.run(handler.clone()));
+
+        match RemoteClient::connect(&format!("localhost:{port}"), client_config).await {
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => (),
+            Err(error) => panic!("unexpected error {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct TestHandler {
+        received: Arc<AtomicUsize>,
+    }
+
+    impl TestHandler {
+        fn received(&self) -> usize {
+            self.received.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait]
+    impl Handler for TestHandler {
+        type Request = Request;
+        type Response = Response;
+
+        async fn handle(&self, _: Self::Request, _: &NotificationSender) -> Result<Self::Response> {
+            self.received.fetch_add(1, Ordering::Relaxed);
+            Ok(Response::None)
+        }
+    }
+
+    fn make_configs(
+        server_versions: RangeInclusive<u64>,
+        client_versions: RangeInclusive<u64>,
+    ) -> (ServerConfig, ClientConfig) {
+        let gen = rcgen::generate_simple_self_signed(["localhost".to_owned()]).unwrap();
+        let cert = rustls::Certificate(gen.serialize_der().unwrap());
+        let key = rustls::PrivateKey(gen.serialize_private_key_der());
+
+        let server_config =
+            ServerConfig::with_versions(vec![cert.clone()], key, server_versions).unwrap();
+        let client_config = ClientConfig::with_versions(&[cert], client_versions).unwrap();
+
+        (server_config, client_config)
     }
 }
