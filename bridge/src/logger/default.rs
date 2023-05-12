@@ -11,10 +11,17 @@ pub struct Logger;
 
 impl Logger {
     pub(crate) fn new() -> Result<Self, io::Error> {
+        // Disable colors in output on Windows as `cmd` doesn't seem to support it.
+        #[cfg(target_os = "windows")]
+        let colors = false;
+        #[cfg(not(target_os = "windows"))]
+        let colors = true;
+
         tracing_subscriber::registry()
             .with(
                 fmt::layer()
                     .pretty()
+                    .with_ansi(colors)
                     .with_target(false)
                     .with_file(true)
                     .with_line_number(true)
