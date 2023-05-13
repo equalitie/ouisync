@@ -434,7 +434,7 @@ impl Entry {
     fn as_file(&self) -> Result<&FileEntry, Error> {
         match self {
             Entry::File(file_entry) => Ok(file_entry),
-            Entry::Directory(_) => Err(STATUS_INVALID_PARAMETER.into()),
+            Entry::Directory(_) => Err(STATUS_INVALID_DEVICE_REQUEST.into()),
         }
     }
 
@@ -726,18 +726,18 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        assert!(alloc_size >= 0);
-        let alloc_size = alloc_size as u64;
+        let alloc_size: u64 = alloc_size
+            .try_into()
+            .map_err(|_| STATUS_INVALID_PARAMETER)?;
 
-        match &context.entry {
-            Entry::File(entry) => self.rt.block_on(async {
-                let mut lock = entry.file.lock().await;
-                let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
-                self.resize_file(file, alloc_size).await?;
-                Ok(())
-            }),
-            Entry::Directory(_) => unreachable!(), // or todo!()?
-        }
+        let entry = context.entry.as_file()?;
+
+        self.rt.block_on(async {
+            let mut lock = entry.file.lock().await;
+            let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+            self.resize_file(file, alloc_size).await?;
+            Ok(())
+        })
     }
 
     fn get_disk_free_space(
@@ -826,6 +826,7 @@ impl From<Error> for i32 {
                     E::OffsetOutOfRange => STATUS_INVALID_PARAMETER,
                     E::OperationNotSupported => STATUS_NOT_IMPLEMENTED,
                     E::Locked => STATUS_LOCK_NOT_GRANTED,
+                    E::EntryIsDirectory => STATUS_INVALID_DEVICE_REQUEST,
                     _ => todo!("Unhandled error to NTSTATUS conversion \"{error:?}\""),
                 }
             }
