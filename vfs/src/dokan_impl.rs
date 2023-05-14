@@ -147,13 +147,12 @@ impl VirtualFilesystem {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    async fn create_file_entry(
+    async fn get_or_set_shared(
         &self,
         path: Utf8PathBuf,
-        create_disposition: u32,
         delete_on_close: bool,
-    ) -> Result<(FileEntry, bool, u64), Error> {
-        let (shared, id) = match self.handles.lock().await.entry(path.clone()) {
+    ) -> (Arc<AsyncMutex<Shared>>, u64) {
+        match self.handles.lock().await.entry(path.clone()) {
             hash_map::Entry::Occupied(entry) => {
                 let shared = entry.get().clone();
                 let mut lock = shared.lock().await;
@@ -174,22 +173,28 @@ impl VirtualFilesystem {
                 entry.insert(shared.clone());
                 (shared, id)
             }
-        };
+        }
+    }
 
-        let result = match create_disposition {
+    async fn create_file_entry(
+        &self,
+        path: &Utf8PathBuf,
+        create_disposition: u32,
+    ) -> Result<(File, bool), Error> {
+        match create_disposition {
             FILE_CREATE => {
-                let mut file = self.repo.create_file(&path).await?;
+                let mut file = self.repo.create_file(path).await?;
                 file.flush().await?;
                 Ok((file, true))
             }
             FILE_OPEN => {
-                let file = self.repo.open_file(&path).await?;
+                let file = self.repo.open_file(path).await?;
                 Ok((file, false))
             }
-            FILE_OPEN_IF => match self.repo.open_file(&path).await {
+            FILE_OPEN_IF => match self.repo.open_file(path).await {
                 Ok(file) => Ok((file, false)),
                 Err(ouisync_lib::Error::EntryNotFound) => {
-                    let mut file = self.repo.create_file(&path).await?;
+                    let mut file = self.repo.create_file(path).await?;
                     file.flush().await?;
                     Ok((file, true))
                 }
@@ -200,33 +205,7 @@ impl VirtualFilesystem {
                 Err(STATUS_NOT_IMPLEMENTED.into())
             }
             _ => Err(STATUS_INVALID_PARAMETER.into()),
-        };
-
-        if result.is_err() {
-            match self.handles.lock().await.entry(path) {
-                hash_map::Entry::Occupied(entry) => {
-                    let mut handle = entry.get().lock().await;
-                    handle.handle_count -= 1;
-                    if handle.handle_count == 0 {
-                        drop(handle);
-                        entry.remove();
-                    }
-                }
-                // Unreachable because we ensured it's occupied above.
-                hash_map::Entry::Vacant(_) => unreachable!(),
-            }
         }
-
-        result.map(|(file, created)| {
-            (
-                FileEntry {
-                    file: AsyncMutex::new(Some(file)),
-                    shared,
-                },
-                created,
-                id,
-            )
-        })
     }
 
     async fn create_directory_entry(
@@ -250,6 +229,51 @@ impl VirtualFilesystem {
             FILE_OVERWRITE_IF => todo!(),
             _ => Err(STATUS_INVALID_PARAMETER.into()),
         }
+    }
+
+    async fn create_entry(
+        &self,
+        path: Utf8PathBuf,
+        is_directory: bool,
+        create_disposition: u32,
+        delete_on_close: bool,
+    ) -> Result<(Entry, bool, u64), Error> {
+        let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
+
+        let result = if !is_directory {
+            self.create_file_entry(&path, create_disposition)
+                .await
+                .map(|(file, created)| {
+                    (
+                        Entry::File(FileEntry {
+                            file: AsyncMutex::new(Some(file)),
+                            shared,
+                        }),
+                        created,
+                    )
+                })
+        } else {
+            self.create_directory_entry(&path, create_disposition)
+                .await
+                .map(|created| (Entry::Directory(path.clone()), created))
+        };
+
+        if result.is_err() {
+            match self.handles.lock().await.entry(path) {
+                hash_map::Entry::Occupied(entry) => {
+                    let mut handle = entry.get().lock().await;
+                    handle.handle_count -= 1;
+                    if handle.handle_count == 0 {
+                        drop(handle);
+                        entry.remove();
+                    }
+                }
+                // Unreachable because we ensured it's occupied above.
+                hash_map::Entry::Vacant(_) => unreachable!(),
+            }
+        }
+
+        result.map(|(entry, is_new)| (entry, is_new, id))
     }
 
     async fn resize_file(&self, file: &mut File, desired_len: u64) -> Result<(), Error> {
@@ -473,30 +497,18 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         }
 
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
+        let is_dir = create_options & FILE_DIRECTORY_FILE > 0;
 
         let path = to_path(file_name)?;
 
-        let is_dir = create_options & FILE_DIRECTORY_FILE > 0;
-
-        let result = if !is_dir {
-            self.rt.block_on(async {
-                self.create_file_entry(path.clone(), create_disposition, delete_on_close)
-                    .await
-                    .map(|(file, is_new, id)| (Entry::File(file), is_new, id))
-            })
-        } else {
-            self.rt.block_on(async {
-                self.create_directory_entry(&path, create_disposition)
-                    .await
-                    .map(|is_new| (Entry::Directory(path.clone()), is_new, 0))
-            })
-        };
-
-        let (entry, is_new, id) = result?;
+        let (entry, is_new, id) = self.rt.block_on(async {
+            self.create_entry(path, is_dir, create_disposition, delete_on_close)
+                .await
+        })?;
 
         Ok(CreateFileInfo {
             context: EntryHandle { id, entry },
-            is_dir: false,
+            is_dir,
             new_file_created: is_new,
         })
     }
