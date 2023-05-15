@@ -1,17 +1,32 @@
 use camino::Utf8Path;
-use ouisync::{Access, Repository, StateMonitor, WriteSecrets};
-use rand::{rngs::StdRng, Rng};
-use std::{ops::Deref, path::Path};
-use tokio::runtime::Handle;
+use ouisync::{
+    network::{Network, Registration},
+    Access, Event, Payload, PeerAddr, Repository, StateMonitor, WriteSecrets,
+};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::{net::Ipv4Addr, ops::Deref, path::Path, time::Duration};
+use tokio::{
+    runtime::Handle,
+    sync::broadcast::{self, error::RecvError},
+    time,
+};
 
-pub async fn create_repo(rng: &mut StdRng, store: &Path) -> RepositoryGuard {
-    let monitor = StateMonitor::make_root();
+const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `id` is used to generate the access secrets - repos with the same id have the same secrets.
+pub async fn create_repo(
+    rng: &mut StdRng,
+    store: &Path,
+    id: u64,
+    monitor: StateMonitor,
+) -> RepositoryGuard {
+    let mut secret_rng = StdRng::seed_from_u64(id);
+    let secrets = WriteSecrets::generate(&mut secret_rng);
+
     let repository = Repository::create(
         store,
         rng.gen(),
-        Access::WriteUnlocked {
-            secrets: WriteSecrets::generate(rng),
-        },
+        Access::WriteUnlocked { secrets },
         &monitor,
     )
     .await
@@ -91,4 +106,83 @@ pub async fn read_file(repo: &Repository, path: &Utf8Path, buffer_size: usize) -
     }
 
     size
+}
+
+pub(crate) struct Actor {
+    pub network: Network,
+    pub repo: RepositoryGuard,
+    pub _reg: Registration,
+}
+
+impl Actor {
+    pub(crate) async fn new(rng: &mut StdRng, base_dir: &Path) -> Self {
+        let monitor = StateMonitor::make_root();
+
+        let network = Network::new(None, monitor.clone());
+        network
+            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+
+        let repo = create_repo(rng, &base_dir.join("repo.db"), 0, monitor).await;
+        let reg = network.register(repo.store().clone()).await;
+
+        Self {
+            network,
+            repo,
+            _reg: reg,
+        }
+    }
+
+    pub(crate) fn connect_to(&self, peer: &Actor) {
+        let addr = peer
+            .network
+            .listener_local_addrs()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        self.network.add_user_provided_peer(&addr);
+    }
+}
+
+pub(crate) async fn wait_for_sync(repo_a: &Repository, repo_b: &Repository) {
+    let mut rx = repo_a.subscribe();
+
+    loop {
+        let vv_a = repo_a
+            .local_branch()
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap();
+        let vv_b = repo_b
+            .local_branch()
+            .unwrap()
+            .version_vector()
+            .await
+            .unwrap();
+
+        let progress_a = repo_a.sync_progress().await.unwrap();
+
+        if progress_a.value == progress_a.total && vv_a >= vv_b {
+            break;
+        }
+
+        wait_for_event(&mut rx).await;
+    }
+}
+
+async fn wait_for_event(rx: &mut broadcast::Receiver<Event>) {
+    loop {
+        match time::timeout(EVENT_TIMEOUT, rx.recv()).await {
+            Ok(Ok(Event {
+                payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                ..
+            }))
+            | Ok(Err(RecvError::Lagged(_))) => return,
+            Ok(Ok(Event { .. })) => continue,
+            Ok(Err(RecvError::Closed)) => panic!("notification channel unexpectedly closed"),
+            Err(_) => panic!("timeout waiting for notification"),
+        }
+    }
 }
