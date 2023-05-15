@@ -455,6 +455,36 @@ impl Repository {
         self.shared.store.metadata()
     }
 
+    /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
+    pub async fn set_quota(&self, quota: Option<u64>) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+
+        if let Some(quota) = quota {
+            metadata::set_quota(&mut tx, quota).await?
+        } else {
+            metadata::remove_quota(&mut tx).await?
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Get the storage quota in bytes or `None` if no quota is set.
+    pub async fn quota(&self) -> Result<Option<u64>> {
+        let mut conn = self.db().acquire().await?;
+        match metadata::get_quota(&mut conn).await {
+            Ok(quota) => Ok(Some(quota)),
+            Err(Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Get the total size of the data stored in this repository.
+    pub async fn size(&self) -> Result<u64> {
+        self.shared.store.size().await
+    }
+
     pub fn store(&self) -> &Store {
         &self.shared.store
     }

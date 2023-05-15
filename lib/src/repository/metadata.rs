@@ -36,6 +36,8 @@ const DEPRECATED_ACCESS_KEY: &[u8] = b"access_key"; // read key or write key
 const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
+const QUOTA: &[u8] = b"quota";
+
 // -------------------------------------------------------------------
 // Accessor for user-defined metadata
 // -------------------------------------------------------------------
@@ -499,6 +501,21 @@ async fn get_read_key(
 }
 
 // -------------------------------------------------------------------
+// Storage quota
+// -------------------------------------------------------------------
+pub(super) async fn get_quota(conn: &mut db::Connection) -> Result<u64> {
+    get_public(conn, QUOTA).await
+}
+
+pub(super) async fn set_quota(tx: &mut db::WriteTransaction, value: u64) -> Result<()> {
+    set_public(tx, QUOTA, value).await
+}
+
+pub(super) async fn remove_quota(tx: &mut db::WriteTransaction) -> Result<()> {
+    remove_public(tx, QUOTA).await
+}
+
+// -------------------------------------------------------------------
 // Public values
 // -------------------------------------------------------------------
 async fn get_public_blob<T>(conn: &mut db::Connection, id: &[u8]) -> Result<T>
@@ -567,6 +584,7 @@ impl<'a, T> MetadataSet<'a> for T where T: detail::Set<'a> {}
 
 // Use the sealed trait pattern to avoid exposing implementation details outside of this crate.
 mod detail {
+    use crate::db;
     use sqlx::{
         sqlite::{SqliteArguments, SqliteRow},
         Row, Sqlite,
@@ -594,6 +612,18 @@ mod detail {
     impl<'a> Set<'a> for bool {
         fn bind(self, query: Query<'a>) -> Query<'a> {
             query.bind(self)
+        }
+    }
+
+    impl Get for u64 {
+        fn get(row: &SqliteRow) -> Result<Self, sqlx::Error> {
+            row.try_get(0).map(db::decode_u64)
+        }
+    }
+
+    impl<'a> Set<'a> for u64 {
+        fn bind(self, query: Query<'a>) -> Query<'a> {
+            query.bind(db::encode_u64(self))
         }
     }
 

@@ -984,6 +984,62 @@ fn content_stays_available_during_sync() {
     });
 }
 
+// TODO: unignore when quota is implemented
+#[ignore]
+#[test]
+fn quota() {
+    let mut env = Env::new();
+
+    let quota = 64 * 1024;
+    let content0 = common::random_content(3 * quota as usize / 4);
+    let content1 = common::random_content(2 * quota as usize / 4);
+
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", {
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.add_user_provided_peer(&actor::lookup_addr("mirror").await);
+
+            let mut file = repo.create_file("one.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content0, 4096).await;
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+
+            let mut file = repo.create_file("two.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content1, 4096).await;
+            file.flush().await.unwrap();
+
+            rx.recv().await.unwrap();
+        }
+    });
+
+    env.actor("mirror", {
+        async move {
+            let network = actor::create_network(Proto::Tcp).await;
+
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
+            repo.set_quota(Some(quota)).await.unwrap();
+
+            let _reg = network.register(repo.store().clone()).await;
+
+            expect_sync_complete(&repo).await;
+
+            // The first file is synced now.
+            let size = repo.size().await.unwrap();
+            assert!(size < quota);
+            tx.send(()).await.unwrap();
+
+            expect_sync_complete(&repo).await;
+
+            // The second file is rejected because it exceeds the quota.
+            assert_eq!(repo.size().await.unwrap(), size);
+            tx.send(()).await.unwrap();
+        }
+    });
+}
+
 #[instrument(skip(repo))]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
@@ -992,6 +1048,14 @@ async fn expect_local_directory_exists(repo: &Repository, path: &str) {
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
             Err(error) => panic!("unexpected error: {error:?}"),
         }
+    })
+    .await
+}
+
+async fn expect_sync_complete(repo: &Repository) {
+    common::eventually(repo, || async {
+        let progress = repo.sync_progress().await.unwrap();
+        progress.total > 0 && progress.value == progress.total
     })
     .await
 }

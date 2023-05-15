@@ -1,13 +1,14 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
+    block::{self, BlockData, BlockId, BlockNonce, BlockTracker, BLOCK_NONCE_SIZE},
     db,
     error::{Error, Result},
     event::Payload,
     index::{self, Index},
     progress::Progress,
     repository::{LocalId, Metadata, RepositoryMonitor},
+    BLOCK_SIZE,
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -126,6 +127,21 @@ impl Store {
 
     pub(crate) fn metadata(&self) -> Metadata {
         Metadata::new(self.db().clone())
+    }
+
+    /// Total size of the stored data
+    pub(crate) async fn size(&self) -> Result<u64> {
+        let mut conn = self.db().acquire().await?;
+
+        // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
+        let count = db::decode_u64(
+            sqlx::query("SELECT COUNT(*) FROM blocks")
+                .fetch_one(&mut *conn)
+                .await?
+                .get(0),
+        );
+
+        Ok(count * (BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64))
     }
 }
 

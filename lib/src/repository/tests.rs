@@ -1,5 +1,11 @@
 use super::*;
-use crate::{blob, block::BLOCK_SIZE, db, state_monitor::StateMonitor, test_utils, WriteSecrets};
+use crate::{
+    blob,
+    block::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
+    db,
+    state_monitor::StateMonitor,
+    test_utils, WriteSecrets,
+};
 use assert_matches::assert_matches;
 use rand::Rng;
 use std::io::SeekFrom;
@@ -847,6 +853,31 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
     assert_matches!(
         remote_file.fork(local_branch).await,
         Err(Error::EntryExists)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn size() {
+    let (_base_dir, repo) = setup().await;
+    assert_eq!(repo.size().await.unwrap(), 0);
+
+    let mut file = repo.create_file("test.txt").await.unwrap();
+
+    // 2 blocks: 1 for the file and 1 for the root dir
+    assert_eq!(
+        repo.size().await.unwrap(),
+        2 * (BLOCK_SIZE + BlockId::SIZE + BLOCK_NONCE_SIZE) as u64
+    );
+
+    // 1 block size + 1 byte == 2 blocks
+    let content = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE + 1);
+    file.write(&content).await.unwrap();
+    file.flush().await.unwrap();
+
+    // 3 blocks: 2 for the file and 1 for the root dir
+    assert_eq!(
+        repo.size().await.unwrap(),
+        3 * (BLOCK_SIZE + BlockId::SIZE + BLOCK_NONCE_SIZE) as u64
     );
 }
 

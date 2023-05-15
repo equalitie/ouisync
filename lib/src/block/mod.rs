@@ -6,7 +6,7 @@ mod store;
 pub(crate) mod tracker;
 
 pub(crate) use self::{
-    store::{count, exists, read, remove, write, BlockNonce},
+    store::{count, exists, read, remove, write, BlockNonce, BLOCK_NONCE_SIZE},
     tracker::{BlockTracker, BlockTrackerClient},
 };
 
@@ -19,6 +19,8 @@ pub const BLOCK_SIZE: usize = 32 * 1024;
 pub struct BlockId(Hash);
 
 impl BlockId {
+    pub(crate) const SIZE: usize = Hash::SIZE;
+
     pub(crate) fn from_content(content: &[u8]) -> Self {
         Self(content.hash())
     }
