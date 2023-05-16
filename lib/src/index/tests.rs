@@ -380,12 +380,12 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
+                .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter)
                 .await
                 .unwrap();
 
@@ -418,12 +418,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
     let (_base_dir, index, _write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
         let result = index
-            .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
+            .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter)
             .await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
@@ -738,12 +738,12 @@ async fn receive_snapshot(
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter)
                 .await
                 .unwrap();
         }

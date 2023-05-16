@@ -200,6 +200,35 @@ pub(crate) enum BlockRequestMode {
     Greedy,
 }
 
+/* TODO:
+/// Yields all missing block ids referenced from the given snapshot.
+pub(crate) fn snapshot_missing_block_ids<'a>(
+    conn: &'a mut db::Connection,
+    root_hash: &'a Hash,
+) -> impl Stream<Item = Result<BlockId>> + 'a {
+    sqlx::query(
+        "WITH RECURSIVE
+             inner_nodes(hash) AS (
+                 SELECT i.hash
+                     FROM snapshot_inner_nodes AS i
+                     WHERE i.parent = ?
+                 UNION ALL
+                 SELECT hash
+                     FROM snapshot_inner_nodes AS c
+                     INNER JOIN inner_nodes AS p ON p.hash = c.parent
+             )
+         SELECT DISTINCT block_id
+             FROM snapshot_leaf_nodes
+             WHERE parent IN inner_nodes
+        ",
+    )
+    .bind(root_hash)
+    .fetch(conn)
+    .map_ok(|row| row.get(0))
+    .err_into()
+}
+*/
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,7 +600,7 @@ mod tests {
             }
         };
 
-        let mut receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.db().clone());
         let version_vector = VersionVector::first(branch_id);
         let proof = Proof::new(
             branch_id,
@@ -590,7 +619,7 @@ mod tests {
             for (_, nodes) in layer.inner_maps() {
                 store
                     .index
-                    .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                    .receive_inner_nodes(nodes.clone().into(), &receive_filter)
                     .await
                     .unwrap();
             }

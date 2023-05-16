@@ -25,7 +25,7 @@ pub(super) struct Client {
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
-    block_tracker: Arc<BlockTrackerClient>,
+    block_tracker: BlockTrackerClient,
     _request_sender: ScopedJoinHandle<()>,
 }
 
@@ -36,7 +36,7 @@ impl Client {
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pool = store.db().clone();
-        let block_tracker = Arc::new(store.block_tracker.client());
+        let block_tracker = store.block_tracker.client();
 
         let pending_requests = Arc::new(PendingRequests::new(store.monitor.clone()));
 
@@ -63,8 +63,6 @@ impl Client {
         self.receive_filter.reset().await?;
 
         let mut block_promise_acceptor = self.block_tracker.acceptor();
-        let request_tx = self.request_tx.clone();
-        let pending_requests = self.pending_requests.clone();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
@@ -85,7 +83,7 @@ impl Client {
                     None => break,
                 };
 
-                let response = match pending_requests.remove(response) {
+                let response = match self.pending_requests.remove(response) {
                     Some(response) => response,
                     // Unsolicited and non-root response.
                     None => continue,
@@ -101,8 +99,7 @@ impl Client {
             select! {
                 block_promise = block_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
-                    // Unwrap OK because the sending task never returns.
-                    request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
+                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
                 }
                 _ = &mut move_from_pending_into_queued => break,
                 result = &mut handle_queued_responses => {
@@ -121,7 +118,7 @@ impl Client {
     }
 
     async fn handle_responses(
-        &mut self,
+        &self,
         mut queued_responses_rx: mpsc::Receiver<PendingResponse>,
     ) -> Result<()> {
         loop {
@@ -132,7 +129,7 @@ impl Client {
         }
     }
 
-    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
+    async fn handle_response(&self, response: PendingResponse) -> Result<()> {
         let result = match response {
             PendingResponse::RootNode {
                 proof,
@@ -200,7 +197,7 @@ impl Client {
 
     #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_inner_nodes(
-        &mut self,
+        &self,
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
@@ -209,7 +206,7 @@ impl Client {
         let (updated_nodes, completed_branches) = self
             .store
             .index
-            .receive_inner_nodes(nodes, &mut self.receive_filter)
+            .receive_inner_nodes(nodes, &self.receive_filter)
             .await?;
 
         let debug = DebugRequest::start();
@@ -243,7 +240,7 @@ impl Client {
 
     #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_leaf_nodes(
-        &mut self,
+        &self,
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
@@ -299,7 +296,7 @@ impl Client {
 
     #[instrument(skip_all, fields(id = ?data.id), err(Debug))]
     async fn handle_block(
-        &mut self,
+        &self,
         data: BlockData,
         nonce: BlockNonce,
         // We need to preserve the lifetime of `_block_promise` until the response is processed.

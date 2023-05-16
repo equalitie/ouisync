@@ -167,7 +167,7 @@ pub(crate) async fn receive_nodes(
     version_vector: VersionVector,
     snapshot: &Snapshot,
 ) {
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index
@@ -178,7 +178,7 @@ pub(crate) async fn receive_nodes(
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter)
                 .await
                 .unwrap();
         }

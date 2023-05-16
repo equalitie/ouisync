@@ -133,7 +133,7 @@ impl Index {
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
-        receive_filter: &mut ReceiveFilter,
+        receive_filter: &ReceiveFilter,
     ) -> Result<(Vec<InnerNode>, Vec<PublicKey>), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
@@ -188,7 +188,7 @@ impl Index {
         &self,
         tx: &mut db::WriteTransaction,
         remote_nodes: &InnerNodeMap,
-        receive_filter: &mut ReceiveFilter,
+        receive_filter: &ReceiveFilter,
     ) -> Result<Vec<InnerNode>> {
         let mut output = Vec::with_capacity(remote_nodes.len());
 
