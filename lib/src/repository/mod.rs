@@ -745,7 +745,7 @@ impl Repository {
         Ok(JointDirectory::new(Some(local_branch), dirs))
     }
 
-    async fn cd<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
+    pub async fn cd<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         self.root().await?.cd(path).await
     }
 

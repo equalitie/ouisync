@@ -5,8 +5,8 @@ use dokan::{
     MountOptions, OperationInfo, OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
 };
 use dokan_sys::win32::{
-    FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_MAXIMUM_DISPOSITION, FILE_OPEN,
-    FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
+    FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+    FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
 use ouisync_lib::{deadlock::AsyncMutex, File, JointEntryRef, Repository};
 use std::{
@@ -20,6 +20,7 @@ use std::{
     thread,
     time::UNIX_EPOCH,
 };
+use tracing::instrument;
 use widestring::{U16CStr, U16CString};
 use winapi::{shared::ntstatus::*, um::winnt};
 
@@ -176,87 +177,95 @@ impl VirtualFilesystem {
         }
     }
 
-    async fn create_file_entry(
+    async fn create_entry_impl(
         &self,
         path: &Utf8PathBuf,
-        create_disposition: u32,
-    ) -> Result<(File, bool), Error> {
-        match create_disposition {
-            FILE_CREATE => {
-                let mut file = self.repo.create_file(path).await?;
-                file.flush().await?;
-                Ok((file, true))
+        // Only used when creating a new entry, don't use it to determine what type of entry we
+        // want to open if it does already exist.
+        create_directory: bool,
+        create_disposition: CreateDisposition,
+        shared: Arc<AsyncMutex<Shared>>,
+    ) -> Result<(Entry, bool), Error> {
+        use ouisync_lib::path;
+        use ouisync_lib::Error as E;
+
+        let (parent, child) = match path::decompose(path) {
+            Some((parent, child)) => (parent, child),
+            None => {
+                // It's the root.
+                return Ok((Entry::Directory(path.clone()), false));
             }
-            FILE_OPEN => {
-                let file = self.repo.open_file(path).await?;
-                Ok((file, false))
-            }
-            FILE_OPEN_IF => match self.repo.open_file(path).await {
-                Ok(file) => Ok((file, false)),
-                Err(ouisync_lib::Error::EntryNotFound) => {
+        };
+
+        let dir = self.repo.cd(parent).await?;
+
+        let existing_entry = match dir.lookup_unique(child) {
+            Ok(existing_entry) => existing_entry,
+            Err(E::EntryNotFound) => {
+                if !create_disposition.should_create() {
+                    return Err(E::EntryNotFound.into());
+                }
+
+                let created = true;
+
+                if create_directory {
+                    return self
+                        .repo
+                        .create_directory(&path)
+                        .await
+                        .map(|_dir| (Entry::Directory(path.clone()), created))
+                        .map_err(|e| e.into());
+                } else {
                     let mut file = self.repo.create_file(path).await?;
                     file.flush().await?;
-                    Ok((file, true))
-                }
-                Err(other) => Err(other.into()),
-            },
-            // TODO
-            FILE_SUPERSEDE | FILE_OVERWRITE | FILE_OVERWRITE_IF => {
-                Err(STATUS_NOT_IMPLEMENTED.into())
-            }
-            _ => Err(STATUS_INVALID_PARAMETER.into()),
-        }
-    }
-
-    async fn create_directory_entry(
-        &self,
-        path: &Utf8PathBuf,
-        create_disposition: u32,
-    ) -> Result<bool, Error> {
-        match create_disposition {
-            FILE_SUPERSEDE => todo!(),
-            FILE_CREATE => {
-                let _dir = self.repo.create_directory(&path).await?;
-                // TODO: We don't actually know whether it's newly created here.
-                Ok(true)
-            }
-            FILE_OPEN => {
-                let _joint_dir = self.repo.open_directory(&path).await?;
-                Ok(false)
-            }
-            FILE_OPEN_IF => todo!(),
-            FILE_OVERWRITE => todo!(),
-            FILE_OVERWRITE_IF => todo!(),
-            _ => Err(STATUS_INVALID_PARAMETER.into()),
-        }
-    }
-
-    async fn create_entry(
-        &self,
-        path: Utf8PathBuf,
-        is_directory: bool,
-        create_disposition: u32,
-        delete_on_close: bool,
-    ) -> Result<(Entry, bool, u64), Error> {
-        let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
-
-        let result = if !is_directory {
-            self.create_file_entry(&path, create_disposition)
-                .await
-                .map(|(file, created)| {
-                    (
+                    return Ok((
                         Entry::File(FileEntry {
                             file: AsyncMutex::new(Some(file)),
                             shared,
                         }),
                         created,
-                    )
-                })
-        } else {
-            self.create_directory_entry(&path, create_disposition)
-                .await
-                .map(|created| (Entry::Directory(path.clone()), created))
+                    ));
+                }
+            }
+            Err(other) => return Err(other.into()),
         };
+
+        let created = false;
+
+        match existing_entry {
+            JointEntryRef::File(file_entry) => {
+                let file = file_entry.open().await?;
+                Ok((
+                    Entry::File(FileEntry {
+                        file: AsyncMutex::new(Some(file)),
+                        shared,
+                    }),
+                    created,
+                ))
+            }
+            JointEntryRef::Directory(_) => Ok((Entry::Directory(path.clone()), created)),
+        }
+    }
+
+    #[instrument(
+        skip(self),
+        fields(path, is_directory, create_disposition, delete_on_close),
+        err(Debug)
+    )]
+    async fn create_entry(
+        &self,
+        path: Utf8PathBuf,
+        // Only used when creating a new entry, don't use it to determine what type of entry we
+        // want to open if it does already exist.
+        create_directory: bool,
+        create_disposition: CreateDisposition,
+        delete_on_close: bool,
+    ) -> Result<(Entry, bool, u64), Error> {
+        let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
+
+        let result = self
+            .create_entry_impl(&path, create_directory, create_disposition, shared)
+            .await;
 
         if result.is_err() {
             match self.handles.lock().await.entry(path) {
@@ -387,6 +396,15 @@ impl VirtualFilesystem {
         let dir = self.repo.open_directory(directory_path).await?;
 
         for entry in dir.entries() {
+            // TODO: Unwrap
+            let name = entry.unique_name();
+
+            if name == "." || name == ".." {
+                continue;
+            }
+
+            let file_name = U16CString::from_str(entry.unique_name().as_ref()).unwrap();
+
             let (attributes, file_size) = match &entry {
                 JointEntryRef::File(file) => {
                     let file_size = match file.open().await {
@@ -400,9 +418,6 @@ impl VirtualFilesystem {
                     (winnt::FILE_ATTRIBUTE_DIRECTORY, 0)
                 }
             };
-
-            // TODO: Unwrap
-            let file_name = U16CString::from_str(entry.unique_name().as_ref()).unwrap();
 
             if let Some(pattern) = pattern {
                 let ignore_case = true;
@@ -426,23 +441,50 @@ impl VirtualFilesystem {
     }
 }
 
-//fn create_disposition_to_str(create_disposition: u32) -> &'static str {
-//    match create_disposition {
-//        // If the file already exists, replace it with the given file. If it does not, create the given file.
-//        FILE_SUPERSEDE => "FILE_SUPERSEDE",
-//        // If the file already exists, fail the request and do not create or open the given file. If it does not, create the given file.
-//        FILE_CREATE => "FILE_CREATE",
-//        // If the file already exists, open it instead of creating a new file. If it does not, fail the request and do not create a new file.
-//        FILE_OPEN => "FILE_OPEN",
-//        // If the file already exists, open it. If it does not, create the given file.
-//        FILE_OPEN_IF => "FILE_OPEN_IF",
-//        //  If the file already exists, open it and overwrite it. If it does not, fail the request.
-//        FILE_OVERWRITE => "FILE_OVERWRITE",
-//        //  If the file already exists, open it and overwrite it. If it does not, create the given file.
-//        FILE_OVERWRITE_IF => "FILE_OVERWRITE_IF",
-//        _ => "UNKNOWN",
-//    }
-//}
+#[derive(Debug)]
+enum CreateDisposition {
+    // If the file already exists, replace it with the given file. If it does not, create the given file.
+    FileSupersede,
+    // If the file already exists, fail the request and do not create or open the given file. If it does not, create the given file.
+    FileCreate,
+    // If the file already exists, open it instead of creating a new file. If it does not, fail the request and do not create a new file.
+    FileOpen,
+    // If the file already exists, open it. If it does not, create the given file.
+    FileOpenIf,
+    //  If the file already exists, open it and overwrite it. If it does not, fail the request.
+    FileOverwrite,
+    //  If the file already exists, open it and overwrite it. If it does not, create the given file.
+    FileOverwriteIf,
+}
+
+impl CreateDisposition {
+    fn should_create(&self) -> bool {
+        match self {
+            Self::FileSupersede => true,
+            Self::FileCreate => true,
+            Self::FileOpen => false,
+            Self::FileOpenIf => true,
+            Self::FileOverwrite => false,
+            Self::FileOverwriteIf => true,
+        }
+    }
+}
+
+impl TryFrom<u32> for CreateDisposition {
+    type Error = Error;
+
+    fn try_from(n: u32) -> Result<Self, Self::Error> {
+        match n {
+            FILE_SUPERSEDE => Ok(Self::FileSupersede),
+            FILE_CREATE => Ok(Self::FileCreate),
+            FILE_OPEN => Ok(Self::FileOpen),
+            FILE_OPEN_IF => Ok(Self::FileOpenIf),
+            FILE_OVERWRITE => Ok(Self::FileOverwrite),
+            FILE_OVERWRITE_IF => Ok(Self::FileOverwriteIf),
+            _ => Err(STATUS_INVALID_PARAMETER.into()),
+        }
+    }
+}
 
 struct FileEntry {
     file: AsyncMutex<Option<File>>,
@@ -492,19 +534,18 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
-        if create_disposition > FILE_MAXIMUM_DISPOSITION {
-            return Err(STATUS_INVALID_PARAMETER);
-        }
-
+        let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
-        let is_dir = create_options & FILE_DIRECTORY_FILE > 0;
+        let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
 
         let path = to_path(file_name)?;
 
         let (entry, is_new, id) = self.rt.block_on(async {
-            self.create_entry(path, is_dir, create_disposition, delete_on_close)
+            self.create_entry(path, create_dir, create_disposition, delete_on_close)
                 .await
         })?;
+
+        let is_dir = entry.as_directory().is_ok();
 
         Ok(CreateFileInfo {
             context: EntryHandle { id, entry },
