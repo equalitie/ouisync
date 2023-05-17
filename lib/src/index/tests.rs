@@ -194,7 +194,7 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap()
         .root_node;
 
-    assert!(root.summary.is_complete());
+    assert!(root.summary.is_complete);
     let root_hash = root.proof.hash;
     let root_vv = root.proof.version_vector.clone();
 
@@ -206,13 +206,15 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
 
-    assert!(local_branch
-        .load_snapshot(&mut conn)
-        .await
-        .unwrap()
-        .root_node
-        .summary
-        .is_complete());
+    assert!(
+        local_branch
+            .load_snapshot(&mut conn)
+            .await
+            .unwrap()
+            .root_node
+            .summary
+            .is_complete
+    );
 }
 
 mod receive_and_create_root_node {

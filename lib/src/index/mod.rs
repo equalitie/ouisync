@@ -18,7 +18,10 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::proof::ProofError;
+use self::{
+    node::{try_collect_into, Completion},
+    proof::ProofError,
+};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -129,12 +132,12 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    /// Also returns the ids of the branches that became complete.
+    /// Also returns the receive status.
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &ReceiveFilter,
-    ) -> Result<(Vec<InnerNode>, Vec<PublicKey>), ReceiveError> {
+    ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
@@ -148,18 +151,18 @@ impl Index {
         nodes.inherit_summaries(&mut tx).await?;
         nodes.save(&mut tx, &parent_hash).await?;
 
-        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+        let status = self.update_summaries(tx, parent_hash).await?;
 
-        Ok((updated_nodes, completed_branches))
+        Ok((updated_nodes, status))
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    /// Also returns the ids of the branches that became complete.
+    /// Also returns the receive status.
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
-    ) -> Result<(Vec<BlockId>, Vec<PublicKey>), ReceiveError> {
+    ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
@@ -175,9 +178,9 @@ impl Index {
             .save(&mut tx, &parent_hash)
             .await?;
 
-        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+        let status = self.update_summaries(tx, parent_hash).await?;
 
-        Ok((updated_blocks, completed_branches))
+        Ok((updated_blocks, status))
     }
 
     // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
@@ -245,21 +248,48 @@ impl Index {
         &self,
         mut tx: db::WriteTransaction,
         hash: Hash,
-    ) -> Result<Vec<PublicKey>> {
-        let statuses = node::update_summaries(&mut tx, hash).await?;
-        tx.commit().await?;
+    ) -> Result<ReceiveStatus> {
+        let statuses = node::update_summaries(&mut tx, vec![hash]).await?;
 
-        let completed: Vec<_> = statuses
-            .into_iter()
-            .filter(|(_, complete)| *complete)
-            .map(|(writer_id, _)| writer_id)
-            .collect();
+        let complete = !statuses.is_empty();
+        let mut new_complete = Vec::new();
 
-        if !completed.is_empty() {
-            for branch_id in &completed {
-                if tracing::enabled!(Level::DEBUG) {
-                    let mut conn = self.pool.acquire().await?;
-                    let snapshot = self.get_branch(*branch_id).load_snapshot(&mut conn).await?;
+        for (hash, complete) in statuses {
+            let completer = match complete {
+                Completion::Done => continue,
+                Completion::Pending(completer) => completer,
+            };
+
+            // TODO: perform the quota validation here
+
+            completer.complete(&mut tx).await?;
+
+            try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_complete).await?;
+        }
+
+        new_complete.sort();
+        new_complete.dedup();
+
+        // For logging completed snapshots
+        let snapshots = if tracing::enabled!(Level::DEBUG) {
+            let mut snapshots = Vec::with_capacity(new_complete.len());
+
+            for branch_id in &new_complete {
+                snapshots.push(self.get_branch(*branch_id).load_snapshot(&mut tx).await?);
+            }
+
+            snapshots
+        } else {
+            Vec::new()
+        };
+
+        // TODO: run the closure under the current span
+        tx.commit_and_then({
+            let new_complete = new_complete.clone();
+            let event_tx = self.notify().clone();
+
+            move || {
+                for snapshot in snapshots {
                     tracing::debug!(
                         branch_id = ?snapshot.branch_id(),
                         hash = ?snapshot.root_hash(),
@@ -268,11 +298,17 @@ impl Index {
                     );
                 }
 
-                self.notify().send(Payload::BranchChanged(*branch_id));
+                for branch_id in new_complete {
+                    event_tx.send(Payload::BranchChanged(branch_id));
+                }
             }
-        }
+        })
+        .await?;
 
-        Ok(completed)
+        Ok(ReceiveStatus {
+            complete,
+            new_complete,
+        })
     }
 
     async fn check_parent_node_exists(
@@ -286,6 +322,15 @@ impl Index {
             Err(ReceiveError::ParentNodeNotFound)
         }
     }
+}
+
+/// Status of receiving nodes from remote replica.
+#[derive(Debug)]
+pub(crate) struct ReceiveStatus {
+    /// Whether the snapshot(s) the received nodes belong to are complete.
+    pub complete: bool,
+    /// List of branches whose snapshots became complete.
+    pub new_complete: Vec<PublicKey>,
 }
 
 #[derive(Debug, Error)]

@@ -82,10 +82,6 @@ impl Summary {
     pub fn is_outdated(&self, other: &Self) -> bool {
         self.block_presence.is_outdated(&other.block_presence)
     }
-
-    pub fn is_complete(&self) -> bool {
-        self.is_complete
-    }
 }
 
 /// Information about the presence of a single block.

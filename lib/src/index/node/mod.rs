@@ -8,12 +8,16 @@ mod summary;
 #[cfg(test)]
 mod tests;
 
+use std::iter;
+
 pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
     summary::{MultiBlockPresence, SingleBlockPresence, Summary},
 };
+
+pub(super) use self::root::Completion;
 
 use crate::{
     block::BlockId,
@@ -22,21 +26,39 @@ use crate::{
     db,
     error::Result,
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::{future, Stream, TryStreamExt};
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
-/// Update summary of the nodes with the specified hash and all their ancestor nodes.
-/// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they
-/// became complete.
+/// Update summary of the nodes with the specified hashes and all their ancestor nodes.
+/// Returns the `Completion`s of the affected complete snapshots.
 pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
-    hash: Hash,
-) -> Result<HashMap<PublicKey, bool>> {
-    update_summaries_with_stack(tx, vec![hash]).await
+    mut nodes: Vec<Hash>,
+) -> Result<HashMap<Hash, Completion>> {
+    let mut statuses = HashMap::default();
+
+    while let Some(hash) = nodes.pop() {
+        match parent_kind(tx, &hash).await? {
+            Some(ParentNodeKind::Root) => {
+                let Some(new) = RootNode::update_summaries(tx, &hash).await? else {
+                    continue;
+                };
+
+                statuses.entry(hash).or_insert(Completion::Done).update(new);
+            }
+            Some(ParentNodeKind::Inner) => {
+                InnerNode::update_summaries(tx, &hash).await?;
+                try_collect_into(InnerNode::load_parent_hashes(tx, &hash), &mut nodes).await?;
+            }
+            None => (),
+        }
+    }
+
+    Ok(statuses)
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
@@ -50,13 +72,13 @@ pub(crate) async fn receive_block(
     }
 
     let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
+    let mut branch_ids = HashSet::default();
 
-    let ids = update_summaries_with_stack(tx, nodes)
-        .await?
-        .into_keys()
-        .collect();
+    for (hash, _) in update_summaries(tx, nodes).await? {
+        try_collect_into(RootNode::load_writer_ids(tx, &hash), &mut branch_ids).await?;
+    }
 
-    Ok(ids)
+    Ok(branch_ids)
 }
 
 /// Does a parent node (root or inner) with the given hash exist?
@@ -154,37 +176,15 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
     }
 }
 
-async fn update_summaries_with_stack(
-    tx: &mut db::WriteTransaction,
-    mut nodes: Vec<Hash>,
-) -> Result<HashMap<PublicKey, bool>> {
-    let mut statuses = HashMap::default();
-
-    while let Some(hash) = nodes.pop() {
-        match parent_kind(tx, &hash).await? {
-            Some(ParentNodeKind::Root) => {
-                let complete = RootNode::update_summaries(tx, &hash).await?;
-                RootNode::load_writer_ids(tx, &hash)
-                    .try_for_each(|writer_id| {
-                        let entry = statuses.entry(writer_id).or_insert(false);
-                        *entry = *entry || complete;
-
-                        future::ready(Ok(()))
-                    })
-                    .await?;
-            }
-            Some(ParentNodeKind::Inner) => {
-                InnerNode::update_summaries(tx, &hash).await?;
-                InnerNode::load_parent_hashes(tx, &hash)
-                    .try_for_each(|parent_hash| {
-                        nodes.push(parent_hash);
-                        future::ready(Ok(()))
-                    })
-                    .await?;
-            }
-            None => (),
-        }
-    }
-
-    Ok(statuses)
+// TODO: move this to some generic utils module.
+pub(super) async fn try_collect_into<S, D, T, E>(src: S, dst: &mut D) -> Result<(), E>
+where
+    S: Stream<Item = Result<T, E>>,
+    D: Extend<T>,
+{
+    src.try_for_each(|item| {
+        dst.extend(iter::once(item));
+        future::ready(Ok(()))
+    })
+    .await
 }

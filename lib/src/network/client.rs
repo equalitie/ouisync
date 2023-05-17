@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
-    crypto::{CacheHash, Hashable},
+    crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     repository::RepositoryMonitor,
@@ -203,7 +203,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
 
-        let (updated_nodes, completed_branches) = self
+        let (updated_nodes, status) = self
             .store
             .index
             .receive_inner_nodes(nodes, &self.receive_filter)
@@ -229,11 +229,7 @@ impl Client {
             ));
         }
 
-        // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
-        // for explanation.
-        for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id, debug));
-        }
+        self.refresh_branches(&status.new_complete);
 
         Ok(())
     }
@@ -245,8 +241,7 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
-        let (updated_blocks, completed_branches) =
-            self.store.index.receive_leaf_nodes(nodes).await?;
+        let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes).await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",
@@ -270,26 +265,7 @@ impl Client {
             }
         }
 
-        // Request again the branches that became completed. This is to cover the following edge
-        // case:
-        //
-        // A block is initially present, but is part of a an outdated file/directory. A new snapshot
-        // is in the process of being downloaded from a remote replica. During this download, the
-        // block is still present and so is not marked as offered (because at least one of its
-        // local ancestor nodes is still seen as up-to-date). Then before the download completes,
-        // the worker garbage-collects the block. Then the download completes and triggers another
-        // worker run. During this run the block might be marked as required again (because e.g.
-        // the file was modified by the remote replica). But the block hasn't been marked as
-        // offered (because it was still present during the last snapshot download) and so is not
-        // requested. We would now have to wait for the next snapshot update from the remote replica
-        // before the block is marked as offered and only then we proceed with requesting it. This
-        // can take arbitrarily long (even indefinitely).
-        //
-        // By requesting the root node again immediatelly, we ensure that the missing block is
-        // requested as soon as possible.
-        for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
-        }
+        self.refresh_branches(&status.new_complete);
 
         Ok(())
     }
@@ -308,6 +284,29 @@ impl Client {
             // needed.
             Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),
             Err(error) => Err(error.into()),
+        }
+    }
+
+    // Request again the branches that became completed. This is to cover the following edge
+    // case:
+    //
+    // A block is initially present, but is part of a an outdated file/directory. A new snapshot
+    // is in the process of being downloaded from a remote replica. During this download, the
+    // block is still present and so is not marked as offered (because at least one of its
+    // local ancestor nodes is still seen as up-to-date). Then before the download completes,
+    // the worker garbage-collects the block. Then the download completes and triggers another
+    // worker run. During this run the block might be marked as required again (because e.g.
+    // the file was modified by the remote replica). But the block hasn't been marked as
+    // offered (because it was still present during the last snapshot download) and so is not
+    // requested. We would now have to wait for the next snapshot update from the remote replica
+    // before the block is marked as offered and only then we proceed with requesting it. This
+    // can take arbitrarily long (even indefinitely).
+    //
+    // By requesting the root node again immediatelly, we ensure that the missing block is
+    // requested as soon as possible.
+    fn refresh_branches(&self, branches: &[PublicKey]) {
+        for branch_id in branches {
+            self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
         }
     }
 }

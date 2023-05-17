@@ -272,7 +272,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_root_node_changed(&self, root_node: RootNode) -> Result<()> {
-        if !root_node.summary.is_complete() {
+        if !root_node.summary.is_complete {
             // send only complete branches
             return Ok(());
         }

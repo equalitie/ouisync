@@ -426,8 +426,7 @@ async fn wait_until_snapshots_in_sync(
 
     loop {
         if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
-            if client_root.summary.is_complete() && client_root.proof.hash == server_root.proof.hash
-            {
+            if client_root.summary.is_complete && client_root.proof.hash == server_root.proof.hash {
                 // client has now fully downloaded server's latest snapshot.
                 assert_eq!(
                     client_root.proof.version_vector,

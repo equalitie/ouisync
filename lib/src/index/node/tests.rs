@@ -558,16 +558,14 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
             *snapshot.root_hash(),
             &write_keys,
         ),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
 
-    super::update_summaries(&mut tx, root_node.proof.hash)
-        .await
-        .unwrap();
+    update_summaries(&mut tx, root_node.proof.hash).await;
     root_node.reload(&mut tx).await.unwrap();
-    assert_eq!(root_node.summary.is_complete(), leaf_count == 0);
+    assert_eq!(root_node.summary.is_complete, leaf_count == 0);
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
     // breadth-first.
@@ -575,11 +573,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
             nodes.save(&mut tx, parent_hash).await.unwrap();
-            super::update_summaries(&mut tx, *parent_hash)
-                .await
-                .unwrap();
+
+            update_summaries(&mut tx, *parent_hash).await;
+
             root_node.reload(&mut tx).await.unwrap();
-            assert!(!root_node.summary.is_complete());
+            assert!(!root_node.summary.is_complete);
         }
     }
 
@@ -589,21 +587,25 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         nodes.save(&mut tx, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&mut tx, *parent_hash)
-            .await
-            .unwrap();
+        update_summaries(&mut tx, *parent_hash).await;
         root_node.reload(&mut tx).await.unwrap();
 
         if unsaved_leaves > 0 {
-            assert!(!root_node.summary.is_complete());
+            assert!(!root_node.summary.is_complete);
         }
     }
 
-    assert!(root_node.summary.is_complete());
+    assert!(root_node.summary.is_complete);
 
     // HACK: prevent "too many open files" error.
     drop(tx);
     pool.close().await.unwrap();
+
+    async fn update_summaries(tx: &mut db::WriteTransaction, hash: Hash) {
+        for (_, completion) in super::update_summaries(tx, vec![hash]).await.unwrap() {
+            completion.complete(tx).await.unwrap();
+        }
+    }
 }
 
 #[proptest]
@@ -639,7 +641,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut tx, root_node.proof.hash)
+        super::update_summaries(&mut tx, vec![root_node.proof.hash])
             .await
             .unwrap();
     }
@@ -663,7 +665,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .await
             .unwrap();
 
-        super::update_summaries(&mut tx, *parent_hash)
+        super::update_summaries(&mut tx, vec![*parent_hash])
             .await
             .unwrap();
     }

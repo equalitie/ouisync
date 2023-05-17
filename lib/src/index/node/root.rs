@@ -1,10 +1,7 @@
-use std::cmp::Ordering;
-
 use super::{
     super::{proof::Proof, SnapshotId},
-    inner::InnerNode,
+    inner::{InnerNode, EMPTY_INNER_HASH},
     summary::Summary,
-    EMPTY_INNER_HASH,
 };
 use crate::{
     crypto::{
@@ -18,6 +15,7 @@ use crate::{
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
+use std::cmp::Ordering;
 
 const EMPTY_SNAPSHOT_ID: SnapshotId = 0;
 
@@ -321,34 +319,34 @@ impl RootNode {
         Ok(())
     }
 
-    /// Updates the summaries of all nodes with the specified hash. Returns whether at least one
-    /// nodes became complete.
-    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<bool> {
+    /// Update the summaries of all nodes with the specified hash.
+    pub async fn update_summaries(
+        tx: &mut db::WriteTransaction,
+        hash: &Hash,
+    ) -> Result<Option<Completion>> {
         let summary = InnerNode::compute_summary(tx, hash).await?;
-
-        // Multiple nodes with the same hash can have different `is_complete`. This happens on
-        // receiving a node with the same hash as a complete node we already have but with a
-        // different (greater) version vector. In that case the old node is complete but the new
-        // one is not (because nodes are always initially inserted with `is_complete = false`).
-        let was_incomplete: bool =
+        let was_complete =
             sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND is_complete = 0")
                 .bind(hash)
                 .fetch_optional(&mut *tx)
                 .await?
-                .is_some();
+                .is_none();
 
-        sqlx::query(
-            "UPDATE snapshot_root_nodes
-             SET is_complete = ?, block_presence = ?
-             WHERE hash = ?",
-        )
-        .bind(summary.is_complete)
-        .bind(&summary.block_presence)
-        .bind(hash)
-        .execute(tx)
-        .await?;
+        sqlx::query("UPDATE snapshot_root_nodes SET block_presence = ? WHERE hash = ?")
+            .bind(&summary.block_presence)
+            .bind(hash)
+            .execute(tx)
+            .await?;
 
-        Ok(was_incomplete && summary.is_complete)
+        if summary.is_complete {
+            if was_complete {
+                Ok(Some(Completion::Done))
+            } else {
+                Ok(Some(Completion::Pending(Completer(*hash))))
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     /// Removes this node including its snapshot.
@@ -444,5 +442,49 @@ impl RootNode {
                 }
             }
         }
+    }
+}
+
+/// Completion status after updating the summary of root nodes.
+pub(crate) enum Completion {
+    /// The nodes were already complete before the update.
+    Done,
+    /// The nodes have been completed by the update but have not yet been marked as complete. Use
+    /// the provided `Completer` to mark them as such. This two phase completion allows to perform
+    /// additional validations on the node if necessary.
+    Pending(Completer),
+}
+
+impl Completion {
+    pub fn update(&mut self, other: Self) {
+        match (&*self, other) {
+            (Self::Done, Self::Done)
+            | (Self::Pending(_), Self::Done)
+            | (Self::Pending(_), Self::Pending(_)) => (),
+            (Self::Done, other @ Self::Pending(_)) => {
+                *self = other;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn complete(self, tx: &mut db::WriteTransaction) -> Result<()> {
+        match self {
+            Self::Done => Ok(()),
+            Self::Pending(completer) => completer.complete(tx).await,
+        }
+    }
+}
+
+pub(crate) struct Completer(Hash);
+
+impl Completer {
+    pub async fn complete(self, tx: &mut db::WriteTransaction) -> Result<()> {
+        sqlx::query("UPDATE snapshot_root_nodes SET is_complete = 1 WHERE hash = ?")
+            .bind(&self.0)
+            .execute(tx)
+            .await?;
+
+        Ok(())
     }
 }
