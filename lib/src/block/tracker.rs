@@ -40,6 +40,7 @@ impl BlockTracker {
                 accepted_by: None,
                 being_required: 0,
                 required: false,
+                approved: false,
             })
             .being_required += 1;
 
@@ -50,8 +51,25 @@ impl BlockTracker {
     }
 
     /// Approve the block request if offered.
-    pub fn approve(&self, _block_id: &BlockId) {
-        // TODO
+    pub fn approve(&self, block_id: &BlockId) {
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        let Some(missing_block) = inner.missing_blocks.get_mut(block_id) else {
+            return;
+        };
+
+        if missing_block.approved {
+            return;
+        }
+
+        tracing::trace!(?block_id, "approve");
+
+        missing_block.approved = true;
+
+        // If required and offered, notify the waiting acceptors.
+        if missing_block.required && !missing_block.clients.is_empty() {
+            self.shared.notify();
+        }
     }
 
     pub fn client(&self) -> BlockTrackerClient {
@@ -73,7 +91,7 @@ impl BlockTracker {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum OfferState {
     Pending,
     Approved,
@@ -97,7 +115,7 @@ impl BlockTrackerClient {
     /// Offer to request the given block by the client with `client_id` if it is, or will become,
     /// required. Returns `true` if this block was offered for the first time (by any client), `false` if it was
     /// already offered before but not yet accepted or cancelled.
-    pub fn offer(&self, block_id: BlockId, _state: OfferState) -> bool {
+    pub fn offer(&self, block_id: BlockId, state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].insert(block_id) {
@@ -105,7 +123,7 @@ impl BlockTrackerClient {
             return false;
         }
 
-        tracing::trace!(?block_id, "offer");
+        tracing::trace!(?block_id, ?state, "offer");
 
         let missing_block = inner
             .missing_blocks
@@ -115,11 +133,18 @@ impl BlockTrackerClient {
                 accepted_by: None,
                 being_required: 0,
                 required: false,
+                approved: false,
             });
 
         missing_block.clients.insert(self.client_id);
 
-        self.shared.notify();
+        match state {
+            OfferState::Approved => {
+                missing_block.approved = true;
+                self.shared.notify();
+            }
+            OfferState::Pending => (),
+        }
 
         true
     }
@@ -160,7 +185,10 @@ impl BlockPromiseAcceptor {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-            if missing_block.required && missing_block.accepted_by.is_none() {
+            if missing_block.required
+                && missing_block.approved
+                && missing_block.accepted_by.is_none()
+            {
                 missing_block.accepted_by = Some(self.client_id);
 
                 return Some(BlockPromise {
@@ -350,6 +378,7 @@ struct MissingBlock {
     accepted_by: Option<ClientId>,
     being_required: usize,
     required: bool,
+    approved: bool,
 }
 
 impl MissingBlock {
@@ -594,27 +623,27 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn approve() {
-    //     let tracker = BlockTracker::new();
-    //     let client = tracker.client();
+    #[test]
+    fn approve() {
+        let tracker = BlockTracker::new();
+        let client = tracker.client();
 
-    //     let block = make_block();
-    //     tracker.begin_require(block.id).commit();
+        let block = make_block();
+        tracker.begin_require(block.id).commit();
 
-    //     client.offer(block.id, OfferState::Pending);
-    //     assert!(client.acceptor().try_accept().is_none());
+        client.offer(block.id, OfferState::Pending);
+        assert!(client.acceptor().try_accept().is_none());
 
-    //     tracker.approve(&block.id);
-    //     assert_eq!(
-    //         client
-    //             .acceptor()
-    //             .try_accept()
-    //             .as_ref()
-    //             .map(BlockPromise::block_id),
-    //         Some(&block.id)
-    //     );
-    // }
+        tracker.approve(&block.id);
+        assert_eq!(
+            client
+                .acceptor()
+                .try_accept()
+                .as_ref()
+                .map(BlockPromise::block_id),
+            Some(&block.id)
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn race() {
