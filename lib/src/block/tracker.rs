@@ -152,29 +152,6 @@ impl BlockTrackerClient {
 
         true
     }
-
-    /// Cancel a previously offered request.
-    // TODO: This currently isn't used in the non-test code, but probably should be. However we
-    // currently don't have code in place which would indicate when a block is no longer offered by
-    // a peer.
-    #[cfg(test)]
-    pub fn cancel(&self, block_id: &BlockId) {
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        if !inner.clients[self.client_id].remove(block_id) {
-            return;
-        }
-
-        tracing::trace!(?block_id, "cancel");
-
-        // unwrap is ok because of the invariant in `Inner`
-        let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
-        missing_block.clients.remove(&self.client_id);
-
-        if missing_block.unaccept_by(self.client_id) {
-            self.shared.notify();
-        }
-    }
 }
 
 pub(crate) struct BlockPromiseAcceptor {
@@ -475,69 +452,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(block.id, accepted_block_id);
-    }
-
-    #[test]
-    fn fallback_on_cancel_before_accept() {
-        let tracker = BlockTracker::new();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        tracker.begin_require(block.id).commit();
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
-
-        client0.cancel(&block.id);
-
-        assert!(client0.acceptor().try_accept().is_none());
-
-        let block_promise = client1.acceptor().try_accept().unwrap();
-
-        assert_eq!(block_promise.block_id(), &block.id);
-
-        tracker.complete(&block.id);
-
-        assert!(tracker
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .missing_blocks
-            .is_empty());
-    }
-
-    #[test]
-    fn fallback_on_cancel_before_accept_() {
-        let tracker = BlockTracker::new();
-
-        let client0 = tracker.client();
-        let client1 = tracker.client();
-
-        let block = make_block();
-
-        tracker.begin_require(block.id).commit();
-        client0.offer(block.id, OfferState::Approved);
-        client1.offer(block.id, OfferState::Approved);
-
-        client0.cancel(&block.id);
-
-        assert!(client0.acceptor().try_accept().is_none());
-
-        let block_promise = client1.acceptor().try_accept().unwrap();
-        assert_eq!(block_promise.block_id(), &block.id);
-
-        tracker.complete(&block.id);
-
-        assert!(tracker
-            .shared
-            .inner
-            .lock()
-            .unwrap()
-            .missing_blocks
-            .is_empty());
     }
 
     #[test]
