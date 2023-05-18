@@ -8,9 +8,10 @@ use dokan_sys::win32::{
     FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
-use ouisync_lib::{deadlock::AsyncMutex, File, JointEntryRef, Repository};
+use ouisync_lib::{deadlock::AsyncMutex, path, File, JointEntryRef, Repository};
 use std::{
     collections::{hash_map, HashMap},
+    fmt,
     io::{self, SeekFrom},
     path::Path,
     sync::{
@@ -35,7 +36,7 @@ pub fn mount(
     // TODO: Check these flags.
     let mut flags = MountFlags::empty();
     //flags |= ALT_STREAM;
-    flags |= MountFlags::DEBUG | MountFlags::STDERR;
+    //flags |= MountFlags::DEBUG | MountFlags::STDERR;
     flags |= MountFlags::REMOVABLE;
 
     let options = MountOptions {
@@ -186,7 +187,6 @@ impl VirtualFilesystem {
         create_disposition: CreateDisposition,
         shared: Arc<AsyncMutex<Shared>>,
     ) -> Result<(Entry, bool), Error> {
-        use ouisync_lib::path;
         use ouisync_lib::Error as E;
 
         let (parent, child) = match path::decompose(path) {
@@ -260,12 +260,23 @@ impl VirtualFilesystem {
         create_directory: bool,
         create_disposition: CreateDisposition,
         delete_on_close: bool,
+        delete_access: bool,
     ) -> Result<(Entry, bool, u64), Error> {
         let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
 
-        let result = self
-            .create_entry_impl(&path, create_directory, create_disposition, shared)
-            .await;
+        let result = if !delete_access {
+            self.create_entry_impl(&path, create_directory, create_disposition, shared)
+                .await
+        } else {
+            Ok((
+                Entry::File(FileEntry {
+                    file: AsyncMutex::new(None),
+                    shared,
+                }),
+                // TODO
+                false,
+            ))
+        };
 
         if result.is_err() {
             match self.handles.lock().await.entry(path) {
@@ -283,54 +294,6 @@ impl VirtualFilesystem {
         }
 
         result.map(|(entry, is_new)| (entry, is_new, id))
-    }
-
-    async fn resize_file(&self, file: &mut File, desired_len: u64) -> Result<(), Error> {
-        let start_len = file.len();
-
-        if start_len == desired_len {
-            return Ok(());
-        }
-
-        let local_branch = self.repo.local_branch()?;
-
-        file.fork(local_branch).await?;
-
-        if start_len > desired_len {
-            file.truncate(desired_len).await?;
-        } else {
-            let start_pos = file.seek(SeekFrom::Current(0)).await?;
-            file.seek(SeekFrom::End(0)).await?;
-            // TODO: We shouldn't need to do allocation here as we're only writing constants.
-            let buf = vec![0; (desired_len - start_len) as usize];
-            file.write(&buf).await?;
-            file.seek(SeekFrom::Start(start_pos)).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn write_file_impl(
-        &self,
-        file_entry: &FileEntry,
-        offset: Option<u64>,
-        data: &[u8],
-    ) -> Result<u32, Error> {
-        let mut lock = file_entry.file.lock().await;
-        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
-
-        let offset = match offset {
-            Some(offset) => offset,
-            None => file.len(),
-        };
-
-        let local_branch = self.repo.local_branch()?;
-
-        file.seek(SeekFrom::Start(offset)).await?;
-        file.fork(local_branch).await?;
-        file.write(data).await?;
-
-        Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
 
     async fn close_file_impl(&self, entry: &FileEntry) {
@@ -396,13 +359,13 @@ impl VirtualFilesystem {
         let dir = self.repo.open_directory(directory_path).await?;
 
         for entry in dir.entries() {
-            // TODO: Unwrap
             let name = entry.unique_name();
 
             if name == "." || name == ".." {
                 continue;
             }
 
+            // TODO: Unwrap
             let file_name = U16CString::from_str(entry.unique_name().as_ref()).unwrap();
 
             let (attributes, file_size) = match &entry {
@@ -437,6 +400,369 @@ impl VirtualFilesystem {
             })
             .or_else(ignore_name_too_long)?;
         }
+        Ok(())
+    }
+
+    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+    // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
+    async fn async_create_file<'c, 'h: 'c>(
+        &'h self,
+        file_name: &U16CStr,
+        _security_context: &IO_SECURITY_CONTEXT,
+        desired_access: winnt::ACCESS_MASK,
+        _file_attributes: u32,
+        _share_access: u32,
+        create_disposition: u32,
+        create_options: u32,
+        _info: &mut OperationInfo<'c, 'h, Self>,
+    ) -> Result<CreateFileInfo<EntryHandle>, Error> {
+        let create_disposition = create_disposition.try_into()?;
+        let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
+        let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
+        let delete_access = desired_access & winnt::DELETE > 0;
+
+        let path = to_path(file_name)?;
+
+        let (entry, is_new, id) = self
+            .create_entry(
+                path,
+                create_dir,
+                create_disposition,
+                delete_on_close,
+                delete_access,
+            )
+            .await?;
+
+        let is_dir = entry.as_directory().is_ok();
+
+        Ok(CreateFileInfo {
+            context: EntryHandle { id, entry },
+            is_dir,
+            new_file_created: is_new,
+        })
+    }
+
+    async fn async_cleanup<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) {
+    }
+
+    async fn async_close_file<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) {
+        match &context.entry {
+            Entry::File(entry) => {
+                self.close_file_impl(entry).await;
+            }
+            Entry::Directory(_) => (),
+        };
+    }
+
+    async fn async_read_file<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        offset: i64,
+        buffer: &mut [u8],
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<u32, Error> {
+        let entry = match &context.entry {
+            Entry::File(entry) => entry,
+            Entry::Directory(_) => return Err(STATUS_ACCESS_DENIED.into()),
+        };
+
+        let mut lock = entry.file.lock().await;
+        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+        let offset: u64 = offset
+            .try_into()
+            .map_err(|_| ouisync_lib::Error::OffsetOutOfRange)?;
+        file.seek(SeekFrom::Start(offset)).await?;
+        let size = file.read(buffer).await?;
+
+        Ok(size as u32)
+    }
+
+    async fn async_write_file<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        offset: i64,
+        buffer: &[u8],
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<u32, Error> {
+        let file_entry = context.entry.as_file()?;
+
+        let mut lock = file_entry.file.lock().await;
+        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+
+        let offset = if info.write_to_eof() {
+            file.len()
+        } else {
+            offset.try_into().map_err(|_| STATUS_INVALID_PARAMETER)?
+        };
+
+        let local_branch = self.repo.local_branch()?;
+
+        file.seek(SeekFrom::Start(offset)).await?;
+        file.fork(local_branch).await?;
+        file.write(buffer).await?;
+
+        Ok(buffer.len().try_into().unwrap_or(u32::MAX))
+    }
+
+    async fn async_flush_file_buffers<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    #[instrument(skip(self, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
+    async fn async_get_file_information<'c, 'h: 'c>(
+        &'h self,
+        file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<FileInfo, Error> {
+        let (attributes, file_size) = match &context.entry {
+            Entry::File(entry) => {
+                let len = if let Some(file) = entry.file.lock().await.as_ref() {
+                    file.len()
+                } else {
+                    // Ideally we wouldn't need to do this and expect that the file is open if we
+                    // get to this function. But Windows insists on "opening" an entry, reading
+                    // its size when moving/renaming a file prior to first closing it. This is
+                    // currently verboten in ouisync due to this issue:
+                    // https://github.com/equalitie/ouisync/issues/58
+                    // And so we need to open the file manually, read the length and then close it.
+                    let lock = entry.shared.lock().await;
+                    let file = self.repo.open_file(&lock.path).await?;
+                    file.len()
+                };
+
+                (winnt::FILE_ATTRIBUTE_NORMAL, len)
+            }
+            Entry::Directory(_) => (
+                winnt::FILE_ATTRIBUTE_DIRECTORY,
+                // TODO: Should we count the blocks?
+                0,
+            ),
+        };
+
+        Ok(FileInfo {
+            attributes,
+            // TODO
+            creation_time: UNIX_EPOCH,
+            last_access_time: UNIX_EPOCH,
+            last_write_time: UNIX_EPOCH,
+            file_size,
+            number_of_links: 1,
+            file_index: context.id,
+        })
+    }
+
+    async fn async_find_files<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        fill_find_data: impl FnMut(&FindData) -> FillDataResult,
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        let dir_path = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, dir_path, None).await
+    }
+
+    async fn async_find_files_with_pattern<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        pattern: &U16CStr,
+        fill_find_data: impl FnMut(&FindData) -> FillDataResult,
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        let dir_path = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, dir_path, Some(pattern))
+            .await
+    }
+
+    async fn async_set_file_attributes<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _file_attributes: u32,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn async_set_file_time<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _creation_time: FileTimeOperation,
+        _last_access_time: FileTimeOperation,
+        _last_write_time: FileTimeOperation,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        tracing::warn!("set_file_time not implemented yet");
+        Ok(())
+    }
+
+    async fn async_delete_file<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        let file_entry = context.entry.as_file()?;
+        file_entry.shared.lock().await.delete_on_close = info.delete_on_close();
+        Ok(())
+    }
+
+    async fn async_delete_directory<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn async_move_file<'c, 'h: 'c>(
+        &'h self,
+        file_name: &U16CStr,
+        new_file_name: &U16CStr,
+        _replace_if_existing: bool,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        // Note: Don't forget to rename in `self.handles`.
+        let src_path = to_path(file_name)?;
+        let dst_path = to_path(new_file_name)?;
+
+        if src_path == dst_path {
+            return Ok(());
+        }
+
+        let (src_dir, src_name) = path::decompose(&src_path).ok_or(STATUS_INVALID_PARAMETER)?;
+
+        let (dst_dir, dst_name) = path::decompose(&dst_path).ok_or(STATUS_INVALID_PARAMETER)?;
+
+        self.repo
+            .move_entry(&src_dir, &src_name, &dst_dir, &dst_name)
+            .await?;
+
+        let mut handles = self.handles.lock().await;
+
+        if let Some(handle) = handles.remove(&src_path) {
+            let mut lock = handle.lock().await;
+            lock.path = dst_path;
+        }
+
+        Ok(())
+    }
+
+    async fn async_set_end_of_file<'c, 'h: 'c>(
+        &'h self,
+        file_name: &U16CStr,
+        offset: i64,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        // TODO: How do the fwo functions differ?
+        self.async_set_allocation_size(file_name, offset, info, context)
+            .await
+    }
+
+    async fn async_set_allocation_size<'c, 'h: 'c>(
+        &'h self,
+        _file_name: &U16CStr,
+        alloc_size: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
+    ) -> Result<(), Error> {
+        let desired_len: u64 = alloc_size
+            .try_into()
+            .map_err(|_| STATUS_INVALID_PARAMETER)?;
+
+        let entry = context.entry.as_file()?;
+        let mut lock = entry.file.lock().await;
+        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+
+        let start_len = file.len();
+
+        if start_len == desired_len {
+            return Ok(());
+        }
+
+        let local_branch = self.repo.local_branch()?;
+
+        file.fork(local_branch).await?;
+
+        if start_len > desired_len {
+            file.truncate(desired_len).await?;
+        } else {
+            let start_pos = file.seek(SeekFrom::Current(0)).await?;
+            file.seek(SeekFrom::End(0)).await?;
+            // TODO: We shouldn't need to do allocation here as we're only writing constants.
+            let buf = vec![0; (desired_len - start_len) as usize];
+            file.write(&buf).await?;
+            file.seek(SeekFrom::Start(start_pos)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn async_get_disk_free_space<'c, 'h: 'c>(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> Result<DiskSpaceInfo, Error> {
+        // TODO
+        Ok(DiskSpaceInfo {
+            byte_count: 1024 * 1024 * 1024,
+            free_byte_count: 512 * 1024 * 1024,
+            available_byte_count: 512 * 1024 * 1024,
+        })
+    }
+
+    async fn async_get_volume_information<'c, 'h: 'c>(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> Result<VolumeInfo, Error> {
+        Ok(VolumeInfo {
+            name: U16CString::from_str("ouisync").unwrap(),
+            serial_number: 0,
+            max_component_length: MAX_COMPONENT_LENGTH,
+            fs_flags: winnt::FILE_CASE_PRESERVED_NAMES
+                | winnt::FILE_CASE_SENSITIVE_SEARCH
+                | winnt::FILE_UNICODE_ON_DISK
+                | winnt::FILE_PERSISTENT_ACLS
+                | winnt::FILE_NAMED_STREAMS,
+            // Custom names don't play well with UAC.
+            fs_name: U16CString::from_str("NTFS").unwrap(),
+        })
+    }
+
+    async fn async_mounted<'c, 'h: 'c>(
+        &'h self,
+        _mount_point: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn async_unmounted<'c, 'h: 'c>(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -521,244 +847,200 @@ struct EntryHandle {
 impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
     type Context = EntryHandle;
 
-    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
-    // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
     fn create_file(
         &'h self,
         file_name: &U16CStr,
-        _security_context: &IO_SECURITY_CONTEXT,
-        _desired_access: winnt::ACCESS_MASK,
-        _file_attributes: u32,
-        _share_access: u32,
+        security_context: &IO_SECURITY_CONTEXT,
+        desired_access: winnt::ACCESS_MASK,
+        file_attributes: u32,
+        share_access: u32,
         create_disposition: u32,
         create_options: u32,
-        _info: &mut OperationInfo<'c, 'h, Self>,
+        info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
-        let create_disposition = create_disposition.try_into()?;
-        let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
-        let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
+        self.rt
+            .block_on(self.async_create_file(
+                file_name,
+                security_context,
+                desired_access,
+                file_attributes,
+                share_access,
+                create_disposition,
+                create_options,
+                info,
+            ))
+            .map_err(Error::into)
+    }
 
-        let path = to_path(file_name)?;
-
-        let (entry, is_new, id) = self.rt.block_on(async {
-            self.create_entry(path, create_dir, create_disposition, delete_on_close)
-                .await
-        })?;
-
-        let is_dir = entry.as_directory().is_ok();
-
-        Ok(CreateFileInfo {
-            context: EntryHandle { id, entry },
-            is_dir,
-            new_file_created: is_new,
-        })
+    fn cleanup(
+        &'h self,
+        _file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) {
     }
 
     fn close_file(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) {
-        match &context.entry {
-            Entry::File(entry) => {
-                self.rt.block_on(async {
-                    self.close_file_impl(entry).await;
-                });
-            }
-            Entry::Directory(_) => (),
-        };
+        self.rt
+            .block_on(self.async_close_file(file_name, info, context))
     }
 
     fn read_file(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         offset: i64,
         buffer: &mut [u8],
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        let entry = match &context.entry {
-            Entry::File(entry) => entry,
-            Entry::Directory(_) => return Err(STATUS_ACCESS_DENIED),
-        };
-
-        let len = self.rt.block_on(async {
-            let mut lock = entry.file.lock().await;
-            let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
-            let offset: u64 = offset
-                .try_into()
-                .map_err(|_| ouisync_lib::Error::OffsetOutOfRange)?;
-            file.seek(SeekFrom::Start(offset)).await?;
-            let size = file.read(buffer).await?;
-            Ok::<_, Error>(size)
-        })?;
-
-        Ok(len as u32)
+        self.rt
+            .block_on(self.async_read_file(file_name, offset, buffer, info, context))
+            .map_err(Error::into)
     }
 
     fn write_file(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         offset: i64,
         buffer: &[u8],
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        match &context.entry {
-            Entry::File(file) => {
-                assert!(offset >= 0);
-
-                let offset: Option<u64> = if info.write_to_eof() {
-                    // Will be eof.
-                    None
-                } else {
-                    Some(offset.try_into().map_err(|_| STATUS_INVALID_PARAMETER)?)
-                };
-
-                let amount_written = self
-                    .rt
-                    .block_on(async { self.write_file_impl(file, offset, buffer).await })?;
-
-                Ok(amount_written)
-            }
-            Entry::Directory(_) => Err(STATUS_ACCESS_DENIED),
-        }
+        self.rt
+            .block_on(self.async_write_file(file_name, offset, buffer, info, context))
+            .map_err(Error::into)
     }
 
     fn flush_file_buffers(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) -> OperationResult<()> {
-        Ok(())
+        self.rt
+            .block_on(self.async_flush_file_buffers(file_name, info, context))
+            .map_err(Error::into)
     }
 
     fn get_file_information(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<FileInfo> {
-        let (attributes, file_size) = match &context.entry {
-            Entry::File(entry) => {
-                let len = self.rt.block_on(async {
-                    let len = entry
-                        .file
-                        .lock()
-                        .await
-                        .as_ref()
-                        .map(|file| file.len())
-                        .ok_or(STATUS_FILE_CLOSED)?;
-                    Ok::<_, i32>(len)
-                })?;
-                (winnt::FILE_ATTRIBUTE_NORMAL, len)
-            }
-            Entry::Directory(_) => (
-                winnt::FILE_ATTRIBUTE_DIRECTORY,
-                // TODO: Should we count the blocks?
-                0,
-            ),
-        };
-
-        Ok(FileInfo {
-            attributes,
-            // TODO
-            creation_time: UNIX_EPOCH,
-            last_access_time: UNIX_EPOCH,
-            last_write_time: UNIX_EPOCH,
-            file_size,
-            number_of_links: 1,
-            file_index: context.id,
-        })
+        self.rt
+            .block_on(self.async_get_file_information(file_name, info, context))
+            .map_err(Error::into)
     }
 
     fn find_files(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        let dir_path = context.entry.as_directory()?;
         self.rt
-            .block_on(async { self.find_files_impl(fill_find_data, dir_path, None).await })
-            .map_err(|e| e.into())
+            .block_on(self.async_find_files(file_name, fill_find_data, info, context))
+            .map_err(Error::into)
     }
 
     fn find_files_with_pattern(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         pattern: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        let dir_path = context.entry.as_directory()?;
         self.rt
-            .block_on(async {
-                self.find_files_impl(fill_find_data, dir_path, Some(pattern))
-                    .await
-            })
-            .map_err(|e| e.into())
+            .block_on(self.async_find_files_with_pattern(
+                file_name,
+                pattern,
+                fill_find_data,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
     }
 
     fn set_file_attributes(
         &'h self,
-        _file_name: &U16CStr,
-        _file_attributes: u32,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        file_attributes: u32,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) -> OperationResult<()> {
-        todo!()
+        self.rt
+            .block_on(self.async_set_file_attributes(file_name, file_attributes, info, context))
+            .map_err(Error::into)
     }
 
     fn set_file_time(
         &'h self,
-        _file_name: &U16CStr,
-        _creation_time: FileTimeOperation,
-        _last_access_time: FileTimeOperation,
-        _last_write_time: FileTimeOperation,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        creation_time: FileTimeOperation,
+        last_access_time: FileTimeOperation,
+        last_write_time: FileTimeOperation,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) -> OperationResult<()> {
-        tracing::warn!("set_file_time not implemented yet");
-        Ok(())
+        self.rt
+            .block_on(self.async_set_file_time(
+                file_name,
+                creation_time,
+                last_access_time,
+                last_write_time,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
     }
 
     fn delete_file(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt.block_on(async {
-            let file_entry = context.entry.as_file()?;
-            file_entry.shared.lock().await.delete_on_close = info.delete_on_close();
-            Ok(())
-        })
+        self.rt
+            .block_on(self.async_delete_file(file_name, info, context))
+            .map_err(Error::into)
     }
 
     fn delete_directory(
         &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) -> OperationResult<()> {
-        todo!()
+        self.rt
+            .block_on(self.async_delete_directory(file_name, info, context))
+            .map_err(Error::into)
     }
 
     fn move_file(
         &'h self,
-        _file_name: &U16CStr,
-        _new_file_name: &U16CStr,
-        _replace_if_existing: bool,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c Self::Context,
+        file_name: &U16CStr,
+        new_file_name: &U16CStr,
+        replace_if_existing: bool,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // Note: Don't forget to rename in `self.handles`.
-        todo!()
+        self.rt
+            .block_on(self.async_move_file(
+                file_name,
+                new_file_name,
+                replace_if_existing,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
     }
 
     fn set_end_of_file(
@@ -768,71 +1050,55 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        // TODO: How do the fwo functions differ?
-        self.set_allocation_size(file_name, offset, info, context)
+        self.rt
+            .block_on(self.async_set_end_of_file(file_name, offset, info, context))
+            .map_err(Error::into)
     }
 
     fn set_allocation_size(
         &'h self,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         alloc_size: i64,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        let alloc_size: u64 = alloc_size
-            .try_into()
-            .map_err(|_| STATUS_INVALID_PARAMETER)?;
-
-        let entry = context.entry.as_file()?;
-
-        self.rt.block_on(async {
-            let mut lock = entry.file.lock().await;
-            let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
-            self.resize_file(file, alloc_size).await?;
-            Ok(())
-        })
+        self.rt
+            .block_on(self.async_set_allocation_size(file_name, alloc_size, info, context))
+            .map_err(Error::into)
     }
 
     fn get_disk_free_space(
         &'h self,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
-        // TODO
-        Ok(DiskSpaceInfo {
-            byte_count: 1024 * 1024 * 1024,
-            free_byte_count: 512 * 1024 * 1024,
-            available_byte_count: 512 * 1024 * 1024,
-        })
+        self.rt
+            .block_on(self.async_get_disk_free_space(info))
+            .map_err(Error::into)
     }
 
     fn get_volume_information(
         &'h self,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<VolumeInfo> {
-        Ok(VolumeInfo {
-            name: U16CString::from_str("ouisync").unwrap(),
-            serial_number: 0,
-            max_component_length: MAX_COMPONENT_LENGTH,
-            fs_flags: winnt::FILE_CASE_PRESERVED_NAMES
-                | winnt::FILE_CASE_SENSITIVE_SEARCH
-                | winnt::FILE_UNICODE_ON_DISK
-                | winnt::FILE_PERSISTENT_ACLS
-                | winnt::FILE_NAMED_STREAMS,
-            // Custom names don't play well with UAC.
-            fs_name: U16CString::from_str("NTFS").unwrap(),
-        })
+        self.rt
+            .block_on(self.async_get_volume_information(info))
+            .map_err(Error::into)
     }
 
     fn mounted(
         &'h self,
-        _mount_point: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        mount_point: &U16CStr,
+        info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<()> {
-        Ok(())
+        self.rt
+            .block_on(self.async_mounted(mount_point, info))
+            .map_err(Error::into)
     }
 
-    fn unmounted(&'h self, _info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
-        Ok(())
+    fn unmounted(&'h self, info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_unmounted(info))
+            .map_err(Error::into)
     }
 }
 
@@ -846,10 +1112,29 @@ fn ignore_name_too_long(err: FillDataError) -> OperationResult<()> {
     }
 }
 
-#[derive(Debug)]
 enum Error {
     NtStatus(i32),
     OuiSync(ouisync_lib::Error),
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NtStatus(status) => match *status {
+                STATUS_OBJECT_NAME_NOT_FOUND => write!(f, "STATUS_OBJECT_NAME_NOT_FOUND"),
+                STATUS_ACCESS_DENIED => write!(f, "STATUS_ACCESS_DENIED"),
+                STATUS_INVALID_PARAMETER => write!(f, "STATUS_INVALID_PARAMETER"),
+                STATUS_NOT_IMPLEMENTED => write!(f, "STATUS_NOT_IMPLEMENTED"),
+                STATUS_LOCK_NOT_GRANTED => write!(f, "STATUS_LOCK_NOT_GRANTED"),
+                STATUS_INVALID_DEVICE_REQUEST => write!(f, "STATUS_INVALID_DEVICE_REQUEST"),
+                STATUS_FILE_CLOSED => write!(f, "STATUS_FILE_CLOSED"),
+                other => write!(f, "{:#x}", other),
+            },
+            Self::OuiSync(error) => {
+                write!(f, "{:?}", error)
+            }
+        }
+    }
 }
 
 impl From<i32> for Error {
