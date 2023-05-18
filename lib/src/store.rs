@@ -14,7 +14,6 @@ use crate::{
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
-use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
@@ -94,16 +93,13 @@ impl Store {
         block::write(&mut tx, &data.id, &data.content, nonce).await?;
 
         let data_id = data.id;
-        let index = self.index.clone();
+        let event_tx = self.index.notify().clone();
         let block_tracker = self.block_tracker.clone();
-        let span = Span::current();
 
         tx.commit_and_then(move || {
-            let _enter = span.enter();
-
             // Notify affected branches.
             for writer_id in writer_ids {
-                index.notify().send(Payload::BlockReceived {
+                event_tx.send(Payload::BlockReceived {
                     block_id: data_id,
                     branch_id: writer_id,
                 });

@@ -282,7 +282,6 @@ impl Index {
             Vec::new()
         };
 
-        // TODO: run the closure under the current span
         tx.commit_and_then({
             let new_complete = new_complete.clone();
             let event_tx = self.notify().clone();
