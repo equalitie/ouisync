@@ -5,7 +5,10 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
+    block::{
+        tracker::{BlockPromise, OfferState},
+        BlockData, BlockNonce, BlockTrackerClient,
+    },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
@@ -229,6 +232,10 @@ impl Client {
             ));
         }
 
+        for branch_id in &status.new_complete {
+            self.store.approve_snapshot(branch_id).await?;
+        }
+
         self.refresh_branches(&status.new_complete);
 
         Ok(())
@@ -250,19 +257,29 @@ impl Client {
             updated_blocks
         );
 
+        let offer_state = if status.complete {
+            OfferState::Approved
+        } else {
+            OfferState::Pending
+        };
+
         match self.store.block_request_mode {
             BlockRequestMode::Lazy => {
                 for block_id in updated_blocks {
-                    self.block_tracker.offer(block_id);
+                    self.block_tracker.offer(block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
                 for block_id in updated_blocks {
-                    if self.block_tracker.offer(block_id) {
+                    if self.block_tracker.offer(block_id, offer_state) {
                         self.store.require_missing_block(block_id).await?;
                     }
                 }
             }
+        }
+
+        for branch_id in &status.new_complete {
+            self.store.approve_snapshot(branch_id).await?;
         }
 
         self.refresh_branches(&status.new_complete);

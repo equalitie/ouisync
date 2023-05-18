@@ -49,6 +49,11 @@ impl BlockTracker {
         }
     }
 
+    /// Approve the block request if offered.
+    pub fn approve(&self, _block_id: &BlockId) {
+        // TODO
+    }
+
     /// Mark the block request as successfully completed.
     pub fn complete(&self, block_id: &BlockId) {
         tracing::trace!(?block_id, "complete");
@@ -97,6 +102,12 @@ impl BlockTracker {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum OfferState {
+    Pending,
+    Approved,
+}
+
 pub(crate) struct BlockTrackerClient {
     shared: Arc<Shared>,
     client_id: ClientId,
@@ -114,9 +125,8 @@ impl BlockTrackerClient {
 
     /// Offer to request the given block by the client with `client_id` if it is, or will become,
     /// required. Returns `true` if this block was offered for the first time (by any client), `false` if it was
-    /// already offered before but not yet
-    /// accepted or cancelled.
-    pub fn offer(&self, block_id: BlockId) -> bool {
+    /// already offered before but not yet accepted or cancelled.
+    pub fn offer(&self, block_id: BlockId, _state: OfferState) -> bool {
         let mut inner = self.shared.inner.lock().unwrap();
 
         if !inner.clients[self.client_id].insert(block_id) {
@@ -406,7 +416,7 @@ mod tests {
 
         // Offered but not required blocks are not returned
         let block0 = make_block();
-        client.offer(block0.id);
+        client.offer(block0.id, OfferState::Approved);
         assert!(client.acceptor().try_accept().is_none());
 
         // Required but not offered blocks are not returned
@@ -457,7 +467,7 @@ mod tests {
         // Make sure acceptor started accepting.
         rx.recv().await.unwrap();
 
-        client.offer(block.id);
+        client.offer(block.id, OfferState::Approved);
 
         let accepted_block_id = time::timeout(Duration::from_secs(5), handle)
             .await
@@ -477,8 +487,8 @@ mod tests {
         let block = make_block();
 
         tracker.begin_require(block.id).commit();
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         client0.cancel(&block.id);
 
@@ -509,8 +519,8 @@ mod tests {
         let block = make_block();
 
         tracker.begin_require(block.id).commit();
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         client0.cancel(&block.id);
 
@@ -540,8 +550,8 @@ mod tests {
         let block = make_block();
 
         tracker.begin_require(block.id).commit();
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         let block_promise = client0.acceptor().try_accept();
         assert_eq!(
@@ -572,8 +582,8 @@ mod tests {
 
         let block = make_block();
 
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         tracker.begin_require(block.id).commit();
 
@@ -598,8 +608,8 @@ mod tests {
 
         let block = make_block();
 
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         tracker.begin_require(block.id).commit();
 
@@ -632,8 +642,8 @@ mod tests {
 
         let block = make_block();
 
-        client0.offer(block.id);
-        client1.offer(block.id);
+        client0.offer(block.id, OfferState::Approved);
+        client1.offer(block.id, OfferState::Approved);
 
         drop(client0);
 
@@ -655,7 +665,7 @@ mod tests {
         let client = tracker.client();
 
         let block = make_block();
-        client.offer(block.id);
+        client.offer(block.id, OfferState::Approved);
 
         let require = tracker.begin_require(block.id);
         tracker.complete(&block.id);
@@ -670,7 +680,7 @@ mod tests {
         let client = tracker.client();
 
         let block = make_block();
-        client.offer(block.id);
+        client.offer(block.id, OfferState::Approved);
 
         let require1 = tracker.begin_require(block.id);
         let require2 = tracker.begin_require(block.id);
@@ -699,7 +709,7 @@ mod tests {
         tracker.begin_require(block.id).commit();
 
         for client in &clients {
-            client.offer(block.id);
+            client.offer(block.id, OfferState::Approved);
         }
 
         // Make sure all clients stay alive until we are done so that any accepted requests are not
@@ -761,7 +771,7 @@ mod tests {
                     tracker.begin_require(block_id).commit();
                 }
                 Op::Offer => {
-                    client.offer(block_id);
+                    client.offer(block_id, OfferState::Approved);
                 }
             }
         }

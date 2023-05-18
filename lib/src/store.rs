@@ -2,15 +2,16 @@
 
 use crate::{
     block::{self, BlockData, BlockId, BlockNonce, BlockTracker, BLOCK_NONCE_SIZE},
+    crypto::sign::PublicKey,
     db,
     error::{Error, Result},
     event::Payload,
-    index::{self, Index},
+    index::{self, Index, SingleBlockPresence},
     progress::Progress,
     repository::{LocalId, Metadata, RepositoryMonitor},
     BLOCK_SIZE,
 };
-use futures_util::TryStreamExt;
+use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
 use tracing::Span;
@@ -143,6 +144,17 @@ impl Store {
 
         Ok(count * (BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64))
     }
+
+    pub(crate) async fn approve_snapshot(&self, branch_id: &PublicKey) -> Result<()> {
+        let mut tx = self.db().begin_read().await?;
+        let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
+
+        while let Some(block_id) = block_ids.try_next().await? {
+            self.block_tracker.approve(&block_id);
+        }
+
+        Ok(())
+    }
 }
 
 pub(crate) struct BlockIdsPage {
@@ -200,34 +212,38 @@ pub(crate) enum BlockRequestMode {
     Greedy,
 }
 
-/* TODO:
-/// Yields all missing block ids referenced from the given snapshot.
-pub(crate) fn snapshot_missing_block_ids<'a>(
+/// Yields all missing block ids referenced from the latest complete snapshot of the given branch.
+fn branch_missing_block_ids<'a>(
     conn: &'a mut db::Connection,
-    root_hash: &'a Hash,
+    branch_id: &'a PublicKey,
 ) -> impl Stream<Item = Result<BlockId>> + 'a {
     sqlx::query(
         "WITH RECURSIVE
              inner_nodes(hash) AS (
                  SELECT i.hash
                      FROM snapshot_inner_nodes AS i
-                     WHERE i.parent = ?
+                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                     WHERE r.snapshot_id = (
+                         SELECT MAX(snapshot_id)
+                         FROM snapshot_root_nodes
+                         WHERE writer_id = ? AND is_complete = 1
+                     )
                  UNION ALL
-                 SELECT hash
+                 SELECT c.hash
                      FROM snapshot_inner_nodes AS c
                      INNER JOIN inner_nodes AS p ON p.hash = c.parent
              )
          SELECT DISTINCT block_id
              FROM snapshot_leaf_nodes
-             WHERE parent IN inner_nodes
-        ",
+             WHERE parent IN inner_nodes AND block_presence = ?
+         ",
     )
-    .bind(root_hash)
+    .bind(branch_id)
+    .bind(SingleBlockPresence::Missing)
     .fetch(conn)
     .map_ok(|row| row.get(0))
     .err_into()
 }
-*/
 
 #[cfg(test)]
 mod tests {

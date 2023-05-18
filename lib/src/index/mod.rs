@@ -241,9 +241,8 @@ impl Index {
         Ok(output)
     }
 
-    // Updates summaries of the specified nodes and all their ancestors, commits the transaction
-    // and notifies the affected branches that became complete (wasn't before the update but became
-    // after it). Also returns the completed branches.
+    // Finalizes receiving nodes from a remote replica, commits the transaction and notifies the
+    // affected branches.
     async fn update_summaries(
         &self,
         mut tx: db::WriteTransaction,
