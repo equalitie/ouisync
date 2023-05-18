@@ -592,7 +592,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        todo!()
+        Err(STATUS_NOT_IMPLEMENTED.into())
     }
 
     async fn async_set_file_time<'c, 'h: 'c>(
