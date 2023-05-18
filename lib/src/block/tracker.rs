@@ -39,7 +39,7 @@ impl BlockTracker {
                 clients: HashSet::default(),
                 accepted_by: None,
                 being_required: 0,
-                required: 0,
+                required: false,
             })
             .being_required += 1;
 
@@ -114,7 +114,7 @@ impl BlockTrackerClient {
                 clients: HashSet::default(),
                 accepted_by: None,
                 being_required: 0,
-                required: 0,
+                required: false,
             });
 
         missing_block.clients.insert(self.client_id);
@@ -160,7 +160,7 @@ impl BlockPromiseAcceptor {
             // unwrap is ok because of the invariant in `Inner`
             let missing_block = inner.missing_blocks.get_mut(block_id).unwrap();
 
-            if missing_block.required > 0 && missing_block.accepted_by.is_none() {
+            if missing_block.required && missing_block.accepted_by.is_none() {
                 missing_block.accepted_by = Some(self.client_id);
 
                 return Some(BlockPromise {
@@ -281,11 +281,11 @@ impl Require {
             Entry::Occupied(mut entry) => {
                 let missing_block = entry.get_mut();
 
-                if missing_block.required == 0 {
+                if !missing_block.required {
                     tracing::trace!(block_id = ?self.block_id, "require");
                 }
 
-                missing_block.required += 1;
+                missing_block.required = true;
 
                 if !missing_block.clients.is_empty() {
                     self.shared.notify();
@@ -305,7 +305,7 @@ impl Drop for Require {
             Entry::Occupied(mut entry) => {
                 let missing_block = entry.get_mut();
                 missing_block.being_required -= 1;
-                if missing_block.being_required == 0 && missing_block.required == 0 {
+                if missing_block.being_required == 0 && !missing_block.required {
                     std::mem::swap(&mut offered_by, &mut missing_block.clients);
                     entry.remove();
                 }
@@ -349,7 +349,7 @@ struct MissingBlock {
     clients: HashSet<ClientId>,
     accepted_by: Option<ClientId>,
     being_required: usize,
-    required: usize,
+    required: bool,
 }
 
 impl MissingBlock {
@@ -593,6 +593,28 @@ mod tests {
             Some(&block.id)
         );
     }
+
+    // #[test]
+    // fn approve() {
+    //     let tracker = BlockTracker::new();
+    //     let client = tracker.client();
+
+    //     let block = make_block();
+    //     tracker.begin_require(block.id).commit();
+
+    //     client.offer(block.id, OfferState::Pending);
+    //     assert!(client.acceptor().try_accept().is_none());
+
+    //     tracker.approve(&block.id);
+    //     assert_eq!(
+    //         client
+    //             .acceptor()
+    //             .try_accept()
+    //             .as_ref()
+    //             .map(BlockPromise::block_id),
+    //         Some(&block.id)
+    //     );
+    // }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn race() {
