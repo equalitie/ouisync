@@ -206,10 +206,11 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
 
+        let quota = self.store.quota().await?;
         let (updated_nodes, status) = self
             .store
             .index
-            .receive_inner_nodes(nodes, &self.receive_filter)
+            .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
 
         let debug = DebugRequest::start();
@@ -232,8 +233,10 @@ impl Client {
             ));
         }
 
-        for branch_id in &status.new_complete {
-            self.store.approve_snapshot(branch_id).await?;
+        if quota.is_some() {
+            for branch_id in &status.new_complete {
+                self.store.approve_snapshot(branch_id).await?;
+            }
         }
 
         self.refresh_branches(&status.new_complete);
@@ -248,7 +251,8 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
-        let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes).await?;
+        let quota = self.store.quota().await?;
+        let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",
@@ -257,7 +261,7 @@ impl Client {
             updated_blocks
         );
 
-        let offer_state = if status.complete {
+        let offer_state = if quota.is_none() || status.complete {
             OfferState::Approved
         } else {
             OfferState::Pending
@@ -278,8 +282,10 @@ impl Client {
             }
         }
 
-        for branch_id in &status.new_complete {
-            self.store.approve_snapshot(branch_id).await?;
+        if quota.is_some() {
+            for branch_id in &status.new_complete {
+                self.store.approve_snapshot(branch_id).await?;
+            }
         }
 
         self.refresh_branches(&status.new_complete);

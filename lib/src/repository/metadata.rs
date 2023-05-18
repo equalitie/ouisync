@@ -503,16 +503,20 @@ async fn get_read_key(
 // -------------------------------------------------------------------
 // Storage quota
 // -------------------------------------------------------------------
-pub(super) async fn get_quota(conn: &mut db::Connection) -> Result<u64> {
-    get_public(conn, QUOTA).await
-}
+pub(crate) mod quota {
+    use super::*;
 
-pub(super) async fn set_quota(tx: &mut db::WriteTransaction, value: u64) -> Result<()> {
-    set_public(tx, QUOTA, value).await
-}
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<u64> {
+        get_public(conn, QUOTA).await
+    }
 
-pub(super) async fn remove_quota(tx: &mut db::WriteTransaction) -> Result<()> {
-    remove_public(tx, QUOTA).await
+    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: u64) -> Result<()> {
+        set_public(tx, QUOTA, value).await
+    }
+
+    pub(crate) async fn remove(tx: &mut db::WriteTransaction) -> Result<()> {
+        remove_public(tx, QUOTA).await
+    }
 }
 
 // -------------------------------------------------------------------

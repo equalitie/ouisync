@@ -178,7 +178,7 @@ pub(crate) async fn receive_nodes(
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter)
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
         }
@@ -186,7 +186,7 @@ pub(crate) async fn receive_nodes(
 
     for (_, nodes) in snapshot.leaf_sets() {
         index
-            .receive_leaf_nodes(nodes.clone().into())
+            .receive_leaf_nodes(nodes.clone().into(), None)
             .await
             .unwrap();
     }

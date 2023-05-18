@@ -386,7 +386,7 @@ async fn receive_valid_child_nodes() {
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter)
+                .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
 
@@ -401,7 +401,7 @@ async fn receive_valid_child_nodes() {
 
     for (hash, leaf_nodes) in snapshot.leaf_sets() {
         index
-            .receive_leaf_nodes(leaf_nodes.clone().into())
+            .receive_leaf_nodes(leaf_nodes.clone().into(), None)
             .await
             .unwrap();
 
@@ -424,7 +424,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
         let result = index
-            .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter)
+            .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
             .await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
@@ -436,7 +436,9 @@ async fn receive_child_nodes_with_missing_root_parent() {
     }
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
-    let result = index.receive_leaf_nodes(leaf_nodes.clone().into()).await;
+    let result = index
+        .receive_leaf_nodes(leaf_nodes.clone().into(), None)
+        .await;
     assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
     // The orphaned leaf nodes were not written to the db.
@@ -738,7 +740,7 @@ async fn receive_snapshot(
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter)
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
         }
@@ -746,7 +748,7 @@ async fn receive_snapshot(
 
     for (_, nodes) in snapshot.leaf_sets() {
         index
-            .receive_leaf_nodes(nodes.clone().into())
+            .receive_leaf_nodes(nodes.clone().into(), None)
             .await
             .unwrap();
     }

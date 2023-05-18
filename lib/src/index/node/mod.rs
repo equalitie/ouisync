@@ -188,3 +188,13 @@ where
     })
     .await
 }
+
+/// Check whether the snapshot with the given root hash, together with all the already complete
+/// snapshots, is withink the given storage quota.
+pub(super) async fn check_quota(
+    _conn: &mut db::Connection,
+    _root_hash: &Hash,
+    _quota: u64,
+) -> Result<bool> {
+    Ok(true)
+}

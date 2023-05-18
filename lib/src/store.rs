@@ -2,7 +2,8 @@
 
 use crate::{
     block::{
-        self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker, BLOCK_NONCE_SIZE,
+        self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker,
+        BLOCK_RECORD_SIZE,
     },
     crypto::sign::PublicKey,
     db,
@@ -10,8 +11,7 @@ use crate::{
     event::Payload,
     index::{self, Index, SingleBlockPresence},
     progress::Progress,
-    repository::{LocalId, Metadata, RepositoryMonitor},
-    BLOCK_SIZE,
+    repository::{quota, LocalId, Metadata, RepositoryMonitor},
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -140,7 +140,30 @@ impl Store {
                 .get(0),
         );
 
-        Ok(count * (BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64))
+        Ok(count * BLOCK_RECORD_SIZE)
+    }
+
+    pub(crate) async fn set_quota(&self, quota: Option<u64>) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+
+        if let Some(quota) = quota {
+            quota::set(&mut tx, quota).await?
+        } else {
+            quota::remove(&mut tx).await?
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn quota(&self) -> Result<Option<u64>> {
+        let mut conn = self.db().acquire().await?;
+        match quota::get(&mut conn).await {
+            Ok(quota) => Ok(Some(quota)),
+            Err(Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) async fn approve_snapshot(&self, branch_id: &PublicKey) -> Result<()> {
@@ -640,7 +663,7 @@ mod tests {
             for (_, nodes) in layer.inner_maps() {
                 store
                     .index
-                    .receive_inner_nodes(nodes.clone().into(), &receive_filter)
+                    .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                     .await
                     .unwrap();
             }
@@ -649,7 +672,7 @@ mod tests {
         for (_, nodes) in snapshot.leaf_sets().take(1) {
             store
                 .index
-                .receive_leaf_nodes(nodes.clone().into())
+                .receive_leaf_nodes(nodes.clone().into(), None)
                 .await
                 .unwrap();
         }

@@ -124,7 +124,10 @@ impl Index {
                 "snapshot started"
             );
 
-            self.update_summaries(tx, node.proof.hash).await?;
+            // Ignoring quota here because if the snapshot became complete by receiving this root
+            // node it means that we already have all the other nodes and so the quota validation
+            // already took place.
+            self.finalize_receive(tx, node.proof.hash, None).await?;
         }
 
         Ok(action.request_children)
@@ -137,6 +140,7 @@ impl Index {
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &ReceiveFilter,
+        quota: Option<u64>,
     ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
@@ -151,7 +155,7 @@ impl Index {
         nodes.inherit_summaries(&mut tx).await?;
         nodes.save(&mut tx, &parent_hash).await?;
 
-        let status = self.update_summaries(tx, parent_hash).await?;
+        let status = self.finalize_receive(tx, parent_hash, quota).await?;
 
         Ok((updated_nodes, status))
     }
@@ -162,6 +166,7 @@ impl Index {
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
+        quota: Option<u64>,
     ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
@@ -178,7 +183,7 @@ impl Index {
             .save(&mut tx, &parent_hash)
             .await?;
 
-        let status = self.update_summaries(tx, parent_hash).await?;
+        let status = self.finalize_receive(tx, parent_hash, quota).await?;
 
         Ok((updated_blocks, status))
     }
@@ -243,10 +248,11 @@ impl Index {
 
     // Finalizes receiving nodes from a remote replica, commits the transaction and notifies the
     // affected branches.
-    async fn update_summaries(
+    async fn finalize_receive(
         &self,
         mut tx: db::WriteTransaction,
         hash: Hash,
+        quota: Option<u64>,
     ) -> Result<ReceiveStatus> {
         let statuses = node::update_summaries(&mut tx, vec![hash]).await?;
 
@@ -259,7 +265,11 @@ impl Index {
                 Completion::Pending(completer) => completer,
             };
 
-            // TODO: perform the quota validation here
+            if let Some(quota) = quota {
+                if !node::check_quota(&mut tx, &hash, quota).await? {
+                    continue;
+                }
+            }
 
             completer.complete(&mut tx).await?;
 
