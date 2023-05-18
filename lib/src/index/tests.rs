@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use super::{
     branch_data::BranchData,
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, Summary, EMPTY_INNER_HASH},
-    node_test_utils::Snapshot,
+    node_test_utils::{self, Snapshot},
     proof::Proof,
     Index, ReceiveError, ReceiveFilter,
 };
@@ -20,6 +18,7 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::task;
 
@@ -468,13 +467,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // Receive it all.
     receive_snapshot(&store.index, remote_id, &snapshot0, &write_keys).await;
-
-    for block in snapshot0.blocks().values() {
-        store
-            .write_received_block(&block.data, &block.nonce)
-            .await
-            .unwrap();
-    }
+    node_test_utils::receive_blocks(&store, &snapshot0).await;
 
     let remote_branch = store.index.get_branch(remote_id);
 

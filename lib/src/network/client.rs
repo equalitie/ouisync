@@ -292,11 +292,14 @@ impl Client {
         &self,
         data: BlockData,
         nonce: BlockNonce,
-        // We need to preserve the lifetime of `_block_promise` until the response is processed.
-        _block_promise: Option<BlockPromise>,
+        block_promise: BlockPromise,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        match self.store.write_received_block(&data, &nonce).await {
+        match self
+            .store
+            .write_received_block(&data, &nonce, block_promise)
+            .await
+        {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),

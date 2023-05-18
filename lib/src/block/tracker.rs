@@ -54,25 +54,6 @@ impl BlockTracker {
         // TODO
     }
 
-    /// Mark the block request as successfully completed.
-    pub fn complete(&self, block_id: &BlockId) {
-        tracing::trace!(?block_id, "complete");
-
-        let mut inner = self.shared.inner.lock().unwrap();
-
-        let missing_block = if let Some(missing_block) = inner.missing_blocks.remove(block_id) {
-            missing_block
-        } else {
-            return;
-        };
-
-        for client_id in missing_block.clients {
-            if let Some(block_ids) = inner.clients.get_mut(client_id) {
-                block_ids.remove(block_id);
-            }
-        }
-    }
-
     pub fn client(&self) -> BlockTrackerClient {
         let client_id = self
             .shared
@@ -89,16 +70,6 @@ impl BlockTracker {
             client_id,
             notify_rx,
         }
-    }
-
-    #[cfg(test)]
-    fn contains(&self, block_id: &BlockId) -> bool {
-        self.shared
-            .inner
-            .lock()
-            .unwrap()
-            .missing_blocks
-            .contains_key(block_id)
     }
 }
 
@@ -191,10 +162,12 @@ impl BlockPromiseAcceptor {
 
             if missing_block.required > 0 && missing_block.accepted_by.is_none() {
                 missing_block.accepted_by = Some(self.client_id);
+
                 return Some(BlockPromise {
                     shared: self.shared.clone(),
                     client_id: self.client_id,
                     block_id: *block_id,
+                    complete: false,
                 });
             }
         }
@@ -203,15 +176,36 @@ impl BlockPromiseAcceptor {
     }
 }
 
+/// Represents an accepted block request.
 pub(crate) struct BlockPromise {
     shared: Arc<Shared>,
     client_id: ClientId,
     block_id: BlockId,
+    complete: bool,
 }
 
 impl BlockPromise {
     pub(crate) fn block_id(&self) -> &BlockId {
         &self.block_id
+    }
+
+    /// Mark the block request as successfully completed.
+    pub fn complete(mut self) {
+        let mut inner = self.shared.inner.lock().unwrap();
+
+        let Some(missing_block) = inner.missing_blocks.remove(&self.block_id) else {
+            return;
+        };
+
+        for client_id in missing_block.clients {
+            if let Some(block_ids) = inner.clients.get_mut(client_id) {
+                block_ids.remove(&self.block_id);
+            }
+        }
+
+        tracing::trace!(block_id = ?self.block_id, "complete");
+
+        self.complete = true;
     }
 }
 
@@ -226,6 +220,10 @@ impl fmt::Debug for BlockPromise {
 
 impl Drop for BlockPromise {
     fn drop(&mut self) {
+        if self.complete {
+            return;
+        }
+
         let mut inner = self.shared.inner.lock().unwrap();
 
         let client = match inner.clients.get_mut(self.client_id) {
@@ -571,21 +569,6 @@ mod tests {
                 .map(BlockPromise::block_id),
             Some(&block.id)
         );
-    }
-
-    #[test]
-    fn concurrent_require_and_complete() {
-        let tracker = BlockTracker::new();
-        let client = tracker.client();
-
-        let block = make_block();
-        client.offer(block.id, OfferState::Approved);
-
-        let require = tracker.begin_require(block.id);
-        tracker.complete(&block.id);
-        require.commit();
-
-        assert!(!tracker.contains(&block.id));
     }
 
     #[test]

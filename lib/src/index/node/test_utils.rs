@@ -4,7 +4,7 @@ use super::{
     INNER_LAYER_COUNT,
 };
 use crate::{
-    block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    block::{tracker::OfferState, BlockData, BlockId, BlockNonce, BLOCK_SIZE},
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -193,9 +193,16 @@ pub(crate) async fn receive_nodes(
 }
 
 pub(crate) async fn receive_blocks(store: &Store, snapshot: &Snapshot) {
+    let client = store.block_tracker.client();
+    let acceptor = client.acceptor();
+
     for block in snapshot.blocks().values() {
+        store.block_tracker.begin_require(*block.id()).commit();
+        client.offer(*block.id(), OfferState::Approved);
+        let promise = acceptor.try_accept().unwrap();
+
         store
-            .write_received_block(&block.data, &block.nonce)
+            .write_received_block(&block.data, &block.nonce, promise)
             .await
             .unwrap();
     }

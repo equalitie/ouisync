@@ -1,7 +1,9 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{self, BlockData, BlockId, BlockNonce, BlockTracker, BLOCK_NONCE_SIZE},
+    block::{
+        self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker, BLOCK_NONCE_SIZE,
+    },
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
@@ -75,6 +77,7 @@ impl Store {
         &self,
         data: &BlockData,
         nonce: &BlockNonce,
+        promise: BlockPromise,
     ) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
 
@@ -83,7 +86,7 @@ impl Store {
             Err(error) => {
                 if matches!(error, Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
-                    self.block_tracker.complete(&data.id);
+                    promise.complete();
                 }
 
                 return Err(error);
@@ -94,7 +97,6 @@ impl Store {
 
         let data_id = data.id;
         let event_tx = self.index.notify().clone();
-        let block_tracker = self.block_tracker.clone();
 
         tx.commit_and_then(move || {
             // Notify affected branches.
@@ -105,7 +107,7 @@ impl Store {
                 });
             }
 
-            block_tracker.complete(&data_id);
+            promise.complete();
         })
         .await?;
 
@@ -245,7 +247,7 @@ fn branch_missing_block_ids<'a>(
 mod tests {
     use super::*;
     use crate::{
-        block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+        block::{self, tracker::OfferState, BlockId, BlockNonce, BLOCK_SIZE},
         collections::HashSet,
         crypto::{
             cipher::SecretKey,
@@ -447,10 +449,17 @@ mod tests {
         let store = create_store(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let block_tracker = store.block_tracker.client();
 
         for block in snapshot.blocks().values() {
+            store.block_tracker.begin_require(*block.id()).commit();
+            block_tracker.offer(*block.id(), OfferState::Approved);
+            let promise = block_tracker.acceptor().try_accept().unwrap();
+
             assert_matches!(
-                store.write_received_block(&block.data, &block.nonce).await,
+                store
+                    .write_received_block(&block.data, &block.nonce, promise)
+                    .await,
                 Err(Error::BlockNotReferenced)
             );
         }
