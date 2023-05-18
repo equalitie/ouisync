@@ -442,14 +442,6 @@ impl VirtualFilesystem {
         })
     }
 
-    async fn async_cleanup<'c, 'h: 'c>(
-        &'h self,
-        _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c EntryHandle,
-    ) {
-    }
-
     async fn async_close_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -1159,13 +1151,27 @@ impl From<Error> for i32 {
                 use ouisync_lib::Error as E;
 
                 match error {
-                    E::EntryNotFound => STATUS_OBJECT_NAME_NOT_FOUND,
+                    E::Db(_) => STATUS_INTERNAL_DB_ERROR,
                     E::PermissionDenied => STATUS_ACCESS_DENIED,
-                    E::OffsetOutOfRange => STATUS_INVALID_PARAMETER,
-                    E::OperationNotSupported => STATUS_NOT_IMPLEMENTED,
-                    E::Locked => STATUS_LOCK_NOT_GRANTED,
+                    E::MalformedData => STATUS_DATA_ERROR,
+                    E::BlockNotFound(_) => STATUS_RESOURCE_DATA_NOT_FOUND,
+                    E::BlockNotReferenced => STATUS_RESOURCE_DATA_NOT_FOUND,
+                    E::WrongBlockLength(_) => STATUS_DATA_ERROR,
+                    E::MalformedDirectory => STATUS_DATA_ERROR,
+                    E::EntryExists => STATUS_OBJECT_NAME_EXISTS,
+                    E::EntryNotFound => STATUS_OBJECT_NAME_NOT_FOUND,
+                    E::AmbiguousEntry => STATUS_FLT_DUPLICATE_ENTRY,
+                    // These two are as they were used in the memfs dokan example.
+                    E::EntryIsFile => STATUS_INVALID_DEVICE_REQUEST,
                     E::EntryIsDirectory => STATUS_INVALID_DEVICE_REQUEST,
-                    _ => todo!("Unhandled error to NTSTATUS conversion \"{error:?}\""),
+                    E::NonUtf8FileName => STATUS_OBJECT_NAME_INVALID,
+                    E::OffsetOutOfRange => STATUS_INVALID_PARAMETER,
+                    E::DirectoryNotEmpty => STATUS_DIRECTORY_NOT_EMPTY,
+                    E::OperationNotSupported => STATUS_NOT_IMPLEMENTED,
+                    E::Writer(_) => STATUS_IO_DEVICE_ERROR,
+                    E::RequestTimeout => STATUS_TIMEOUT,
+                    E::StorageVersionMismatch => STATUS_IO_DEVICE_ERROR,
+                    E::Locked => STATUS_LOCK_NOT_GRANTED,
                 }
             }
         }
