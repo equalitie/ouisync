@@ -51,6 +51,10 @@ impl JointDirectory {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries().next().is_none()
+    }
+
     /// Returns iterator over the entries of this directory. Multiple concurrent versions of the
     /// same file are returned as separate `JointEntryRef::File` entries. Multiple concurrent
     /// versions of the same directory are returned as a single `JointEntryRef::Directory` entry.

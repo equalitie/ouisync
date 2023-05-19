@@ -185,6 +185,7 @@ impl VirtualFilesystem {
         // want to open if it does already exist.
         create_directory: bool,
         create_disposition: CreateDisposition,
+        delete_access: bool,
         shared: Arc<AsyncMutex<Shared>>,
     ) -> Result<(Entry, bool), Error> {
         use ouisync_lib::Error as E;
@@ -193,7 +194,7 @@ impl VirtualFilesystem {
             Some((parent, child)) => (parent, child),
             None => {
                 // It's the root.
-                return Ok((Entry::Directory(path.clone()), false));
+                return Ok((Entry::new_dir(path.clone(), shared), false));
             }
         };
 
@@ -206,45 +207,44 @@ impl VirtualFilesystem {
                     return Err(E::EntryNotFound.into());
                 }
 
-                let created = true;
-
-                if create_directory {
-                    return self
-                        .repo
-                        .create_directory(&path)
-                        .await
-                        .map(|_dir| (Entry::Directory(path.clone()), created))
-                        .map_err(|e| e.into());
+                let entry = if delete_access {
+                    if create_directory {
+                        Entry::new_dir(path.clone(), shared)
+                    } else {
+                        Entry::new_file(None, shared)
+                    }
                 } else {
-                    let mut file = self.repo.create_file(path).await?;
-                    file.flush().await?;
-                    return Ok((
-                        Entry::File(FileEntry {
-                            file: AsyncMutex::new(Some(file)),
-                            shared,
-                        }),
-                        created,
-                    ));
-                }
+                    if create_directory {
+                        self.repo.create_directory(&path).await?;
+                        Entry::new_dir(path.clone(), shared)
+                    } else {
+                        let mut file = self.repo.create_file(path).await?;
+                        file.flush().await?;
+                        Entry::new_file(Some(file), shared)
+                    }
+                };
+
+                return Ok((entry, true /* is new */));
             }
             Err(other) => return Err(other.into()),
         };
 
-        let created = false;
-
-        match existing_entry {
-            JointEntryRef::File(file_entry) => {
-                let file = file_entry.open().await?;
-                Ok((
-                    Entry::File(FileEntry {
-                        file: AsyncMutex::new(Some(file)),
-                        shared,
-                    }),
-                    created,
-                ))
+        let entry = if delete_access {
+            match existing_entry {
+                JointEntryRef::File(_) => Entry::new_file(None, shared),
+                JointEntryRef::Directory(_) => Entry::new_dir(path.clone(), shared),
             }
-            JointEntryRef::Directory(_) => Ok((Entry::Directory(path.clone()), created)),
-        }
+        } else {
+            match existing_entry {
+                JointEntryRef::File(file_entry) => {
+                    let file = file_entry.open().await?;
+                    Entry::new_file(Some(file), shared)
+                }
+                JointEntryRef::Directory(_) => Entry::new_dir(path.clone(), shared),
+            }
+        };
+
+        Ok((entry, false /* not new */))
     }
 
     #[instrument(
@@ -264,22 +264,18 @@ impl VirtualFilesystem {
     ) -> Result<(Entry, bool, u64), Error> {
         let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
 
-        let result = if !delete_access {
-            self.create_entry_impl(&path, create_directory, create_disposition, shared)
-                .await
-        } else {
-            Ok((
-                Entry::File(FileEntry {
-                    file: AsyncMutex::new(None),
-                    shared,
-                }),
-                // TODO
-                false,
-            ))
-        };
+        let result = self
+            .create_entry_impl(
+                &path,
+                create_directory,
+                create_disposition,
+                delete_access,
+                shared,
+            )
+            .await;
 
         if result.is_err() {
-            match self.handles.lock().await.entry(path) {
+            match self.handles.lock().await.entry(path.clone()) {
                 hash_map::Entry::Occupied(entry) => {
                     let mut handle = entry.get().lock().await;
                     handle.handle_count -= 1;
@@ -296,28 +292,14 @@ impl VirtualFilesystem {
         result.map(|(entry, is_new)| (entry, is_new, id))
     }
 
-    async fn close_file_impl(&self, entry: &FileEntry) {
-        let mut file_lock = entry.file.lock().await;
-
-        let file = match file_lock.as_mut() {
-            Some(file) => file,
-            None => {
-                tracing::error!("File already closed");
-                return;
-            }
-        };
-
-        if let Err(error) = file.flush().await {
-            tracing::error!("Failed to flush on file close: {error:?}");
-        }
-
-        // Note: `handles` must never be locked *after* `entry.shared`.
+    async fn close_shared(&self, shared: &Arc<AsyncMutex<Shared>>) -> Option<Utf8PathBuf> {
+        // Note: `handles` must never be locked *after* `shared`.
         let mut handles = self.handles.lock().await;
-        let mut lock = entry.shared.lock().await;
+        let mut lock = shared.lock().await;
 
         match handles.entry(lock.path.clone()) {
             hash_map::Entry::Occupied(occupied) => {
-                assert_eq!(Arc::as_ptr(occupied.get()), Arc::as_ptr(&entry.shared));
+                assert_eq!(Arc::as_ptr(occupied.get()), Arc::as_ptr(&shared));
 
                 lock.handle_count -= 1;
 
@@ -328,22 +310,13 @@ impl VirtualFilesystem {
                         None
                     };
 
-                    // Close the file handle.
-                    file_lock.take();
                     drop(lock);
-                    drop(file_lock);
                     occupied.remove();
 
-                    // Now all file handles to this particular file are closed, so we
-                    // shouldn't get the `ouisync_lib::Error::Locked` error.
-                    if let Some(to_delete) = to_delete {
-                        if let Err(error) = self.repo.remove_entry(to_delete.clone()).await {
-                            tracing::warn!(
-                                "Failed to delete file \"{to_delete:?}\" on close: {error:?}"
-                            );
-                        }
-                    }
+                    return to_delete;
                 }
+
+                return None;
             }
             // This FileEntry exists, so it must be in `handles`.
             hash_map::Entry::Vacant(_) => unreachable!(),
@@ -353,10 +326,10 @@ impl VirtualFilesystem {
     async fn find_files_impl(
         &self,
         mut fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        directory_path: &Utf8PathBuf,
+        directory_entry: &DirEntry,
         pattern: Option<&U16CStr>,
     ) -> Result<(), Error> {
-        let dir = self.repo.open_directory(directory_path).await?;
+        let dir = self.repo.open_directory(&directory_entry.path).await?;
 
         for entry in dir.entries() {
             let name = entry.unique_name();
@@ -450,10 +423,34 @@ impl VirtualFilesystem {
     ) {
         match &context.entry {
             Entry::File(entry) => {
-                self.close_file_impl(entry).await;
+                let mut file_lock = entry.file.lock().await;
+
+                match file_lock.as_mut() {
+                    Some(file) => {
+                        if let Err(error) = file.flush().await {
+                            tracing::error!("Failed to flush on file close: {error:?}");
+                        }
+                    }
+                    None => {
+                        // TODO: This is not always an error.
+                        tracing::error!("File already closed");
+                    }
+                };
+
+                // Close the file handle.
+                file_lock.take();
+                drop(file_lock);
             }
             Entry::Directory(_) => (),
         };
+
+        if let Some(to_delete) = self.close_shared(context.entry.shared()).await {
+            // Now all handles to this particular entry are closed, so we shouldn't get the
+            // `ouisync_lib::Error::Locked` error.
+            if let Err(error) = self.repo.remove_entry(to_delete.clone()).await {
+                tracing::warn!("Failed to delete file \"{to_delete:?}\" on close: {error:?}");
+            }
+        }
     }
 
     async fn async_read_file<'c, 'h: 'c>(
@@ -480,6 +477,7 @@ impl VirtualFilesystem {
         Ok(size as u32)
     }
 
+    #[instrument(skip(self, buffer, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_write_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -568,8 +566,8 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        let dir_path = context.entry.as_directory()?;
-        self.find_files_impl(fill_find_data, dir_path, None).await
+        let dir_entry = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, dir_entry, None).await
     }
 
     async fn async_find_files_with_pattern<'c, 'h: 'c>(
@@ -580,8 +578,8 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        let dir_path = context.entry.as_directory()?;
-        self.find_files_impl(fill_find_data, dir_path, Some(pattern))
+        let dir_entry = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, dir_entry, Some(pattern))
             .await
     }
 
@@ -622,10 +620,22 @@ impl VirtualFilesystem {
     async fn async_delete_directory<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c EntryHandle,
+        info: &OperationInfo<'c, 'h, Self>,
+        context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        todo!()
+        let dir_entry = context.entry.as_directory()?;
+        let mut shared = dir_entry.shared.lock().await;
+
+        let dir = self.repo.cd(&dir_entry.path).await?;
+
+        match (dir.is_empty(), info.delete_on_close()) {
+            (true, true) => shared.delete_on_close = true,
+            (true, false) => shared.delete_on_close = false,
+            (false, true) => return Err(STATUS_DIRECTORY_NOT_EMPTY.into()),
+            (false, false) => shared.delete_on_close = false,
+        }
+
+        Ok(())
     }
 
     async fn async_move_file<'c, 'h: 'c>(
@@ -809,12 +819,28 @@ struct FileEntry {
     shared: Arc<AsyncMutex<Shared>>,
 }
 
+struct DirEntry {
+    path: Utf8PathBuf,
+    shared: Arc<AsyncMutex<Shared>>,
+}
+
 enum Entry {
     File(FileEntry),
-    Directory(Utf8PathBuf),
+    Directory(DirEntry),
 }
 
 impl Entry {
+    fn new_file(file: Option<File>, shared: Arc<AsyncMutex<Shared>>) -> Entry {
+        Entry::File(FileEntry {
+            file: AsyncMutex::new(file),
+            shared,
+        })
+    }
+
+    fn new_dir(path: Utf8PathBuf, shared: Arc<AsyncMutex<Shared>>) -> Entry {
+        Entry::Directory(DirEntry { path, shared })
+    }
+
     fn as_file(&self) -> Result<&FileEntry, Error> {
         match self {
             Entry::File(file_entry) => Ok(file_entry),
@@ -822,10 +848,17 @@ impl Entry {
         }
     }
 
-    fn as_directory(&self) -> Result<&Utf8PathBuf, Error> {
+    fn as_directory(&self) -> Result<&DirEntry, Error> {
         match self {
             Entry::File(_) => Err(STATUS_INVALID_DEVICE_REQUEST.into()),
-            Entry::Directory(path) => Ok(path),
+            Entry::Directory(entry) => Ok(entry),
+        }
+    }
+
+    fn shared(&self) -> &Arc<AsyncMutex<Shared>> {
+        match self {
+            Entry::File(entry) => &entry.shared,
+            Entry::Directory(entry) => &entry.shared,
         }
     }
 }
