@@ -271,7 +271,7 @@ impl RootNode {
                  writer_id,
                  versions,
                  signature,
-                 is_complete
+                 is_complete,
                  block_presence
              FROM snapshot_root_nodes
              WHERE hash = ?",
