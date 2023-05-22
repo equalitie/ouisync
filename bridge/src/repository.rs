@@ -1,10 +1,16 @@
-use crate::{config::ConfigStore, device_id, error::Result};
+use crate::{
+    config::{ConfigError, ConfigKey, ConfigStore},
+    device_id,
+    error::Result,
+};
 use camino::Utf8PathBuf;
 use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
-    ShareToken, StateMonitor,
+    ShareToken, StateMonitor, StorageSize,
 };
 use std::borrow::Cow;
+
+const DEFAULT_QUOTA_KEY: ConfigKey<u64> = ConfigKey::new("default_quota", "Default storage quota");
 
 /// Creates a new repository and set access to it based on the following table:
 ///
@@ -41,6 +47,9 @@ pub async fn create(
     let access = Access::new(local_read_secret, local_write_secret, access_secrets);
     let repository =
         Repository::create(store.into_std_path_buf(), device_id, access, repos_monitor).await?;
+
+    let quota = get_default_quota(config).await?;
+    repository.set_quota(quota).await?;
 
     Ok(repository)
 }
@@ -179,4 +188,26 @@ pub async fn create_share_token(
     };
 
     Ok(share_token.to_string())
+}
+
+pub async fn set_default_quota(config: &ConfigStore, value: Option<StorageSize>) -> Result<()> {
+    let entry = config.entry(DEFAULT_QUOTA_KEY);
+
+    if let Some(value) = value {
+        entry.set(&value.to_bytes()).await?;
+    } else {
+        entry.remove().await?;
+    }
+
+    Ok(())
+}
+
+pub async fn get_default_quota(config: &ConfigStore) -> Result<Option<StorageSize>> {
+    let entry = config.entry(DEFAULT_QUOTA_KEY);
+
+    match entry.get().await {
+        Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }

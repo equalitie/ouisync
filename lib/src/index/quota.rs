@@ -1,6 +1,14 @@
 use super::{try_collect_into, RootNode};
-use crate::{crypto::Hash, db, error::Result, iterator, storage_size::StorageSize, versioned};
+use crate::{
+    crypto::Hash,
+    db,
+    error::{Error, Result},
+    iterator,
+    storage_size::StorageSize,
+    versioned,
+};
 use sqlx::Row;
+use thiserror::Error;
 
 /// Check whether the repository would be within the given block count quota if the snapshot with
 /// the given root hash was approved.
@@ -8,17 +16,32 @@ pub(super) async fn check(
     conn: &mut db::Connection,
     candidate_root_hash: &Hash,
     quota: StorageSize,
-) -> Result<bool> {
+) -> Result<(), QuotaError> {
     let root_hashes = load_candidate_latest_root_hashes(conn, candidate_root_hash).await?;
 
     // The candidate snapshot is already outdated, reject it straight away.
     if root_hashes.iter().all(|hash| hash != candidate_root_hash) {
-        return Ok(false);
+        return Err(QuotaError::Outdated);
     }
 
     let block_count = count_referenced_blocks(conn, &root_hashes).await?;
+    let size = StorageSize::from_blocks(block_count);
 
-    Ok(block_count <= quota.to_blocks())
+    if size <= quota {
+        Ok(())
+    } else {
+        Err(QuotaError::Exceeded(size))
+    }
+}
+
+#[derive(Debug, Error)]
+pub(super) enum QuotaError {
+    #[error("quota exceeded")]
+    Exceeded(StorageSize),
+    #[error("snapshot outdated")]
+    Outdated,
+    #[error("fatal error")]
+    Fatal(#[from] Error),
 }
 
 /// Load the most up-to-date root node hashes considering also the unapproved candidate.

@@ -1,5 +1,5 @@
 use clap::{builder::BoolishValueParser, Subcommand};
-use ouisync_lib::{AccessMode, PeerAddr, PeerInfo};
+use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf};
 
@@ -156,7 +156,7 @@ pub(crate) enum Request {
     /// Enable or disable DHT
     Dht {
         #[arg(short = 'n', long)]
-        repository_name: String,
+        name: String,
 
         /// Whether to enable or disable. If omitted, prints the current state.
         #[arg(value_parser = BoolishValueParser::new())]
@@ -165,11 +165,34 @@ pub(crate) enum Request {
     /// Enable or disable Peer Exchange (PEX)
     Pex {
         #[arg(short = 'n', long)]
-        repository_name: String,
+        name: String,
 
         /// Whether to enable or disable. If omitted, prints the current state.
         #[arg(value_parser = BoolishValueParser::new())]
         enabled: Option<bool>,
+    },
+    /// Get or set storage quota
+    Quota {
+        /// Name of the repository to get/set the quota for
+        #[arg(
+            short,
+            long,
+            required_unless_present = "default",
+            conflicts_with = "default"
+        )]
+        name: Option<String>,
+
+        /// Get/set the default quota
+        #[arg(short, long)]
+        default: bool,
+
+        /// Remove the quota
+        #[arg(short, long, conflicts_with = "value")]
+        remove: bool,
+
+        /// Quota to set, in bytes. If omitted, prints the current quota. Support binary (ki, Mi,
+        /// Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
+        value: Option<StorageSize>,
     },
 }
 
@@ -181,6 +204,8 @@ pub(crate) enum Response {
     Strings(Vec<String>),
     PeerInfo(Vec<PeerInfo>),
     SocketAddrs(Vec<SocketAddr>),
+    StorageSize(StorageSize),
+    QuotaInfo(QuotaInfo),
 }
 
 impl From<()> for Response {
@@ -219,10 +244,22 @@ impl From<Vec<SocketAddr>> for Response {
     }
 }
 
+impl From<StorageSize> for Response {
+    fn from(value: StorageSize) -> Self {
+        Self::StorageSize(value)
+    }
+}
+
+impl From<QuotaInfo> for Response {
+    fn from(value: QuotaInfo) -> Self {
+        Self::QuotaInfo(value)
+    }
+}
+
 impl fmt::Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => write!(f, "OK"),
+            Self::None => Ok(()),
             Self::Bool(value) => write!(f, "{value}"),
             Self::String(value) => write!(f, "{value}"),
             Self::Strings(value) => {
@@ -250,6 +287,63 @@ impl fmt::Display for Response {
 
                 Ok(())
             }
+            Self::StorageSize(value) => write!(f, "{value}"),
+            Self::QuotaInfo(info) => write!(f, "{info}"),
         }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct QuotaInfo {
+    pub quota: Option<StorageSize>,
+    pub size: StorageSize,
+}
+
+impl fmt::Display for QuotaInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "quota:     ")?;
+
+        if let Some(quota) = self.quota {
+            writeln!(f, "{quota}")?;
+        } else {
+            writeln!(f, "∞")?;
+        }
+
+        write!(f, "available: ")?;
+
+        if let Some(quota) = self.quota {
+            let available = quota.saturating_sub(self.size);
+
+            writeln!(
+                f,
+                "{} ({:.0}%)",
+                available,
+                percent(available.to_bytes(), quota.to_bytes())
+            )?;
+        } else {
+            writeln!(f, "∞")?;
+        }
+
+        write!(f, "used:      {}", self.size)?;
+
+        if let Some(quota) = self.quota {
+            writeln!(
+                f,
+                " ({:.0}%)",
+                percent(self.size.to_bytes(), quota.to_bytes())
+            )?;
+        } else {
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn percent(num: u64, den: u64) -> f64 {
+    if den > 0 {
+        100.0 * num as f64 / den as f64
+    } else {
+        0.0
     }
 }

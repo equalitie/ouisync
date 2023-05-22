@@ -19,7 +19,7 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::{node::Completion, proof::ProofError};
+use self::{node::Completion, proof::ProofError, quota::QuotaError};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -265,8 +265,17 @@ impl Index {
             };
 
             if let Some(quota) = quota {
-                if !quota::check(&mut tx, &hash, quota).await? {
-                    continue;
+                match quota::check(&mut tx, &hash, quota).await {
+                    Ok(()) => (),
+                    Err(QuotaError::Exceeded(size)) => {
+                        tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
+                        continue;
+                    }
+                    Err(QuotaError::Outdated) => {
+                        tracing::debug!(?hash, "snapshot outdated");
+                        continue;
+                    }
+                    Err(QuotaError::Fatal(error)) => return Err(error),
                 }
             }
 

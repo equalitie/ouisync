@@ -61,6 +61,7 @@ pub use self::{
     progress::Progress,
     repository::{delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryId},
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
+    storage_size::StorageSize,
     store::Store,
     version_vector::VersionVector,
 };

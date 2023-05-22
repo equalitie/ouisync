@@ -859,13 +859,13 @@ async fn file_conflict_attempt_to_fork_and_modify_remote() {
 #[tokio::test(flavor = "multi_thread")]
 async fn size() {
     let (_base_dir, repo) = setup().await;
-    assert_eq!(repo.size().await.unwrap(), 0);
+    assert_eq!(repo.size().await.unwrap().to_bytes(), 0);
 
     let mut file = repo.create_file("test.txt").await.unwrap();
 
     // 2 blocks: 1 for the file and 1 for the root dir
     assert_eq!(
-        repo.size().await.unwrap(),
+        repo.size().await.unwrap().to_bytes(),
         2 * (BLOCK_SIZE + BlockId::SIZE + BLOCK_NONCE_SIZE) as u64
     );
 
@@ -876,7 +876,7 @@ async fn size() {
 
     // 3 blocks: 2 for the file and 1 for the root dir
     assert_eq!(
-        repo.size().await.unwrap(),
+        repo.size().await.unwrap().to_bytes(),
         3 * (BLOCK_SIZE + BlockId::SIZE + BLOCK_NONCE_SIZE) as u64
     );
 }

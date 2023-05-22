@@ -457,21 +457,18 @@ impl Repository {
     }
 
     /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
-    pub async fn set_quota(&self, quota: Option<u64>) -> Result<()> {
-        self.shared
-            .store
-            .set_quota(quota.map(StorageSize::from_bytes))
-            .await
+    pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
+        self.shared.store.set_quota(quota).await
     }
 
     /// Get the storage quota in bytes or `None` if no quota is set.
-    pub async fn quota(&self) -> Result<Option<u64>> {
-        Ok(self.shared.store.quota().await?.map(StorageSize::to_bytes))
+    pub async fn quota(&self) -> Result<Option<StorageSize>> {
+        self.shared.store.quota().await
     }
 
     /// Get the total size of the data stored in this repository.
-    pub async fn size(&self) -> Result<u64> {
-        Ok(self.shared.store.size().await?.to_bytes())
+    pub async fn size(&self) -> Result<StorageSize> {
+        self.shared.store.size().await
     }
 
     pub fn store(&self) -> &Store {

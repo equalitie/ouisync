@@ -5,7 +5,7 @@ mod common;
 use self::common::{actor, Env, Proto, DEFAULT_REPO};
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StateMonitor, VersionVector,
+    Access, AccessMode, EntryType, Error, Repository, StateMonitor, StorageSize, VersionVector,
     BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
@@ -990,9 +990,9 @@ fn content_stays_available_during_sync() {
 fn quota() {
     let mut env = Env::new();
 
-    let quota = 64 * 1024;
-    let content0 = common::random_content(3 * quota as usize / 4);
-    let content1 = common::random_content(2 * quota as usize / 4);
+    let quota = StorageSize::from_blocks(2);
+    let content0 = common::random_content(3 * quota.to_bytes() as usize / 4);
+    let content1 = common::random_content(2 * quota.to_bytes() as usize / 4);
 
     let (tx, mut rx) = mpsc::channel(1);
 
