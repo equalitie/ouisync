@@ -2,6 +2,7 @@ mod branch_data;
 mod node;
 mod path;
 mod proof;
+mod quota;
 mod receive_filter;
 #[cfg(test)]
 mod tests;
@@ -18,10 +19,7 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::{
-    node::{try_collect_into, Completion},
-    proof::ProofError,
-};
+use self::{node::Completion, proof::ProofError};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -30,10 +28,11 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventSender, Payload},
     repository::RepositoryId,
+    storage_size::StorageSize,
     version_vector::VersionVector,
 };
-use futures_util::TryStreamExt;
-use std::cmp::Ordering;
+use futures_util::{Stream, TryStreamExt};
+use std::{cmp::Ordering, future, iter};
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::Level;
@@ -140,7 +139,7 @@ impl Index {
         &self,
         nodes: CacheHash<InnerNodeMap>,
         receive_filter: &ReceiveFilter,
-        quota: Option<u64>,
+        quota: Option<StorageSize>,
     ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
@@ -166,7 +165,7 @@ impl Index {
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
-        quota: Option<u64>,
+        quota: Option<StorageSize>,
     ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
@@ -252,7 +251,7 @@ impl Index {
         &self,
         mut tx: db::WriteTransaction,
         hash: Hash,
-        quota: Option<u64>,
+        quota: Option<StorageSize>,
     ) -> Result<ReceiveStatus> {
         let statuses = node::update_summaries(&mut tx, vec![hash]).await?;
 
@@ -266,7 +265,7 @@ impl Index {
             };
 
             if let Some(quota) = quota {
-                if !node::check_quota(&mut tx, &hash, quota).await? {
+                if !quota::check(&mut tx, &hash, quota).await? {
                     continue;
                 }
             }
@@ -450,4 +449,17 @@ async fn decide_root_node_action(
     }
 
     Ok(action)
+}
+
+// TODO: move this to some generic utils module.
+async fn try_collect_into<S, D, T, E>(src: S, dst: &mut D) -> Result<(), E>
+where
+    S: Stream<Item = Result<T, E>>,
+    D: Extend<T>,
+{
+    src.try_for_each(|item| {
+        dst.extend(iter::once(item));
+        future::ready(Ok(()))
+    })
+    .await
 }

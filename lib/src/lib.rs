@@ -35,6 +35,7 @@ mod locator;
 mod progress;
 mod repository;
 mod state_monitor;
+mod storage_size;
 mod store;
 mod sync;
 #[cfg(test)]

@@ -1,10 +1,7 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{
-        self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker,
-        BLOCK_RECORD_SIZE,
-    },
+    block::{self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
@@ -12,6 +9,7 @@ use crate::{
     index::{self, Index, SingleBlockPresence},
     progress::Progress,
     repository::{quota, LocalId, Metadata, RepositoryMonitor},
+    storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -129,7 +127,7 @@ impl Store {
     }
 
     /// Total size of the stored data
-    pub(crate) async fn size(&self) -> Result<u64> {
+    pub(crate) async fn size(&self) -> Result<StorageSize> {
         let mut conn = self.db().acquire().await?;
 
         // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
@@ -140,14 +138,14 @@ impl Store {
                 .get(0),
         );
 
-        Ok(count * BLOCK_RECORD_SIZE)
+        Ok(StorageSize::from_blocks(count))
     }
 
-    pub(crate) async fn set_quota(&self, quota: Option<u64>) -> Result<()> {
+    pub(crate) async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
 
         if let Some(quota) = quota {
-            quota::set(&mut tx, quota).await?
+            quota::set(&mut tx, quota.to_bytes()).await?
         } else {
             quota::remove(&mut tx).await?
         }
@@ -157,10 +155,10 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn quota(&self) -> Result<Option<u64>> {
+    pub(crate) async fn quota(&self) -> Result<Option<StorageSize>> {
         let mut conn = self.db().acquire().await?;
         match quota::get(&mut conn).await {
-            Ok(quota) => Ok(Some(quota)),
+            Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
             Err(Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error),
         }

@@ -32,6 +32,7 @@ use crate::{
     path,
     progress::Progress,
     state_monitor::StateMonitor,
+    storage_size::StorageSize,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
 };
@@ -457,17 +458,20 @@ impl Repository {
 
     /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
     pub async fn set_quota(&self, quota: Option<u64>) -> Result<()> {
-        self.shared.store.set_quota(quota).await
+        self.shared
+            .store
+            .set_quota(quota.map(StorageSize::from_bytes))
+            .await
     }
 
     /// Get the storage quota in bytes or `None` if no quota is set.
     pub async fn quota(&self) -> Result<Option<u64>> {
-        self.shared.store.quota().await
+        Ok(self.shared.store.quota().await?.map(StorageSize::to_bytes))
     }
 
     /// Get the total size of the data stored in this repository.
     pub async fn size(&self) -> Result<u64> {
-        self.shared.store.size().await
+        Ok(self.shared.store.size().await?.to_bytes())
     }
 
     pub fn store(&self) -> &Store {

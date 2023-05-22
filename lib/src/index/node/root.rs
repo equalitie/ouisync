@@ -12,6 +12,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     version_vector::VersionVector,
+    versioned::Versioned,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
@@ -259,6 +260,35 @@ impl RootNode {
         Self::load_all_by_writer(conn, writer_id).try_next().await
     }
 
+    /// Returns all nodes with the specified hash
+    pub fn load_all_by_hash<'a>(
+        conn: &'a mut db::Connection,
+        hash: &'a Hash,
+    ) -> impl Stream<Item = Result<Self>> + 'a {
+        sqlx::query(
+            "SELECT
+                 snapshot_id,
+                 writer_id,
+                 versions,
+                 signature,
+                 is_complete
+                 block_presence
+             FROM snapshot_root_nodes
+             WHERE hash = ?",
+        )
+        .bind(hash)
+        .fetch(conn)
+        .map_ok(move |row| Self {
+            snapshot_id: row.get(0),
+            proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
+            summary: Summary {
+                is_complete: row.get(4),
+                block_presence: row.get(5),
+            },
+        })
+        .err_into()
+    }
+
     /// Returns the writer ids of the nodes with the specified hash.
     pub fn load_writer_ids<'a>(
         conn: &'a mut db::Connection,
@@ -442,6 +472,12 @@ impl RootNode {
                 }
             }
         }
+    }
+}
+
+impl Versioned for RootNode {
+    fn version_vector(&self) -> &VersionVector {
+        &self.proof.version_vector
     }
 }
 

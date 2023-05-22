@@ -8,8 +8,6 @@ mod summary;
 #[cfg(test)]
 mod tests;
 
-use std::iter;
-
 pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
@@ -19,6 +17,7 @@ pub(crate) use self::{
 
 pub(super) use self::root::Completion;
 
+use super::try_collect_into;
 use crate::{
     block::BlockId,
     collections::{HashMap, HashSet},
@@ -26,7 +25,7 @@ use crate::{
     db,
     error::Result,
 };
-use futures_util::{future, Stream, TryStreamExt};
+use futures_util::TryStreamExt;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
@@ -174,27 +173,4 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
         2 => Ok(Some(ParentNodeKind::Inner)),
         _ => unreachable!(),
     }
-}
-
-// TODO: move this to some generic utils module.
-pub(super) async fn try_collect_into<S, D, T, E>(src: S, dst: &mut D) -> Result<(), E>
-where
-    S: Stream<Item = Result<T, E>>,
-    D: Extend<T>,
-{
-    src.try_for_each(|item| {
-        dst.extend(iter::once(item));
-        future::ready(Ok(()))
-    })
-    .await
-}
-
-/// Check whether the snapshot with the given root hash, together with all the already complete
-/// snapshots, is withink the given storage quota.
-pub(super) async fn check_quota(
-    _conn: &mut db::Connection,
-    _root_hash: &Hash,
-    _quota: u64,
-) -> Result<bool> {
-    Ok(true)
 }

@@ -206,7 +206,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
 
-        let quota = self.store.quota().await?;
+        let quota = self.store.quota().await?.map(Into::into);
         let (updated_nodes, status) = self
             .store
             .index
@@ -251,7 +251,7 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
-        let quota = self.store.quota().await?;
+        let quota = self.store.quota().await?.map(Into::into);
         let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
