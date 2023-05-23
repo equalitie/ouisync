@@ -68,7 +68,11 @@ pub(crate) async fn receive_block(
     let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
     let mut branch_ids = HashSet::default();
 
-    for (hash, _) in update_summaries(tx, nodes).await? {
+    for (hash, state) in update_summaries(tx, nodes).await? {
+        if !state.is_approved() {
+            continue;
+        }
+
         try_collect_into(RootNode::load_writer_ids(tx, &hash), &mut branch_ids).await?;
     }
 

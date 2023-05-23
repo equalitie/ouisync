@@ -90,7 +90,7 @@ impl Bin {
     pub fn bind(&self) {
         expect_output(
             &self.id,
-            "OK",
+            "",
             self.client_command()
                 .arg("bind")
                 .arg(format!("tcp/{}:0", Ipv4Addr::LOCALHOST))
@@ -112,7 +112,7 @@ impl Bin {
     pub fn add_peer(&self, peer_port: u16) {
         expect_output(
             &self.id,
-            "OK",
+            "",
             self.client_command()
                 .arg("add-peers")
                 .arg(&format!("tcp/{}:{peer_port}", Ipv4Addr::LOCALHOST))
@@ -133,7 +133,7 @@ impl Bin {
             command.arg("--name").arg(DEFAULT_REPO);
         }
 
-        expect_output(&self.id, "OK", command.output().unwrap());
+        expect_output(&self.id, "", command.output().unwrap());
     }
 
     /// Create a share token for the repository
@@ -157,7 +157,7 @@ impl Bin {
     pub fn mount(&self) {
         expect_output(
             &self.id,
-            "OK",
+            "",
             self.client_command()
                 .arg("mount")
                 .arg("--all")
@@ -185,7 +185,7 @@ impl Bin {
     pub fn mirror(&self, host: &str) {
         expect_output(
             &self.id,
-            "OK",
+            "",
             self.client_command()
                 .arg("mirror")
                 .arg("--name")
