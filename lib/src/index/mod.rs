@@ -93,7 +93,7 @@ impl Index {
     pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
 
@@ -111,7 +111,7 @@ impl Index {
         let mut tx = self.pool.begin_write().await?;
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = decide_root_node_action(&mut tx, &proof, &summary).await?;
+        let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
 
         if action.insert {
             let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
@@ -409,7 +409,7 @@ struct RootNodeAction {
 async fn decide_root_node_action(
     tx: &mut db::WriteTransaction,
     new_proof: &Proof,
-    new_summary: &Summary,
+    new_block_presence: &MultiBlockPresence,
 ) -> Result<RootNodeAction> {
     let mut action = RootNodeAction {
         insert: true,
@@ -438,7 +438,11 @@ async fn decide_root_node_action(
 
                     // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
                     // with `new_summary.is_outdated(&old_node.summary)`.
-                    if !old_node.summary.is_outdated(new_summary) {
+                    if !old_node
+                        .summary
+                        .block_presence
+                        .is_outdated(new_block_presence)
+                    {
                         action.request_children = false;
                     }
                 }

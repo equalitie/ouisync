@@ -11,7 +11,9 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    index::{
+        InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof,
+    },
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
 };
@@ -136,10 +138,10 @@ impl Client {
         let result = match response {
             PendingResponse::RootNode {
                 proof,
-                summary,
+                block_presence,
                 permit: _permit,
                 debug,
-            } => self.handle_root_node(proof, summary, debug).await,
+            } => self.handle_root_node(proof, block_presence, debug).await,
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
@@ -171,24 +173,28 @@ impl Client {
             writer_id = ?proof.writer_id,
             vv = ?proof.version_vector,
             hash = ?proof.hash,
-            block_presence = ?summary.block_presence,
+            ?block_presence,
         ),
         err(Debug)
     )]
     async fn handle_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
-        let updated = self.store.index.receive_root_node(proof, summary).await?;
+        let updated = self
+            .store
+            .index
+            .receive_root_node(proof, block_presence)
+            .await?;
 
         if updated {
             tracing::trace!("received updated root node");
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
-                ResponseDisambiguator::new(summary.block_presence),
+                ResponseDisambiguator::new(block_presence),
                 DebugRequest::start(),
             ));
         } else {

@@ -1,7 +1,7 @@
 use super::{
     super::{proof::Proof, Index},
-    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, SingleBlockPresence, Summary,
-    INNER_LAYER_COUNT,
+    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, MultiBlockPresence,
+    SingleBlockPresence, Summary, INNER_LAYER_COUNT,
 };
 use crate::{
     block::{tracker::OfferState, BlockData, BlockId, BlockNonce, BLOCK_SIZE},
@@ -171,7 +171,7 @@ pub(crate) async fn receive_nodes(
 
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index
-        .receive_root_node(proof.into(), Summary::INCOMPLETE)
+        .receive_root_node(proof.into(), MultiBlockPresence::None)
         .await
         .unwrap();
 

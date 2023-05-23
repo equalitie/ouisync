@@ -7,7 +7,7 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::uninitialized_watch,
 };
@@ -53,7 +53,7 @@ impl PendingRequest {
 pub(super) enum PendingResponse {
     RootNode {
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
         permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
@@ -145,11 +145,11 @@ impl PendingRequests {
                     let r = match success {
                         processed_response::Success::RootNode {
                             proof,
-                            summary,
+                            block_presence,
                             debug,
                         } => PendingResponse::RootNode {
                             proof,
-                            summary,
+                            block_presence,
                             permit,
                             debug,
                         },
@@ -188,11 +188,11 @@ impl PendingRequests {
             match response {
                 ProcessedResponse::Success(processed_response::Success::RootNode {
                     proof,
-                    summary,
+                    block_presence,
                     debug,
                 }) => Some(PendingResponse::RootNode {
                     proof,
-                    summary,
+                    block_presence,
                     permit: None,
                     debug,
                 }),
@@ -310,7 +310,7 @@ mod processed_response {
     pub(super) enum Success {
         RootNode {
             proof: UntrustedProof,
-            summary: Summary,
+            block_presence: MultiBlockPresence,
             debug: DebugReceivedResponse,
         },
         InnerNodes(
@@ -372,11 +372,11 @@ impl From<Response> for ProcessedResponse {
         match response {
             Response::RootNode {
                 proof,
-                summary,
+                block_presence,
                 debug,
             } => Self::Success(processed_response::Success::RootNode {
                 proof,
-                summary,
+                block_presence,
                 debug: debug.received(),
             }),
             Response::InnerNodes(nodes, disambiguator, debug) => {

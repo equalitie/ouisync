@@ -27,12 +27,6 @@ impl Summary {
         block_presence: MultiBlockPresence::None,
     };
 
-    /// Summary indicating that the whole subtree is complete and all its blocks present.
-    pub const FULL: Self = Self {
-        state: NodeState::Complete,
-        block_presence: MultiBlockPresence::Full,
-    };
-
     pub fn from_leaves(nodes: &LeafNodeSet) -> Self {
         let mut block_presence_builder = MultiBlockPresenceBuilder::new();
 

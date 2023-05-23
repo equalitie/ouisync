@@ -282,7 +282,7 @@ mod tests {
         event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
+            BranchData, MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
         },
         locator::Locator,
         repository::RepositoryId,
@@ -655,7 +655,7 @@ mod tests {
 
         store
             .index
-            .receive_root_node(proof.into(), Summary::INCOMPLETE)
+            .receive_root_node(proof.into(), MultiBlockPresence::None)
             .await
             .unwrap();
 

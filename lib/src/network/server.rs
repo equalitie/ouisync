@@ -109,7 +109,7 @@ impl<'a> Responder<'a> {
 
                 let response = Response::RootNode {
                     proof: node.proof.into(),
-                    summary: node.summary,
+                    block_presence: node.summary.block_presence,
                     debug: debug.send(),
                 };
 
@@ -292,7 +292,7 @@ impl<'a> Monitor<'a> {
 
         let response = Response::RootNode {
             proof: root_node.proof.into(),
-            summary: root_node.summary,
+            block_presence: root_node.summary.block_presence,
             debug: DebugResponsePayload::unsolicited(),
         };
 

@@ -38,7 +38,7 @@ async fn create_new_root_node() {
             hash,
             &write_keys,
         ),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -74,7 +74,7 @@ async fn attempt_to_create_outdated_root_node() {
     RootNode::create(
         &mut tx,
         Proof::new(writer_id, vv1.clone(), hash, &write_keys),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -112,7 +112,7 @@ async fn create_new_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node = InnerNode::new(hash, Summary::FULL);
+    let node = InnerNode::new(hash, Summary::INCOMPLETE);
     node.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -136,10 +136,10 @@ async fn create_existing_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node0 = InnerNode::new(hash, Summary::FULL);
+    let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash, Summary::FULL);
+    let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
     node1.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -169,10 +169,10 @@ async fn attempt_to_create_conflicting_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node0 = InnerNode::new(hash0, Summary::FULL);
+    let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash1, Summary::FULL);
+    let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
     assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
 }
 
