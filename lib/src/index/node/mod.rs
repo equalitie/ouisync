@@ -12,7 +12,9 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::{MultiBlockPresence, SingleBlockPresence, Summary},
+    summary::{
+        MultiBlockPresence, NodeState, RootState, RootSummary, SingleBlockPresence, Summary,
+    },
 };
 
 pub(super) use self::root::Completion;

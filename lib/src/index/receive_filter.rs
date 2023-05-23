@@ -1,4 +1,4 @@
-use super::node::Summary;
+use super::node::MultiBlockPresence;
 use crate::{crypto::Hash, db, error::Result};
 use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,16 +29,16 @@ impl ReceiveFilter {
         &self,
         tx: &mut db::WriteTransaction,
         hash: &Hash,
-        new_summary: &Summary,
+        new_presence: &MultiBlockPresence,
     ) -> Result<bool> {
-        if let Some((row_id, old_summary)) = load(tx, self.id, hash).await? {
-            if !old_summary.is_outdated(new_summary) {
+        if let Some((row_id, old_presence)) = load(tx, self.id, hash).await? {
+            if !old_presence.is_outdated(new_presence) {
                 return Ok(false);
             }
 
-            update(tx, row_id, new_summary).await?;
+            update(tx, row_id, new_presence).await?;
         } else {
-            insert(tx, self.id, hash, new_summary).await?;
+            insert(tx, self.id, hash, new_presence).await?;
         }
 
         Ok(true)
@@ -55,7 +55,7 @@ async fn load(
     conn: &mut db::Connection,
     client_id: u64,
     hash: &Hash,
-) -> Result<Option<(u64, Summary)>> {
+) -> Result<Option<(u64, MultiBlockPresence)>> {
     let row = sqlx::query(
         "SELECT rowid, block_presence
          FROM received_inner_nodes
@@ -73,19 +73,16 @@ async fn load(
     };
 
     let id = db::decode_u64(row.get(0));
-    let summary = Summary {
-        is_complete: true,
-        block_presence: row.get(1),
-    };
+    let presence = row.get(1);
 
-    Ok(Some((id, summary)))
+    Ok(Some((id, presence)))
 }
 
 async fn insert(
     conn: &mut db::Connection,
     client_id: u64,
     hash: &Hash,
-    summary: &Summary,
+    presence: &MultiBlockPresence,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO received_inner_nodes
@@ -94,20 +91,24 @@ async fn insert(
     )
     .bind(db::encode_u64(client_id))
     .bind(hash)
-    .bind(&summary.block_presence)
+    .bind(presence)
     .execute(conn)
     .await?;
 
     Ok(())
 }
 
-async fn update(conn: &mut db::Connection, row_id: u64, summary: &Summary) -> Result<()> {
+async fn update(
+    conn: &mut db::Connection,
+    row_id: u64,
+    presence: &MultiBlockPresence,
+) -> Result<()> {
     sqlx::query(
         "UPDATE received_inner_nodes
          SET block_presence = ?
          WHERE rowid = ?",
     )
-    .bind(&summary.block_presence)
+    .bind(presence)
     .bind(db::encode_u64(row_id))
     .execute(conn)
     .await?;

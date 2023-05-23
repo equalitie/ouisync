@@ -7,7 +7,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{Index, InnerNode, LeafNode, RootNode},
+    index::{Index, InnerNode, LeafNode, NodeState, RootNode},
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -272,7 +272,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_root_node_changed(&self, root_node: RootNode) -> Result<()> {
-        if !root_node.summary.is_complete {
+        if !root_node.summary.state.is_complete() {
             // send only complete branches
             return Ok(());
         }

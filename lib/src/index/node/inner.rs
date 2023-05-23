@@ -1,6 +1,6 @@
 use super::{
     leaf::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-    summary::Summary,
+    summary::InnerSummary,
 };
 use crate::{
     crypto::{Digest, Hash, Hashable},
@@ -23,12 +23,12 @@ pub(crate) const INNER_LAYER_COUNT: usize = 3;
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct InnerNode {
     pub hash: Hash,
-    pub summary: Summary,
+    pub summary: InnerSummary,
 }
 
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
-    pub fn new(hash: Hash, summary: Summary) -> Self {
+    pub fn new(hash: Hash, summary: InnerSummary) -> Self {
         Self { hash, summary }
     }
 
@@ -38,7 +38,7 @@ impl InnerNode {
             "SELECT
                  bucket,
                  hash,
-                 is_complete,
+                 state,
                  block_presence
              FROM snapshot_inner_nodes
              WHERE parent = ?",
@@ -49,8 +49,8 @@ impl InnerNode {
             let bucket: u32 = row.get(0);
             let node = Self {
                 hash: row.get(1),
-                summary: Summary {
-                    is_complete: row.get(2),
+                summary: InnerSummary {
+                    state: row.get(2),
                     block_presence: row.get(3),
                 },
             };
@@ -73,7 +73,7 @@ impl InnerNode {
     /// Load the inner node with the specified hash
     pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>> {
         let node = sqlx::query(
-            "SELECT is_complete, block_presence
+            "SELECT state, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
@@ -82,8 +82,8 @@ impl InnerNode {
         .await?
         .map(|row| Self {
             hash: *hash,
-            summary: Summary {
-                is_complete: row.get(0),
+            summary: InnerSummary {
+                state: row.get(0),
                 block_presence: row.get(1),
             },
         });
@@ -115,7 +115,7 @@ impl InnerNode {
                  parent,
                  bucket,
                  hash,
-                 is_complete,
+                 state,
                  block_presence
              )
              VALUES (?, ?, ?, ?, ?)
@@ -124,7 +124,7 @@ impl InnerNode {
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
-        .bind(self.summary.is_complete)
+        .bind(self.summary.state)
         .bind(&self.summary.block_presence)
         .execute(tx)
         .await?;
@@ -138,10 +138,10 @@ impl InnerNode {
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
-             SET is_complete = ?, block_presence = ?
+             SET state = ?, block_presence = ?
              WHERE hash = ?",
         )
-        .bind(summary.is_complete)
+        .bind(summary.state)
         .bind(&summary.block_presence)
         .bind(hash)
         .execute(tx)
@@ -151,17 +151,20 @@ impl InnerNode {
     }
 
     /// Compute summaries from the children nodes of the specified parent nodes.
-    pub async fn compute_summary(conn: &mut db::Connection, parent_hash: &Hash) -> Result<Summary> {
+    pub async fn compute_summary(
+        conn: &mut db::Connection,
+        parent_hash: &Hash,
+    ) -> Result<InnerSummary> {
         // 1st attempt: empty inner nodes
         if parent_hash == &*EMPTY_INNER_HASH {
             let children = InnerNodeMap::default();
-            return Ok(Summary::from_inners(&children));
+            return Ok(InnerSummary::from_inners(&children));
         }
 
         // 2nd attempt: empty leaf nodes
         if parent_hash == &*EMPTY_LEAF_HASH {
             let children = LeafNodeSet::default();
-            return Ok(Summary::from_leaves(&children));
+            return Ok(InnerSummary::from_leaves(&children));
         }
 
         // 3rd attempt: non-empty inner nodes
@@ -169,7 +172,7 @@ impl InnerNode {
         if !children.is_empty() {
             // We download all children nodes of a given parent together so when we know that
             // we have at least one we also know we have them all.
-            return Ok(Summary::from_inners(&children));
+            return Ok(InnerSummary::from_inners(&children));
         }
 
         // 4th attempt: non-empty leaf nodes
@@ -177,11 +180,11 @@ impl InnerNode {
         if !children.is_empty() {
             // Similarly as in the inner nodes case, we only need to check that we have at
             // least one leaf node child and that already tells us that we have them all.
-            return Ok(Summary::from_leaves(&children));
+            return Ok(InnerSummary::from_leaves(&children));
         }
 
         // The parent hash doesn't correspond to any known node
-        Ok(Summary::INCOMPLETE)
+        Ok(InnerSummary::INCOMPLETE)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -200,20 +203,20 @@ impl InnerNode {
     /// to have only one record per node and to represent the parent-child relation using a
     /// separate db table (many-to-many relation).
     async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<()> {
-        if self.summary != Summary::INCOMPLETE {
+        if self.summary != InnerSummary::INCOMPLETE {
             return Ok(());
         }
 
         let summary = sqlx::query(
-            "SELECT is_complete, block_presence
+            "SELECT state, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
         .bind(&self.hash)
         .fetch_optional(conn)
         .await?
-        .map(|row| Summary {
-            is_complete: row.get(0),
+        .map(|row| InnerSummary {
+            state: row.get(0),
             block_presence: row.get(1),
         });
 
@@ -269,11 +272,11 @@ impl InnerNodeMap {
         Ok(())
     }
 
-    /// Returns the same nodes but with the `is_complete` and `missing_block` fields changed to
+    /// Returns the same nodes but with the `state` and `block_presence` fields changed to
     /// indicate that these nodes are not complete yet.
     pub fn into_incomplete(mut self) -> Self {
         for node in self.0.values_mut() {
-            node.summary = Summary::INCOMPLETE;
+            node.summary = InnerSummary::INCOMPLETE;
         }
 
         self

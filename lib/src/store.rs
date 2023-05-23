@@ -6,7 +6,7 @@ use crate::{
     db,
     error::{Error, Result},
     event::Payload,
-    index::{self, Index, SingleBlockPresence},
+    index::{self, Index, RootState, SingleBlockPresence},
     progress::Progress,
     repository::{quota, LocalId, Metadata, RepositoryMonitor},
     storage_size::StorageSize,
@@ -194,7 +194,7 @@ impl BlockIdsPage {
                      SELECT i.hash
                         FROM snapshot_inner_nodes AS i
                         INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                        WHERE r.is_complete = 1
+                        WHERE r.state > ?
                      UNION ALL
                      SELECT c.hash
                         FROM snapshot_inner_nodes AS c
@@ -206,6 +206,7 @@ impl BlockIdsPage {
                  ORDER BY block_id
                  LIMIT ?",
         )
+        .bind(RootState::Incomplete)
         .bind(self.lower_bound.as_ref())
         .bind(self.page_size)
         .fetch(&mut *conn)
@@ -245,7 +246,7 @@ fn branch_missing_block_ids<'a>(
                      WHERE r.snapshot_id = (
                          SELECT MAX(snapshot_id)
                          FROM snapshot_root_nodes
-                         WHERE writer_id = ? AND is_complete = 1
+                         WHERE writer_id = ? AND state > ?
                      )
                  UNION ALL
                  SELECT c.hash
@@ -258,6 +259,7 @@ fn branch_missing_block_ids<'a>(
          ",
     )
     .bind(branch_id)
+    .bind(RootState::Incomplete)
     .bind(SingleBlockPresence::Missing)
     .fetch(conn)
     .map_ok(|row| row.get(0))

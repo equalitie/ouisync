@@ -7,7 +7,7 @@ use super::{
     },
     path::Path,
     proof::Proof,
-    Summary, VersionVectorOp,
+    RootSummary, VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -356,7 +356,7 @@ impl SnapshotData {
         &mut self,
         tx: &mut db::WriteTransaction,
         new_proof: Proof,
-        new_summary: Summary,
+        new_summary: RootSummary,
     ) -> Result<()> {
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
 

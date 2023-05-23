@@ -11,7 +11,7 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, RootSummary, UntrustedProof},
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
 };
@@ -178,7 +178,7 @@ impl Client {
     async fn handle_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        summary: RootSummary,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;

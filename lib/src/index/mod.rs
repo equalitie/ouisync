@@ -13,7 +13,8 @@ pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MultiBlockPresence, RootNode, SingleBlockPresence, Summary,
+        MultiBlockPresence, NodeState, RootNode, RootState, RootSummary, SingleBlockPresence,
+        Summary,
     },
     proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
@@ -93,7 +94,7 @@ impl Index {
     pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        summary: RootSummary,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
 
@@ -201,7 +202,7 @@ impl Index {
 
         for (_, remote_node) in remote_nodes {
             if !receive_filter
-                .check(tx, &remote_node.hash, &remote_node.summary)
+                .check(tx, &remote_node.hash, &remote_node.summary.block_presence)
                 .await?
             {
                 continue;
@@ -406,7 +407,7 @@ struct RootNodeAction {
 async fn decide_root_node_action(
     tx: &mut db::WriteTransaction,
     new_proof: &Proof,
-    new_summary: &Summary,
+    new_summary: &RootSummary,
 ) -> Result<RootNodeAction> {
     let mut action = RootNodeAction {
         insert: true,
