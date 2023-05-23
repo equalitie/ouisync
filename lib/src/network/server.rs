@@ -7,7 +7,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{Index, InnerNode, LeafNode, NodeState, RootNode},
+    index::{Index, InnerNode, LeafNode, RootNode},
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -101,7 +101,7 @@ impl<'a> Responder<'a> {
         let debug = debug.begin_reply();
 
         let mut conn = self.index.pool.acquire().await?;
-        let root_node = RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await;
+        let root_node = RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await;
 
         match root_node {
             Ok(node) => {
@@ -272,8 +272,8 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_root_node_changed(&self, root_node: RootNode) -> Result<()> {
-        if !root_node.summary.state.is_complete() {
-            // send only complete branches
+        if !root_node.summary.state.is_approved() {
+            // send only approved branches
             return Ok(());
         }
 
@@ -303,14 +303,14 @@ impl<'a> Monitor<'a> {
 
     async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
         let mut conn = self.index.pool.acquire().await?;
-        RootNode::load_all_latest_complete(&mut conn)
+        RootNode::load_all_latest_approved(&mut conn)
             .try_collect()
             .await
     }
 
     async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
         let mut conn = self.index.pool.acquire().await?;
-        RootNode::load_latest_complete_by_writer(&mut conn, branch_id).await
+        RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await
     }
 }
 

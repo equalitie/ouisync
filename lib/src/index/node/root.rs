@@ -1,8 +1,7 @@
 use super::{
     super::{proof::Proof, SnapshotId},
     inner::{InnerNode, EMPTY_INNER_HASH},
-    summary::{RootState, RootSummary},
-    NodeState,
+    summary::{MultiBlockPresence, NodeState, Summary},
 };
 use crate::{
     crypto::{
@@ -25,7 +24,7 @@ const EMPTY_SNAPSHOT_ID: SnapshotId = 0;
 pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
     pub proof: Proof,
-    pub summary: RootSummary,
+    pub summary: Summary,
 }
 
 impl RootNode {
@@ -41,7 +40,10 @@ impl RootNode {
         Self {
             snapshot_id: EMPTY_SNAPSHOT_ID,
             proof,
-            summary: RootSummary::FULL,
+            summary: Summary {
+                state: NodeState::Approved,
+                block_presence: MultiBlockPresence::Full,
+            },
         }
     }
 
@@ -52,7 +54,7 @@ impl RootNode {
     pub async fn create(
         tx: &mut db::WriteTransaction,
         proof: Proof,
-        summary: RootSummary,
+        summary: Summary,
     ) -> Result<Self> {
         // Check that the root node to be created is newer than the latest existing root node in
         // the same branch.
@@ -116,9 +118,8 @@ impl RootNode {
         })
     }
 
-    /// Returns the latest complete root node of the specified writer. Unlike
-    /// `load_latest_by_writer`, this assumes the node exists and returns `EntryNotFound` otherwise.
-    pub async fn load_latest_complete_by_writer(
+    /// Returns the latest approved root node of the specified writer.
+    pub async fn load_latest_approved_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Self> {
@@ -128,7 +129,6 @@ impl RootNode {
                  versions,
                  hash,
                  signature,
-                 state,
                  block_presence
              FROM
                  snapshot_root_nodes
@@ -136,27 +136,27 @@ impl RootNode {
                  snapshot_id = (
                      SELECT MAX(snapshot_id)
                      FROM snapshot_root_nodes
-                     WHERE writer_id = ? AND state > ?
+                     WHERE writer_id = ? AND state = ?
                  )
             ",
         )
         .bind(&writer_id)
-        .bind(RootState::Incomplete)
+        .bind(NodeState::Approved)
         .fetch_optional(conn)
         .await?
         .map(|row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: RootSummary {
-                state: row.get(4),
-                block_presence: row.get(5),
+            summary: Summary {
+                state: NodeState::Approved,
+                block_presence: row.get(4),
             },
         })
         .ok_or(Error::EntryNotFound)
     }
 
-    /// Return the latest complete root nodes of all known writers.
-    pub fn load_all_latest_complete(
+    /// Return the latest approved root nodes of all known writers.
+    pub fn load_all_latest_approved(
         conn: &mut db::Connection,
     ) -> impl Stream<Item = Result<Self>> + '_ {
         sqlx::query(
@@ -166,7 +166,6 @@ impl RootNode {
                  versions,
                  hash,
                  signature,
-                 state,
                  block_presence
              FROM
                  snapshot_root_nodes
@@ -174,18 +173,18 @@ impl RootNode {
                  snapshot_id IN (
                      SELECT MAX(snapshot_id)
                      FROM snapshot_root_nodes
-                     WHERE state > ?
+                     WHERE state = ?
                      GROUP BY writer_id
                  )",
         )
-        .bind(RootState::Incomplete)
+        .bind(NodeState::Approved)
         .fetch(conn)
         .map_ok(|row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-            summary: RootSummary {
-                state: row.get(5),
-                block_presence: row.get(6),
+            summary: Summary {
+                state: NodeState::Approved,
+                block_presence: row.get(5),
             },
         })
         .err_into()
@@ -215,7 +214,7 @@ impl RootNode {
         .map_ok(|row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-            summary: RootSummary {
+            summary: Summary {
                 state: row.get(5),
                 block_presence: row.get(6),
             },
@@ -247,7 +246,7 @@ impl RootNode {
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: RootSummary {
+            summary: Summary {
                 state: row.get(4),
                 block_presence: row.get(5),
             },
@@ -286,7 +285,7 @@ impl RootNode {
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
-            summary: RootSummary {
+            summary: Summary {
                 state: row.get(4),
                 block_presence: row.get(5),
             },
@@ -306,7 +305,7 @@ impl RootNode {
             .err_into()
     }
 
-    /// Load the previous complete root node of the same writer.
+    /// Load the previous approved root node of the same writer.
     pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
         sqlx::query(
             "SELECT
@@ -314,23 +313,22 @@ impl RootNode {
                 versions,
                 hash,
                 signature,
-                state,
                 block_presence
              FROM snapshot_root_nodes
-             WHERE writer_id = ? AND state > ? AND snapshot_id < ?
+             WHERE writer_id = ? AND state = ? AND snapshot_id < ?
              ORDER BY snapshot_id DESC
              LIMIT 1",
         )
         .bind(&self.proof.writer_id)
-        .bind(RootState::Incomplete)
+        .bind(NodeState::Approved)
         .bind(self.snapshot_id)
         .fetch(conn)
         .map_ok(|row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(self.proof.writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: RootSummary {
-                state: row.get(4),
-                block_presence: row.get(5),
+            summary: Summary {
+                state: NodeState::Approved,
+                block_presence: row.get(4),
             },
         })
         .err_into()
@@ -357,34 +355,46 @@ impl RootNode {
     }
 
     /// Update the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(
-        tx: &mut db::WriteTransaction,
-        hash: &Hash,
-    ) -> Result<Option<Completion>> {
+    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<NodeState> {
         let summary = InnerNode::compute_summary(tx, hash).await?;
-        let was_complete =
-            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE hash = ? AND state = ?")
-                .bind(hash)
-                .bind(RootState::Incomplete)
-                .fetch_optional(&mut *tx)
-                .await?
-                .is_none();
 
-        sqlx::query("UPDATE snapshot_root_nodes SET block_presence = ? WHERE hash = ?")
-            .bind(&summary.block_presence)
+        let state = sqlx::query(
+            "UPDATE snapshot_root_nodes
+             SET block_presence = ?,
+                 state = CASE state WHEN ? THEN ? ELSE state END
+             WHERE hash = ?
+             RETURNING state
+             ",
+        )
+        .bind(&summary.block_presence)
+        .bind(NodeState::Incomplete)
+        .bind(summary.state)
+        .bind(hash)
+        .fetch_optional(tx)
+        .await?
+        .map(|row| row.get(0))
+        .unwrap_or(NodeState::Incomplete);
+
+        Ok(state)
+    }
+
+    /// Approve the nodes with the specified hash.
+    pub async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+        Self::set_state(tx, hash, NodeState::Approved).await
+    }
+
+    /// Reject the nodes with the specified hash.
+    pub async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+        Self::set_state(tx, hash, NodeState::Rejected).await
+    }
+
+    async fn set_state(tx: &mut db::WriteTransaction, hash: &Hash, state: NodeState) -> Result<()> {
+        sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
+            .bind(state)
             .bind(hash)
             .execute(tx)
             .await?;
-
-        if summary.state.is_complete() {
-            if was_complete {
-                Ok(Some(Completion::Done))
-            } else {
-                Ok(Some(Completion::Pending(Completer(*hash))))
-            }
-        } else {
-            Ok(None)
-        }
+        Ok(())
     }
 
     /// Removes this node including its snapshot.
@@ -420,11 +430,12 @@ impl RootNode {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(
             "DELETE FROM snapshot_root_nodes
-             WHERE snapshot_id < ? AND writer_id = ? AND state = ?",
+             WHERE snapshot_id < ? AND writer_id = ? AND state IN (?, ?)",
         )
         .bind(self.snapshot_id)
         .bind(&self.proof.writer_id)
-        .bind(RootState::Incomplete)
+        .bind(NodeState::Incomplete)
+        .bind(NodeState::Rejected)
         .execute(tx)
         .await?;
 
@@ -459,7 +470,7 @@ impl RootNode {
         .map_ok(move |row| Self {
             snapshot_id: row.get(0),
             proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
-            summary: RootSummary {
+            summary: Summary {
                 state: row.get(4),
                 block_presence: row.get(5),
             },
@@ -487,50 +498,5 @@ impl RootNode {
 impl Versioned for RootNode {
     fn version_vector(&self) -> &VersionVector {
         &self.proof.version_vector
-    }
-}
-
-/// Completion status after updating the summary of root nodes.
-pub(crate) enum Completion {
-    /// The nodes were already complete before the update.
-    Done,
-    /// The nodes have been completed by the update but have not yet been marked as complete. Use
-    /// the provided `Completer` to mark them as such. This two phase completion allows to perform
-    /// additional validations on the node if necessary.
-    Pending(Completer),
-}
-
-impl Completion {
-    pub fn update(&mut self, other: Self) {
-        match (&*self, other) {
-            (Self::Done, Self::Done)
-            | (Self::Pending(_), Self::Done)
-            | (Self::Pending(_), Self::Pending(_)) => (),
-            (Self::Done, other @ Self::Pending(_)) => {
-                *self = other;
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub async fn complete(self, tx: &mut db::WriteTransaction) -> Result<()> {
-        match self {
-            Self::Done => Ok(()),
-            Self::Pending(completer) => completer.complete(tx).await,
-        }
-    }
-}
-
-pub(crate) struct Completer(Hash);
-
-impl Completer {
-    pub async fn complete(self, tx: &mut db::WriteTransaction) -> Result<()> {
-        sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
-            .bind(RootState::Pending)
-            .bind(&self.0)
-            .execute(tx)
-            .await?;
-
-        Ok(())
     }
 }

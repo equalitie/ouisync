@@ -7,7 +7,7 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    index::{InnerNodeMap, LeafNodeSet, RootSummary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, Summary, UntrustedProof},
     repository::RepositoryMonitor,
     sync::uninitialized_watch,
 };
@@ -53,7 +53,7 @@ impl PendingRequest {
 pub(super) enum PendingResponse {
     RootNode {
         proof: UntrustedProof,
-        summary: RootSummary,
+        summary: Summary,
         permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
@@ -310,7 +310,7 @@ mod processed_response {
     pub(super) enum Success {
         RootNode {
             proof: UntrustedProof,
-            summary: RootSummary,
+            summary: Summary,
             debug: DebugReceivedResponse,
         },
         InnerNodes(

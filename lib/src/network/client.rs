@@ -11,7 +11,7 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, RootSummary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
 };
@@ -178,7 +178,7 @@ impl Client {
     async fn handle_root_node(
         &self,
         proof: UntrustedProof,
-        summary: RootSummary,
+        summary: Summary,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
@@ -234,12 +234,12 @@ impl Client {
         }
 
         if quota.is_some() {
-            for branch_id in &status.new_complete {
-                self.store.approve_snapshot(branch_id).await?;
+            for branch_id in &status.new_approved {
+                self.store.approve_offers(branch_id).await?;
             }
         }
 
-        self.refresh_branches(&status.new_complete);
+        self.refresh_branches(&status.new_approved);
 
         Ok(())
     }
@@ -261,11 +261,12 @@ impl Client {
             updated_blocks
         );
 
-        let offer_state = if quota.is_none() || status.complete {
-            OfferState::Approved
-        } else {
-            OfferState::Pending
-        };
+        let offer_state =
+            if quota.is_none() || !status.new_approved.is_empty() || status.old_approved {
+                OfferState::Approved
+            } else {
+                OfferState::Pending
+            };
 
         match self.store.block_request_mode {
             BlockRequestMode::Lazy => {
@@ -283,12 +284,12 @@ impl Client {
         }
 
         if quota.is_some() {
-            for branch_id in &status.new_complete {
-                self.store.approve_snapshot(branch_id).await?;
+            for branch_id in &status.new_approved {
+                self.store.approve_offers(branch_id).await?;
             }
         }
 
-        self.refresh_branches(&status.new_complete);
+        self.refresh_branches(&status.new_approved);
 
         Ok(())
     }

@@ -1,6 +1,6 @@
 use super::{
     leaf::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-    summary::InnerSummary,
+    summary::Summary,
 };
 use crate::{
     crypto::{Digest, Hash, Hashable},
@@ -23,12 +23,12 @@ pub(crate) const INNER_LAYER_COUNT: usize = 3;
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct InnerNode {
     pub hash: Hash,
-    pub summary: InnerSummary,
+    pub summary: Summary,
 }
 
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
-    pub fn new(hash: Hash, summary: InnerSummary) -> Self {
+    pub fn new(hash: Hash, summary: Summary) -> Self {
         Self { hash, summary }
     }
 
@@ -49,7 +49,7 @@ impl InnerNode {
             let bucket: u32 = row.get(0);
             let node = Self {
                 hash: row.get(1),
-                summary: InnerSummary {
+                summary: Summary {
                     state: row.get(2),
                     block_presence: row.get(3),
                 },
@@ -82,7 +82,7 @@ impl InnerNode {
         .await?
         .map(|row| Self {
             hash: *hash,
-            summary: InnerSummary {
+            summary: Summary {
                 state: row.get(0),
                 block_presence: row.get(1),
             },
@@ -151,20 +151,17 @@ impl InnerNode {
     }
 
     /// Compute summaries from the children nodes of the specified parent nodes.
-    pub async fn compute_summary(
-        conn: &mut db::Connection,
-        parent_hash: &Hash,
-    ) -> Result<InnerSummary> {
+    pub async fn compute_summary(conn: &mut db::Connection, parent_hash: &Hash) -> Result<Summary> {
         // 1st attempt: empty inner nodes
         if parent_hash == &*EMPTY_INNER_HASH {
             let children = InnerNodeMap::default();
-            return Ok(InnerSummary::from_inners(&children));
+            return Ok(Summary::from_inners(&children));
         }
 
         // 2nd attempt: empty leaf nodes
         if parent_hash == &*EMPTY_LEAF_HASH {
             let children = LeafNodeSet::default();
-            return Ok(InnerSummary::from_leaves(&children));
+            return Ok(Summary::from_leaves(&children));
         }
 
         // 3rd attempt: non-empty inner nodes
@@ -172,7 +169,7 @@ impl InnerNode {
         if !children.is_empty() {
             // We download all children nodes of a given parent together so when we know that
             // we have at least one we also know we have them all.
-            return Ok(InnerSummary::from_inners(&children));
+            return Ok(Summary::from_inners(&children));
         }
 
         // 4th attempt: non-empty leaf nodes
@@ -180,11 +177,11 @@ impl InnerNode {
         if !children.is_empty() {
             // Similarly as in the inner nodes case, we only need to check that we have at
             // least one leaf node child and that already tells us that we have them all.
-            return Ok(InnerSummary::from_leaves(&children));
+            return Ok(Summary::from_leaves(&children));
         }
 
         // The parent hash doesn't correspond to any known node
-        Ok(InnerSummary::INCOMPLETE)
+        Ok(Summary::INCOMPLETE)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -203,7 +200,7 @@ impl InnerNode {
     /// to have only one record per node and to represent the parent-child relation using a
     /// separate db table (many-to-many relation).
     async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<()> {
-        if self.summary != InnerSummary::INCOMPLETE {
+        if self.summary != Summary::INCOMPLETE {
             return Ok(());
         }
 
@@ -215,7 +212,7 @@ impl InnerNode {
         .bind(&self.hash)
         .fetch_optional(conn)
         .await?
-        .map(|row| InnerSummary {
+        .map(|row| Summary {
             state: row.get(0),
             block_presence: row.get(1),
         });
@@ -276,7 +273,7 @@ impl InnerNodeMap {
     /// indicate that these nodes are not complete yet.
     pub fn into_incomplete(mut self) -> Self {
         for node in self.0.values_mut() {
-            node.summary = InnerSummary::INCOMPLETE;
+            node.summary = Summary::INCOMPLETE;
         }
 
         self

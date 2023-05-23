@@ -3,7 +3,7 @@ use super::{
     node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, EMPTY_INNER_HASH},
     node_test_utils::{self, Snapshot},
     proof::Proof,
-    Index, ReceiveError, ReceiveFilter, RootSummary,
+    Index, ReceiveError, ReceiveFilter, Summary,
 };
 use crate::{
     block::{self, BlockId, BlockTracker, BLOCK_SIZE},
@@ -17,7 +17,6 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
-use node::NodeState;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -45,7 +44,7 @@ async fn receive_valid_root_node() {
                 &write_keys,
             )
             .into(),
-            RootSummary::INCOMPLETE,
+            Summary::INCOMPLETE,
         )
         .await
         .unwrap();
@@ -73,7 +72,7 @@ async fn receive_root_node_with_invalid_proof() {
                 &invalid_write_keys,
             )
             .into(),
-            RootSummary::INCOMPLETE,
+            Summary::INCOMPLETE,
         )
         .await;
     assert_matches!(result, Err(ReceiveError::InvalidProof));
@@ -100,7 +99,7 @@ async fn receive_root_node_with_empty_version_vector() {
                 &write_keys,
             )
             .into(),
-            RootSummary::INCOMPLETE,
+            Summary::INCOMPLETE,
         )
         .await
         .unwrap();
@@ -127,13 +126,13 @@ async fn receive_duplicate_root_node() {
 
     // Receive root node for the first time.
     index
-        .receive_root_node(proof.clone().into(), RootSummary::INCOMPLETE)
+        .receive_root_node(proof.clone().into(), Summary::INCOMPLETE)
         .await
         .unwrap();
 
     // Receiving it again is a no-op.
     index
-        .receive_root_node(proof.into(), RootSummary::INCOMPLETE)
+        .receive_root_node(proof.into(), Summary::INCOMPLETE)
         .await
         .unwrap();
 
@@ -194,7 +193,7 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap()
         .root_node;
 
-    assert!(root.summary.state.is_complete());
+    assert!(root.summary.state.is_approved());
     let root_hash = root.proof.hash;
     let root_vv = root.proof.version_vector.clone();
 
@@ -202,7 +201,7 @@ async fn receive_root_node_with_existing_hash() {
 
     // TODO: assert this returns false as we shouldn't need to download further nodes
     index
-        .receive_root_node(proof.into(), RootSummary::FULL)
+        .receive_root_node(proof.into(), Summary::FULL)
         .await
         .unwrap();
 
@@ -213,7 +212,7 @@ async fn receive_root_node_with_existing_hash() {
         .root_node
         .summary
         .state
-        .is_complete());
+        .is_approved());
 }
 
 mod receive_and_create_root_node {
@@ -376,7 +375,7 @@ async fn receive_valid_child_nodes() {
                 &write_keys,
             )
             .into(),
-            RootSummary::INCOMPLETE,
+            Summary::INCOMPLETE,
         )
         .await
         .unwrap();
@@ -490,7 +489,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         .index
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
-            RootSummary::FULL,
+            Summary::FULL,
         )
         .await
         .unwrap();
@@ -730,7 +729,7 @@ async fn receive_snapshot(
     index
         .receive_root_node(
             Proof::new(writer_id, vv, *snapshot.root_hash(), write_keys).into(),
-            RootSummary::FULL,
+            Summary::FULL,
         )
         .await
         .unwrap();

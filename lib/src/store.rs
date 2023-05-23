@@ -6,7 +6,7 @@ use crate::{
     db,
     error::{Error, Result},
     event::Payload,
-    index::{self, Index, RootState, SingleBlockPresence},
+    index::{self, Index, NodeState, SingleBlockPresence},
     progress::Progress,
     repository::{quota, LocalId, Metadata, RepositoryMonitor},
     storage_size::StorageSize,
@@ -164,7 +164,7 @@ impl Store {
         }
     }
 
-    pub(crate) async fn approve_snapshot(&self, branch_id: &PublicKey) -> Result<()> {
+    pub(crate) async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
         let mut tx = self.db().begin_read().await?;
         let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
 
@@ -194,7 +194,7 @@ impl BlockIdsPage {
                      SELECT i.hash
                         FROM snapshot_inner_nodes AS i
                         INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                        WHERE r.state > ?
+                        WHERE r.state = ?
                      UNION ALL
                      SELECT c.hash
                         FROM snapshot_inner_nodes AS c
@@ -206,7 +206,7 @@ impl BlockIdsPage {
                  ORDER BY block_id
                  LIMIT ?",
         )
-        .bind(RootState::Incomplete)
+        .bind(NodeState::Approved)
         .bind(self.lower_bound.as_ref())
         .bind(self.page_size)
         .fetch(&mut *conn)
@@ -246,7 +246,7 @@ fn branch_missing_block_ids<'a>(
                      WHERE r.snapshot_id = (
                          SELECT MAX(snapshot_id)
                          FROM snapshot_root_nodes
-                         WHERE writer_id = ? AND state > ?
+                         WHERE writer_id = ? AND state = ?
                      )
                  UNION ALL
                  SELECT c.hash
@@ -259,7 +259,7 @@ fn branch_missing_block_ids<'a>(
          ",
     )
     .bind(branch_id)
-    .bind(RootState::Incomplete)
+    .bind(NodeState::Approved)
     .bind(SingleBlockPresence::Missing)
     .fetch(conn)
     .map_ok(|row| row.get(0))

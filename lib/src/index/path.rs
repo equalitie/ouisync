@@ -1,6 +1,6 @@
 use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, NodeState, RootSummary,
-    SingleBlockPresence, Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
+    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, NodeState, SingleBlockPresence,
+    Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
 };
 use crate::{
     block::BlockId,
@@ -27,13 +27,13 @@ use crate::{
 pub(super) struct Path {
     locator: Hash,
     pub root_hash: Hash,
-    pub root_summary: RootSummary,
+    pub root_summary: Summary,
     pub inner: Vec<InnerNodeMap>,
     pub leaves: LeafNodeSet,
 }
 
 impl Path {
-    pub fn new(root_hash: Hash, root_summary: RootSummary, locator: Hash) -> Self {
+    pub fn new(root_hash: Hash, root_summary: Summary, locator: Hash) -> Self {
         let inner = vec![InnerNodeMap::default(); INNER_LAYER_COUNT];
 
         Self {
@@ -114,6 +114,7 @@ impl Path {
 
         self.root_hash = self.compute_hash_for_layer(0).unwrap_or(*EMPTY_INNER_HASH);
         self.root_summary = self.compute_summary_for_layer(0);
+        self.root_summary.state = NodeState::Approved;
     }
 
     // Assumes layers higher than `layer` have their hashes already computed
@@ -132,7 +133,7 @@ impl Path {
     }
 
     // Assumes layers higher than `layer` have their summaries already computed
-    fn compute_summary_for_layer<S: NodeState>(&self, layer: usize) -> Summary<S> {
+    fn compute_summary_for_layer(&self, layer: usize) -> Summary {
         if layer == INNER_LAYER_COUNT {
             Summary::from_leaves(&self.leaves)
         } else {

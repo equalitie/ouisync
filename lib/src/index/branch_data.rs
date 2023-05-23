@@ -7,7 +7,7 @@ use super::{
     },
     path::Path,
     proof::Proof,
-    RootSummary, VersionVectorOp,
+    Summary, VersionVectorOp,
 };
 use crate::{
     block::BlockId,
@@ -41,7 +41,7 @@ impl BranchData {
     }
 
     pub async fn load_snapshot(&self, conn: &mut db::Connection) -> Result<SnapshotData> {
-        let root_node = RootNode::load_latest_complete_by_writer(conn, self.writer_id).await?;
+        let root_node = RootNode::load_latest_approved_by_writer(conn, self.writer_id).await?;
 
         Ok(SnapshotData { root_node })
     }
@@ -51,7 +51,7 @@ impl BranchData {
         conn: &mut db::Connection,
         write_keys: &Keypair,
     ) -> Result<SnapshotData> {
-        let root_node = match RootNode::load_latest_complete_by_writer(conn, self.writer_id).await {
+        let root_node = match RootNode::load_latest_approved_by_writer(conn, self.writer_id).await {
             Ok(root_node) => Some(root_node),
             Err(Error::EntryNotFound) => None,
             Err(error) => return Err(error),
@@ -106,7 +106,7 @@ pub(crate) struct SnapshotData {
 impl SnapshotData {
     /// Load all latest snapshots
     pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
-        RootNode::load_all_latest_complete(conn).map_ok(move |root_node| Self { root_node })
+        RootNode::load_all_latest_approved(conn).map_ok(move |root_node| Self { root_node })
     }
 
     /// Load previous snapshot
@@ -356,7 +356,7 @@ impl SnapshotData {
         &mut self,
         tx: &mut db::WriteTransaction,
         new_proof: Proof,
-        new_summary: RootSummary,
+        new_summary: Summary,
     ) -> Result<()> {
         self.root_node = RootNode::create(tx, new_proof, new_summary).await?;
 

@@ -12,12 +12,8 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::{
-        MultiBlockPresence, NodeState, RootState, RootSummary, SingleBlockPresence, Summary,
-    },
+    summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
-
-pub(super) use self::root::Completion;
 
 use super::try_collect_into;
 use crate::{
@@ -35,21 +31,18 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 }
 
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
-/// Returns the `Completion`s of the affected complete snapshots.
+/// Returns the affected snapshots and their states.
 pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     mut nodes: Vec<Hash>,
-) -> Result<HashMap<Hash, Completion>> {
-    let mut statuses = HashMap::default();
+) -> Result<HashMap<Hash, NodeState>> {
+    let mut states = HashMap::default();
 
     while let Some(hash) = nodes.pop() {
         match parent_kind(tx, &hash).await? {
             Some(ParentNodeKind::Root) => {
-                let Some(new) = RootNode::update_summaries(tx, &hash).await? else {
-                    continue;
-                };
-
-                statuses.entry(hash).or_insert(Completion::Done).update(new);
+                let state = RootNode::update_summaries(tx, &hash).await?;
+                states.entry(hash).or_insert(state).update(state);
             }
             Some(ParentNodeKind::Inner) => {
                 InnerNode::update_summaries(tx, &hash).await?;
@@ -59,7 +52,7 @@ pub(crate) async fn update_summaries(
         }
     }
 
-    Ok(statuses)
+    Ok(states)
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.

@@ -11,7 +11,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, NodeState, RootNode, SingleBlockPresence, VersionVectorOp,
+        BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
     repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
@@ -432,7 +432,7 @@ async fn wait_until_snapshots_in_sync(
 
     loop {
         if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
-            if client_root.summary.state.is_complete()
+            if client_root.summary.state.is_approved()
                 && client_root.proof.hash == server_root.proof.hash
             {
                 // client has now fully downloaded server's latest snapshot.

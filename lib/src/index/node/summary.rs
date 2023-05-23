@@ -12,30 +12,24 @@ use std::{fmt, hash::Hasher};
 use thiserror::Error;
 use twox_hash::xxh3::{Hash128, HasherExt};
 
-pub(crate) type RootSummary = Summary<RootState>;
-pub(crate) type InnerSummary = Summary<InnerState>;
-
 /// Summary info of a snapshot subtree. Contains whether the subtree has been completely downloaded
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-pub(crate) struct Summary<S> {
-    pub state: S,
+pub(crate) struct Summary {
+    pub state: NodeState,
     pub block_presence: MultiBlockPresence,
 }
 
-impl<S> Summary<S>
-where
-    S: NodeState,
-{
+impl Summary {
     /// Summary indicating the subtree hasn't been completely downloaded yet.
     pub const INCOMPLETE: Self = Self {
-        state: S::INCOMPLETE,
+        state: NodeState::Incomplete,
         block_presence: MultiBlockPresence::None,
     };
 
     /// Summary indicating that the whole subtree is complete and all its blocks present.
     pub const FULL: Self = Self {
-        state: S::COMPLETE,
+        state: NodeState::Complete,
         block_presence: MultiBlockPresence::Full,
     };
 
@@ -54,14 +48,14 @@ where
         }
 
         Self {
-            state: S::COMPLETE,
+            state: NodeState::Complete,
             block_presence: block_presence_builder.build(),
         }
     }
 
     pub fn from_inners(nodes: &InnerNodeMap) -> Self {
         let mut block_presence_builder = MultiBlockPresenceBuilder::new();
-        let mut state = S::COMPLETE;
+        let mut state = NodeState::Complete;
 
         for (_, node) in nodes {
             // We should never store empty nodes, but in case someone sends us one anyway, ignore
@@ -71,10 +65,7 @@ where
             }
 
             block_presence_builder.update(node.summary.block_presence);
-            state = match (state.is_complete(), node.summary.state.is_complete()) {
-                (true, true) => S::COMPLETE,
-                (true, false) | (false, true) | (false, false) => S::INCOMPLETE,
-            }
+            state.update(node.summary.state);
         }
 
         Self {
@@ -94,92 +85,52 @@ where
     }
 }
 
-pub(crate) trait NodeState: Copy {
-    const COMPLETE: Self;
-    const INCOMPLETE: Self;
-
-    fn is_complete(self) -> bool;
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
-pub(crate) enum RootState {
+pub(crate) enum NodeState {
     Incomplete = 0,
-    Pending = 1,
+    Complete = 1,
     Approved = 2,
     Rejected = 3,
 }
 
-impl NodeState for RootState {
-    const INCOMPLETE: Self = Self::Incomplete;
-    const COMPLETE: Self = Self::Pending;
-
-    fn is_complete(self) -> bool {
-        matches!(self, Self::Pending | Self::Approved | Self::Rejected)
+impl NodeState {
+    pub fn is_approved(self) -> bool {
+        matches!(self, Self::Approved)
     }
-}
 
-impl Type<Sqlite> for RootState {
-    fn type_info() -> SqliteTypeInfo {
-        <u8 as Type<Sqlite>>::type_info()
-    }
-}
-
-impl<'q> Encode<'q, Sqlite> for RootState {
-    fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode(*self as u8, args)
-    }
-}
-
-impl<'r> Decode<'r, Sqlite> for RootState {
-    fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        let num = <u8 as Decode<Sqlite>>::decode(value)?;
-
-        match num {
-            0 => Ok(Self::Incomplete),
-            1 => Ok(Self::Pending),
-            2 => Ok(Self::Approved),
-            3 => Ok(Self::Rejected),
-            _ => Err(InvalidValue(num).into()),
+    pub fn update(&mut self, other: Self) {
+        *self = match (*self, other) {
+            (Self::Incomplete, _) | (_, Self::Incomplete) => Self::Incomplete,
+            (Self::Complete, _) | (_, Self::Complete) => Self::Complete,
+            (Self::Approved, Self::Approved) => Self::Approved,
+            (Self::Rejected, Self::Rejected) => Self::Rejected,
+            (Self::Approved, Self::Rejected) | (Self::Rejected, Self::Approved) => unreachable!(),
         }
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[repr(u8)]
-pub(crate) enum InnerState {
-    Incomplete = 0,
-    Complete = 1,
-}
-
-impl NodeState for InnerState {
-    const INCOMPLETE: Self = Self::Incomplete;
-    const COMPLETE: Self = Self::Complete;
-
-    fn is_complete(self) -> bool {
-        matches!(self, Self::Complete)
-    }
-}
-
-impl Type<Sqlite> for InnerState {
+impl Type<Sqlite> for NodeState {
     fn type_info() -> SqliteTypeInfo {
         <u8 as Type<Sqlite>>::type_info()
     }
 }
 
-impl<'q> Encode<'q, Sqlite> for InnerState {
+impl<'q> Encode<'q, Sqlite> for NodeState {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
         Encode::<Sqlite>::encode(*self as u8, args)
     }
 }
 
-impl<'r> Decode<'r, Sqlite> for InnerState {
+impl<'r> Decode<'r, Sqlite> for NodeState {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
         let num = <u8 as Decode<Sqlite>>::decode(value)?;
 
         match num {
             0 => Ok(Self::Incomplete),
             1 => Ok(Self::Complete),
+            2 => Ok(Self::Approved),
+            3 => Ok(Self::Rejected),
             _ => Err(InvalidValue(num).into()),
         }
     }

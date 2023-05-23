@@ -56,7 +56,7 @@ async fn load_candidate_latest_root_hashes(
         &mut nodes,
     )
     .await?;
-    try_collect_into(RootNode::load_all_latest_complete(conn), &mut nodes).await?;
+    try_collect_into(RootNode::load_all_latest_approved(conn), &mut nodes).await?;
 
     let nodes = versioned::keep_maximal(nodes, ());
 

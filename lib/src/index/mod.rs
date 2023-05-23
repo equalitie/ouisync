@@ -13,14 +13,13 @@ pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MultiBlockPresence, NodeState, RootNode, RootState, RootSummary, SingleBlockPresence,
-        Summary,
+        MultiBlockPresence, NodeState, RootNode, SingleBlockPresence, Summary,
     },
     proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
 };
 
-use self::{node::Completion, proof::ProofError, quota::QuotaError};
+use self::{proof::ProofError, quota::QuotaError};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -94,7 +93,7 @@ impl Index {
     pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
-        summary: RootSummary,
+        summary: Summary,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
 
@@ -254,49 +253,52 @@ impl Index {
         hash: Hash,
         quota: Option<StorageSize>,
     ) -> Result<ReceiveStatus> {
-        let statuses = node::update_summaries(&mut tx, vec![hash]).await?;
+        let states = node::update_summaries(&mut tx, vec![hash]).await?;
 
-        let mut complete = false;
-        let mut new_complete = Vec::new();
+        let mut old_approved = false;
+        let mut new_approved = Vec::new();
 
-        for (hash, completion) in statuses {
-            let completer = match completion {
-                Completion::Done => {
-                    complete = true;
+        for (hash, state) in states {
+            match state {
+                NodeState::Complete => (),
+                NodeState::Approved => {
+                    old_approved = true;
                     continue;
                 }
-                Completion::Pending(completer) => completer,
-            };
+                NodeState::Incomplete | NodeState::Rejected => continue,
+            }
 
-            if let Some(quota) = quota {
+            let approve = if let Some(quota) = quota {
                 match quota::check(&mut tx, &hash, quota).await {
-                    Ok(()) => (),
+                    Ok(()) => true,
                     Err(QuotaError::Exceeded(size)) => {
                         tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
-                        continue;
+                        false
                     }
                     Err(QuotaError::Outdated) => {
                         tracing::debug!(?hash, "snapshot outdated");
-                        continue;
+                        false
                     }
                     Err(QuotaError::Fatal(error)) => return Err(error),
                 }
+            } else {
+                true
+            };
+
+            if approve {
+                RootNode::approve(&mut tx, &hash).await?;
+                try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_approved)
+                    .await?;
+            } else {
+                RootNode::reject(&mut tx, &hash).await?;
             }
-
-            completer.complete(&mut tx).await?;
-            complete = true;
-
-            try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_complete).await?;
         }
-
-        new_complete.sort();
-        new_complete.dedup();
 
         // For logging completed snapshots
         let snapshots = if tracing::enabled!(Level::DEBUG) {
-            let mut snapshots = Vec::with_capacity(new_complete.len());
+            let mut snapshots = Vec::with_capacity(new_approved.len());
 
-            for branch_id in &new_complete {
+            for branch_id in &new_approved {
                 snapshots.push(self.get_branch(*branch_id).load_snapshot(&mut tx).await?);
             }
 
@@ -306,7 +308,7 @@ impl Index {
         };
 
         tx.commit_and_then({
-            let new_complete = new_complete.clone();
+            let new_approved = new_approved.clone();
             let event_tx = self.notify().clone();
 
             move || {
@@ -319,7 +321,7 @@ impl Index {
                     );
                 }
 
-                for branch_id in new_complete {
+                for branch_id in new_approved {
                     event_tx.send(Payload::BranchChanged(branch_id));
                 }
             }
@@ -327,8 +329,8 @@ impl Index {
         .await?;
 
         Ok(ReceiveStatus {
-            complete,
-            new_complete,
+            old_approved,
+            new_approved,
         })
     }
 
@@ -348,10 +350,10 @@ impl Index {
 /// Status of receiving nodes from remote replica.
 #[derive(Debug)]
 pub(crate) struct ReceiveStatus {
-    /// Whether the snapshot(s) the received nodes belong to are complete.
-    pub complete: bool,
-    /// List of branches whose snapshots became complete.
-    pub new_complete: Vec<PublicKey>,
+    /// Whether any of the snapshots were already approved.
+    pub old_approved: bool,
+    /// List of branches whose snapshots have been approved.
+    pub new_approved: Vec<PublicKey>,
 }
 
 #[derive(Debug, Error)]
@@ -407,7 +409,7 @@ struct RootNodeAction {
 async fn decide_root_node_action(
     tx: &mut db::WriteTransaction,
     new_proof: &Proof,
-    new_summary: &RootSummary,
+    new_summary: &Summary,
 ) -> Result<RootNodeAction> {
     let mut action = RootNodeAction {
         insert: true,
