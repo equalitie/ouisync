@@ -382,7 +382,7 @@ impl VirtualFilesystem {
         &'h self,
         file_name: &U16CStr,
         _security_context: &IO_SECURITY_CONTEXT,
-        desired_access: winnt::ACCESS_MASK,
+        access_mask: AccessMask,
         _file_attributes: u32,
         _share_access: u32,
         create_disposition: u32,
@@ -392,7 +392,7 @@ impl VirtualFilesystem {
         let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
         let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
-        let delete_access = desired_access & winnt::DELETE > 0;
+        let delete_access = access_mask.has_delete();
 
         let path = to_path(file_name)?;
 
@@ -887,7 +887,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
             .block_on(self.async_create_file(
                 file_name,
                 security_context,
-                desired_access,
+                desired_access.into(),
                 file_attributes,
                 share_access,
                 create_disposition,
@@ -1221,4 +1221,78 @@ fn to_path(path_cstr: &U16CStr) -> OperationResult<Utf8PathBuf> {
     };
 
     Ok(Utf8PathBuf::from(path_str))
+}
+
+#[derive(Clone, Copy)]
+struct AccessMask {
+    mask: winnt::ACCESS_MASK,
+}
+
+impl AccessMask {
+    fn has_delete(&self) -> bool {
+        self.mask & winnt::DELETE > 0
+    }
+}
+
+impl From<winnt::ACCESS_MASK> for AccessMask {
+    fn from(mask: winnt::ACCESS_MASK) -> Self {
+        Self { mask }
+    }
+}
+
+impl From<AccessMask> for winnt::ACCESS_MASK {
+    fn from(mask: AccessMask) -> Self {
+        mask.mask
+    }
+}
+
+impl fmt::Debug for AccessMask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut mask = self.mask;
+        let mut first = true;
+        if mask & winnt::DELETE > 0 {
+            first = false;
+            write!(f, "DELETE")?;
+            mask ^= winnt::DELETE;
+        }
+        if mask & winnt::READ_CONTROL > 0 {
+            if !first {
+                write!(f, "|")?;
+            }
+            first = false;
+            write!(f, "READ_CONTROL")?;
+            mask ^= winnt::READ_CONTROL;
+        }
+        if mask & winnt::WRITE_DAC > 0 {
+            if !first {
+                write!(f, "|")?;
+            }
+            first = false;
+            write!(f, "WRITE_DAC")?;
+            mask ^= winnt::WRITE_DAC;
+        }
+        if mask & winnt::WRITE_OWNER > 0 {
+            if !first {
+                write!(f, "|")?;
+            }
+            first = false;
+            write!(f, "WRITE_OWNER")?;
+            mask ^= winnt::WRITE_OWNER;
+        }
+        if mask & winnt::SYNCHRONIZE > 0 {
+            if !first {
+                write!(f, "|")?;
+            }
+            first = false;
+            write!(f, "SYNCHRONIZE")?;
+            mask ^= winnt::SYNCHRONIZE;
+        }
+        if mask > 0 {
+            if !first {
+                write!(f, "|")?;
+            }
+            write!(f, "{:#x}", mask)?;
+        }
+        Ok(())
+    }
 }
