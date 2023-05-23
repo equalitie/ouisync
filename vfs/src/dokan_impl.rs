@@ -211,7 +211,13 @@ impl VirtualFilesystem {
                     if create_directory {
                         Entry::new_dir(path.clone(), shared)
                     } else {
-                        Entry::new_file(None, shared)
+                        Entry::new_file(
+                            OpenState::Lazy {
+                                path: path.clone(),
+                                create_disposition,
+                            },
+                            shared,
+                        )
                     }
                 } else {
                     if create_directory {
@@ -220,7 +226,7 @@ impl VirtualFilesystem {
                     } else {
                         let mut file = self.repo.create_file(path).await?;
                         file.flush().await?;
-                        Entry::new_file(Some(file), shared)
+                        Entry::new_file(OpenState::Open(file), shared)
                     }
                 };
 
@@ -231,14 +237,20 @@ impl VirtualFilesystem {
 
         let entry = if delete_access {
             match existing_entry {
-                JointEntryRef::File(_) => Entry::new_file(None, shared),
+                JointEntryRef::File(_) => Entry::new_file(
+                    OpenState::Lazy {
+                        path: path.clone(),
+                        create_disposition,
+                    },
+                    shared,
+                ),
                 JointEntryRef::Directory(_) => Entry::new_dir(path.clone(), shared),
             }
         } else {
             match existing_entry {
                 JointEntryRef::File(file_entry) => {
                     let file = file_entry.open().await?;
-                    Entry::new_file(Some(file), shared)
+                    Entry::new_file(OpenState::Open(file), shared)
                 }
                 JointEntryRef::Directory(_) => Entry::new_dir(path.clone(), shared),
             }
@@ -425,20 +437,20 @@ impl VirtualFilesystem {
             Entry::File(entry) => {
                 let mut file_lock = entry.file.lock().await;
 
-                match file_lock.as_mut() {
-                    Some(file) => {
+                match &mut *file_lock {
+                    OpenState::Open(file) => {
                         if let Err(error) = file.flush().await {
                             tracing::error!("Failed to flush on file close: {error:?}");
                         }
                     }
-                    None => {
-                        // TODO: This is not always an error.
+                    OpenState::Lazy { .. } => (),
+                    OpenState::Closed => {
                         tracing::error!("File already closed");
                     }
                 };
 
                 // Close the file handle.
-                file_lock.take();
+                *file_lock = OpenState::Closed;
                 drop(file_lock);
             }
             Entry::Directory(_) => (),
@@ -467,7 +479,8 @@ impl VirtualFilesystem {
         };
 
         let mut lock = entry.file.lock().await;
-        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+        let file = lock.opened_file(&self.repo).await?;
+
         let offset: u64 = offset
             .try_into()
             .map_err(|_| ouisync_lib::Error::OffsetOutOfRange)?;
@@ -489,7 +502,7 @@ impl VirtualFilesystem {
         let file_entry = context.entry.as_file()?;
 
         let mut lock = file_entry.file.lock().await;
-        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+        let file = lock.opened_file(&self.repo).await?;
 
         let offset = if info.write_to_eof() {
             file.len()
@@ -510,8 +523,18 @@ impl VirtualFilesystem {
         &'h self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c EntryHandle,
+        context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_write_file");
+        match &context.entry {
+            Entry::File(entry) => {
+                let mut lock = entry.file.lock().await;
+                if let OpenState::Open(file) = &mut *lock {
+                    file.flush().await?;
+                }
+            }
+            Entry::Directory(_) => (),
+        }
         Ok(())
     }
 
@@ -524,19 +547,9 @@ impl VirtualFilesystem {
     ) -> Result<FileInfo, Error> {
         let (attributes, file_size) = match &context.entry {
             Entry::File(entry) => {
-                let len = if let Some(file) = entry.file.lock().await.as_ref() {
-                    file.len()
-                } else {
-                    // Ideally we wouldn't need to do this and expect that the file is open if we
-                    // get to this function. But Windows insists on "opening" an entry, reading
-                    // its size when moving/renaming a file prior to first closing it. This is
-                    // currently verboten in ouisync due to this issue:
-                    // https://github.com/equalitie/ouisync/issues/58
-                    // And so we need to open the file manually, read the length and then close it.
-                    let lock = entry.shared.lock().await;
-                    let file = self.repo.open_file(&lock.path).await?;
-                    file.len()
-                };
+                let mut lock = entry.file.lock().await;
+                let file = lock.opened_file(&self.repo).await?;
+                let len = file.len();
 
                 (winnt::FILE_ATTRIBUTE_NORMAL, len)
             }
@@ -697,7 +710,7 @@ impl VirtualFilesystem {
 
         let entry = context.entry.as_file()?;
         let mut lock = entry.file.lock().await;
-        let file = lock.as_mut().ok_or(STATUS_FILE_CLOSED)?;
+        let file = lock.opened_file(&self.repo).await?;
 
         let start_len = file.len();
 
@@ -815,7 +828,7 @@ impl TryFrom<u32> for CreateDisposition {
 }
 
 struct FileEntry {
-    file: AsyncMutex<Option<File>>,
+    file: AsyncMutex<OpenState>,
     shared: Arc<AsyncMutex<Shared>>,
 }
 
@@ -830,7 +843,7 @@ enum Entry {
 }
 
 impl Entry {
-    fn new_file(file: Option<File>, shared: Arc<AsyncMutex<Shared>>) -> Entry {
+    fn new_file(file: OpenState, shared: Arc<AsyncMutex<Shared>>) -> Entry {
         Entry::File(FileEntry {
             file: AsyncMutex::new(file),
             shared,
@@ -1221,6 +1234,52 @@ fn to_path(path_cstr: &U16CStr) -> OperationResult<Utf8PathBuf> {
     };
 
     Ok(Utf8PathBuf::from(path_str))
+}
+
+enum OpenState {
+    Open(File),
+    Lazy {
+        path: Utf8PathBuf,
+        create_disposition: CreateDisposition,
+    },
+    Closed,
+}
+
+impl OpenState {
+    fn as_mut_file(&mut self) -> Option<&mut File> {
+        match self {
+            Self::Open(file) => Some(file),
+            Self::Lazy { .. } => None,
+            Self::Closed => None,
+        }
+    }
+
+    async fn opened_file(&mut self, repo: &Repository) -> Result<&mut File, Error> {
+        match self {
+            Self::Open(file) => Ok(file),
+            Self::Lazy {
+                path,
+                create_disposition,
+            } => {
+                use ouisync_lib::Error as E;
+                let file = match repo.open_file(&path).await {
+                    Ok(file) => file,
+                    Err(E::EntryNotFound) => {
+                        if !create_disposition.should_create() {
+                            return Err(E::EntryNotFound.into());
+                        }
+                        repo.create_file(path).await?
+                    }
+                    Err(other) => {
+                        return Err(other.into());
+                    }
+                };
+                *self = OpenState::Open(file);
+                Ok(self.as_mut_file().unwrap())
+            }
+            Self::Closed => Err(STATUS_FILE_CLOSED.into()),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
