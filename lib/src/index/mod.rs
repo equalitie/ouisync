@@ -255,12 +255,15 @@ impl Index {
     ) -> Result<ReceiveStatus> {
         let statuses = node::update_summaries(&mut tx, vec![hash]).await?;
 
-        let complete = !statuses.is_empty();
+        let mut complete = false;
         let mut new_complete = Vec::new();
 
-        for (hash, complete) in statuses {
-            let completer = match complete {
-                Completion::Done => continue,
+        for (hash, completion) in statuses {
+            let completer = match completion {
+                Completion::Done => {
+                    complete = true;
+                    continue;
+                }
                 Completion::Pending(completer) => completer,
             };
 
@@ -280,6 +283,7 @@ impl Index {
             }
 
             completer.complete(&mut tx).await?;
+            complete = true;
 
             try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_complete).await?;
         }
