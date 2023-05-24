@@ -253,6 +253,12 @@ impl Index {
         hash: Hash,
         quota: Option<StorageSize>,
     ) -> Result<ReceiveStatus> {
+        // TODO: Don't hold write transaction through this whole function. Use it only for
+        // `update_summaries` then commit it, then do the quota check with a read-only transaction
+        // and then grab another write transaction to do the `approve` / `reject`.
+        // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
+        // concurrent checks to succeed where they would otherwise fail if ran sequentially.
+
         let states = node::update_summaries(&mut tx, vec![hash]).await?;
 
         let mut old_approved = false;
