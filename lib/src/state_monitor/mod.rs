@@ -2,10 +2,7 @@ mod duration_ranges;
 
 pub(crate) use duration_ranges::DurationRanges;
 
-use crate::{
-    deadlock::{BlockingMutex, BlockingMutexGuard},
-    sync::uninitialized_watch,
-};
+use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
 use serde::{
     de::Error as _,
     ser::{SerializeMap, SerializeStruct},
@@ -22,6 +19,7 @@ use std::{
         Arc, Weak,
     },
 };
+use tokio::sync::watch;
 
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
 pub struct MonitorId {
@@ -146,7 +144,8 @@ struct StateMonitorShared {
 struct StateMonitorInner {
     values: BTreeMap<String, MonitoredValueHandle>,
     children: BTreeMap<MonitorId, ChildEntry>,
-    on_change: uninitialized_watch::Sender<()>,
+    // TODO: Why is this in mutex?
+    on_change: watch::Sender<()>,
 }
 
 struct ChildEntry {
@@ -204,7 +203,7 @@ impl StateMonitor {
                     inner: BlockingMutex::new(StateMonitorInner {
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
-                        on_change: uninitialized_watch::channel().0,
+                        on_change: watch::channel(()).0,
                     }),
                 });
 
@@ -292,7 +291,7 @@ impl StateMonitor {
     }
 
     /// Get notified whenever there is a change in this StateMonitor
-    pub fn subscribe(&self) -> uninitialized_watch::Receiver<()> {
+    pub fn subscribe(&self) -> watch::Receiver<()> {
         self.shared.subscribe()
     }
 }
@@ -351,7 +350,7 @@ impl StateMonitorShared {
             inner: BlockingMutex::new(StateMonitorInner {
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
-                on_change: uninitialized_watch::channel().0,
+                on_change: watch::channel(()).0,
             }),
         })
     }
@@ -374,7 +373,7 @@ impl StateMonitorShared {
         child.and_then(|child| child.locate(path))
     }
 
-    fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
+    fn subscribe(self: &Arc<Self>) -> watch::Receiver<()> {
         self.lock_inner().on_change.subscribe()
     }
 
