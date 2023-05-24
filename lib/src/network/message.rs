@@ -8,7 +8,7 @@ use crate::{
     block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
-    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, Summary, UntrustedProof},
+    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub(crate) enum Response {
     /// `Request::RootNode` but also on its own when it detects change in the repo.
     RootNode {
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
         debug: DebugResponsePayload,
     },
     /// Send that a RootNode request failed
@@ -65,10 +65,14 @@ pub(crate) enum Response {
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::RootNode { proof, summary, .. } => f
+            Self::RootNode {
+                proof,
+                block_presence,
+                ..
+            } => f
                 .debug_struct("RootNode")
                 .field("proof", proof)
-                .field("summary", summary)
+                .field("block_presence", block_presence)
                 .finish(),
             Self::RootNodeError(branch_id, _) => {
                 f.debug_tuple("RootNodeError").field(branch_id).finish()

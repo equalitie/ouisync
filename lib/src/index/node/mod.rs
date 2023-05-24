@@ -12,9 +12,10 @@ pub(crate) use self::{
     inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf::{LeafNode, LeafNodeSet, ModifyStatus},
     root::RootNode,
-    summary::{MultiBlockPresence, SingleBlockPresence, Summary},
+    summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
 
+use super::try_collect_into;
 use crate::{
     block::BlockId,
     collections::{HashMap, HashSet},
@@ -22,21 +23,36 @@ use crate::{
     db,
     error::Result,
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::TryStreamExt;
 
 /// Get the bucket for `locator` at the specified `inner_layer`.
 pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
-/// Update summary of the nodes with the specified hash and all their ancestor nodes.
-/// Returns a map `PublicKey -> bool` indicating which branches were affected and whether they
-/// became complete.
+/// Update summary of the nodes with the specified hashes and all their ancestor nodes.
+/// Returns the affected snapshots and their states.
 pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
-    hash: Hash,
-) -> Result<HashMap<PublicKey, bool>> {
-    update_summaries_with_stack(tx, vec![hash]).await
+    mut nodes: Vec<Hash>,
+) -> Result<HashMap<Hash, NodeState>> {
+    let mut states = HashMap::default();
+
+    while let Some(hash) = nodes.pop() {
+        match parent_kind(tx, &hash).await? {
+            Some(ParentNodeKind::Root) => {
+                let state = RootNode::update_summaries(tx, &hash).await?;
+                states.entry(hash).or_insert(state).update(state);
+            }
+            Some(ParentNodeKind::Inner) => {
+                InnerNode::update_summaries(tx, &hash).await?;
+                try_collect_into(InnerNode::load_parent_hashes(tx, &hash), &mut nodes).await?;
+            }
+            None => (),
+        }
+    }
+
+    Ok(states)
 }
 
 /// Receive a block from other replica. This marks the block as not missing by the local replica.
@@ -50,13 +66,17 @@ pub(crate) async fn receive_block(
     }
 
     let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
+    let mut branch_ids = HashSet::default();
 
-    let ids = update_summaries_with_stack(tx, nodes)
-        .await?
-        .into_keys()
-        .collect();
+    for (hash, state) in update_summaries(tx, nodes).await? {
+        if !state.is_approved() {
+            continue;
+        }
 
-    Ok(ids)
+        try_collect_into(RootNode::load_writer_ids(tx, &hash), &mut branch_ids).await?;
+    }
+
+    Ok(branch_ids)
 }
 
 /// Does a parent node (root or inner) with the given hash exist?
@@ -152,39 +172,4 @@ async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Pa
         2 => Ok(Some(ParentNodeKind::Inner)),
         _ => unreachable!(),
     }
-}
-
-async fn update_summaries_with_stack(
-    tx: &mut db::WriteTransaction,
-    mut nodes: Vec<Hash>,
-) -> Result<HashMap<PublicKey, bool>> {
-    let mut statuses = HashMap::default();
-
-    while let Some(hash) = nodes.pop() {
-        match parent_kind(tx, &hash).await? {
-            Some(ParentNodeKind::Root) => {
-                let complete = RootNode::update_summaries(tx, &hash).await?;
-                RootNode::load_writer_ids(tx, &hash)
-                    .try_for_each(|writer_id| {
-                        let entry = statuses.entry(writer_id).or_insert(false);
-                        *entry = *entry || complete;
-
-                        future::ready(Ok(()))
-                    })
-                    .await?;
-            }
-            Some(ParentNodeKind::Inner) => {
-                InnerNode::update_summaries(tx, &hash).await?;
-                InnerNode::load_parent_hashes(tx, &hash)
-                    .try_for_each(|parent_hash| {
-                        nodes.push(parent_hash);
-                        future::ready(Ok(()))
-                    })
-                    .await?;
-            }
-            None => (),
-        }
-    }
-
-    Ok(statuses)
 }

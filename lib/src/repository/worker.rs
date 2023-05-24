@@ -755,8 +755,9 @@ mod scan {
                 .try_collect()
                 .await?;
 
+            // TODO: can we do `update_summaries(tx, parent_hashes)` instead?
             for hash in parent_hashes {
-                index::update_summaries(tx, hash).await?;
+                index::update_summaries(tx, vec![hash]).await?;
             }
         }
 

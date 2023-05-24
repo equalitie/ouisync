@@ -8,7 +8,7 @@ mod worker;
 
 pub use self::{id::RepositoryId, metadata::Metadata, reopen_token::ReopenToken};
 
-pub(crate) use self::{id::LocalId, monitor::RepositoryMonitor};
+pub(crate) use self::{id::LocalId, metadata::quota, monitor::RepositoryMonitor};
 
 use self::worker::{Worker, WorkerHandle};
 use crate::{
@@ -32,6 +32,7 @@ use crate::{
     path,
     progress::Progress,
     state_monitor::StateMonitor,
+    storage_size::StorageSize,
     store::{BlockRequestMode, Store},
     sync::broadcast::ThrottleReceiver,
 };
@@ -455,12 +456,32 @@ impl Repository {
         self.shared.store.metadata()
     }
 
+    /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
+    pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
+        self.shared.store.set_quota(quota).await
+    }
+
+    /// Get the storage quota in bytes or `None` if no quota is set.
+    pub async fn quota(&self) -> Result<Option<StorageSize>> {
+        self.shared.store.quota().await
+    }
+
+    /// Get the total size of the data stored in this repository.
+    pub async fn size(&self) -> Result<StorageSize> {
+        self.shared.store.size().await
+    }
+
     pub fn store(&self) -> &Store {
         &self.shared.store
     }
 
     pub(crate) fn db(&self) -> &db::Pool {
         self.shared.store.db()
+    }
+
+    /// Get the state monitor node of this repository.
+    pub fn monitor(&self) -> &StateMonitor {
+        self.shared.store.monitor.node()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.

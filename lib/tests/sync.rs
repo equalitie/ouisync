@@ -1,11 +1,16 @@
 //! Synchronization tests
 
 mod common;
+#[path = "common/traffic_monitor.rs"]
+mod traffic_monitor;
 
-use self::common::{actor, Env, Proto, DEFAULT_REPO};
+use self::{
+    common::{actor, Env, Proto, DEFAULT_REPO},
+    traffic_monitor::TrafficMonitor,
+};
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StateMonitor, VersionVector,
+    Access, AccessMode, EntryType, Error, Repository, StateMonitor, StorageSize, VersionVector,
     BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
@@ -981,6 +986,142 @@ fn content_stays_available_during_sync() {
 
             tx.send(()).await.unwrap();
         }
+    });
+}
+
+#[test]
+fn quota_exceed() {
+    let mut env = Env::new();
+
+    let quota = StorageSize::from_blocks(4);
+    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content2 = common::random_content(BLOCK_SIZE - BLOB_HEADER_SIZE);
+
+    let (tx, mut rx) = mpsc::channel(1);
+
+    env.actor("writer", {
+        let content0 = content0.clone();
+        let content2 = content2.clone();
+
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+            network.add_user_provided_peer(&actor::lookup_addr("reader").await);
+
+            let mut file = repo.create_file("0.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content0, 4096).await;
+            file.flush().await.unwrap();
+            tracing::info!("write 0.dat");
+
+            rx.recv().await.unwrap();
+
+            let mut file = repo.create_file("1.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content1, 4096).await;
+            file.flush().await.unwrap();
+            drop(file);
+            tracing::info!("write 1.dat");
+
+            rx.recv().await.unwrap();
+
+            repo.remove_entry("1.dat").await.unwrap();
+            tracing::info!("remove 1.dat");
+
+            let mut file = repo.create_file("2.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content2, 4096).await;
+            file.flush().await.unwrap();
+            tracing::info!("write 2.dat");
+
+            rx.recv().await.unwrap();
+        }
+    });
+
+    env.actor("reader", {
+        async move {
+            let network = actor::create_network(Proto::Tcp).await;
+
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+            repo.set_quota(Some(quota)).await.unwrap();
+
+            let _reg = network.register(repo.store().clone()).await;
+
+            // The first file is within the quota
+            common::expect_file_content(&repo, "0.dat", &content0).await;
+
+            let mut traffic = TrafficMonitor::new(&repo);
+
+            let size0 = repo.size().await.unwrap();
+            assert!(size0 <= quota);
+
+            tracing::info!("read 0.dat");
+            tx.send(()).await.unwrap();
+
+            // Wait for the traffic to settle
+            traffic.wait_start().await;
+            traffic.wait_stop().await;
+
+            // The second file is rejected because it exceeds the quota
+            let size1 = repo.size().await.unwrap();
+            assert_eq!(size1, size0);
+
+            tracing::info!("not read 1.dat");
+            tx.send(()).await.unwrap();
+
+            // Once the second file is deleted we accept the third file which is within the quota.
+            common::expect_file_content(&repo, "2.dat", &content2).await;
+            let size2 = repo.size().await.unwrap();
+            assert!(size2 <= quota);
+
+            tracing::info!("read 2.dat");
+            tx.send(()).await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn quota_concurrent_writes() {
+    let mut env = Env::new();
+
+    let quota = StorageSize::from_blocks(3);
+
+    // Each of these files individually is within the quota but together they exceed it.
+    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+
+    let barrier = Arc::new(Barrier::new(3));
+
+    for (index, content) in [content0, content1].into_iter().enumerate() {
+        let barrier = barrier.clone();
+
+        env.actor(&format!("writer-{index}"), async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file(format!("file-{index}.dat")).await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            barrier.wait().await;
+        });
+    }
+
+    env.actor("reader", async move {
+        let network = actor::create_network(Proto::Tcp).await;
+        network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
+        network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
+
+        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+        repo.set_quota(Some(quota)).await.unwrap();
+
+        let mut traffic = TrafficMonitor::new(&repo);
+
+        let _reg = network.register(repo.store().clone()).await;
+
+        traffic.wait_start().await;
+        traffic.wait_stop().await;
+
+        let size = repo.size().await.unwrap();
+        assert!(size <= quota);
+
+        barrier.wait().await;
     });
 }
 

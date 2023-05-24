@@ -5,10 +5,15 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTrackerClient},
-    crypto::{CacheHash, Hashable},
+    block::{
+        tracker::{BlockPromise, OfferState},
+        BlockData, BlockNonce, BlockTrackerClient,
+    },
+    crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{InnerNodeMap, LeafNodeSet, ReceiveError, ReceiveFilter, Summary, UntrustedProof},
+    index::{
+        InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof,
+    },
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
 };
@@ -25,7 +30,7 @@ pub(super) struct Client {
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
-    block_tracker: Arc<BlockTrackerClient>,
+    block_tracker: BlockTrackerClient,
     _request_sender: ScopedJoinHandle<()>,
 }
 
@@ -36,7 +41,7 @@ impl Client {
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
         let pool = store.db().clone();
-        let block_tracker = Arc::new(store.block_tracker.client());
+        let block_tracker = store.block_tracker.client();
 
         let pending_requests = Arc::new(PendingRequests::new(store.monitor.clone()));
 
@@ -63,8 +68,6 @@ impl Client {
         self.receive_filter.reset().await?;
 
         let mut block_promise_acceptor = self.block_tracker.acceptor();
-        let request_tx = self.request_tx.clone();
-        let pending_requests = self.pending_requests.clone();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
         // some unsolicited responses and also the peer may be malicious and send us too many
@@ -85,7 +88,7 @@ impl Client {
                     None => break,
                 };
 
-                let response = match pending_requests.remove(response) {
+                let response = match self.pending_requests.remove(response) {
                     Some(response) => response,
                     // Unsolicited and non-root response.
                     None => continue,
@@ -101,8 +104,7 @@ impl Client {
             select! {
                 block_promise = block_promise_acceptor.accept() => {
                     let debug = DebugRequest::start();
-                    // Unwrap OK because the sending task never returns.
-                    request_tx.send((PendingRequest::Block(block_promise, debug), Instant::now())).unwrap();
+                    self.enqueue_request(PendingRequest::Block(block_promise, debug));
                 }
                 _ = &mut move_from_pending_into_queued => break,
                 result = &mut handle_queued_responses => {
@@ -121,7 +123,7 @@ impl Client {
     }
 
     async fn handle_responses(
-        &mut self,
+        &self,
         mut queued_responses_rx: mpsc::Receiver<PendingResponse>,
     ) -> Result<()> {
         loop {
@@ -132,14 +134,14 @@ impl Client {
         }
     }
 
-    async fn handle_response(&mut self, response: PendingResponse) -> Result<()> {
+    async fn handle_response(&self, response: PendingResponse) -> Result<()> {
         let result = match response {
             PendingResponse::RootNode {
                 proof,
-                summary,
+                block_presence,
                 permit: _permit,
                 debug,
-            } => self.handle_root_node(proof, summary, debug).await,
+            } => self.handle_root_node(proof, block_presence, debug).await,
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
@@ -171,24 +173,28 @@ impl Client {
             writer_id = ?proof.writer_id,
             vv = ?proof.version_vector,
             hash = ?proof.hash,
-            block_presence = ?summary.block_presence,
+            ?block_presence,
         ),
         err(Debug)
     )]
     async fn handle_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
-        let updated = self.store.index.receive_root_node(proof, summary).await?;
+        let updated = self
+            .store
+            .index
+            .receive_root_node(proof, block_presence)
+            .await?;
 
         if updated {
             tracing::trace!("received updated root node");
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
-                ResponseDisambiguator::new(summary.block_presence),
+                ResponseDisambiguator::new(block_presence),
                 DebugRequest::start(),
             ));
         } else {
@@ -200,16 +206,17 @@ impl Client {
 
     #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_inner_nodes(
-        &mut self,
+        &self,
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
 
-        let (updated_nodes, completed_branches) = self
+        let quota = self.store.quota().await?.map(Into::into);
+        let (updated_nodes, status) = self
             .store
             .index
-            .receive_inner_nodes(nodes, &mut self.receive_filter)
+            .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
 
         let debug = DebugRequest::start();
@@ -232,24 +239,26 @@ impl Client {
             ));
         }
 
-        // Request the branches that became completed again. See the comment in `handle_leaf_nodes`
-        // for explanation.
-        for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id, debug));
+        if quota.is_some() {
+            for branch_id in &status.new_approved {
+                self.store.approve_offers(branch_id).await?;
+            }
         }
+
+        self.refresh_branches(&status.new_approved);
 
         Ok(())
     }
 
     #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
     async fn handle_leaf_nodes(
-        &mut self,
+        &self,
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
-        let (updated_blocks, completed_branches) =
-            self.store.index.receive_leaf_nodes(nodes).await?;
+        let quota = self.store.quota().await?.map(Into::into);
+        let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",
@@ -258,59 +267,79 @@ impl Client {
             updated_blocks
         );
 
+        let offer_state =
+            if quota.is_none() || !status.new_approved.is_empty() || status.old_approved {
+                OfferState::Approved
+            } else {
+                OfferState::Pending
+            };
+
         match self.store.block_request_mode {
             BlockRequestMode::Lazy => {
                 for block_id in updated_blocks {
-                    self.block_tracker.offer(block_id);
+                    self.block_tracker.offer(block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
                 for block_id in updated_blocks {
-                    if self.block_tracker.offer(block_id) {
+                    if self.block_tracker.offer(block_id, offer_state) {
                         self.store.require_missing_block(block_id).await?;
                     }
                 }
             }
         }
 
-        // Request again the branches that became completed. This is to cover the following edge
-        // case:
-        //
-        // A block is initially present, but is part of a an outdated file/directory. A new snapshot
-        // is in the process of being downloaded from a remote replica. During this download, the
-        // block is still present and so is not marked as offered (because at least one of its
-        // local ancestor nodes is still seen as up-to-date). Then before the download completes,
-        // the worker garbage-collects the block. Then the download completes and triggers another
-        // worker run. During this run the block might be marked as required again (because e.g.
-        // the file was modified by the remote replica). But the block hasn't been marked as
-        // offered (because it was still present during the last snapshot download) and so is not
-        // requested. We would now have to wait for the next snapshot update from the remote replica
-        // before the block is marked as offered and only then we proceed with requesting it. This
-        // can take arbitrarily long (even indefinitely).
-        //
-        // By requesting the root node again immediatelly, we ensure that the missing block is
-        // requested as soon as possible.
-        for branch_id in completed_branches {
-            self.enqueue_request(PendingRequest::RootNode(branch_id, DebugRequest::start()));
+        if quota.is_some() {
+            for branch_id in &status.new_approved {
+                self.store.approve_offers(branch_id).await?;
+            }
         }
+
+        self.refresh_branches(&status.new_approved);
 
         Ok(())
     }
 
     #[instrument(skip_all, fields(id = ?data.id), err(Debug))]
     async fn handle_block(
-        &mut self,
+        &self,
         data: BlockData,
         nonce: BlockNonce,
-        // We need to preserve the lifetime of `_block_promise` until the response is processed.
-        _block_promise: Option<BlockPromise>,
+        block_promise: BlockPromise,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        match self.store.write_received_block(&data, &nonce).await {
+        match self
+            .store
+            .write_received_block(&data, &nonce, block_promise)
+            .await
+        {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),
             Err(error) => Err(error.into()),
+        }
+    }
+
+    // Request again the branches that became completed. This is to cover the following edge
+    // case:
+    //
+    // A block is initially present, but is part of a an outdated file/directory. A new snapshot
+    // is in the process of being downloaded from a remote replica. During this download, the
+    // block is still present and so is not marked as offered (because at least one of its
+    // local ancestor nodes is still seen as up-to-date). Then before the download completes,
+    // the worker garbage-collects the block. Then the download completes and triggers another
+    // worker run. During this run the block might be marked as required again (because e.g.
+    // the file was modified by the remote replica). But the block hasn't been marked as
+    // offered (because it was still present during the last snapshot download) and so is not
+    // requested. We would now have to wait for the next snapshot update from the remote replica
+    // before the block is marked as offered and only then we proceed with requesting it. This
+    // can take arbitrarily long (even indefinitely).
+    //
+    // By requesting the root node again immediatelly, we ensure that the missing block is
+    // requested as soon as possible.
+    fn refresh_branches(&self, branches: &[PublicKey]) {
+        for branch_id in branches {
+            self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
         }
     }
 }

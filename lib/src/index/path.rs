@@ -1,6 +1,6 @@
 use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, SingleBlockPresence, Summary,
-    EMPTY_INNER_HASH, INNER_LAYER_COUNT,
+    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, NodeState, SingleBlockPresence,
+    Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
 };
 use crate::{
     block::BlockId,
@@ -114,6 +114,7 @@ impl Path {
 
         self.root_hash = self.compute_hash_for_layer(0).unwrap_or(*EMPTY_INNER_HASH);
         self.root_summary = self.compute_summary_for_layer(0);
+        self.root_summary.state = NodeState::Approved;
     }
 
     // Assumes layers higher than `layer` have their hashes already computed

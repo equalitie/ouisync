@@ -1,17 +1,17 @@
 mod duration_ranges;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use duration_ranges::DurationRanges;
 
-use crate::{
-    deadlock::{BlockingMutex, BlockingMutexGuard},
-    sync::uninitialized_watch,
-};
+use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
 use serde::{
     de::Error as _,
     ser::{SerializeMap, SerializeStruct},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
+    any::Any,
     collections::{btree_map, BTreeMap},
     convert::Into,
     fmt,
@@ -22,6 +22,7 @@ use std::{
         Arc, Weak,
     },
 };
+use tokio::sync::watch;
 
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
 pub struct MonitorId {
@@ -146,7 +147,8 @@ struct StateMonitorShared {
 struct StateMonitorInner {
     values: BTreeMap<String, MonitoredValueHandle>,
     children: BTreeMap<MonitorId, ChildEntry>,
-    on_change: uninitialized_watch::Sender<()>,
+    // TODO: Why is this in mutex?
+    on_change: watch::Sender<()>,
 }
 
 struct ChildEntry {
@@ -204,7 +206,7 @@ impl StateMonitor {
                     inner: BlockingMutex::new(StateMonitorInner {
                         values: BTreeMap::new(),
                         children: BTreeMap::new(),
-                        on_change: uninitialized_watch::channel().0,
+                        on_change: watch::channel(()).0,
                     }),
                 });
 
@@ -253,11 +255,7 @@ impl StateMonitor {
     /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
-    pub fn make_value<N: Into<String>, T: fmt::Debug + Sync + Send + 'static>(
-        &self,
-        name: N,
-        value: T,
-    ) -> MonitoredValue<T> {
+    pub fn make_value<N: Into<String>, T: Value>(&self, name: N, value: T) -> MonitoredValue<T> {
         let mut lock = self.shared.lock_inner();
 
         let name = name.into();
@@ -291,8 +289,26 @@ impl StateMonitor {
         }
     }
 
+    /// Gets current snapshot of the given value. Returns `None` if the value doesn't exists or is
+    /// not of type `T`.
+    pub fn get_value<T>(&self, name: &str) -> Option<T>
+    where
+        T: Any + Clone,
+    {
+        self.shared
+            .lock_inner()
+            .values
+            .get(name)?
+            .ptr
+            .lock()
+            .unwrap()
+            .as_any()
+            .downcast_ref()
+            .cloned()
+    }
+
     /// Get notified whenever there is a change in this StateMonitor
-    pub fn subscribe(&self) -> uninitialized_watch::Receiver<()> {
+    pub fn subscribe(&self) -> watch::Receiver<()> {
         self.shared.subscribe()
     }
 }
@@ -351,7 +367,7 @@ impl StateMonitorShared {
             inner: BlockingMutex::new(StateMonitorInner {
                 values: BTreeMap::new(),
                 children: BTreeMap::new(),
-                on_change: uninitialized_watch::channel().0,
+                on_change: watch::channel(()).0,
             }),
         })
     }
@@ -374,7 +390,7 @@ impl StateMonitorShared {
         child.and_then(|child| child.locate(path))
     }
 
-    fn subscribe(self: &Arc<Self>) -> uninitialized_watch::Receiver<()> {
+    fn subscribe(self: &Arc<Self>) -> watch::Receiver<()> {
         self.lock_inner().on_change.subscribe()
     }
 
@@ -507,7 +523,20 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<BlockingMutex<dyn fmt::Debug + Sync + Send>>,
+    ptr: Arc<BlockingMutex<dyn Value>>,
+}
+
+pub trait Value: fmt::Debug + Any + Send + 'static {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T> Value for T
+where
+    T: fmt::Debug + Any + Send + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 // --- Serialization

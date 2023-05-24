@@ -115,6 +115,15 @@ impl<T> ConfigEntry<T> {
         Ok(())
     }
 
+    #[instrument(name = "config.remove", skip(self), err(Debug))]
+    pub async fn remove(&self) -> Result<(), ConfigError> {
+        match fs::remove_file(self.path()).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub(crate) fn path(&self) -> PathBuf {
         self.store.dir.join(self.key.name).with_extension("conf")
     }

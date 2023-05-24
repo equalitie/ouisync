@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use super::{
     branch_data::BranchData,
-    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, Summary, EMPTY_INNER_HASH},
-    node_test_utils::Snapshot,
+    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, EMPTY_INNER_HASH},
+    node_test_utils::{self, Snapshot},
     proof::Proof,
     Index, ReceiveError, ReceiveFilter,
 };
@@ -19,7 +17,9 @@ use crate::{
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
+use node::MultiBlockPresence;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::task;
 
@@ -45,7 +45,7 @@ async fn receive_valid_root_node() {
                 &write_keys,
             )
             .into(),
-            Summary::INCOMPLETE,
+            MultiBlockPresence::None,
         )
         .await
         .unwrap();
@@ -73,7 +73,7 @@ async fn receive_root_node_with_invalid_proof() {
                 &invalid_write_keys,
             )
             .into(),
-            Summary::INCOMPLETE,
+            MultiBlockPresence::None,
         )
         .await;
     assert_matches!(result, Err(ReceiveError::InvalidProof));
@@ -100,7 +100,7 @@ async fn receive_root_node_with_empty_version_vector() {
                 &write_keys,
             )
             .into(),
-            Summary::INCOMPLETE,
+            MultiBlockPresence::None,
         )
         .await
         .unwrap();
@@ -127,13 +127,13 @@ async fn receive_duplicate_root_node() {
 
     // Receive root node for the first time.
     index
-        .receive_root_node(proof.clone().into(), Summary::INCOMPLETE)
+        .receive_root_node(proof.clone().into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
     // Receiving it again is a no-op.
     index
-        .receive_root_node(proof.into(), Summary::INCOMPLETE)
+        .receive_root_node(proof.into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
@@ -194,7 +194,7 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap()
         .root_node;
 
-    assert!(root.summary.is_complete());
+    assert!(root.summary.state.is_approved());
     let root_hash = root.proof.hash;
     let root_vv = root.proof.version_vector.clone();
 
@@ -202,7 +202,7 @@ async fn receive_root_node_with_existing_hash() {
 
     // TODO: assert this returns false as we shouldn't need to download further nodes
     index
-        .receive_root_node(proof.into(), Summary::FULL)
+        .receive_root_node(proof.into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
@@ -212,7 +212,8 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap()
         .root_node
         .summary
-        .is_complete());
+        .state
+        .is_approved());
 }
 
 mod receive_and_create_root_node {
@@ -293,7 +294,10 @@ mod receive_and_create_root_node {
         // up-to-date.
         let remote_task = async {
             index
-                .receive_root_node(root_node_0.proof.clone().into(), root_node_0.summary)
+                .receive_root_node(
+                    root_node_0.proof.clone().into(),
+                    root_node_0.summary.block_presence,
+                )
                 .await
                 .unwrap();
         };
@@ -375,17 +379,17 @@ async fn receive_valid_child_nodes() {
                 &write_keys,
             )
             .into(),
-            Summary::INCOMPLETE,
+            MultiBlockPresence::None,
         )
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
+                .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
 
@@ -400,7 +404,7 @@ async fn receive_valid_child_nodes() {
 
     for (hash, leaf_nodes) in snapshot.leaf_sets() {
         index
-            .receive_leaf_nodes(leaf_nodes.clone().into())
+            .receive_leaf_nodes(leaf_nodes.clone().into(), None)
             .await
             .unwrap();
 
@@ -418,12 +422,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
     let (_base_dir, index, _write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
         let result = index
-            .receive_inner_nodes(inner_nodes.clone().into(), &mut receive_filter)
+            .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
             .await;
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
@@ -435,7 +439,9 @@ async fn receive_child_nodes_with_missing_root_parent() {
     }
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
-    let result = index.receive_leaf_nodes(leaf_nodes.clone().into()).await;
+    let result = index
+        .receive_leaf_nodes(leaf_nodes.clone().into(), None)
+        .await;
     assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
     // The orphaned leaf nodes were not written to the db.
@@ -466,13 +472,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // Receive it all.
     receive_snapshot(&store.index, remote_id, &snapshot0, &write_keys).await;
-
-    for block in snapshot0.blocks().values() {
-        store
-            .write_received_block(&block.data, &block.nonce)
-            .await
-            .unwrap();
-    }
+    node_test_utils::receive_blocks(&store, &snapshot0).await;
 
     let remote_branch = store.index.get_branch(remote_id);
 
@@ -493,7 +493,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         .index
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
-            Summary::FULL,
+            MultiBlockPresence::Full,
         )
         .await
         .unwrap();
@@ -733,17 +733,17 @@ async fn receive_snapshot(
     index
         .receive_root_node(
             Proof::new(writer_id, vv, *snapshot.root_hash(), write_keys).into(),
-            Summary::FULL,
+            MultiBlockPresence::Full,
         )
         .await
         .unwrap();
 
-    let mut receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
         }
@@ -751,7 +751,7 @@ async fn receive_snapshot(
 
     for (_, nodes) in snapshot.leaf_sets() {
         index
-            .receive_leaf_nodes(nodes.clone().into())
+            .receive_leaf_nodes(nodes.clone().into(), None)
             .await
             .unwrap();
     }

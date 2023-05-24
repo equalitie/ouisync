@@ -1,5 +1,5 @@
 use crate::{
-    protocol::{Request, Response},
+    protocol::{QuotaInfo, Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };
@@ -321,14 +321,11 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 Ok(().into())
             }
             Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
-            Request::Dht {
-                repository_name,
-                enabled,
-            } => {
+            Request::Dht { name, enabled } => {
                 let holder = self
                     .state
                     .repositories
-                    .get(&repository_name)
+                    .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
@@ -338,14 +335,11 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     Ok(holder.registration.is_dht_enabled().into())
                 }
             }
-            Request::Pex {
-                repository_name,
-                enabled,
-            } => {
+            Request::Pex { name, enabled } => {
                 let holder = self
                     .state
                     .repositories
-                    .get(&repository_name)
+                    .get(&name)
                     .ok_or(ouisync_lib::Error::EntryNotFound)?;
 
                 if let Some(enabled) = enabled {
@@ -353,6 +347,42 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     Ok(().into())
                 } else {
                     Ok(holder.registration.is_pex_enabled().into())
+                }
+            }
+            Request::Quota {
+                name,
+                default: _,
+                remove,
+                value,
+            } => {
+                let value = if remove { Some(None) } else { value.map(Some) };
+
+                if let Some(name) = name {
+                    let holder = self
+                        .state
+                        .repositories
+                        .get(&name)
+                        .ok_or(ouisync_lib::Error::EntryNotFound)?;
+
+                    if let Some(value) = value {
+                        holder.repository.set_quota(value).await?;
+                        Ok(().into())
+                    } else {
+                        let quota = holder.repository.quota().await?;
+                        let size = holder.repository.size().await?;
+
+                        Ok(QuotaInfo { quota, size }.into())
+                    }
+                } else if let Some(value) = value {
+                    ouisync_bridge::repository::set_default_quota(&self.state.config, value)
+                        .await?;
+                    Ok(().into())
+                } else if let Some(value) =
+                    ouisync_bridge::repository::get_default_quota(&self.state.config).await?
+                {
+                    Ok(value.into())
+                } else {
+                    Ok(().into())
                 }
             }
         }

@@ -8,7 +8,7 @@ use crate::{
     },
     db,
     error::Error,
-    index::node::summary::MultiBlockPresence,
+    index::node::summary::{MultiBlockPresence, NodeState},
     state_monitor::StateMonitor,
     test_utils,
     version_vector::VersionVector,
@@ -38,7 +38,7 @@ async fn create_new_root_node() {
             hash,
             &write_keys,
         ),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -74,7 +74,7 @@ async fn attempt_to_create_outdated_root_node() {
     RootNode::create(
         &mut tx,
         Proof::new(writer_id, vv1.clone(), hash, &write_keys),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
@@ -112,7 +112,7 @@ async fn create_new_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node = InnerNode::new(hash, Summary::FULL);
+    let node = InnerNode::new(hash, Summary::INCOMPLETE);
     node.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -136,10 +136,10 @@ async fn create_existing_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node0 = InnerNode::new(hash, Summary::FULL);
+    let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash, Summary::FULL);
+    let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
     node1.save(&mut tx, &parent, bucket).await.unwrap();
 
     let nodes = InnerNode::load_children(&mut tx, &parent).await.unwrap();
@@ -169,10 +169,10 @@ async fn attempt_to_create_conflicting_inner_node() {
 
     let mut tx = pool.begin_write().await.unwrap();
 
-    let node0 = InnerNode::new(hash0, Summary::FULL);
+    let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
     node0.save(&mut tx, &parent, bucket).await.unwrap();
 
-    let node1 = InnerNode::new(hash1, Summary::FULL);
+    let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
     assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
 }
 
@@ -278,7 +278,7 @@ async fn compute_summary_from_empty_leaf_nodes() {
     let hash = *EMPTY_LEAF_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
@@ -309,7 +309,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
@@ -328,7 +328,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_matches!(summary.block_presence, MultiBlockPresence::Some(_));
 }
 
@@ -346,7 +346,7 @@ async fn compute_summary_from_complete_leaf_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::Full);
 }
 
@@ -358,7 +358,7 @@ async fn compute_summary_from_empty_inner_nodes() {
     let hash = *EMPTY_INNER_HASH;
     let summary = InnerNode::compute_summary(&mut conn, &hash).await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
@@ -399,7 +399,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_missing_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::None);
 }
 
@@ -447,7 +447,7 @@ async fn compute_summary_from_complete_inner_nodes_with_some_present_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_matches!(summary.block_presence, MultiBlockPresence::Some(_));
 }
 
@@ -475,7 +475,7 @@ async fn compute_summary_from_complete_inner_nodes_with_all_present_blocks() {
     let summary = InnerNode::compute_summary(&mut tx, &hash).await.unwrap();
     tx.commit().await.unwrap();
 
-    assert!(summary.is_complete);
+    assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::Full);
 }
 
@@ -558,16 +558,14 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
             *snapshot.root_hash(),
             &write_keys,
         ),
-        Summary::FULL,
+        Summary::INCOMPLETE,
     )
     .await
     .unwrap();
 
-    super::update_summaries(&mut tx, root_node.proof.hash)
-        .await
-        .unwrap();
+    update_summaries(&mut tx, root_node.proof.hash).await;
     root_node.reload(&mut tx).await.unwrap();
-    assert_eq!(root_node.summary.is_complete(), leaf_count == 0);
+    assert_eq!(root_node.summary.state.is_approved(), leaf_count == 0);
 
     // TODO: consider randomizing the order the nodes are saved so it's not always
     // breadth-first.
@@ -575,11 +573,11 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     for layer in snapshot.inner_layers() {
         for (parent_hash, nodes) in layer.inner_maps() {
             nodes.save(&mut tx, parent_hash).await.unwrap();
-            super::update_summaries(&mut tx, *parent_hash)
-                .await
-                .unwrap();
+
+            update_summaries(&mut tx, *parent_hash).await;
+
             root_node.reload(&mut tx).await.unwrap();
-            assert!(!root_node.summary.is_complete());
+            assert!(!root_node.summary.state.is_approved());
         }
     }
 
@@ -589,21 +587,31 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
         nodes.save(&mut tx, parent_hash).await.unwrap();
         unsaved_leaves -= nodes.len();
 
-        super::update_summaries(&mut tx, *parent_hash)
-            .await
-            .unwrap();
+        update_summaries(&mut tx, *parent_hash).await;
         root_node.reload(&mut tx).await.unwrap();
 
         if unsaved_leaves > 0 {
-            assert!(!root_node.summary.is_complete());
+            assert!(!root_node.summary.state.is_approved());
         }
     }
 
-    assert!(root_node.summary.is_complete());
+    assert!(root_node.summary.state.is_approved());
 
     // HACK: prevent "too many open files" error.
     drop(tx);
     pool.close().await.unwrap();
+
+    async fn update_summaries(tx: &mut db::WriteTransaction, hash: Hash) {
+        for (hash, state) in super::update_summaries(tx, vec![hash]).await.unwrap() {
+            match state {
+                NodeState::Complete => {
+                    RootNode::approve(tx, &hash).await.unwrap();
+                }
+                NodeState::Incomplete | NodeState::Approved => (),
+                NodeState::Rejected => unreachable!(),
+            }
+        }
+    }
 }
 
 #[proptest]
@@ -639,7 +647,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut tx, root_node.proof.hash)
+        super::update_summaries(&mut tx, vec![root_node.proof.hash])
             .await
             .unwrap();
     }
@@ -663,7 +671,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .await
             .unwrap();
 
-        super::update_summaries(&mut tx, *parent_hash)
+        super::update_summaries(&mut tx, vec![*parent_hash])
             .await
             .unwrap();
     }

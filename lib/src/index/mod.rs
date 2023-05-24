@@ -2,6 +2,7 @@ mod branch_data;
 mod node;
 mod path;
 mod proof;
+mod quota;
 mod receive_filter;
 #[cfg(test)]
 mod tests;
@@ -12,13 +13,13 @@ pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MultiBlockPresence, RootNode, SingleBlockPresence, Summary,
+        MultiBlockPresence, NodeState, RootNode, SingleBlockPresence, Summary,
     },
     proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
 };
 
-use self::proof::ProofError;
+use self::{proof::ProofError, quota::QuotaError};
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -27,10 +28,11 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventSender, Payload},
     repository::RepositoryId,
+    storage_size::StorageSize,
     version_vector::VersionVector,
 };
-use futures_util::TryStreamExt;
-use std::cmp::Ordering;
+use futures_util::{Stream, TryStreamExt};
+use std::{cmp::Ordering, future, iter};
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::Level;
@@ -91,7 +93,7 @@ impl Index {
     pub async fn receive_root_node(
         &self,
         proof: UntrustedProof,
-        summary: Summary,
+        block_presence: MultiBlockPresence,
     ) -> Result<bool, ReceiveError> {
         let proof = proof.verify(self.repository_id())?;
 
@@ -109,7 +111,7 @@ impl Index {
         let mut tx = self.pool.begin_write().await?;
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = decide_root_node_action(&mut tx, &proof, &summary).await?;
+        let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
 
         if action.insert {
             let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
@@ -121,7 +123,10 @@ impl Index {
                 "snapshot started"
             );
 
-            self.update_summaries(tx, node.proof.hash).await?;
+            // Ignoring quota here because if the snapshot became complete by receiving this root
+            // node it means that we already have all the other nodes and so the quota validation
+            // already took place.
+            self.finalize_receive(tx, node.proof.hash, None).await?;
         }
 
         Ok(action.request_children)
@@ -129,12 +134,13 @@ impl Index {
 
     /// Receive inner nodes from other replica and store them into the db.
     /// Returns hashes of those nodes that were more up to date than the locally stored ones.
-    /// Also returns the ids of the branches that became complete.
+    /// Also returns the receive status.
     pub async fn receive_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
-        receive_filter: &mut ReceiveFilter,
-    ) -> Result<(Vec<InnerNode>, Vec<PublicKey>), ReceiveError> {
+        receive_filter: &ReceiveFilter,
+        quota: Option<StorageSize>,
+    ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
@@ -148,18 +154,19 @@ impl Index {
         nodes.inherit_summaries(&mut tx).await?;
         nodes.save(&mut tx, &parent_hash).await?;
 
-        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+        let status = self.finalize_receive(tx, parent_hash, quota).await?;
 
-        Ok((updated_nodes, completed_branches))
+        Ok((updated_nodes, status))
     }
 
     /// Receive leaf nodes from other replica and store them into the db.
     /// Returns the ids of the blocks that the remote replica has but the local one has not.
-    /// Also returns the ids of the branches that became complete.
+    /// Also returns the receive status.
     pub async fn receive_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
-    ) -> Result<(Vec<BlockId>, Vec<PublicKey>), ReceiveError> {
+        quota: Option<StorageSize>,
+    ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
         let mut tx = self.pool.begin_write().await?;
         let parent_hash = nodes.hash();
 
@@ -175,9 +182,9 @@ impl Index {
             .save(&mut tx, &parent_hash)
             .await?;
 
-        let completed_branches = self.update_summaries(tx, parent_hash).await?;
+        let status = self.finalize_receive(tx, parent_hash, quota).await?;
 
-        Ok((updated_blocks, completed_branches))
+        Ok((updated_blocks, status))
     }
 
     // Filter inner nodes that the remote replica has some blocks in that the local one is missing.
@@ -188,13 +195,13 @@ impl Index {
         &self,
         tx: &mut db::WriteTransaction,
         remote_nodes: &InnerNodeMap,
-        receive_filter: &mut ReceiveFilter,
+        receive_filter: &ReceiveFilter,
     ) -> Result<Vec<InnerNode>> {
         let mut output = Vec::with_capacity(remote_nodes.len());
 
         for (_, remote_node) in remote_nodes {
             if !receive_filter
-                .check(tx, &remote_node.hash, &remote_node.summary)
+                .check(tx, &remote_node.hash, &remote_node.summary.block_presence)
                 .await?
             {
                 continue;
@@ -238,28 +245,80 @@ impl Index {
         Ok(output)
     }
 
-    // Updates summaries of the specified nodes and all their ancestors, commits the transaction
-    // and notifies the affected branches that became complete (wasn't before the update but became
-    // after it). Also returns the completed branches.
-    async fn update_summaries(
+    // Finalizes receiving nodes from a remote replica, commits the transaction and notifies the
+    // affected branches.
+    async fn finalize_receive(
         &self,
         mut tx: db::WriteTransaction,
         hash: Hash,
-    ) -> Result<Vec<PublicKey>> {
-        let statuses = node::update_summaries(&mut tx, hash).await?;
-        tx.commit().await?;
+        quota: Option<StorageSize>,
+    ) -> Result<ReceiveStatus> {
+        // TODO: Don't hold write transaction through this whole function. Use it only for
+        // `update_summaries` then commit it, then do the quota check with a read-only transaction
+        // and then grab another write transaction to do the `approve` / `reject`.
+        // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
+        // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
-        let completed: Vec<_> = statuses
-            .into_iter()
-            .filter(|(_, complete)| *complete)
-            .map(|(writer_id, _)| writer_id)
-            .collect();
+        let states = node::update_summaries(&mut tx, vec![hash]).await?;
 
-        if !completed.is_empty() {
-            for branch_id in &completed {
-                if tracing::enabled!(Level::DEBUG) {
-                    let mut conn = self.pool.acquire().await?;
-                    let snapshot = self.get_branch(*branch_id).load_snapshot(&mut conn).await?;
+        let mut old_approved = false;
+        let mut new_approved = Vec::new();
+
+        for (hash, state) in states {
+            match state {
+                NodeState::Complete => (),
+                NodeState::Approved => {
+                    old_approved = true;
+                    continue;
+                }
+                NodeState::Incomplete | NodeState::Rejected => continue,
+            }
+
+            let approve = if let Some(quota) = quota {
+                match quota::check(&mut tx, &hash, quota).await {
+                    Ok(()) => true,
+                    Err(QuotaError::Exceeded(size)) => {
+                        tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
+                        false
+                    }
+                    Err(QuotaError::Outdated) => {
+                        tracing::debug!(?hash, "snapshot outdated");
+                        false
+                    }
+                    Err(QuotaError::Fatal(error)) => return Err(error),
+                }
+            } else {
+                true
+            };
+
+            if approve {
+                RootNode::approve(&mut tx, &hash).await?;
+                try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_approved)
+                    .await?;
+            } else {
+                RootNode::reject(&mut tx, &hash).await?;
+            }
+        }
+
+        // For logging completed snapshots
+        let snapshots = if tracing::enabled!(Level::DEBUG) {
+            let mut snapshots = Vec::with_capacity(new_approved.len());
+
+            for branch_id in &new_approved {
+                snapshots.push(self.get_branch(*branch_id).load_snapshot(&mut tx).await?);
+            }
+
+            snapshots
+        } else {
+            Vec::new()
+        };
+
+        tx.commit_and_then({
+            let new_approved = new_approved.clone();
+            let event_tx = self.notify().clone();
+
+            move || {
+                for snapshot in snapshots {
                     tracing::debug!(
                         branch_id = ?snapshot.branch_id(),
                         hash = ?snapshot.root_hash(),
@@ -268,11 +327,17 @@ impl Index {
                     );
                 }
 
-                self.notify().send(Payload::BranchChanged(*branch_id));
+                for branch_id in new_approved {
+                    event_tx.send(Payload::BranchChanged(branch_id));
+                }
             }
-        }
+        })
+        .await?;
 
-        Ok(completed)
+        Ok(ReceiveStatus {
+            old_approved,
+            new_approved,
+        })
     }
 
     async fn check_parent_node_exists(
@@ -286,6 +351,15 @@ impl Index {
             Err(ReceiveError::ParentNodeNotFound)
         }
     }
+}
+
+/// Status of receiving nodes from remote replica.
+#[derive(Debug)]
+pub(crate) struct ReceiveStatus {
+    /// Whether any of the snapshots were already approved.
+    pub old_approved: bool,
+    /// List of branches whose snapshots have been approved.
+    pub new_approved: Vec<PublicKey>,
 }
 
 #[derive(Debug, Error)]
@@ -341,7 +415,7 @@ struct RootNodeAction {
 async fn decide_root_node_action(
     tx: &mut db::WriteTransaction,
     new_proof: &Proof,
-    new_summary: &Summary,
+    new_block_presence: &MultiBlockPresence,
 ) -> Result<RootNodeAction> {
     let mut action = RootNodeAction {
         insert: true,
@@ -370,7 +444,11 @@ async fn decide_root_node_action(
 
                     // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
                     // with `new_summary.is_outdated(&old_node.summary)`.
-                    if !old_node.summary.is_outdated(new_summary) {
+                    if !old_node
+                        .summary
+                        .block_presence
+                        .is_outdated(new_block_presence)
+                    {
                         action.request_children = false;
                     }
                 }
@@ -397,4 +475,17 @@ async fn decide_root_node_action(
     }
 
     Ok(action)
+}
+
+// TODO: move this to some generic utils module.
+async fn try_collect_into<S, D, T, E>(src: S, dst: &mut D) -> Result<(), E>
+where
+    S: Stream<Item = Result<T, E>>,
+    D: Extend<T>,
+{
+    src.try_for_each(|item| {
+        dst.extend(iter::once(item));
+        future::ready(Ok(()))
+    })
+    .await
 }

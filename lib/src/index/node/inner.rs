@@ -38,7 +38,7 @@ impl InnerNode {
             "SELECT
                  bucket,
                  hash,
-                 is_complete,
+                 state,
                  block_presence
              FROM snapshot_inner_nodes
              WHERE parent = ?",
@@ -50,7 +50,7 @@ impl InnerNode {
             let node = Self {
                 hash: row.get(1),
                 summary: Summary {
-                    is_complete: row.get(2),
+                    state: row.get(2),
                     block_presence: row.get(3),
                 },
             };
@@ -73,7 +73,7 @@ impl InnerNode {
     /// Load the inner node with the specified hash
     pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>> {
         let node = sqlx::query(
-            "SELECT is_complete, block_presence
+            "SELECT state, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
@@ -83,7 +83,7 @@ impl InnerNode {
         .map(|row| Self {
             hash: *hash,
             summary: Summary {
-                is_complete: row.get(0),
+                state: row.get(0),
                 block_presence: row.get(1),
             },
         });
@@ -115,7 +115,7 @@ impl InnerNode {
                  parent,
                  bucket,
                  hash,
-                 is_complete,
+                 state,
                  block_presence
              )
              VALUES (?, ?, ?, ?, ?)
@@ -124,7 +124,7 @@ impl InnerNode {
         .bind(parent)
         .bind(bucket)
         .bind(&self.hash)
-        .bind(self.summary.is_complete)
+        .bind(self.summary.state)
         .bind(&self.summary.block_presence)
         .execute(tx)
         .await?;
@@ -138,10 +138,10 @@ impl InnerNode {
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
-             SET is_complete = ?, block_presence = ?
+             SET state = ?, block_presence = ?
              WHERE hash = ?",
         )
-        .bind(summary.is_complete)
+        .bind(summary.state)
         .bind(&summary.block_presence)
         .bind(hash)
         .execute(tx)
@@ -205,7 +205,7 @@ impl InnerNode {
         }
 
         let summary = sqlx::query(
-            "SELECT is_complete, block_presence
+            "SELECT state, block_presence
              FROM snapshot_inner_nodes
              WHERE hash = ?",
         )
@@ -213,7 +213,7 @@ impl InnerNode {
         .fetch_optional(conn)
         .await?
         .map(|row| Summary {
-            is_complete: row.get(0),
+            state: row.get(0),
             block_presence: row.get(1),
         });
 
@@ -269,7 +269,7 @@ impl InnerNodeMap {
         Ok(())
     }
 
-    /// Returns the same nodes but with the `is_complete` and `missing_block` fields changed to
+    /// Returns the same nodes but with the `state` and `block_presence` fields changed to
     /// indicate that these nodes are not complete yet.
     pub fn into_incomplete(mut self) -> Self {
         for node in self.0.values_mut() {

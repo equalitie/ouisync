@@ -7,6 +7,7 @@ mod migrations;
 mod monitor;
 
 pub use id::DatabaseId;
+use tracing::Span;
 
 use self::monitor::DatabaseMonitor;
 use crate::{deadlock::ExpectShortLifetime, state_monitor::StateMonitor};
@@ -320,6 +321,9 @@ impl WriteTransaction {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
+        let span = Span::current();
+        let f = move || span.in_scope(f);
+
         task::spawn(async move { self.commit().await.map(|()| f()) })
             .await
             .unwrap()

@@ -1,18 +1,19 @@
 //! Operation that affect both the index and the block store.
 
 use crate::{
-    block::{self, BlockData, BlockId, BlockNonce, BlockTracker},
+    block::{self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
+    crypto::sign::PublicKey,
     db,
     error::{Error, Result},
     event::Payload,
-    index::{self, Index},
+    index::{self, Index, NodeState, SingleBlockPresence},
     progress::Progress,
-    repository::{LocalId, Metadata, RepositoryMonitor},
+    repository::{quota, LocalId, Metadata, RepositoryMonitor},
+    storage_size::StorageSize,
 };
-use futures_util::TryStreamExt;
+use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
-use tracing::Span;
 
 #[derive(Clone)]
 pub struct Store {
@@ -74,6 +75,7 @@ impl Store {
         &self,
         data: &BlockData,
         nonce: &BlockNonce,
+        promise: BlockPromise,
     ) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
 
@@ -82,7 +84,7 @@ impl Store {
             Err(error) => {
                 if matches!(error, Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
-                    self.block_tracker.complete(&data.id);
+                    promise.complete();
                 }
 
                 return Err(error);
@@ -92,22 +94,18 @@ impl Store {
         block::write(&mut tx, &data.id, &data.content, nonce).await?;
 
         let data_id = data.id;
-        let index = self.index.clone();
-        let block_tracker = self.block_tracker.clone();
-        let span = Span::current();
+        let event_tx = self.index.notify().clone();
 
         tx.commit_and_then(move || {
-            let _enter = span.enter();
-
             // Notify affected branches.
             for writer_id in writer_ids {
-                index.notify().send(Payload::BlockReceived {
+                event_tx.send(Payload::BlockReceived {
                     block_id: data_id,
                     branch_id: writer_id,
                 });
             }
 
-            block_tracker.complete(&data_id);
+            promise.complete();
         })
         .await?;
 
@@ -126,6 +124,55 @@ impl Store {
 
     pub(crate) fn metadata(&self) -> Metadata {
         Metadata::new(self.db().clone())
+    }
+
+    /// Total size of the stored data
+    pub(crate) async fn size(&self) -> Result<StorageSize> {
+        let mut conn = self.db().acquire().await?;
+
+        // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
+        let count = db::decode_u64(
+            sqlx::query("SELECT COUNT(*) FROM blocks")
+                .fetch_one(&mut *conn)
+                .await?
+                .get(0),
+        );
+
+        Ok(StorageSize::from_blocks(count))
+    }
+
+    pub(crate) async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
+        let mut tx = self.db().begin_write().await?;
+
+        if let Some(quota) = quota {
+            quota::set(&mut tx, quota.to_bytes()).await?
+        } else {
+            quota::remove(&mut tx).await?
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn quota(&self) -> Result<Option<StorageSize>> {
+        let mut conn = self.db().acquire().await?;
+        match quota::get(&mut conn).await {
+            Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
+            Err(Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
+        let mut tx = self.db().begin_read().await?;
+        let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
+
+        while let Some(block_id) = block_ids.try_next().await? {
+            self.block_tracker.approve(&block_id);
+        }
+
+        Ok(())
     }
 }
 
@@ -147,7 +194,7 @@ impl BlockIdsPage {
                      SELECT i.hash
                         FROM snapshot_inner_nodes AS i
                         INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                        WHERE r.is_complete = 1
+                        WHERE r.state = ?
                      UNION ALL
                      SELECT c.hash
                         FROM snapshot_inner_nodes AS c
@@ -159,6 +206,7 @@ impl BlockIdsPage {
                  ORDER BY block_id
                  LIMIT ?",
         )
+        .bind(NodeState::Approved)
         .bind(self.lower_bound.as_ref())
         .bind(self.page_size)
         .fetch(&mut *conn)
@@ -184,11 +232,45 @@ pub(crate) enum BlockRequestMode {
     Greedy,
 }
 
+/// Yields all missing block ids referenced from the latest complete snapshot of the given branch.
+fn branch_missing_block_ids<'a>(
+    conn: &'a mut db::Connection,
+    branch_id: &'a PublicKey,
+) -> impl Stream<Item = Result<BlockId>> + 'a {
+    sqlx::query(
+        "WITH RECURSIVE
+             inner_nodes(hash) AS (
+                 SELECT i.hash
+                     FROM snapshot_inner_nodes AS i
+                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                     WHERE r.snapshot_id = (
+                         SELECT MAX(snapshot_id)
+                         FROM snapshot_root_nodes
+                         WHERE writer_id = ? AND state = ?
+                     )
+                 UNION ALL
+                 SELECT c.hash
+                     FROM snapshot_inner_nodes AS c
+                     INNER JOIN inner_nodes AS p ON p.hash = c.parent
+             )
+         SELECT DISTINCT block_id
+             FROM snapshot_leaf_nodes
+             WHERE parent IN inner_nodes AND block_presence = ?
+         ",
+    )
+    .bind(branch_id)
+    .bind(NodeState::Approved)
+    .bind(SingleBlockPresence::Missing)
+    .fetch(conn)
+    .map_ok(|row| row.get(0))
+    .err_into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+        block::{self, tracker::OfferState, BlockId, BlockNonce, BLOCK_SIZE},
         collections::HashSet,
         crypto::{
             cipher::SecretKey,
@@ -200,7 +282,7 @@ mod tests {
         event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData, Proof, ReceiveFilter, SingleBlockPresence, Summary,
+            BranchData, MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
         },
         locator::Locator,
         repository::RepositoryId,
@@ -390,10 +472,17 @@ mod tests {
         let store = create_store(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let block_tracker = store.block_tracker.client();
 
         for block in snapshot.blocks().values() {
+            store.block_tracker.begin_require(*block.id()).commit();
+            block_tracker.offer(*block.id(), OfferState::Approved);
+            let promise = block_tracker.acceptor().try_accept().unwrap();
+
             assert_matches!(
-                store.write_received_block(&block.data, &block.nonce).await,
+                store
+                    .write_received_block(&block.data, &block.nonce, promise)
+                    .await,
                 Err(Error::BlockNotReferenced)
             );
         }
@@ -555,7 +644,7 @@ mod tests {
             }
         };
 
-        let mut receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.db().clone());
         let version_vector = VersionVector::first(branch_id);
         let proof = Proof::new(
             branch_id,
@@ -566,7 +655,7 @@ mod tests {
 
         store
             .index
-            .receive_root_node(proof.into(), Summary::INCOMPLETE)
+            .receive_root_node(proof.into(), MultiBlockPresence::None)
             .await
             .unwrap();
 
@@ -574,7 +663,7 @@ mod tests {
             for (_, nodes) in layer.inner_maps() {
                 store
                     .index
-                    .receive_inner_nodes(nodes.clone().into(), &mut receive_filter)
+                    .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                     .await
                     .unwrap();
             }
@@ -583,7 +672,7 @@ mod tests {
         for (_, nodes) in snapshot.leaf_sets().take(1) {
             store
                 .index
-                .receive_leaf_nodes(nodes.clone().into())
+                .receive_leaf_nodes(nodes.clone().into(), None)
                 .await
                 .unwrap();
         }
