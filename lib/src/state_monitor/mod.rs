@@ -1,4 +1,6 @@
 mod duration_ranges;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use duration_ranges::DurationRanges;
 
@@ -9,6 +11,7 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
+    any::Any,
     collections::{btree_map, BTreeMap},
     convert::Into,
     fmt,
@@ -252,11 +255,7 @@ impl StateMonitor {
     /// If the caller fails to ensure this uniqueness, the value of this variable shall be seen as
     /// the string "<AMBIGUOUS>". Such solution seem to be more sensible than panicking given that
     /// this is only a monitoring piece of code.
-    pub fn make_value<N: Into<String>, T: fmt::Debug + Sync + Send + 'static>(
-        &self,
-        name: N,
-        value: T,
-    ) -> MonitoredValue<T> {
+    pub fn make_value<N: Into<String>, T: Value>(&self, name: N, value: T) -> MonitoredValue<T> {
         let mut lock = self.shared.lock_inner();
 
         let name = name.into();
@@ -288,6 +287,24 @@ impl StateMonitor {
             monitor: self.clone(),
             value,
         }
+    }
+
+    /// Gets current snapshot of the given value. Returns `None` if the value doesn't exists or is
+    /// not of type `T`.
+    pub fn get_value<T>(&self, name: &str) -> Option<T>
+    where
+        T: Any + Clone,
+    {
+        self.shared
+            .lock_inner()
+            .values
+            .get(name)?
+            .ptr
+            .lock()
+            .unwrap()
+            .as_any()
+            .downcast_ref()
+            .cloned()
     }
 
     /// Get notified whenever there is a change in this StateMonitor
@@ -506,7 +523,20 @@ impl<T> Drop for MonitoredValue<T> {
 
 struct MonitoredValueHandle {
     refcount: usize,
-    ptr: Arc<BlockingMutex<dyn fmt::Debug + Sync + Send>>,
+    ptr: Arc<BlockingMutex<dyn Value>>,
+}
+
+pub trait Value: fmt::Debug + Any + Send + 'static {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T> Value for T
+where
+    T: fmt::Debug + Any + Send + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 // --- Serialization
