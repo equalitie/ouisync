@@ -1,8 +1,13 @@
 //! Synchronization tests
 
 mod common;
+#[path = "common/traffic_monitor.rs"]
+mod traffic_monitor;
 
-use self::common::{actor, Env, Proto, DEFAULT_REPO};
+use self::{
+    common::{actor, Env, Proto, DEFAULT_REPO},
+    traffic_monitor::TrafficMonitor,
+};
 use assert_matches::assert_matches;
 use ouisync::{
     Access, AccessMode, EntryType, Error, Repository, StateMonitor, StorageSize, VersionVector,
@@ -984,57 +989,89 @@ fn content_stays_available_during_sync() {
     });
 }
 
-// TODO: unignore when quota is implemented
-#[ignore]
 #[test]
 fn quota() {
     let mut env = Env::new();
 
-    let quota = StorageSize::from_blocks(2);
-    let content0 = common::random_content(3 * quota.to_bytes() as usize / 4);
-    let content1 = common::random_content(2 * quota.to_bytes() as usize / 4);
+    let quota = StorageSize::from_blocks(4);
+    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content2 = common::random_content(BLOCK_SIZE - BLOB_HEADER_SIZE);
 
     let (tx, mut rx) = mpsc::channel(1);
 
     env.actor("writer", {
+        let content0 = content0.clone();
+        let content2 = content2.clone();
+
         async move {
             let (network, repo, _reg) = actor::setup().await;
-            network.add_user_provided_peer(&actor::lookup_addr("mirror").await);
+            network.add_user_provided_peer(&actor::lookup_addr("reader").await);
 
-            let mut file = repo.create_file("one.dat").await.unwrap();
+            let mut file = repo.create_file("0.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content0, 4096).await;
             file.flush().await.unwrap();
+            tracing::info!("write 0.dat");
 
             rx.recv().await.unwrap();
 
-            let mut file = repo.create_file("two.dat").await.unwrap();
+            let mut file = repo.create_file("1.dat").await.unwrap();
             common::write_in_chunks(&mut file, &content1, 4096).await;
             file.flush().await.unwrap();
+            drop(file);
+            tracing::info!("write 1.dat");
+
+            rx.recv().await.unwrap();
+
+            repo.remove_entry("1.dat").await.unwrap();
+            tracing::info!("remove 1.dat");
+
+            let mut file = repo.create_file("2.dat").await.unwrap();
+            common::write_in_chunks(&mut file, &content2, 4096).await;
+            file.flush().await.unwrap();
+            tracing::info!("write 2.dat");
 
             rx.recv().await.unwrap();
         }
     });
 
-    env.actor("mirror", {
+    env.actor("reader", {
         async move {
             let network = actor::create_network(Proto::Tcp).await;
 
-            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
+            let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
             repo.set_quota(Some(quota)).await.unwrap();
 
             let _reg = network.register(repo.store().clone()).await;
 
-            expect_sync_complete(&repo).await;
+            // The first file is within the quota
+            common::expect_file_content(&repo, "0.dat", &content0).await;
 
-            // The first file is synced now.
-            let size = repo.size().await.unwrap();
-            assert!(size < quota);
+            let mut traffic = TrafficMonitor::new(&repo);
+
+            let size0 = repo.size().await.unwrap();
+            assert!(size0 <= quota);
+
+            tracing::info!("read 0.dat");
             tx.send(()).await.unwrap();
 
-            expect_sync_complete(&repo).await;
+            // Wait for the traffic to settle
+            traffic.wait_start().await;
+            traffic.wait_stop().await;
 
-            // The second file is rejected because it exceeds the quota.
-            assert_eq!(repo.size().await.unwrap(), size);
+            // The second file is rejected because it exceeds the quota
+            let size1 = repo.size().await.unwrap();
+            assert_eq!(size1, size0);
+
+            tracing::info!("not read 1.dat");
+            tx.send(()).await.unwrap();
+
+            // Once the second file is deleted we accept the third file which is within the quota.
+            common::expect_file_content(&repo, "2.dat", &content2).await;
+            let size2 = repo.size().await.unwrap();
+            assert!(size2 <= quota);
+
+            tracing::info!("read 2.dat");
             tx.send(()).await.unwrap();
         }
     });
@@ -1048,14 +1085,6 @@ async fn expect_local_directory_exists(repo: &Repository, path: &str) {
             Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
             Err(error) => panic!("unexpected error: {error:?}"),
         }
-    })
-    .await
-}
-
-async fn expect_sync_complete(repo: &Repository) {
-    common::eventually(repo, || async {
-        let progress = repo.sync_progress().await.unwrap();
-        progress.total > 0 && progress.value == progress.total
     })
     .await
 }

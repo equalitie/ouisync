@@ -479,6 +479,11 @@ impl Repository {
         self.shared.store.db()
     }
 
+    /// Get the state monitor node of this repository.
+    pub fn monitor(&self) -> &StateMonitor {
+        self.shared.store.monitor.node()
+    }
+
     /// Looks up an entry by its path. The path must be relative to the repository root.
     /// If the entry exists, returns its `JointEntryType`, otherwise returns `EntryNotFound`.
     pub async fn lookup_type<P: AsRef<Utf8Path>>(&self, path: P) -> Result<EntryType> {
