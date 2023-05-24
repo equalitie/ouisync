@@ -990,7 +990,7 @@ fn content_stays_available_during_sync() {
 }
 
 #[test]
-fn quota() {
+fn quota_exceed() {
     let mut env = Env::new();
 
     let quota = StorageSize::from_blocks(4);
@@ -1074,6 +1074,54 @@ fn quota() {
             tracing::info!("read 2.dat");
             tx.send(()).await.unwrap();
         }
+    });
+}
+
+#[test]
+fn quota_concurrent_writes() {
+    let mut env = Env::new();
+
+    let quota = StorageSize::from_blocks(3);
+
+    // Each of these files individually is within the quota but together they exceed it.
+    let content0 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+    let content1 = common::random_content(2 * BLOCK_SIZE - BLOB_HEADER_SIZE);
+
+    let barrier = Arc::new(Barrier::new(3));
+
+    for (index, content) in [content0, content1].into_iter().enumerate() {
+        let barrier = barrier.clone();
+
+        env.actor(&format!("writer-{index}"), async move {
+            let (_network, repo, _reg) = actor::setup().await;
+
+            let mut file = repo.create_file(format!("file-{index}.dat")).await.unwrap();
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+
+            barrier.wait().await;
+        });
+    }
+
+    env.actor("reader", async move {
+        let network = actor::create_network(Proto::Tcp).await;
+        network.add_user_provided_peer(&actor::lookup_addr("writer-0").await);
+        network.add_user_provided_peer(&actor::lookup_addr("writer-1").await);
+
+        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+        repo.set_quota(Some(quota)).await.unwrap();
+
+        let mut traffic = TrafficMonitor::new(&repo);
+
+        let _reg = network.register(repo.store().clone()).await;
+
+        traffic.wait_start().await;
+        traffic.wait_stop().await;
+
+        let size = repo.size().await.unwrap();
+        assert!(size <= quota);
+
+        barrier.wait().await;
     });
 }
 
