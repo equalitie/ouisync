@@ -796,9 +796,7 @@ impl VirtualFilesystem {
             max_component_length: MAX_COMPONENT_LENGTH,
             fs_flags: winnt::FILE_CASE_PRESERVED_NAMES
                 | winnt::FILE_CASE_SENSITIVE_SEARCH
-                | winnt::FILE_UNICODE_ON_DISK
-                | winnt::FILE_PERSISTENT_ACLS
-                | winnt::FILE_NAMED_STREAMS,
+                | winnt::FILE_UNICODE_ON_DISK,
             // Custom names don't play well with UAC.
             fs_name: U16CString::from_str("NTFS").unwrap(),
         })
