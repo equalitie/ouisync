@@ -1,3 +1,0 @@
-Build the image from the project root with:
-
-    docker build -t equalitie/ouisync:latest . -f docker/Dockerfile
