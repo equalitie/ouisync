@@ -171,11 +171,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 mode,
                 password,
             } => {
-                let holder = self
-                    .state
-                    .repositories
-                    .get(&name)
-                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                let holder = self.state.repositories.find(&name)?;
 
                 ouisync_bridge::repository::create_share_token(
                     &holder.repository,
@@ -188,11 +184,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
             Request::Mount { name, path, all: _ } => {
                 if let Some(name) = name {
-                    let holder = self
-                        .state
-                        .repositories
-                        .get(&name)
-                        .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                    let holder = self.state.repositories.find(&name)?;
 
                     let mount_point = if let Some(path) = &path {
                         path.to_str().ok_or(Error::InvalidArgument)?
@@ -217,7 +209,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
             Request::Unmount { name, all: _ } => {
                 if let Some(name) = name {
-                    if let Some(holder) = self.state.repositories.get(&name) {
+                    if let Ok(holder) = self.state.repositories.find(&name) {
                         holder.set_mount_point(None).await;
                         holder.unmount().await;
                     }
@@ -231,11 +223,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 Ok(().into())
             }
             Request::Mirror { name, host } => {
-                let holder = self
-                    .state
-                    .repositories
-                    .get(&name)
-                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                let holder = self.state.repositories.find(&name)?;
                 let config = self.state.get_client_config().await?;
 
                 holder.mirror(&host, config).await?;
@@ -322,11 +310,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             }
             Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
             Request::Dht { name, enabled } => {
-                let holder = self
-                    .state
-                    .repositories
-                    .get(&name)
-                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                let holder = self.state.repositories.find(&name)?;
 
                 if let Some(enabled) = enabled {
                     holder.registration.set_dht_enabled(enabled).await;
@@ -336,11 +320,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 }
             }
             Request::Pex { name, enabled } => {
-                let holder = self
-                    .state
-                    .repositories
-                    .get(&name)
-                    .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                let holder = self.state.repositories.find(&name)?;
 
                 if let Some(enabled) = enabled {
                     holder.registration.set_pex_enabled(enabled).await;
@@ -358,11 +338,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let value = if remove { Some(None) } else { value.map(Some) };
 
                 if let Some(name) = name {
-                    let holder = self
-                        .state
-                        .repositories
-                        .get(&name)
-                        .ok_or(ouisync_lib::Error::EntryNotFound)?;
+                    let holder = self.state.repositories.find(&name)?;
 
                     if let Some(value) = value {
                         holder.repository.set_quota(value).await?;

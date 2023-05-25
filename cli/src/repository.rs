@@ -13,9 +13,9 @@ use ouisync_lib::{
 use ouisync_vfs::MountGuard;
 use std::{
     borrow::{Borrow, Cow},
-    collections::{hash_map::Entry, HashMap},
+    collections::{btree_map::Entry, BTreeMap},
     fmt, io, mem,
-    ops::Deref,
+    ops::{Bound, Deref},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
@@ -334,7 +334,7 @@ async fn remove_mount_point(path: &Path, depth: u32) -> io::Result<()> {
 
 #[derive(Default)]
 pub(crate) struct RepositoryMap {
-    inner: RwLock<HashMap<RepositoryName, Arc<RepositoryHolder>>>,
+    inner: RwLock<BTreeMap<RepositoryName, Arc<RepositoryHolder>>>,
 }
 
 impl RepositoryMap {
@@ -362,8 +362,26 @@ impl RepositoryMap {
         inner.into_values().collect()
     }
 
+    #[allow(unused)]
     pub fn get(&self, name: &str) -> Option<Arc<RepositoryHolder>> {
         self.inner.read().unwrap().get(name).cloned()
+    }
+
+    // Find entry whose name starts with the given prefix. Fails if no such entry exists or if more
+    // than one such entry exists.
+    pub fn find(&self, prefix: &str) -> Result<Arc<RepositoryHolder>, FindError> {
+        let inner = self.inner.read().unwrap();
+
+        let mut entries = inner
+            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+            .filter(|(key, _)| key.starts_with(prefix));
+
+        let (_, holder) = entries.next().ok_or(FindError::NotFound)?;
+        if entries.next().is_none() {
+            Ok(holder.clone())
+        } else {
+            Err(FindError::Ambiguous)
+        }
     }
 
     pub fn get_all(&self) -> Vec<Arc<RepositoryHolder>> {
@@ -372,6 +390,20 @@ impl RepositoryMap {
 
     pub fn contains(&self, name: &str) -> bool {
         self.inner.read().unwrap().contains_key(name)
+    }
+}
+
+pub(crate) enum FindError {
+    NotFound,
+    Ambiguous,
+}
+
+impl From<FindError> for Error {
+    fn from(src: FindError) -> Self {
+        match src {
+            FindError::NotFound => Error::Library(ouisync_lib::Error::EntryNotFound),
+            FindError::Ambiguous => Error::Library(ouisync_lib::Error::AmbiguousEntry),
+        }
     }
 }
 

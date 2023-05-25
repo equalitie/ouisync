@@ -28,7 +28,7 @@ pub enum Error {
     EntryExists,
     #[error("entry not found")]
     EntryNotFound,
-    #[error("entry has multiple concurrent versions")]
+    #[error("ambiguous entry")]
     AmbiguousEntry,
     #[error("entry is a file")]
     EntryIsFile,
