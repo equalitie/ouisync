@@ -8,7 +8,10 @@ use dokan_sys::win32::{
     FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
-use ouisync_lib::{deadlock::AsyncMutex, path, File, JointEntryRef, Repository};
+use ouisync_lib::{
+    deadlock::{AsyncMutex, AsyncMutexGuard},
+    path, File, JointEntryRef, Repository,
+};
 use std::{
     collections::{hash_map, HashMap},
     fmt,
@@ -304,9 +307,11 @@ impl VirtualFilesystem {
         result.map(|(entry, is_new)| (entry, is_new, id))
     }
 
-    async fn close_shared(&self, shared: &Arc<AsyncMutex<Shared>>) -> Option<Utf8PathBuf> {
-        // Note: `handles` must never be locked *after* `shared`.
-        let mut handles = self.handles.lock().await;
+    async fn close_shared(
+        &self,
+        shared: &Arc<AsyncMutex<Shared>>,
+        handles: &mut AsyncMutexGuard<'_, Handles>,
+    ) -> Option<Utf8PathBuf> {
         let mut lock = shared.lock().await;
 
         match handles.entry(lock.path.clone()) {
@@ -433,6 +438,17 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) {
+        tracing::trace!("async_close_file");
+        // We need to lock `self.handles` here to prevent anything from opening the file while this
+        // function runs. It is because if the file is marked for removal here and if some other
+        // function opens the file, then the function `self.repo.remove_entry` will fail with
+        // `Error::Locked`.
+        // TODO: The issue is that `entry.shared` and `entry.file` are under a different mutex.
+        // An option would be to have it under the same mutex, but then we would not be able to do
+        // some file operations concurrently. For example ope file to read it's properties while
+        // there is a long running write going on on the same file.
+        let mut handles = self.handles.lock().await;
+
         match &context.entry {
             Entry::File(entry) => {
                 let mut file_lock = entry.file.lock().await;
@@ -456,7 +472,10 @@ impl VirtualFilesystem {
             Entry::Directory(_) => (),
         };
 
-        if let Some(to_delete) = self.close_shared(context.entry.shared()).await {
+        if let Some(to_delete) = self
+            .close_shared(context.entry.shared(), &mut handles)
+            .await
+        {
             // Now all handles to this particular entry are closed, so we shouldn't get the
             // `ouisync_lib::Error::Locked` error.
             if let Err(error) = self.repo.remove_entry(to_delete.clone()).await {
