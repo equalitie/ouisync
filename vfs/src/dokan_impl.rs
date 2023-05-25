@@ -277,6 +277,8 @@ impl VirtualFilesystem {
         delete_on_close: bool,
         delete_access: bool,
     ) -> Result<(Entry, bool, u64), Error> {
+        tracing::trace!("create_entry");
+
         let (shared, id) = self.get_or_set_shared(path.clone(), delete_on_close).await;
 
         let result = self
@@ -395,6 +397,7 @@ impl VirtualFilesystem {
 
     // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
     // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
+    #[instrument(skip(self, file_name, _security_context, access_mask, _file_attributes, _share_access, create_disposition, create_options, _info), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_create_file<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -406,6 +409,8 @@ impl VirtualFilesystem {
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> Result<CreateFileInfo<EntryHandle>, Error> {
+        tracing::trace!("async_create_file");
+
         let create_disposition = create_disposition.try_into()?;
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
         let create_dir = create_options & FILE_DIRECTORY_FILE > 0;
@@ -432,6 +437,7 @@ impl VirtualFilesystem {
         })
     }
 
+    #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)))]
     async fn async_close_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -484,6 +490,7 @@ impl VirtualFilesystem {
         }
     }
 
+    #[instrument(skip(self, _file_name, buffer, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_read_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -492,6 +499,8 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<u32, Error> {
+        tracing::trace!("async_read_file");
+
         let entry = match &context.entry {
             Entry::File(entry) => entry,
             Entry::Directory(_) => return Err(STATUS_ACCESS_DENIED.into()),
@@ -509,7 +518,7 @@ impl VirtualFilesystem {
         Ok(size as u32)
     }
 
-    #[instrument(skip(self, buffer, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
+    #[instrument(skip(self, _file_name, buffer, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_write_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -536,19 +545,21 @@ impl VirtualFilesystem {
             file.seek(SeekFrom::Start(offset)).await?;
         }
 
+        tracing::trace!("L{} async_write_file", line!());
         file.fork(local_branch).await?;
         file.write(buffer).await?;
 
         Ok(buffer.len().try_into().unwrap_or(u32::MAX))
     }
 
+    #[instrument(skip(self, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_flush_file_buffers<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
-        tracing::trace!("async_write_file");
+        tracing::trace!("async_flush_file_buffers");
         match &context.entry {
             Entry::File(entry) => {
                 let mut lock = entry.file.lock().await;
@@ -568,6 +579,8 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<FileInfo, Error> {
+        tracing::trace!("async_get_file_information");
+
         let (attributes, file_size) = match &context.entry {
             Entry::File(entry) => {
                 let mut lock = entry.file.lock().await;
@@ -595,6 +608,7 @@ impl VirtualFilesystem {
         })
     }
 
+    #[instrument(skip(self, _file_name, fill_find_data, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_find_files<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -602,10 +616,12 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_find_files");
         let dir_entry = context.entry.as_directory()?;
         self.find_files_impl(fill_find_data, dir_entry, None).await
     }
 
+    #[instrument(skip(self, _file_name, pattern, fill_find_data, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_find_files_with_pattern<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -614,11 +630,13 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_find_files_with_pattern");
         let dir_entry = context.entry.as_directory()?;
         self.find_files_impl(fill_find_data, dir_entry, Some(pattern))
             .await
     }
 
+    #[instrument(skip(self, _file_name, _file_attributes, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_file_attributes<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -626,9 +644,11 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_set_file_attributes");
         Err(STATUS_NOT_IMPLEMENTED.into())
     }
 
+    #[instrument(skip(self, _file_name, _creation_time, _last_access_time, _last_write_time, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_file_time<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -642,23 +662,27 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    #[instrument(skip(self, _file_name, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_delete_file<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_delete_file");
         let file_entry = context.entry.as_file()?;
         file_entry.shared.lock().await.delete_on_close = info.delete_on_close();
         Ok(())
     }
 
+    #[instrument(skip(self, _file_name, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_delete_directory<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_delete_directory");
         let dir_entry = context.entry.as_directory()?;
         let mut shared = dir_entry.shared.lock().await;
 
@@ -674,6 +698,9 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    #[instrument(skip(self, file_name, new_file_name, _replace_if_existing, _info, handle),
+        fields(file_name = ?to_path(file_name), new_file_name = ?to_path(new_file_name)),
+        err(Debug))]
     async fn async_move_file<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -682,6 +709,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         _context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_move_file");
         // Note: Don't forget to rename in `self.handles`.
         let src_path = to_path(file_name)?;
         let dst_path = to_path(new_file_name)?;
@@ -708,6 +736,7 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_set_end_of_file<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -715,11 +744,13 @@ impl VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_set_end_of_file");
         // TODO: How do the fwo functions differ?
         self.async_set_allocation_size(file_name, offset, info, context)
             .await
     }
 
+    #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_allocation_size<'c, 'h: 'c>(
         &'h self,
         _file_name: &U16CStr,
@@ -727,6 +758,7 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
+        tracing::trace!("async_set_allocation_size");
         let desired_len: u64 = alloc_size
             .try_into()
             .map_err(|_| STATUS_INVALID_PARAMETER)?;
@@ -786,10 +818,12 @@ impl VirtualFilesystem {
         })
     }
 
+    #[instrument(skip(self, _info), err(Debug))]
     async fn async_get_volume_information<'c, 'h: 'c>(
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> Result<VolumeInfo, Error> {
+        tracing::trace!("async_get_volume_information");
         Ok(VolumeInfo {
             name: U16CString::from_str("ouisync").unwrap(),
             serial_number: 0,
@@ -802,6 +836,7 @@ impl VirtualFilesystem {
         })
     }
 
+    #[instrument(skip(self, _mount_point, _info), err(Debug))]
     async fn async_mounted<'c, 'h: 'c>(
         &'h self,
         _mount_point: &U16CStr,
@@ -810,6 +845,7 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    #[instrument(skip(self, _info), err(Debug))]
     async fn async_unmounted<'c, 'h: 'c>(
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
