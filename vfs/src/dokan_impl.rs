@@ -745,20 +745,35 @@ impl VirtualFilesystem {
             file.truncate(desired_len).await?;
         } else {
             let start_pos = file.seek(SeekFrom::Current(0)).await?;
+
             file.seek(SeekFrom::End(0)).await?;
-            // TODO: We shouldn't need to do allocation here as we're only writing constants.
-            let buf = vec![0; (desired_len - start_len) as usize];
-            file.write(&buf).await?;
+
+            let mut remaining: usize = (desired_len - start_len)
+                .try_into()
+                .map_err(|_| STATUS_INVALID_PARAMETER)?;
+
+            let zeros = vec![0; ouisync_lib::BLOCK_SIZE];
+
+            while remaining != 0 {
+                let to_write = remaining.min(zeros.len());
+                file.write(&zeros[0..to_write]).await?;
+                remaining -= to_write;
+            }
+
             file.seek(SeekFrom::Start(start_pos)).await?;
         }
+
+        file.flush().await?;
 
         Ok(())
     }
 
+    #[instrument(skip(self, _info), err(Debug))]
     async fn async_get_disk_free_space<'c, 'h: 'c>(
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> Result<DiskSpaceInfo, Error> {
+        tracing::trace!("async_get_disk_free_space");
         // TODO
         Ok(DiskSpaceInfo {
             byte_count: 1024 * 1024 * 1024,
