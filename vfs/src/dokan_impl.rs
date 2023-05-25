@@ -531,7 +531,11 @@ impl VirtualFilesystem {
 
         let local_branch = self.repo.local_branch()?;
 
-        file.seek(SeekFrom::Start(offset)).await?;
+        if offset != file.len() {
+            file.flush().await?;
+            file.seek(SeekFrom::Start(offset)).await?;
+        }
+
         file.fork(local_branch).await?;
         file.write(buffer).await?;
 
