@@ -338,7 +338,9 @@ impl VirtualFilesystem {
                 return None;
             }
             // This FileEntry exists, so it must be in `handles`.
-            hash_map::Entry::Vacant(_) => unreachable!(),
+            hash_map::Entry::Vacant(_) => {
+                panic!("File {:?} has no entry in `handles`", lock.path)
+            }
         }
     }
 
@@ -707,7 +709,7 @@ impl VirtualFilesystem {
         new_file_name: &U16CStr,
         _replace_if_existing: bool,
         _info: &OperationInfo<'c, 'h, Self>,
-        _context: &'c EntryHandle,
+        handle: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_move_file");
         // Note: Don't forget to rename in `self.handles`.
@@ -722,16 +724,29 @@ impl VirtualFilesystem {
 
         let (dst_dir, dst_name) = path::decompose(&dst_path).ok_or(STATUS_INVALID_PARAMETER)?;
 
+        // Lock this entry in `self.shared` so that no other thread can open/create the `File`
+        // while we're renaming it.
+        let _shared_lock = handle.entry.shared().lock().await;
+
+        if let Entry::File(file_entry) = &handle.entry {
+            let mut file = file_entry.file.lock().await;
+
+            match *file {
+                OpenState::Open(_) => {
+                    // TODO: If this is to be reopened (which it probably won't), we should
+                    // preserve the seek offset.
+                    *file = OpenState::Lazy {
+                        path: src_path.clone(),
+                        create_disposition: CreateDisposition::FileOpen,
+                    }
+                }
+                OpenState::Lazy { .. } | OpenState::Closed => {}
+            }
+        }
+
         self.repo
             .move_entry(&src_dir, &src_name, &dst_dir, &dst_name)
             .await?;
-
-        let mut handles = self.handles.lock().await;
-
-        if let Some(handle) = handles.remove(&src_path) {
-            let mut lock = handle.lock().await;
-            lock.path = dst_path;
-        }
 
         Ok(())
     }
