@@ -112,7 +112,6 @@ pub(crate) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state_monitor::StateMonitor;
     use rand::Rng;
     use tempfile::TempDir;
 
@@ -165,7 +164,7 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp(&StateMonitor::make_root()).await.unwrap()
+        db::create_temp().await.unwrap()
     }
 
     fn random_block_content() -> Vec<u8> {

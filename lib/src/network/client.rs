@@ -16,6 +16,7 @@ use crate::{
     },
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
+    timing,
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -141,24 +142,38 @@ impl Client {
                 block_presence,
                 permit: _permit,
                 debug,
-            } => self.handle_root_node(proof, block_presence, debug).await,
+            } => {
+                timing::with_scope(
+                    "handle_root_node",
+                    self.handle_root_node(proof, block_presence, debug),
+                )
+                .await
+            }
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => self.handle_inner_nodes(hash, debug).await,
+            } => {
+                timing::with_scope("handle_inner_nodes", self.handle_inner_nodes(hash, debug)).await
+            }
             PendingResponse::LeafNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => self.handle_leaf_nodes(hash, debug).await,
+            } => timing::with_scope("handle_leaf_nodes", self.handle_leaf_nodes(hash, debug)).await,
             PendingResponse::Block {
                 data,
                 nonce,
                 block_promise,
                 permit: _permit,
                 debug,
-            } => self.handle_block(data, nonce, block_promise, debug).await,
+            } => {
+                timing::with_scope(
+                    "handle_block",
+                    self.handle_block(data, nonce, block_promise, debug),
+                )
+                .await
+            }
         };
 
         match result {

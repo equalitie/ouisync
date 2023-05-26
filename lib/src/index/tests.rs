@@ -692,8 +692,7 @@ async fn setup() -> (TempDir, Index, Keypair) {
 }
 
 async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
-    let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);

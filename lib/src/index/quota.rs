@@ -113,7 +113,6 @@ mod tests {
     use crate::{
         crypto::sign::{Keypair, PublicKey},
         index::{BranchData, SingleBlockPresence},
-        StateMonitor,
     };
     use tempfile::TempDir;
 
@@ -232,6 +231,6 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp(&StateMonitor::make_root()).await.unwrap()
+        db::create_temp().await.unwrap()
     }
 }

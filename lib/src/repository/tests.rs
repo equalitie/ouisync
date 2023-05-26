@@ -275,7 +275,7 @@ async fn blind_access_non_empty_repo() {
     test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
     let local_secret = LocalSecret::random();
@@ -350,7 +350,7 @@ async fn blind_access_empty_repo() {
     test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
     let local_secret = LocalSecret::random();
@@ -389,7 +389,7 @@ async fn read_access_same_replica() {
     test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
     let device_id = rand::random();
 
     let repo = Repository::create_in(
@@ -455,7 +455,7 @@ async fn read_access_different_replica() {
     test_utils::init_log();
 
     let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
 
     let device_id_a = rand::random();
     let repo = Repository::create_in(

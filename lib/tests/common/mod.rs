@@ -5,8 +5,8 @@ use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
     network::{Network, Registration},
-    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
-    Result,
+    timing, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr,
+    Repository, Result,
 };
 use rand::Rng;
 use std::{
@@ -90,9 +90,13 @@ pub(crate) mod env {
 
     impl Drop for Env {
         fn drop(&mut self) {
-            self.runtime
-                .block_on(future::try_join_all(self.tasks.drain(..)))
-                .unwrap();
+            let result = self
+                .runtime
+                .block_on(future::try_join_all(self.tasks.drain(..)));
+
+            println!("{}", timing::report());
+
+            result.unwrap();
         }
     }
 }

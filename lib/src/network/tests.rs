@@ -371,7 +371,7 @@ async fn create_store<R: Rng + CryptoRng>(
     write_keys: &Keypair,
 ) -> (TempDir, Store, PublicKey) {
     let monitor = StateMonitor::make_root();
-    let (base_dir, db) = db::create_temp(&monitor).await.unwrap();
+    let (base_dir, db) = db::create_temp().await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);

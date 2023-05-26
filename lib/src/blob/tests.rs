@@ -7,7 +7,6 @@ use crate::{
     error::Error,
     event::EventSender,
     index::BranchData,
-    state_monitor::StateMonitor,
     test_utils,
 };
 use proptest::collection::vec;
@@ -617,8 +616,7 @@ async fn block_ids_test() {
 async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, db::Pool, [Branch; N]) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
     let keys: AccessKeys = WriteSecrets::generate(&mut rng).into();
-    let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp().await.unwrap();
 
     let event_tx = EventSender::new(1);
     let shared = BranchShared::new();

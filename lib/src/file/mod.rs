@@ -237,7 +237,6 @@ mod tests {
         directory::{DirectoryFallback, DirectoryLocking},
         event::EventSender,
         index::BranchData,
-        state_monitor::StateMonitor,
         test_utils,
     };
     use assert_matches::assert_matches;
@@ -358,8 +357,7 @@ mod tests {
     }
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
-        let monitor = StateMonitor::make_root();
-        let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+        let (base_dir, pool) = db::create_temp().await.unwrap();
         let keys = AccessKeys::from(WriteSecrets::random());
         let event_tx = EventSender::new(1);
         let shared = BranchShared::new();

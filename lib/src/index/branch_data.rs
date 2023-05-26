@@ -416,7 +416,6 @@ mod tests {
         crypto::{cipher::SecretKey, sign::Keypair},
         index::EMPTY_INNER_HASH,
         locator::Locator,
-        state_monitor::StateMonitor,
         test_utils,
     };
     use proptest::{arbitrary::any, collection::vec};
@@ -833,7 +832,7 @@ mod tests {
     }
 
     async fn init_db() -> (TempDir, db::Pool) {
-        db::create_temp(&StateMonitor::make_root()).await.unwrap()
+        db::create_temp().await.unwrap()
     }
 
     async fn setup() -> (TempDir, db::Pool, BranchData) {

@@ -9,7 +9,6 @@ use crate::{
     db,
     error::Error,
     index::node::summary::{MultiBlockPresence, NodeState},
-    state_monitor::StateMonitor,
     test_utils,
     version_vector::VersionVector,
 };
@@ -542,8 +541,7 @@ fn check_complete(
 async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
     let mut tx = pool.begin_write().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
@@ -624,8 +622,7 @@ fn summary(
 
 async fn summary_case(leaf_count: usize, rng_seed: u64) {
     let mut rng = StdRng::seed_from_u64(rng_seed);
-    let monitor = StateMonitor::make_root();
-    let (_base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (_base_dir, pool) = db::create_temp().await.unwrap();
     let mut tx = pool.begin_write().await.unwrap();
 
     let writer_id = PublicKey::generate(&mut rng);
@@ -707,5 +704,5 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
 }
 
 async fn setup() -> (TempDir, db::Pool) {
-    db::create_temp(&StateMonitor::make_root()).await.unwrap()
+    db::create_temp().await.unwrap()
 }

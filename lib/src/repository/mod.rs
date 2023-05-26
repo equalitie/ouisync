@@ -88,7 +88,7 @@ impl Repository {
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
-        let pool = db::create(store, monitor.node()).await?;
+        let pool = db::create(store).await?;
         Self::create_in(pool, device_id, access, monitor).await
     }
 
@@ -142,7 +142,7 @@ impl Repository {
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
-        let pool = db::open(store, monitor.node()).await?;
+        let pool = db::open(store).await?;
         Self::open_in(pool, device_id, local_secret, max_access_mode, monitor).await
     }
 
@@ -196,7 +196,7 @@ impl Repository {
         parent_monitor: &StateMonitor,
     ) -> Result<Self> {
         let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
-        let pool = db::open(store, monitor.node()).await?;
+        let pool = db::open(store).await?;
         Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
 

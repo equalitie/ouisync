@@ -230,7 +230,6 @@ mod tests {
     use super::*;
     use crate::{
         access_control::WriteSecrets, db, event::EventSender, index::Index, locator::Locator,
-        state_monitor::StateMonitor,
     };
     use assert_matches::assert_matches;
     use tempfile::TempDir;
@@ -295,8 +294,7 @@ mod tests {
     }
 
     async fn setup() -> (TempDir, Branch) {
-        let monitor = StateMonitor::make_root();
-        let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+        let (base_dir, pool) = db::create_temp().await.unwrap();
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();

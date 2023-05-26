@@ -5,7 +5,6 @@ use crate::{
     db,
     event::EventSender,
     index::BranchData,
-    state_monitor::StateMonitor,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
@@ -584,8 +583,7 @@ async fn setup() -> (TempDir, Branch) {
 }
 
 async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
-    let monitor = StateMonitor::make_root();
-    let (base_dir, pool) = db::create_temp(&monitor).await.unwrap();
+    let (base_dir, pool) = db::create_temp().await.unwrap();
     let keys = AccessKeys::from(WriteSecrets::random());
     let branches = [(); N].map(|_| create_branch(pool.clone(), keys.clone()));
 
