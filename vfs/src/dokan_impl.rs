@@ -441,15 +441,6 @@ impl VirtualFilesystem {
         context: &'c EntryHandle,
     ) {
         tracing::trace!("async_close_file");
-        // We need to lock `self.handles` here to prevent anything from opening the file while this
-        // function runs. It is because if the file is marked for removal here and if some other
-        // function opens the file, then the function `self.repo.remove_entry` will fail with
-        // `Error::Locked`.
-        // TODO: The issue is that `entry.shared` and `entry.file` are under a different mutex.
-        // An option would be to have it under the same mutex, but then we would not be able to do
-        // some file operations concurrently. For example ope file to read it's properties while
-        // there is a long running write going on on the same file.
-        let mut handles = self.handles.lock().await;
 
         match &context.entry {
             Entry::File(entry) => {
@@ -473,6 +464,12 @@ impl VirtualFilesystem {
             }
             Entry::Directory(_) => (),
         };
+
+        // We need to lock `self.handles` here to prevent anything from opening the file while this
+        // function runs. It is because if the file is marked for removal here and if some other
+        // function opens the file, then the function `self.repo.remove_entry` will fail with
+        // `Error::Locked`.
+        let mut handles = self.handles.lock().await;
 
         if let Some(to_delete) = self
             .close_shared(context.entry.shared(), &mut handles)
@@ -708,7 +705,7 @@ impl VirtualFilesystem {
         handle: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_move_file");
-        // Note: Don't forget to rename in `self.handles`.
+
         let src_path = to_path(file_name)?;
         let dst_path = to_path(new_file_name)?;
 
@@ -1229,13 +1226,13 @@ struct Shared {
 }
 
 struct FileEntry {
-    file: AsyncMutex<OpenState>,
     shared: Arc<AsyncMutex<Shared>>,
+    file: AsyncMutex<OpenState>,
 }
 
 struct DirEntry {
-    dir: JointDirectory,
     shared: Arc<AsyncMutex<Shared>>,
+    dir: JointDirectory,
 }
 
 enum Entry {
@@ -1246,13 +1243,13 @@ enum Entry {
 impl Entry {
     fn new_file(file: OpenState, shared: Arc<AsyncMutex<Shared>>) -> Entry {
         Entry::File(FileEntry {
-            file: AsyncMutex::new(file),
             shared,
+            file: AsyncMutex::new(file),
         })
     }
 
     fn new_dir(dir: JointDirectory, shared: Arc<AsyncMutex<Shared>>) -> Entry {
-        Entry::Directory(DirEntry { dir, shared })
+        Entry::Directory(DirEntry { shared, dir })
     }
 
     fn as_file(&self) -> Result<&FileEntry, Error> {
