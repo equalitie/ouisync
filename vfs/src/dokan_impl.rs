@@ -10,7 +10,7 @@ use dokan_sys::win32::{
 };
 use ouisync_lib::{
     deadlock::{AsyncMutex, AsyncMutexGuard},
-    path, File, JointEntryRef, Repository,
+    path, File, JointDirectory, JointEntryRef, Repository,
 };
 use std::{
     collections::{hash_map, HashMap},
@@ -191,13 +191,13 @@ impl VirtualFilesystem {
             Some((parent, child)) => (parent, child),
             None => {
                 // It's the root.
-                return Ok((Entry::new_dir(shared), false));
+                return Ok((Entry::new_dir(self.repo.cd(path).await?, shared), false));
             }
         };
 
-        let dir = self.repo.cd(parent).await?;
+        let parent_dir = self.repo.cd(parent).await?;
 
-        let existing_entry = match dir.lookup_unique(child) {
+        let existing_entry = match parent_dir.lookup_unique(child) {
             Ok(existing_entry) => existing_entry,
             Err(E::EntryNotFound) => {
                 if !create_disposition.should_create() {
@@ -206,7 +206,7 @@ impl VirtualFilesystem {
 
                 let entry = if delete_access {
                     if create_directory {
-                        Entry::new_dir(shared)
+                        Entry::new_dir(parent_dir.cd(child).await?, shared)
                     } else {
                         Entry::new_file(
                             OpenState::Lazy {
@@ -219,7 +219,7 @@ impl VirtualFilesystem {
                 } else {
                     if create_directory {
                         self.repo.create_directory(&path).await?;
-                        Entry::new_dir(shared)
+                        Entry::new_dir(parent_dir.cd(child).await?, shared)
                     } else {
                         let mut file = self.repo.create_file(path).await?;
                         file.flush().await?;
@@ -241,7 +241,7 @@ impl VirtualFilesystem {
                     },
                     shared,
                 ),
-                JointEntryRef::Directory(_) => Entry::new_dir(shared),
+                JointEntryRef::Directory(_) => Entry::new_dir(parent_dir.cd(child).await?, shared),
             }
         } else {
             match existing_entry {
@@ -249,7 +249,7 @@ impl VirtualFilesystem {
                     let file = file_entry.open().await?;
                     Entry::new_file(OpenState::Open(file), shared)
                 }
-                JointEntryRef::Directory(_) => Entry::new_dir(shared),
+                JointEntryRef::Directory(_) => Entry::new_dir(parent_dir.cd(child).await?, shared),
             }
         };
 
@@ -341,11 +341,11 @@ impl VirtualFilesystem {
     async fn find_files_impl(
         &self,
         mut fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        path: Utf8PathBuf,
+        dir: &JointDirectory,
         pattern: Option<&U16CStr>,
     ) -> Result<(), Error> {
-        let dir = self.repo.open_directory(&path).await?;
-
+        // TODO: We might want to check whether the root version vector of the repository has
+        // changed and reload the JointDirectory if so.
         for entry in dir.entries() {
             let name = entry.unique_name();
 
@@ -613,9 +613,9 @@ impl VirtualFilesystem {
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files");
-        let _dir_entry = context.entry.as_directory()?;
-        let path = to_path(file_name)?;
-        self.find_files_impl(fill_find_data, path, None).await
+        let dir_entry = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, &dir_entry.dir, None)
+            .await
     }
 
     #[instrument(skip(self, file_name, pattern, fill_find_data, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
@@ -628,9 +628,8 @@ impl VirtualFilesystem {
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files_with_pattern");
-        let _dir_entry = context.entry.as_directory()?;
-        let path = to_path(file_name)?;
-        self.find_files_impl(fill_find_data, path, Some(pattern))
+        let dir_entry = context.entry.as_directory()?;
+        self.find_files_impl(fill_find_data, &dir_entry.dir, Some(pattern))
             .await
     }
 
@@ -1235,6 +1234,7 @@ struct FileEntry {
 }
 
 struct DirEntry {
+    dir: JointDirectory,
     shared: Arc<AsyncMutex<Shared>>,
 }
 
@@ -1251,8 +1251,8 @@ impl Entry {
         })
     }
 
-    fn new_dir(shared: Arc<AsyncMutex<Shared>>) -> Entry {
-        Entry::Directory(DirEntry { shared })
+    fn new_dir(dir: JointDirectory, shared: Arc<AsyncMutex<Shared>>) -> Entry {
+        Entry::Directory(DirEntry { dir, shared })
     }
 
     fn as_file(&self) -> Result<&FileEntry, Error> {
