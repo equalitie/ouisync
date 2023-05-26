@@ -1,3 +1,8 @@
+mod entry_map;
+mod inode;
+mod open_flags;
+mod utils;
+
 use self::{
     entry_map::{EntryMap, FileHandle},
     inode::{Inode, InodeMap, InodeView, Representation},
