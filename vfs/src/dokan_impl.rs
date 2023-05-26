@@ -148,20 +148,23 @@ impl VirtualFilesystem {
         path: Utf8PathBuf,
         delete_on_close: bool,
     ) -> (Arc<AsyncMutex<Shared>>, u64) {
+        // It is not clear whether `if path1 == path2 => id1 == id2` from the documentation, but
+        // the memfs example in dokan-rust seems to always generate a new `id` in `create_file` so
+        // the above probably doesn't have to hold.
+
+        let id = self.generate_id();
+
         match self.handles.lock().await.entry(path.clone()) {
             hash_map::Entry::Occupied(entry) => {
                 let shared = entry.get().clone();
                 let mut lock = shared.lock().await;
                 lock.handle_count += 1;
                 lock.delete_on_close |= delete_on_close;
-                let id = lock.id;
                 drop(lock);
                 (shared, id)
             }
             hash_map::Entry::Vacant(entry) => {
-                let id = self.generate_id();
                 let shared = Arc::new(AsyncMutex::new(Shared {
-                    id,
                     path: path.clone(),
                     handle_count: 1,
                     delete_on_close,
@@ -1221,7 +1224,6 @@ fn to_path(path_cstr: &U16CStr) -> OperationResult<Utf8PathBuf> {
 type Handles = HashMap<Utf8PathBuf, Arc<AsyncMutex<Shared>>>;
 
 struct Shared {
-    id: u64,
     path: Utf8PathBuf,
     handle_count: usize,
     delete_on_close: bool,
