@@ -1,4 +1,4 @@
-use ouisync_lib::deadlock::BlockingRwLock;
+use ouisync_lib::deadlock::{BlockingRwLock, BlockingRwLockReadGuard};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -42,6 +42,10 @@ impl<T> Registry<T> {
                 None
             }
         }
+    }
+
+    pub fn read(&self) -> BlockingRwLockReadGuard<HashMap<u64, Arc<T>>> {
+        self.0.read().unwrap()
     }
 
     pub fn get(&self, handle: Handle<T>) -> Arc<T> {
