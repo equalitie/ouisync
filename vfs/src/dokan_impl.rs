@@ -62,7 +62,9 @@ pub fn mount(
     let (unmount_tx, unmount_rx) = mpsc::sync_channel(1);
 
     let join_handle = thread::spawn(move || {
-        let handler = VirtualFilesystem::new(runtime_handle, repository);
+        let handler = SingleRepoVFS {
+            vfs: VirtualFilesystem::new(runtime_handle, repository),
+        };
 
         // TODO: Ensure this is done only once.
         init();
@@ -393,7 +395,7 @@ impl VirtualFilesystem {
 
     // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
     // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
-    #[instrument(skip(self, file_name, _security_context, access_mask, _file_attributes, _share_access, create_disposition, create_options, _info), fields(file_name = ?to_path(file_name)), err(Debug))]
+    #[instrument(skip(self, file_name, _security_context, access_mask, _file_attributes, _share_access, create_disposition, create_options), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_create_file<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -403,7 +405,6 @@ impl VirtualFilesystem {
         _share_access: u32,
         create_disposition: u32,
         create_options: u32,
-        _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> Result<CreateFileInfo<EntryHandle>, Error> {
         tracing::trace!("async_create_file");
 
@@ -433,11 +434,34 @@ impl VirtualFilesystem {
         })
     }
 
+    fn create_file(
+        &self,
+        file_name: &U16CStr,
+        security_context: &IO_SECURITY_CONTEXT,
+        desired_access: winnt::ACCESS_MASK,
+        file_attributes: u32,
+        share_access: u32,
+        create_disposition: u32,
+        create_options: u32,
+    ) -> OperationResult<CreateFileInfo<EntryHandle>> {
+        self.rt
+            .block_on(self.async_create_file(
+                file_name,
+                security_context,
+                desired_access.into(),
+                file_attributes,
+                share_access,
+                create_disposition,
+                create_options,
+            ))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)))]
-    async fn async_close_file<'c, 'h: 'c>(
+    async fn async_close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) {
         tracing::trace!("async_close_file");
@@ -483,13 +507,23 @@ impl VirtualFilesystem {
         }
     }
 
+    fn close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) {
+        self.rt
+            .block_on(self.async_close_file(file_name, info, context))
+    }
+
     #[instrument(skip(self, _file_name, buffer, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_read_file<'c, 'h: 'c>(
+    async fn async_read_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
         offset: i64,
         buffer: &mut [u8],
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<u32, Error> {
         tracing::trace!("async_read_file");
@@ -511,13 +545,26 @@ impl VirtualFilesystem {
         Ok(size as u32)
     }
 
+    fn read_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        offset: i64,
+        buffer: &mut [u8],
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<u32> {
+        self.rt
+            .block_on(self.async_read_file(file_name, offset, buffer, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, buffer, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_write_file<'c, 'h: 'c>(
+    async fn async_write_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
         offset: i64,
         buffer: &[u8],
-        info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<u32, Error> {
         let file_entry = context.entry.as_file()?;
@@ -545,11 +592,24 @@ impl VirtualFilesystem {
         Ok(buffer.len().try_into().unwrap_or(u32::MAX))
     }
 
+    fn write_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        offset: i64,
+        buffer: &[u8],
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<u32> {
+        self.rt
+            .block_on(self.async_write_file(file_name, offset, buffer, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_flush_file_buffers<'c, 'h: 'c>(
+    async fn async_flush_file_buffers<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_flush_file_buffers");
@@ -565,11 +625,22 @@ impl VirtualFilesystem {
         Ok(())
     }
 
-    #[instrument(skip(self, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
-    async fn async_get_file_information<'c, 'h: 'c>(
+    fn flush_file_buffers<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_flush_file_buffers(file_name, info, context))
+            .map_err(Error::into)
+    }
+
+    #[instrument(skip(self, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
+    async fn async_get_file_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<FileInfo, Error> {
         tracing::trace!("async_get_file_information");
@@ -601,12 +672,23 @@ impl VirtualFilesystem {
         })
     }
 
+    fn get_file_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<FileInfo> {
+        self.rt
+            .block_on(self.async_get_file_information(file_name, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, file_name, fill_find_data, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
-    async fn async_find_files<'c, 'h: 'c>(
+    async fn async_find_files<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files");
@@ -615,13 +697,25 @@ impl VirtualFilesystem {
             .await
     }
 
+    fn find_files<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        fill_find_data: impl FnMut(&FindData) -> FillDataResult,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_find_files(file_name, fill_find_data, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, file_name, pattern, fill_find_data, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
-    async fn async_find_files_with_pattern<'c, 'h: 'c>(
+    async fn async_find_files_with_pattern<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
         pattern: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files_with_pattern");
@@ -630,37 +724,89 @@ impl VirtualFilesystem {
             .await
     }
 
+    fn find_files_with_pattern<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        pattern: &U16CStr,
+        fill_find_data: impl FnMut(&FindData) -> FillDataResult,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_find_files_with_pattern(
+                file_name,
+                pattern,
+                fill_find_data,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, _file_attributes, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_set_file_attributes<'c, 'h: 'c>(
+    async fn async_set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
         _file_attributes: u32,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         _context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_set_file_attributes");
         Err(STATUS_NOT_IMPLEMENTED.into())
     }
 
+    fn set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        file_attributes: u32,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_set_file_attributes(file_name, file_attributes, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, _creation_time, _last_access_time, _last_write_time, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_set_file_time<'c, 'h: 'c>(
+    async fn async_set_file_time<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
         _creation_time: FileTimeOperation,
         _last_access_time: FileTimeOperation,
         _last_write_time: FileTimeOperation,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         _context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::warn!("set_file_time not implemented yet");
         Ok(())
     }
 
+    fn set_file_time<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        creation_time: FileTimeOperation,
+        last_access_time: FileTimeOperation,
+        last_write_time: FileTimeOperation,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_set_file_time(
+                file_name,
+                creation_time,
+                last_access_time,
+                last_write_time,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_delete_file<'c, 'h: 'c>(
+    async fn async_delete_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
-        info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_delete_file");
@@ -669,11 +815,22 @@ impl VirtualFilesystem {
         Ok(())
     }
 
-    #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
-    async fn async_delete_directory<'c, 'h: 'c>(
+    fn delete_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
-        info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_delete_file(file_name, info, context))
+            .map_err(Error::into)
+    }
+
+    #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
+    async fn async_delete_directory<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_delete_directory");
@@ -693,15 +850,26 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    fn delete_directory<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_delete_directory(file_name, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, file_name, new_file_name, _replace_if_existing, _info, handle),
         fields(file_name = ?to_path(file_name), new_file_name = ?to_path(new_file_name)),
         err(Debug))]
-    async fn async_move_file<'c, 'h: 'c>(
+    async fn async_move_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
         new_file_name: &U16CStr,
         _replace_if_existing: bool,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         handle: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_move_file");
@@ -744,12 +912,31 @@ impl VirtualFilesystem {
         Ok(())
     }
 
+    fn move_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        new_file_name: &U16CStr,
+        replace_if_existing: bool,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_move_file(
+                file_name,
+                new_file_name,
+                replace_if_existing,
+                info,
+                context,
+            ))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
-    async fn async_set_end_of_file<'c, 'h: 'c>(
+    async fn async_set_end_of_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         file_name: &U16CStr,
         offset: i64,
-        info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_set_end_of_file");
@@ -758,12 +945,24 @@ impl VirtualFilesystem {
             .await
     }
 
+    fn set_end_of_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        file_name: &U16CStr,
+        offset: i64,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_set_end_of_file(file_name, offset, info, context))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
-    async fn async_set_allocation_size<'c, 'h: 'c>(
+    async fn async_set_allocation_size<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _file_name: &U16CStr,
         alloc_size: i64,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
     ) -> Result<(), Error> {
         tracing::trace!("async_set_allocation_size");
@@ -812,10 +1011,22 @@ impl VirtualFilesystem {
         Ok(())
     }
 
-    #[instrument(skip(self, _info), err(Debug))]
-    async fn async_get_disk_free_space<'c, 'h: 'c>(
+    fn set_allocation_size<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
-        _info: &OperationInfo<'c, 'h, Self>,
+        file_name: &U16CStr,
+        alloc_size: i64,
+        info: &OperationInfo<'c, 'h, Super>,
+        context: &'c EntryHandle,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_set_allocation_size(file_name, alloc_size, info, context))
+            .map_err(Error::into)
+    }
+
+    #[instrument(skip(self, _info), err(Debug))]
+    async fn async_get_disk_free_space<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<DiskSpaceInfo, Error> {
         tracing::trace!("async_get_disk_free_space");
         // TODO
@@ -826,10 +1037,19 @@ impl VirtualFilesystem {
         })
     }
 
-    #[instrument(skip(self, _info), err(Debug))]
-    async fn async_get_volume_information<'c, 'h: 'c>(
+    fn get_disk_free_space<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
-        _info: &OperationInfo<'c, 'h, Self>,
+        info: &OperationInfo<'c, 'h, Super>,
+    ) -> OperationResult<DiskSpaceInfo> {
+        self.rt
+            .block_on(self.async_get_disk_free_space(info))
+            .map_err(Error::into)
+    }
+
+    #[instrument(skip(self, _info), err(Debug))]
+    async fn async_get_volume_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<VolumeInfo, Error> {
         tracing::trace!("async_get_volume_information");
         Ok(VolumeInfo {
@@ -844,26 +1064,58 @@ impl VirtualFilesystem {
         })
     }
 
+    fn get_volume_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        info: &OperationInfo<'c, 'h, Super>,
+    ) -> OperationResult<VolumeInfo> {
+        self.rt
+            .block_on(self.async_get_volume_information(info))
+            .map_err(Error::into)
+    }
+
     #[instrument(skip(self, _mount_point, _info), err(Debug))]
-    async fn async_mounted<'c, 'h: 'c>(
+    async fn async_mounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
         _mount_point: &U16CStr,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<(), Error> {
         Ok(())
+    }
+
+    fn mounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        mount_point: &U16CStr,
+        info: &OperationInfo<'c, 'h, Super>,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_mounted(mount_point, info))
+            .map_err(Error::into)
     }
 
     #[instrument(skip(self, _info), err(Debug))]
-    async fn async_unmounted<'c, 'h: 'c>(
+    async fn async_unmounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
         &'h self,
-        _info: &OperationInfo<'c, 'h, Self>,
+        _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<(), Error> {
         Ok(())
     }
+
+    fn unmounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
+        &'h self,
+        info: &OperationInfo<'c, 'h, Super>,
+    ) -> OperationResult<()> {
+        self.rt
+            .block_on(self.async_unmounted(info))
+            .map_err(Error::into)
+    }
+}
+
+struct SingleRepoVFS {
+    vfs: VirtualFilesystem,
 }
 
 //  https://dokan-dev.github.io/dokany-doc/html/struct_d_o_k_a_n___o_p_e_r_a_t_i_o_n_s.html
-impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
+impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for SingleRepoVFS {
     type Context = EntryHandle;
 
     fn create_file(
@@ -875,20 +1127,17 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         share_access: u32,
         create_disposition: u32,
         create_options: u32,
-        info: &mut OperationInfo<'c, 'h, Self>,
+        _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
-        self.rt
-            .block_on(self.async_create_file(
-                file_name,
-                security_context,
-                desired_access.into(),
-                file_attributes,
-                share_access,
-                create_disposition,
-                create_options,
-                info,
-            ))
-            .map_err(Error::into)
+        self.vfs.create_file(
+            file_name,
+            security_context,
+            desired_access,
+            file_attributes,
+            share_access,
+            create_disposition,
+            create_options,
+        )
     }
 
     fn cleanup(
@@ -905,8 +1154,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) {
-        self.rt
-            .block_on(self.async_close_file(file_name, info, context))
+        self.vfs.close_file(file_name, info, context)
     }
 
     fn read_file(
@@ -917,9 +1165,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        self.rt
-            .block_on(self.async_read_file(file_name, offset, buffer, info, context))
-            .map_err(Error::into)
+        self.vfs.read_file(file_name, offset, buffer, info, context)
     }
 
     fn write_file(
@@ -930,9 +1176,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        self.rt
-            .block_on(self.async_write_file(file_name, offset, buffer, info, context))
-            .map_err(Error::into)
+        self.vfs
+            .write_file(file_name, offset, buffer, info, context)
     }
 
     fn flush_file_buffers(
@@ -941,9 +1186,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_flush_file_buffers(file_name, info, context))
-            .map_err(Error::into)
+        self.vfs.flush_file_buffers(file_name, info, context)
     }
 
     fn get_file_information(
@@ -952,9 +1195,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<FileInfo> {
-        self.rt
-            .block_on(self.async_get_file_information(file_name, info, context))
-            .map_err(Error::into)
+        self.vfs.get_file_information(file_name, info, context)
     }
 
     fn find_files(
@@ -964,9 +1205,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_find_files(file_name, fill_find_data, info, context))
-            .map_err(Error::into)
+        self.vfs
+            .find_files(file_name, fill_find_data, info, context)
     }
 
     fn find_files_with_pattern(
@@ -977,15 +1217,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_find_files_with_pattern(
-                file_name,
-                pattern,
-                fill_find_data,
-                info,
-                context,
-            ))
-            .map_err(Error::into)
+        self.vfs
+            .find_files_with_pattern(file_name, pattern, fill_find_data, info, context)
     }
 
     fn set_file_attributes(
@@ -995,9 +1228,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_set_file_attributes(file_name, file_attributes, info, context))
-            .map_err(Error::into)
+        self.vfs
+            .set_file_attributes(file_name, file_attributes, info, context)
     }
 
     fn set_file_time(
@@ -1009,16 +1241,14 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_set_file_time(
-                file_name,
-                creation_time,
-                last_access_time,
-                last_write_time,
-                info,
-                context,
-            ))
-            .map_err(Error::into)
+        self.vfs.set_file_time(
+            file_name,
+            creation_time,
+            last_access_time,
+            last_write_time,
+            info,
+            context,
+        )
     }
 
     fn delete_file(
@@ -1027,9 +1257,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_delete_file(file_name, info, context))
-            .map_err(Error::into)
+        self.vfs.delete_file(file_name, info, context)
     }
 
     fn delete_directory(
@@ -1038,9 +1266,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_delete_directory(file_name, info, context))
-            .map_err(Error::into)
+        self.vfs.delete_directory(file_name, info, context)
     }
 
     fn move_file(
@@ -1051,15 +1277,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_move_file(
-                file_name,
-                new_file_name,
-                replace_if_existing,
-                info,
-                context,
-            ))
-            .map_err(Error::into)
+        self.vfs
+            .move_file(file_name, new_file_name, replace_if_existing, info, context)
     }
 
     fn set_end_of_file(
@@ -1069,9 +1288,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_set_end_of_file(file_name, offset, info, context))
-            .map_err(Error::into)
+        self.vfs.set_end_of_file(file_name, offset, info, context)
     }
 
     fn set_allocation_size(
@@ -1081,27 +1298,22 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_set_allocation_size(file_name, alloc_size, info, context))
-            .map_err(Error::into)
+        self.vfs
+            .set_allocation_size(file_name, alloc_size, info, context)
     }
 
     fn get_disk_free_space(
         &'h self,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
-        self.rt
-            .block_on(self.async_get_disk_free_space(info))
-            .map_err(Error::into)
+        self.vfs.get_disk_free_space(info)
     }
 
     fn get_volume_information(
         &'h self,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<VolumeInfo> {
-        self.rt
-            .block_on(self.async_get_volume_information(info))
-            .map_err(Error::into)
+        self.vfs.get_volume_information(info)
     }
 
     fn mounted(
@@ -1109,15 +1321,11 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for VirtualFilesystem {
         mount_point: &U16CStr,
         info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_mounted(mount_point, info))
-            .map_err(Error::into)
+        self.vfs.mounted(mount_point, info)
     }
 
     fn unmounted(&'h self, info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
-        self.rt
-            .block_on(self.async_unmounted(info))
-            .map_err(Error::into)
+        self.vfs.unmounted(info)
     }
 }
 

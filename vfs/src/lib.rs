@@ -2,7 +2,7 @@
 mod dokan_impl;
 
 #[cfg(target_os = "windows")]
-pub use dokan_impl::{mount, MountGuard, SessionMounter};
+pub use dokan_impl::{mount, MountGuard};
 
 #[cfg(not(target_os = "windows"))]
 mod fuse;

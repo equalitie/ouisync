@@ -71,7 +71,8 @@ impl State {
 
     pub fn remove_repository(&self, handle: Handle<RepositoryHolder>) -> Option<RepositoryHolder> {
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
-            mounter.remove_repo(holder.store_path.clone());
+            let repository = self.repositories.get(handle);
+            mounter.remove_repo(repository.store_path.clone());
         }
 
         self.repositories.remove(handle)
