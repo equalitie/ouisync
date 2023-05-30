@@ -14,7 +14,7 @@ pub(crate) async fn open(
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
-    let repo = state.repositories.get(repo);
+    let repo = state.get_repository(repo);
     let local_branch = repo.repository.local_branch().ok();
 
     let file = repo.repository.open_file(&path).await?;
@@ -32,7 +32,7 @@ pub(crate) async fn create(
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
 ) -> Result<Handle<FileHolder>> {
-    let repo = state.repositories.get(repo);
+    let repo = state.get_repository(repo);
     let local_branch = repo.repository.local_branch()?;
 
     let file = repo.repository.create_file(&path).await?;
@@ -52,8 +52,7 @@ pub(crate) async fn remove(
     path: Utf8PathBuf,
 ) -> Result<()> {
     state
-        .repositories
-        .get(repo)
+        .get_repository(repo)
         .repository
         .remove_entry(&path)
         .await?;

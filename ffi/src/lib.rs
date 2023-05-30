@@ -30,6 +30,7 @@ use ouisync_bridge::{
     logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
+use ouisync_vfs::SessionMounter;
 use std::{
     ffi::CString,
     mem,
@@ -96,9 +97,77 @@ pub unsafe extern "C" fn session_create(
         session
             .runtime
             .spawn(server.run(Handler::new(session.state.clone())));
+
+        let state = session.state.clone();
+
+        session.runtime.spawn(async move {
+            let mounter = match SessionMounter::mount().await {
+                Ok(mounter) => mounter,
+                Err(error) => {
+                    tracing::error!("Failed to mount: {error:?}");
+                    return;
+                }
+            };
+
+            let repos = state.read_repositories();
+
+            for repo_holder in repos.values() {
+                mounter.add_repo(
+                    repo_holder.store_path.clone(),
+                    repo_holder.repository.clone(),
+                );
+            }
+
+            *(state.mounter.lock().unwrap()) = Some(mounter);
+        });
     }
 
     result.into()
+}
+
+/// Mount the session as a virtual file system. Repositories shall be shown in the root of the
+/// mount point as directories and their content under them.
+///
+/// Returns true in the `Port` when mounting succeeds.
+///
+/// # Safety
+///
+/// `session` must be a valid session handle.
+///
+/// Don't call this function multiple times in parallel: the caller is responsible for tracking
+/// that a call to this function may be already in progress and thus avoid calling it again until
+/// the first one finishes.
+///
+/// Also don't call this function once the session is already mounted (that is, when a previous
+/// call to this function returned success).
+pub unsafe extern "C" fn session_mount(session: SessionHandle, port: Port<Result<()>>) {
+    let session = session.get();
+    let port_sender = session.port_sender;
+    let state = session.state.clone();
+
+    session.runtime.spawn(async move {
+        let mounter = match SessionMounter::mount().await {
+            Ok(mounter) => mounter,
+            Err(error) => {
+                tracing::error!("Failed to mount");
+                port_sender.send_result(port, Err(error.into()));
+                return;
+            }
+        };
+
+        let repos = state.read_repositories();
+
+        for repo_holder in repos.values() {
+            mounter.add_repo(
+                repo_holder.store_path.clone(),
+                repo_holder.repository.clone(),
+            );
+        }
+
+        *(state.mounter.lock().unwrap()) = Some(mounter);
+
+        port_sender.send_result(port, Ok(()));
+    });
 }
 
 /// Destroys the ouisync session.
