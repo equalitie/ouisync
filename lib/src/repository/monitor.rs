@@ -5,26 +5,6 @@ use crate::{
 use btdht::InfoHash;
 use tracing::Span;
 
-pub struct RepositoryMonitorContext {
-    parent: StateMonitor,
-    timer: timing::Timer,
-}
-
-impl RepositoryMonitorContext {
-    pub fn new(parent: StateMonitor, timer: timing::Timer) -> Self {
-        Self { parent, timer }
-    }
-}
-
-impl Default for RepositoryMonitorContext {
-    fn default() -> Self {
-        Self {
-            parent: StateMonitor::make_root(),
-            timer: timing::Timer::new(),
-        }
-    }
-}
-
 pub(crate) struct RepositoryMonitor {
     // This indicates how many requests for index nodes are currently in flight.  It is used by the
     // UI to indicate that the index is being synchronized.
@@ -42,9 +22,9 @@ pub(crate) struct RepositoryMonitor {
 }
 
 impl RepositoryMonitor {
-    pub fn new(context: &RepositoryMonitorContext, name: &str) -> Self {
+    pub fn new(parent: StateMonitor, timer: timing::Timer, name: &str) -> Self {
         let span = tracing::info_span!("repo", name);
-        let node = context.parent.make_child(name);
+        let node = parent.make_child(name);
 
         Self {
             index_requests_inflight: node.make_value("index requests inflight", 0),
@@ -61,7 +41,7 @@ impl RepositoryMonitor {
             info_hash: node.make_value("info-hash", None),
             span,
             node,
-            timer: context.timer.clone(),
+            timer,
         }
     }
 

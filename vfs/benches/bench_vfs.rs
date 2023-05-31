@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
-use ouisync_lib::{Access, Repository, WriteSecrets};
+use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
 use ouisync_vfs::MountGuard;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::path::Path;
@@ -32,7 +32,6 @@ fn write_file(c: &mut Criterion) {
 
 mod utils {
     use super::*;
-    use ouisync_lib::RepositoryMonitorContext;
     use std::{
         fs::File,
         io::{self, Read},
@@ -46,14 +45,12 @@ mod utils {
 
         tokio::fs::create_dir_all(&mount_dir).await.unwrap();
 
-        let monitor_context = RepositoryMonitorContext::default();
+        let params = RepositoryParams::new(base_dir.path().join("repo.db"));
         let repo = Repository::create(
-            base_dir.path().join("repo.db"),
-            rng.gen(),
+            &params,
             Access::WriteUnlocked {
                 secrets: WriteSecrets::generate(&mut rng),
             },
-            &monitor_context,
         )
         .await
         .unwrap();

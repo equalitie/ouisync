@@ -154,7 +154,7 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
-    use ouisync::{AccessMode, RepositoryMonitorContext, StateMonitor};
+    use ouisync::{AccessMode, RepositoryParams, StateMonitor};
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -205,14 +205,12 @@ pub(crate) mod actor {
         }
     }
 
-    pub(crate) fn device_id() -> DeviceId {
-        ACTOR.with(|actor| actor.device_id)
-    }
-
-    pub(crate) fn get_repo_path_and_secrets(name: &str) -> (PathBuf, AccessSecrets) {
+    pub(crate) fn get_repo_params_and_secrets(name: &str) -> (RepositoryParams, AccessSecrets) {
         ACTOR.with(|actor| {
             (
-                actor.repo_path(name),
+                RepositoryParams::new(actor.repo_path(name))
+                    .with_device_id(actor.device_id)
+                    .with_timer(actor.context.timer.clone()),
                 actor
                     .context
                     .repo_map
@@ -221,22 +219,12 @@ pub(crate) mod actor {
         })
     }
 
-    pub(crate) fn timer() -> timing::Timer {
-        ACTOR.with(|actor| actor.context.timer.clone())
-    }
-
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
-        let (path, secrets) = get_repo_path_and_secrets(name);
-        let monitor_context = RepositoryMonitorContext::new(StateMonitor::make_root(), timer());
+        let (params, secrets) = get_repo_params_and_secrets(name);
 
-        Repository::create(
-            path,
-            device_id(),
-            Access::new(None, None, secrets.with_mode(mode)),
-            &monitor_context,
-        )
-        .await
-        .unwrap()
+        Repository::create(&params, Access::new(None, None, secrets.with_mode(mode)))
+            .await
+            .unwrap()
     }
 
     pub(crate) async fn create_repo(name: &str) -> Repository {

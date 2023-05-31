@@ -1,8 +1,7 @@
 use camino::Utf8Path;
 use ouisync::{
     network::{Network, Registration},
-    timing, Access, Event, Payload, PeerAddr, Repository, RepositoryMonitorContext, StateMonitor,
-    WriteSecrets,
+    Access, Event, Payload, PeerAddr, Repository, RepositoryParams, StateMonitor, WriteSecrets,
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{net::Ipv4Addr, ops::Deref, path::Path, time::Duration};
@@ -25,10 +24,10 @@ pub async fn create_repo(
     let secrets = WriteSecrets::generate(&mut secret_rng);
 
     let repository = Repository::create(
-        store,
-        rng.gen(),
+        &RepositoryParams::new(store)
+            .with_device_id(rng.gen())
+            .with_parent_monitor(monitor),
         Access::WriteUnlocked { secrets },
-        &RepositoryMonitorContext::new(monitor, timing::Timer::new()),
     )
     .await
     .unwrap();

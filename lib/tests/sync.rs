@@ -10,8 +10,8 @@ use self::{
 };
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, RepositoryMonitorContext, StateMonitor,
-    StorageSize, VersionVector, BLOB_HEADER_SIZE, BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, StorageSize, VersionVector, BLOB_HEADER_SIZE,
+    BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
@@ -485,17 +485,10 @@ fn recreate_local_branch() {
         let network = actor::create_network(proto).await;
 
         // 1. Create the repo but don't link it yet.
-        let (repo_path, repo_secrets) = actor::get_repo_path_and_secrets(DEFAULT_REPO);
-        let timer = actor::timer();
-        let monitor_context = RepositoryMonitorContext::new(StateMonitor::make_root(), timer);
-        let repo = Repository::create(
-            &repo_path,
-            actor::device_id(),
-            Access::new(None, None, repo_secrets),
-            &monitor_context,
-        )
-        .await
-        .unwrap();
+        let (params, secrets) = actor::get_repo_params_and_secrets(DEFAULT_REPO);
+        let repo = Repository::create(&params, Access::new(None, None, secrets))
+            .await
+            .unwrap();
 
         // 2. Create a file
         let mut file = repo.create_file("foo.txt").await.unwrap();
@@ -509,15 +502,9 @@ fn recreate_local_branch() {
         repo.close().await.unwrap();
         drop(repo);
 
-        let repo = Repository::open_with_mode(
-            &repo_path,
-            actor::device_id(),
-            None,
-            AccessMode::Read,
-            &monitor_context,
-        )
-        .await
-        .unwrap();
+        let repo = Repository::open(&params, None, AccessMode::Read)
+            .await
+            .unwrap();
 
         // 4. Establish link
         let reg = network.register(repo.store().clone()).await;
@@ -530,7 +517,7 @@ fn recreate_local_branch() {
 
         repo.close().await.unwrap();
         drop(repo);
-        let repo = Repository::open(&repo_path, actor::device_id(), None, &monitor_context)
+        let repo = Repository::open(&params, None, AccessMode::Write)
             .await
             .unwrap();
 

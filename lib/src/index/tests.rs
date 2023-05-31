@@ -10,8 +10,10 @@ use crate::{
     crypto::sign::{Keypair, PublicKey},
     db,
     event::EventSender,
-    repository::{LocalId, RepositoryId, RepositoryMonitor, RepositoryMonitorContext},
+    repository::{LocalId, RepositoryId, RepositoryMonitor},
+    state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
+    timing,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -459,7 +461,8 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
         monitor: Arc::new(RepositoryMonitor::new(
-            &RepositoryMonitorContext::default(),
+            StateMonitor::make_root(),
+            timing::Timer::new(),
             "test",
         )),
     };

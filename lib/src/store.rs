@@ -285,8 +285,9 @@ mod tests {
             BranchData, MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
         },
         locator::Locator,
-        repository::{RepositoryId, RepositoryMonitorContext},
-        test_utils,
+        repository::RepositoryId,
+        state_monitor::StateMonitor,
+        test_utils, timing,
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
@@ -773,7 +774,8 @@ mod tests {
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
             monitor: Arc::new(RepositoryMonitor::new(
-                &RepositoryMonitorContext::default(),
+                StateMonitor::make_root(),
+                timing::Timer::new(),
                 "test",
             )),
         }

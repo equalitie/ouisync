@@ -62,7 +62,7 @@ pub use self::{
     progress::Progress,
     repository::{
         delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryId,
-        RepositoryMonitorContext,
+        RepositoryParams,
     },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,

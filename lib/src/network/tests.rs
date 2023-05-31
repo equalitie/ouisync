@@ -13,9 +13,10 @@ use crate::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
-    repository::{LocalId, RepositoryId, RepositoryMonitor, RepositoryMonitorContext},
+    repository::{LocalId, RepositoryId, RepositoryMonitor},
+    state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
-    test_utils,
+    test_utils, timing,
     version_vector::VersionVector,
 };
 use futures_util::future;
@@ -383,7 +384,8 @@ async fn create_store<R: Rng + CryptoRng>(
         block_request_mode: BlockRequestMode::Greedy,
         local_id: LocalId::new(),
         monitor: Arc::new(RepositoryMonitor::new(
-            &RepositoryMonitorContext::default(),
+            StateMonitor::make_root(),
+            timing::Timer::new(),
             "test",
         )),
     };

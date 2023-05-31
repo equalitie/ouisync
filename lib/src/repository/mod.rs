@@ -1,14 +1,14 @@
 mod id;
 mod metadata;
 mod monitor;
+mod params;
 mod reopen_token;
 #[cfg(test)]
 mod tests;
 mod worker;
 
 pub use self::{
-    id::RepositoryId, metadata::Metadata, monitor::RepositoryMonitorContext,
-    reopen_token::ReopenToken,
+    id::RepositoryId, metadata::Metadata, params::RepositoryParams, reopen_token::ReopenToken,
 };
 
 pub(crate) use self::{id::LocalId, metadata::quota, monitor::RepositoryMonitor};
@@ -84,26 +84,12 @@ pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(
-        store: impl AsRef<Path>,
-        device_id: DeviceId,
-        access: Access,
-        monitor_context: &RepositoryMonitorContext,
-    ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
-        let pool = db::create(store).await?;
-        Self::create_in(pool, device_id, access, monitor).await
-    }
+    pub async fn create(params: &RepositoryParams, access: Access) -> Result<Self> {
+        let pool = params.create().await?;
+        let device_id = params.device_id();
+        let monitor = params.monitor();
 
-    /// Creates a new repository in an already created database.
-    pub(crate) async fn create_in(
-        pool: db::Pool,
-        device_id: DeviceId,
-        access: Access,
-        monitor: RepositoryMonitor,
-    ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
-
         let local_keys = metadata::initialize_access_secrets(&mut tx, &access).await?;
         let this_writer_id =
             generate_and_store_writer_id(&mut tx, &device_id, local_keys.write.as_deref()).await?;
@@ -120,47 +106,15 @@ impl Repository {
     /// * `local_secret` - A user provided secret to encrypt the access secrets. If not provided,
     ///                    the repository will be opened as a blind replica.
     pub async fn open(
-        store: impl AsRef<Path>,
-        device_id: DeviceId,
-        local_secret: Option<LocalSecret>,
-        monitor_context: &RepositoryMonitorContext,
-    ) -> Result<Self> {
-        Self::open_with_mode(
-            store,
-            device_id,
-            local_secret,
-            AccessMode::Write,
-            monitor_context,
-        )
-        .await
-    }
-
-    /// Opens an existing repository with the provided access mode. This allows to reduce the
-    /// access mode the repository was created with.
-    pub async fn open_with_mode(
-        store: impl AsRef<Path>,
-        device_id: DeviceId,
+        params: &RepositoryParams,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
-        monitor_context: &RepositoryMonitorContext,
     ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
-        let pool = db::open(store).await?;
-        Self::open_in(pool, device_id, local_secret, max_access_mode, monitor).await
-    }
+        let pool = params.open().await?;
+        let device_id = params.device_id();
+        let monitor = params.monitor();
 
-    /// Opens an existing repository in an already opened database.
-    pub(crate) async fn open_in(
-        pool: db::Pool,
-        device_id: DeviceId,
-        local_secret: Option<LocalSecret>,
-        // Allows to reduce the access mode (e.g. open in read-only mode even if the local secret
-        // would give us write access otherwise). Currently used only in tests.
-        max_access_mode: AccessMode,
-        monitor: RepositoryMonitor,
-    ) -> Result<Self> {
         let mut tx = pool.begin_write().await?;
-
         let local_key = if let Some(local_secret) = local_secret {
             let key = match local_secret {
                 LocalSecret::Password(pwd) => metadata::password_to_key(&mut tx, &pwd).await?,
@@ -193,13 +147,10 @@ impl Repository {
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(
-        store: impl AsRef<Path>,
-        token: ReopenToken,
-        monitor_context: &RepositoryMonitorContext,
-    ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
-        let pool = db::open(store).await?;
+    pub async fn reopen(params: &RepositoryParams, token: ReopenToken) -> Result<Self> {
+        let pool = params.open().await?;
+        let monitor = params.monitor();
+
         Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
 

@@ -5,8 +5,8 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{
-    crypto::Password, timing, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken,
-    Repository, RepositoryMonitorContext, ShareToken, StateMonitor, StorageSize,
+    crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
+    RepositoryParams, ShareToken, StateMonitor, StorageSize,
 };
 use std::borrow::Cow;
 
@@ -31,6 +31,10 @@ pub async fn create(
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository> {
+    let params = RepositoryParams::new(store.into_std_path_buf())
+        .with_device_id(device_id::get_or_create(config).await?)
+        .with_parent_monitor(repos_monitor.clone());
+
     let local_read_password = local_read_password.map(Password::from);
     let local_write_password = local_write_password.map(Password::from);
 
@@ -40,18 +44,11 @@ pub async fn create(
         AccessSecrets::random_write()
     };
 
-    let device_id = device_id::get_or_create(config).await?;
-
     let local_read_secret = local_read_password.map(LocalSecret::Password);
     let local_write_secret = local_write_password.map(LocalSecret::Password);
     let access = Access::new(local_read_secret, local_write_secret, access_secrets);
-    let repository = Repository::create(
-        store.into_std_path_buf(),
-        device_id,
-        access,
-        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
-    )
-    .await?;
+
+    let repository = Repository::create(&params, access).await?;
 
     let quota = get_default_quota(config).await?;
     repository.set_quota(quota).await?;
@@ -66,17 +63,15 @@ pub async fn open(
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository> {
-    let local_password = local_password.map(Password::from);
+    let params = RepositoryParams::new(store.into_std_path_buf())
+        .with_device_id(device_id::get_or_create(config).await?)
+        .with_parent_monitor(repos_monitor.clone());
 
-    let device_id = device_id::get_or_create(config).await?;
+    let local_password = local_password
+        .map(Password::from)
+        .map(LocalSecret::Password);
 
-    let repository = Repository::open(
-        store.into_std_path_buf(),
-        device_id,
-        local_password.map(LocalSecret::Password),
-        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
-    )
-    .await?;
+    let repository = Repository::open(&params, local_password, AccessMode::Write).await?;
 
     Ok(repository)
 }
@@ -86,13 +81,10 @@ pub async fn reopen(
     token: Vec<u8>,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository> {
+    let params =
+        RepositoryParams::new(store.into_std_path_buf()).with_parent_monitor(repos_monitor.clone());
     let token = ReopenToken::decode(&token)?;
-    let repository = Repository::reopen(
-        store.into_std_path_buf(),
-        token,
-        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
-    )
-    .await?;
+    let repository = Repository::reopen(&params, token).await?;
 
     Ok(repository)
 }

@@ -272,21 +272,19 @@ async fn append_to_file() {
 async fn blind_access_non_empty_repo() {
     test_utils::init_log();
 
-    let monitor_context = RepositoryMonitorContext::default();
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let device_id = rand::random();
-
+    let params =
+        RepositoryParams::with_pool(pool, "test").with_parent_monitor(StateMonitor::make_root());
     let local_secret = LocalSecret::random();
+
     // Create the repo and put a file in it.
-    let repo = Repository::create_in(
-        pool.clone(),
-        device_id,
+    let repo = Repository::create(
+        &params,
         Access::WriteLocked {
             local_read_secret: local_secret.clone(),
             local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
-        RepositoryMonitor::new(&monitor_context, "test"),
     )
     .await
     .unwrap();
@@ -305,20 +303,14 @@ async fn blind_access_non_empty_repo() {
         (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open_in(
-            pool.clone(),
-            device_id,
-            local_secret.clone(),
-            access_mode,
-            RepositoryMonitor::new(&monitor_context, "test"),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "Repo should open in blind mode (local_secret.is_some:{:?})",
-                local_secret.is_some(),
-            )
-        });
+        let repo = Repository::open(&params, local_secret.clone(), access_mode)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Repo should open in blind mode (local_secret.is_some:{:?})",
+                    local_secret.is_some(),
+                )
+            });
 
         // Reading files is not allowed.
         assert_matches!(
@@ -347,36 +339,27 @@ async fn blind_access_non_empty_repo() {
 async fn blind_access_empty_repo() {
     test_utils::init_log();
 
-    let monitor_context = RepositoryMonitorContext::default();
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let device_id = rand::random();
+    let params = RepositoryParams::with_pool(pool, "test");
 
     let local_secret = LocalSecret::random();
 
     // Create an empty repo.
-    Repository::create_in(
-        pool.clone(),
-        device_id,
+    Repository::create(
+        &params,
         Access::WriteLocked {
             local_read_secret: local_secret.clone(),
             local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
-        RepositoryMonitor::new(&monitor_context, "test"),
     )
     .await
     .unwrap();
 
     // Reopen the repo in blind mode.
-    let repo = Repository::open_in(
-        pool.clone(),
-        device_id,
-        Some(LocalSecret::random()),
-        AccessMode::Read,
-        RepositoryMonitor::new(&monitor_context, "test"),
-    )
-    .await
-    .unwrap();
+    let repo = Repository::open(&params, Some(LocalSecret::random()), AccessMode::Read)
+        .await
+        .unwrap();
 
     // Reading the root directory is not allowed.
     assert_matches!(repo.open_directory("/").await, Err(Error::PermissionDenied));
@@ -386,17 +369,14 @@ async fn blind_access_empty_repo() {
 async fn read_access_same_replica() {
     test_utils::init_log();
 
-    let monitor_context = RepositoryMonitorContext::default();
     let (_base_dir, pool) = db::create_temp().await.unwrap();
-    let device_id = rand::random();
+    let params = RepositoryParams::with_pool(pool, "test");
 
-    let repo = Repository::create_in(
-        pool.clone(),
-        device_id,
+    let repo = Repository::create(
+        &params,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        RepositoryMonitor::new(&monitor_context, "test"),
     )
     .await
     .unwrap();
@@ -409,15 +389,9 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open_in(
-        pool,
-        device_id,
-        None,
-        AccessMode::Read,
-        RepositoryMonitor::new(&monitor_context, "test"),
-    )
-    .await
-    .unwrap();
+    let repo = Repository::open(&params, None, AccessMode::Read)
+        .await
+        .unwrap();
 
     // Reading files is allowed.
     let mut file = repo.open_file("public.txt").await.unwrap();
@@ -452,17 +426,14 @@ async fn read_access_same_replica() {
 async fn read_access_different_replica() {
     test_utils::init_log();
 
-    let monitor_context = RepositoryMonitorContext::default();
     let (_base_dir, pool) = db::create_temp().await.unwrap();
 
-    let device_id_a = rand::random();
-    let repo = Repository::create_in(
-        pool.clone(),
-        device_id_a,
+    let params_a = RepositoryParams::with_pool(pool.clone(), "test").with_device_id(rand::random());
+    let repo = Repository::create(
+        &params_a,
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        RepositoryMonitor::new(&monitor_context, "test"),
     )
     .await
     .unwrap();
@@ -474,16 +445,10 @@ async fn read_access_different_replica() {
     drop(file);
     drop(repo);
 
-    let device_id_b = rand::random();
-    let repo = Repository::open_in(
-        pool,
-        device_id_b,
-        None,
-        AccessMode::Read,
-        RepositoryMonitor::new(&monitor_context, "test"),
-    )
-    .await
-    .unwrap();
+    let params_b = RepositoryParams::with_pool(pool, "test").with_device_id(rand::random());
+    let repo = Repository::open(&params_b, None, AccessMode::Read)
+        .await
+        .unwrap();
 
     let mut file = repo.open_file("public.txt").await.unwrap();
     let content = file.read_to_end().await.unwrap();
@@ -882,12 +847,10 @@ async fn size() {
 async fn setup() -> (TempDir, Repository) {
     let base_dir = TempDir::new().unwrap();
     let repo = Repository::create(
-        base_dir.path().join("repo.db"),
-        rand::random(),
+        &RepositoryParams::new(base_dir.path().join("repo.db")),
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        &RepositoryMonitorContext::default(),
     )
     .await
     .unwrap();
