@@ -17,24 +17,26 @@ mod transport;
 
 use crate::{
     dart::{Port, PortSender},
-    file::FileHolder,
     handler::Handler,
-    registry::Handle,
     state::State,
     transport::{ClientSender, Server},
     utils::UniqueHandle,
 };
+#[cfg(unix)]
+use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result},
     logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
-use ouisync_vfs::SessionMounter;
+use ouisync_vfs::MultiRepoVFS;
+#[cfg(unix)]
+use std::os::raw::c_int;
 use std::{
     ffi::CString,
     mem,
-    os::raw::{c_char, c_int, c_void},
+    os::raw::{c_char, c_void},
     path::PathBuf,
     ptr, slice,
     sync::Arc,
@@ -99,9 +101,10 @@ pub unsafe extern "C" fn session_create(
             .spawn(server.run(Handler::new(session.state.clone())));
 
         let state = session.state.clone();
+        let runtime = session.runtime.handle().clone();
 
         session.runtime.spawn(async move {
-            let mounter = match SessionMounter::mount().await {
+            let mounter = match MultiRepoVFS::mount(runtime, "O:\\").await {
                 Ok(mounter) => mounter,
                 Err(error) => {
                     tracing::error!("Failed to mount: {error:?}");
@@ -112,10 +115,15 @@ pub unsafe extern "C" fn session_create(
             let repos = state.read_repositories();
 
             for repo_holder in repos.values() {
-                mounter.add_repo(
+                if let Err(error) = mounter.add_repo(
                     repo_holder.store_path.clone(),
                     repo_holder.repository.clone(),
-                );
+                ) {
+                    tracing::error!(
+                        "Failed to mount repository {:?}: {error:?}",
+                        repo_holder.store_path
+                    );
+                }
             }
 
             *(state.mounter.lock().unwrap()) = Some(mounter);
@@ -140,34 +148,9 @@ pub unsafe extern "C" fn session_create(
 ///
 /// Also don't call this function once the session is already mounted (that is, when a previous
 /// call to this function returned success).
-pub unsafe extern "C" fn session_mount(session: SessionHandle, port: Port<Result<()>>) {
-    let session = session.get();
-    let port_sender = session.port_sender;
-    let state = session.state.clone();
-
-    session.runtime.spawn(async move {
-        let mounter = match SessionMounter::mount().await {
-            Ok(mounter) => mounter,
-            Err(error) => {
-                tracing::error!("Failed to mount");
-                port_sender.send_result(port, Err(error.into()));
-                return;
-            }
-        };
-
-        let repos = state.read_repositories();
-
-        for repo_holder in repos.values() {
-            mounter.add_repo(
-                repo_holder.store_path.clone(),
-                repo_holder.repository.clone(),
-            );
-        }
-
-        *(state.mounter.lock().unwrap()) = Some(mounter);
-
-        port_sender.send_result(port, Ok(()));
-    });
+pub unsafe extern "C" fn session_mount(_session: SessionHandle, _port: Port<Result<()>>) {
+    // Currently implemented directly in `session_create`
+    todo!()
 }
 
 /// Destroys the ouisync session.

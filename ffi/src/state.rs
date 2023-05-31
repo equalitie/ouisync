@@ -10,7 +10,7 @@ use ouisync_lib::{
     network::Network,
     StateMonitor,
 };
-use ouisync_vfs::SessionMounter;
+use ouisync_vfs::MultiRepoVFS;
 use scoped_task::ScopedJoinHandle;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -23,7 +23,7 @@ pub(crate) struct State {
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
     pub remote_client_config: OnceCell<ClientConfig>,
-    pub mounter: BlockingMutex<Option<SessionMounter>>,
+    pub mounter: BlockingMutex<Option<MultiRepoVFS>>,
 }
 
 impl State {
@@ -63,7 +63,14 @@ impl State {
 
     pub fn insert_repository(&self, holder: RepositoryHolder) -> Handle<RepositoryHolder> {
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
-            mounter.add_repo(holder.store_path.clone(), holder.repository.clone());
+            if let Err(error) =
+                mounter.add_repo(holder.store_path.clone(), holder.repository.clone())
+            {
+                tracing::error!(
+                    "Failed to mount repository {:?}: {error:?}",
+                    holder.store_path
+                );
+            }
         }
 
         self.repositories.insert(holder)
