@@ -60,7 +60,10 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
-    repository::{delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryId},
+    repository::{
+        delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryId,
+        RepositoryMonitorContext,
+    },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
     store::Store,

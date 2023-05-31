@@ -5,8 +5,8 @@ use crate::{
 };
 use camino::Utf8PathBuf;
 use ouisync_lib::{
-    crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
-    ShareToken, StateMonitor, StorageSize,
+    crypto::Password, timing, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken,
+    Repository, RepositoryMonitorContext, ShareToken, StateMonitor, StorageSize,
 };
 use std::borrow::Cow;
 
@@ -45,8 +45,13 @@ pub async fn create(
     let local_read_secret = local_read_password.map(LocalSecret::Password);
     let local_write_secret = local_write_password.map(LocalSecret::Password);
     let access = Access::new(local_read_secret, local_write_secret, access_secrets);
-    let repository =
-        Repository::create(store.into_std_path_buf(), device_id, access, repos_monitor).await?;
+    let repository = Repository::create(
+        store.into_std_path_buf(),
+        device_id,
+        access,
+        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
+    )
+    .await?;
 
     let quota = get_default_quota(config).await?;
     repository.set_quota(quota).await?;
@@ -69,7 +74,7 @@ pub async fn open(
         store.into_std_path_buf(),
         device_id,
         local_password.map(LocalSecret::Password),
-        repos_monitor,
+        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
     )
     .await?;
 
@@ -82,7 +87,12 @@ pub async fn reopen(
     repos_monitor: &StateMonitor,
 ) -> Result<Repository> {
     let token = ReopenToken::decode(&token)?;
-    let repository = Repository::reopen(store.into_std_path_buf(), token, repos_monitor).await?;
+    let repository = Repository::reopen(
+        store.into_std_path_buf(),
+        token,
+        &RepositoryMonitorContext::new(repos_monitor.clone(), timing::Timer::new()),
+    )
+    .await?;
 
     Ok(repository)
 }

@@ -129,7 +129,14 @@ impl Client {
     ) -> Result<()> {
         loop {
             match queued_responses_rx.recv().await {
-                Some(response) => self.handle_response(response).await?,
+                Some(response) => {
+                    self.store
+                        .monitor
+                        .timer()
+                        .clone()
+                        .apply(self.handle_response(response))
+                        .await?
+                }
                 None => return Ok(()),
             };
         }
@@ -143,24 +150,28 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                timing::with_scope(
-                    "handle_root_node",
-                    self.handle_root_node(proof, block_presence, debug),
-                )
-                .await
+                timing::scope("handle_root_node")
+                    .apply(self.handle_root_node(proof, block_presence, debug))
+                    .await
             }
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
                 debug,
             } => {
-                timing::with_scope("handle_inner_nodes", self.handle_inner_nodes(hash, debug)).await
+                timing::scope("handle_inner_nodes")
+                    .apply(self.handle_inner_nodes(hash, debug))
+                    .await
             }
             PendingResponse::LeafNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => timing::with_scope("handle_leaf_nodes", self.handle_leaf_nodes(hash, debug)).await,
+            } => {
+                timing::scope("handle_leaf_nodes")
+                    .apply(self.handle_leaf_nodes(hash, debug))
+                    .await
+            }
             PendingResponse::Block {
                 data,
                 nonce,
@@ -168,11 +179,9 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                timing::with_scope(
-                    "handle_block",
-                    self.handle_block(data, nonce, block_promise, debug),
-                )
-                .await
+                timing::scope("handle_block")
+                    .apply(self.handle_block(data, nonce, block_promise, debug))
+                    .await
             }
         };
 

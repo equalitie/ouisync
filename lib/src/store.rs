@@ -285,8 +285,7 @@ mod tests {
             BranchData, MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
         },
         locator::Locator,
-        repository::RepositoryId,
-        state_monitor::StateMonitor,
+        repository::{RepositoryId, RepositoryMonitorContext},
         test_utils,
         version_vector::VersionVector,
     };
@@ -773,7 +772,10 @@ mod tests {
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),
-            monitor: Arc::new(RepositoryMonitor::new(&StateMonitor::make_root(), "test")),
+            monitor: Arc::new(RepositoryMonitor::new(
+                &RepositoryMonitorContext::default(),
+                "test",
+            )),
         }
     }
 }

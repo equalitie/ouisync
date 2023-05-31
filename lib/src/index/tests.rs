@@ -10,8 +10,7 @@ use crate::{
     crypto::sign::{Keypair, PublicKey},
     db,
     event::EventSender,
-    repository::{LocalId, RepositoryId, RepositoryMonitor},
-    state_monitor::StateMonitor,
+    repository::{LocalId, RepositoryId, RepositoryMonitor, RepositoryMonitorContext},
     store::{BlockRequestMode, Store},
     version_vector::VersionVector,
 };
@@ -459,7 +458,10 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
         local_id: LocalId::new(),
-        monitor: Arc::new(RepositoryMonitor::new(&StateMonitor::make_root(), "test")),
+        monitor: Arc::new(RepositoryMonitor::new(
+            &RepositoryMonitorContext::default(),
+            "test",
+        )),
     };
 
     let mut rng = rand::thread_rng();

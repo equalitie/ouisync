@@ -1,6 +1,7 @@
 mod wait_map;
 
 use camino::Utf8Path;
+use comfy_table::{presets, Table};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -94,7 +95,7 @@ pub(crate) mod env {
                 .runtime
                 .block_on(future::try_join_all(self.tasks.drain(..)));
 
-            println!("{}", timing::report());
+            self.context.timer.report(report_timings).wait();
 
             result.unwrap();
         }
@@ -153,7 +154,7 @@ pub(crate) mod env {
 /// that is, from inside the future passed to `Env::actor`.
 pub(crate) mod actor {
     use super::*;
-    use ouisync::{AccessMode, StateMonitor};
+    use ouisync::{AccessMode, RepositoryMonitorContext, StateMonitor};
 
     pub(crate) fn create_unbound_network() -> Network {
         Network::new(None, StateMonitor::make_root())
@@ -208,7 +209,7 @@ pub(crate) mod actor {
         ACTOR.with(|actor| actor.device_id)
     }
 
-    pub(crate) async fn get_repo_path_and_secrets(name: &str) -> (PathBuf, AccessSecrets) {
+    pub(crate) fn get_repo_path_and_secrets(name: &str) -> (PathBuf, AccessSecrets) {
         ACTOR.with(|actor| {
             (
                 actor.repo_path(name),
@@ -220,15 +221,19 @@ pub(crate) mod actor {
         })
     }
 
+    pub(crate) fn timer() -> timing::Timer {
+        ACTOR.with(|actor| actor.context.timer.clone())
+    }
+
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
-        let (path, secrets) = get_repo_path_and_secrets(name).await;
-        let monitor = StateMonitor::make_root();
+        let (path, secrets) = get_repo_path_and_secrets(name);
+        let monitor_context = RepositoryMonitorContext::new(StateMonitor::make_root(), timer());
 
         Repository::create(
             path,
             device_id(),
             Access::new(None, None, secrets.with_mode(mode)),
-            &monitor,
+            &monitor_context,
         )
         .await
         .unwrap()
@@ -265,6 +270,7 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
+    timer: timing::Timer,
 }
 
 impl Context {
@@ -275,6 +281,7 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
+            timer: timing::Timer::new(),
         }
     }
 }
@@ -626,4 +633,44 @@ pub(crate) fn init_log() {
 
     // error here most likely means the logger is already initialized. We can ignore that.
     result.ok();
+}
+
+fn report_timings(root: &timing::Root) {
+    let mut table = Table::new();
+    table.load_preset(presets::UTF8_FULL_CONDENSED);
+    table.set_header(vec![
+        "name", "count", "min", "max", "mean", "50%", "90%", "99%", "99.9%",
+    ]);
+
+    for (name, node) in &root.children {
+        add_to_table(&mut table, name, node, 0);
+    }
+
+    println!("{table}");
+}
+
+fn add_to_table(table: &mut Table, name: &str, node: &timing::Node, level: usize) {
+    let h = &node.histogram;
+
+    let count: u64 = h.len();
+
+    table.add_row(vec![
+        format!("{}{}", " ".repeat(level * 2), name),
+        format!("{:>5}", count),
+        format!("{:.4}s", to_secs(h.min())),
+        format!("{:.4}s", to_secs(h.max())),
+        format!("{:.4}s", to_secs(h.mean() as u64)),
+        format!("{:.4}s", to_secs(h.value_at_quantile(0.5))),
+        format!("{:.4}s", to_secs(h.value_at_quantile(0.9))),
+        format!("{:.4}s", to_secs(h.value_at_quantile(0.99))),
+        format!("{:.4}s", to_secs(h.value_at_quantile(0.999))),
+    ]);
+
+    for (name, report) in &node.children {
+        add_to_table(table, name, report, level + 1)
+    }
+}
+
+fn to_secs(nanos: u64) -> f64 {
+    nanos as f64 / 1_000_000_000.0
 }

@@ -6,7 +6,10 @@ mod reopen_token;
 mod tests;
 mod worker;
 
-pub use self::{id::RepositoryId, metadata::Metadata, reopen_token::ReopenToken};
+pub use self::{
+    id::RepositoryId, metadata::Metadata, monitor::RepositoryMonitorContext,
+    reopen_token::ReopenToken,
+};
 
 pub(crate) use self::{id::LocalId, metadata::quota, monitor::RepositoryMonitor};
 
@@ -85,9 +88,9 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         access: Access,
-        parent_monitor: &StateMonitor,
+        monitor_context: &RepositoryMonitorContext,
     ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
         let pool = db::create(store).await?;
         Self::create_in(pool, device_id, access, monitor).await
     }
@@ -120,14 +123,14 @@ impl Repository {
         store: impl AsRef<Path>,
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
-        parent_monitor: &StateMonitor,
+        monitor_context: &RepositoryMonitorContext,
     ) -> Result<Self> {
         Self::open_with_mode(
             store,
             device_id,
             local_secret,
             AccessMode::Write,
-            parent_monitor,
+            monitor_context,
         )
         .await
     }
@@ -139,9 +142,9 @@ impl Repository {
         device_id: DeviceId,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
-        parent_monitor: &StateMonitor,
+        monitor_context: &RepositoryMonitorContext,
     ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
         let pool = db::open(store).await?;
         Self::open_in(pool, device_id, local_secret, max_access_mode, monitor).await
     }
@@ -193,9 +196,9 @@ impl Repository {
     pub async fn reopen(
         store: impl AsRef<Path>,
         token: ReopenToken,
-        parent_monitor: &StateMonitor,
+        monitor_context: &RepositoryMonitorContext,
     ) -> Result<Self> {
-        let monitor = RepositoryMonitor::new(parent_monitor, &store.as_ref().to_string_lossy());
+        let monitor = RepositoryMonitor::new(monitor_context, &store.as_ref().to_string_lossy());
         let pool = db::open(store).await?;
         Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
