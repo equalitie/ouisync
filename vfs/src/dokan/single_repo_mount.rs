@@ -1,4 +1,4 @@
-use super::{EntryHandle, VirtualFilesystem};
+use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
     FileSystemMounter, FileTimeOperation, FillDataResult, FindData, MountOptions, OperationInfo,
@@ -262,7 +262,11 @@ pub fn mount(
         init();
 
         let handler = SingleRepoVFS {
-            vfs: VirtualFilesystem::new(runtime_handle, repository),
+            vfs: VirtualFilesystem::new(
+                runtime_handle,
+                Arc::new(EntryIdGenerator::new()),
+                repository,
+            ),
         };
         let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
 

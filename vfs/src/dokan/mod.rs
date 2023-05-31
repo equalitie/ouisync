@@ -1,3 +1,4 @@
+pub(crate) mod multi_repo_mount;
 pub(crate) mod single_repo_mount;
 
 use camino::Utf8PathBuf;
@@ -35,21 +36,21 @@ struct VirtualFilesystem {
     rt: tokio::runtime::Handle,
     repo: Arc<Repository>,
     handles: Arc<AsyncMutex<Handles>>,
-    next_id: AtomicU64,
+    entry_id_generator: Arc<EntryIdGenerator>,
 }
 
 impl VirtualFilesystem {
-    fn new(rt: tokio::runtime::Handle, repo: Arc<Repository>) -> Self {
+    fn new(
+        rt: tokio::runtime::Handle,
+        entry_id_generator: Arc<EntryIdGenerator>,
+        repo: Arc<Repository>,
+    ) -> Self {
         Self {
             rt,
             repo,
             handles: Arc::new(AsyncMutex::new(Default::default())),
-            next_id: AtomicU64::new(1),
+            entry_id_generator,
         }
-    }
-
-    fn generate_id(&self) -> u64 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
     async fn get_or_set_shared(
@@ -61,7 +62,7 @@ impl VirtualFilesystem {
         // the memfs example in dokan-rust seems to always generate a new `id` in `create_file` so
         // the above probably doesn't have to hold.
 
-        let id = self.generate_id();
+        let id = self.entry_id_generator.generate_id();
 
         match self.handles.lock().await.entry(path.clone()) {
             hash_map::Entry::Occupied(entry) => {
@@ -128,7 +129,7 @@ impl VirtualFilesystem {
                 } else {
                     if create_directory {
                         self.repo.create_directory(&path).await?;
-                        Entry::new_dir(parent_dir.cd(child).await?, shared)
+                        Entry::new_dir(self.repo.cd(path).await?, shared)
                     } else {
                         let mut file = self.repo.create_file(path).await?;
                         file.flush().await?;
@@ -366,7 +367,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)))]
     async fn async_close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -415,7 +416,7 @@ impl VirtualFilesystem {
     }
 
     fn close_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -426,7 +427,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, buffer, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_read_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         offset: i64,
         buffer: &mut [u8],
@@ -453,7 +454,7 @@ impl VirtualFilesystem {
     }
 
     fn read_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         offset: i64,
         buffer: &mut [u8],
@@ -467,7 +468,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, buffer, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_write_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         offset: i64,
         buffer: &[u8],
@@ -500,7 +501,7 @@ impl VirtualFilesystem {
     }
 
     fn write_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         offset: i64,
         buffer: &[u8],
@@ -514,7 +515,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_flush_file_buffers<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -533,7 +534,7 @@ impl VirtualFilesystem {
     }
 
     fn flush_file_buffers<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -545,7 +546,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_get_file_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         _info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -580,7 +581,7 @@ impl VirtualFilesystem {
     }
 
     fn get_file_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -592,7 +593,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, file_name, fill_find_data, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_find_files<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
         _info: &OperationInfo<'c, 'h, Super>,
@@ -605,7 +606,7 @@ impl VirtualFilesystem {
     }
 
     fn find_files<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
         info: &OperationInfo<'c, 'h, Super>,
@@ -618,7 +619,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, file_name, pattern, fill_find_data, _info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_find_files_with_pattern<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         pattern: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
@@ -632,7 +633,7 @@ impl VirtualFilesystem {
     }
 
     fn find_files_with_pattern<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         pattern: &U16CStr,
         fill_find_data: impl FnMut(&FindData) -> FillDataResult,
@@ -652,7 +653,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, _file_attributes, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         _file_attributes: u32,
         _info: &OperationInfo<'c, 'h, Super>,
@@ -663,7 +664,7 @@ impl VirtualFilesystem {
     }
 
     fn set_file_attributes<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         file_attributes: u32,
         info: &OperationInfo<'c, 'h, Super>,
@@ -676,7 +677,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, _creation_time, _last_access_time, _last_write_time, _info, _context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_file_time<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         _creation_time: FileTimeOperation,
         _last_access_time: FileTimeOperation,
@@ -689,7 +690,7 @@ impl VirtualFilesystem {
     }
 
     fn set_file_time<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         creation_time: FileTimeOperation,
         last_access_time: FileTimeOperation,
@@ -711,7 +712,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_delete_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -723,7 +724,7 @@ impl VirtualFilesystem {
     }
 
     fn delete_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -735,7 +736,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_delete_directory<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -758,7 +759,7 @@ impl VirtualFilesystem {
     }
 
     fn delete_directory<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
         context: &'c EntryHandle,
@@ -772,7 +773,7 @@ impl VirtualFilesystem {
         fields(file_name = ?to_path(file_name), new_file_name = ?to_path(new_file_name)),
         err(Debug))]
     async fn async_move_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         new_file_name: &U16CStr,
         _replace_if_existing: bool,
@@ -820,7 +821,7 @@ impl VirtualFilesystem {
     }
 
     fn move_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         new_file_name: &U16CStr,
         replace_if_existing: bool,
@@ -840,7 +841,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, file_name, info, context), fields(file_name = ?to_path(file_name)), err(Debug))]
     async fn async_set_end_of_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         offset: i64,
         info: &OperationInfo<'c, 'h, Super>,
@@ -853,7 +854,7 @@ impl VirtualFilesystem {
     }
 
     fn set_end_of_file<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         offset: i64,
         info: &OperationInfo<'c, 'h, Super>,
@@ -866,7 +867,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _file_name, _info, context), fields(file_name = ?to_path(_file_name)), err(Debug))]
     async fn async_set_allocation_size<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _file_name: &U16CStr,
         alloc_size: i64,
         _info: &OperationInfo<'c, 'h, Super>,
@@ -919,7 +920,7 @@ impl VirtualFilesystem {
     }
 
     fn set_allocation_size<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         file_name: &U16CStr,
         alloc_size: i64,
         info: &OperationInfo<'c, 'h, Super>,
@@ -932,7 +933,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _info), err(Debug))]
     async fn async_get_disk_free_space<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<DiskSpaceInfo, Error> {
         tracing::trace!("async_get_disk_free_space");
@@ -945,7 +946,7 @@ impl VirtualFilesystem {
     }
 
     fn get_disk_free_space<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         info: &OperationInfo<'c, 'h, Super>,
     ) -> OperationResult<DiskSpaceInfo> {
         self.rt
@@ -955,7 +956,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _info), err(Debug))]
     async fn async_get_volume_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<VolumeInfo, Error> {
         tracing::trace!("async_get_volume_information");
@@ -972,7 +973,7 @@ impl VirtualFilesystem {
     }
 
     fn get_volume_information<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         info: &OperationInfo<'c, 'h, Super>,
     ) -> OperationResult<VolumeInfo> {
         self.rt
@@ -982,7 +983,7 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _mount_point, _info), err(Debug))]
     async fn async_mounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _mount_point: &U16CStr,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<(), Error> {
@@ -990,7 +991,7 @@ impl VirtualFilesystem {
     }
 
     fn mounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         mount_point: &U16CStr,
         info: &OperationInfo<'c, 'h, Super>,
     ) -> OperationResult<()> {
@@ -1001,14 +1002,14 @@ impl VirtualFilesystem {
 
     #[instrument(skip(self, _info), err(Debug))]
     async fn async_unmounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<(), Error> {
         Ok(())
     }
 
     fn unmounted<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
-        &'h self,
+        &self,
         info: &OperationInfo<'c, 'h, Super>,
     ) -> OperationResult<()> {
         self.rt
@@ -1017,7 +1018,23 @@ impl VirtualFilesystem {
     }
 }
 
-fn ignore_name_too_long(err: FillDataError) -> OperationResult<()> {
+pub(crate) struct EntryIdGenerator {
+    next_id: AtomicU64,
+}
+
+impl EntryIdGenerator {
+    fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(0),
+        }
+    }
+
+    fn generate_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+pub(crate) fn ignore_name_too_long(err: FillDataError) -> OperationResult<()> {
     match err {
         // Normal behavior.
         FillDataError::BufferFull => Err(STATUS_BUFFER_OVERFLOW),
@@ -1027,7 +1044,7 @@ fn ignore_name_too_long(err: FillDataError) -> OperationResult<()> {
     }
 }
 
-enum Error {
+pub(crate) enum Error {
     NtStatus(i32),
     OuiSync(ouisync_lib::Error),
 }
@@ -1342,9 +1359,9 @@ impl fmt::Debug for AccessMask {
 
 pub(crate) fn default_mount_flags() -> MountFlags {
     // TODO: Check these flags.
-    let mut flags = MountFlags::empty();
+    let flags = MountFlags::empty();
     //flags |= ALT_STREAM;
     //flags |= MountFlags::DEBUG | MountFlags::STDERR;
-    flags |= MountFlags::REMOVABLE;
+    //flags |= MountFlags::REMOVABLE;
     flags
 }
