@@ -95,18 +95,11 @@ impl Clock {
         self.tx.send(Command::Record { id: self.id, value }).ok();
     }
 
-    /// Start recording the duration of a section of code. The recording stops when the returned
-    /// handle goes out of scope.
+    /// Start measuring the duration of a section of code using this clock. The measuring stops and
+    /// the measured duration is recorded when the returned `Recording` goes out of scope.
     pub fn start(&self) -> Recording {
         Recording {
-            clock: Cow::Borrowed(self),
-            start: Instant::now(),
-        }
-    }
-
-    pub fn started(self) -> Recording<'static> {
-        Recording {
-            clock: Cow::Owned(self),
+            clock: self,
             start: Instant::now(),
         }
     }
@@ -136,7 +129,7 @@ impl ClockMap {
 }
 
 pub struct Recording<'a> {
-    clock: Cow<'a, Clock>,
+    clock: &'a Clock,
     start: Instant,
 }
 
