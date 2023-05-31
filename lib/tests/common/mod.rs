@@ -50,6 +50,7 @@ pub(crate) mod env {
     use futures_util::future;
     use tokio::{
         runtime::{self, Runtime},
+        sync::oneshot,
         task::JoinHandle,
     };
 
@@ -96,7 +97,14 @@ pub(crate) mod env {
                 .runtime
                 .block_on(future::try_join_all(self.tasks.drain(..)));
 
-            self.context.clocks.report(report_timings).wait();
+            let (tx, rx) = oneshot::channel();
+
+            self.context.clocks.report(|report| {
+                report_timings(report);
+                tx.send(()).ok();
+            });
+
+            rx.blocking_recv().ok();
 
             result.unwrap();
         }

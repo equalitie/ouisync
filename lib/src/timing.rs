@@ -32,25 +32,20 @@ impl Clocks {
         }
     }
 
-    /// Creates a sub-clock
+    /// Creates a clock
     pub fn clock(&self, name: impl Into<ClockName>) -> Clock {
         self.roots.fetch(name.into(), 0, self.tx.clone())
     }
 
-    pub fn report<F>(&self, reporter: F) -> ReportHandle
+    pub fn report<F>(&self, reporter: F)
     where
         F: FnOnce(&Report) + Send + 'static,
     {
-        let (complete_tx, complete_rx) = crossbeam_channel::bounded(0);
-
         self.tx
             .send(Command::Report {
                 reporter: Box::new(reporter),
-                complete_tx,
             })
             .ok();
-
-        ReportHandle(complete_rx)
     }
 }
 
@@ -90,22 +85,18 @@ impl Clock {
         self.children.fetch(name.into(), self.id, self.tx.clone())
     }
 
-    /// Record a value directly
+    /// Records a value directly
     pub fn record(&self, value: Duration) {
         self.tx.send(Command::Record { id: self.id, value }).ok();
     }
 
-    /// Start measuring the duration of a section of code using this clock. The measuring stops and
-    /// the measured duration is recorded when the returned `Recording` goes out of scope.
+    /// Starts measuring the duration of a section of code using this clock. The measuring stops
+    /// and the measured duration is recorded when the returned `Recording` goes out of scope.
     pub fn start(&self) -> Recording {
         Recording {
             clock: self,
             start: Instant::now(),
         }
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
     }
 }
 
@@ -139,15 +130,6 @@ impl Drop for Recording<'_> {
     }
 }
 
-pub struct ReportHandle(crossbeam_channel::Receiver<()>);
-
-impl ReportHandle {
-    /// Blocks until the reporting is complete.
-    pub fn wait(self) {
-        self.0.recv().ok();
-    }
-}
-
 pub type ClockName = Cow<'static, str>;
 
 #[derive(Default)]
@@ -170,6 +152,7 @@ impl Report {
 
             Some(ReportItem {
                 report: self,
+                id: *id,
                 name,
                 node,
             })
@@ -209,6 +192,7 @@ impl Report {
 
 pub struct ReportItem<'a> {
     report: &'a Report,
+    id: u64,
     name: &'a ClockName,
     node: &'a Node,
 }
@@ -224,6 +208,10 @@ impl<'a> ReportItem<'a> {
 
     pub fn items(&self) -> impl Iterator<Item = ReportItem<'a>> {
         self.report.iter_with(&self.node.children)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
@@ -253,7 +241,6 @@ enum Command {
     },
     Report {
         reporter: Box<dyn FnOnce(&Report) + Send + 'static>,
-        complete_tx: crossbeam_channel::Sender<()>,
     },
 }
 
@@ -268,10 +255,7 @@ fn run(rx: crossbeam_channel::Receiver<Command>) {
                 id,
             } => report.register(name, parent_id, id),
             Command::Record { id, value } => report.record(id, value),
-            Command::Report {
-                reporter,
-                complete_tx: _complete_tx,
-            } => {
+            Command::Report { reporter } => {
                 reporter(&report);
             }
         }
