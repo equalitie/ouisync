@@ -90,6 +90,13 @@ impl Clock {
         self.children.fetch(name.into(), self.id, self.tx.clone())
     }
 
+    /// Record a value directly
+    pub fn record(&self, value: Duration) {
+        self.tx.send(Command::Record { id: self.id, value }).ok();
+    }
+
+    /// Start recording the duration of a section of code. The recording stops when the returned
+    /// handle goes out of scope.
     pub fn start(&self) -> Recording {
         Recording {
             clock: Cow::Borrowed(self),
@@ -135,13 +142,7 @@ pub struct Recording<'a> {
 
 impl Drop for Recording<'_> {
     fn drop(&mut self) {
-        self.clock
-            .tx
-            .send(Command::Record {
-                id: self.clock.id,
-                value: self.start.elapsed(),
-            })
-            .ok();
+        self.clock.record(self.start.elapsed())
     }
 }
 

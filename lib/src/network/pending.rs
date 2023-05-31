@@ -232,8 +232,8 @@ fn stats_request_removed(monitor: &RepositoryMonitor, key: &Key, timestamp: Opti
     }
     if let Some(timestamp) = timestamp {
         monitor
-            .request_inflight_durations
-            .note(Instant::now() - timestamp);
+            .clock("request_inflight")
+            .record(timestamp.elapsed());
     }
 }
 

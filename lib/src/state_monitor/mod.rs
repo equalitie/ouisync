@@ -1,8 +1,5 @@
-mod duration_ranges;
 #[cfg(test)]
 mod tests;
-
-pub(crate) use duration_ranges::DurationRanges;
 
 use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
 use serde::{

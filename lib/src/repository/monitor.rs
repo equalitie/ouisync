@@ -1,5 +1,5 @@
 use crate::{
-    state_monitor::{DurationRanges, MonitoredValue, StateMonitor},
+    state_monitor::{MonitoredValue, StateMonitor},
     timing::{Clock, ClockName, Clocks},
 };
 use btdht::InfoHash;
@@ -13,8 +13,6 @@ pub(crate) struct RepositoryMonitor {
     pub pending_requests: MonitoredValue<u64>,
     pub total_requests_cummulative: MonitoredValue<u64>,
     pub request_timeouts: MonitoredValue<u64>,
-    pub request_queue_durations: DurationRanges,
-    pub request_inflight_durations: DurationRanges,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
 
     span: Span,
@@ -33,12 +31,6 @@ impl RepositoryMonitor {
             pending_requests: node.make_value("pending requests", 0),
             total_requests_cummulative: node.make_value("total requests cummulative", 0),
             request_timeouts: node.make_value("request timeouts", 0),
-            request_queue_durations: DurationRanges::new(
-                node.make_child("request queue durations"),
-            ),
-            request_inflight_durations: DurationRanges::new(
-                node.make_child("request inflight durations"),
-            ),
             info_hash: node.make_value("info-hash", None),
 
             span,

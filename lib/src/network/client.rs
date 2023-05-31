@@ -362,6 +362,7 @@ fn start_sender(
     mpsc::UnboundedSender<(PendingRequest, Instant)>,
 ) {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<(PendingRequest, Instant)>();
+    let request_queue_clock = monitor.clock("request_queue");
 
     let handle = scoped_task::spawn({
         async move {
@@ -386,9 +387,7 @@ fn start_sender(
 
                 let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
 
-                monitor
-                    .request_queue_durations
-                    .note(Instant::now() - time_created);
+                request_queue_clock.record(time_created.elapsed());
 
                 let msg = request.to_message();
 
