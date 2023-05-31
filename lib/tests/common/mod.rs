@@ -6,8 +6,9 @@ use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
     network::{Network, Registration},
-    timing, Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr,
-    Repository, Result,
+    timing::{self, Clocks},
+    Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
+    Result,
 };
 use rand::Rng;
 use std::{
@@ -95,7 +96,7 @@ pub(crate) mod env {
                 .runtime
                 .block_on(future::try_join_all(self.tasks.drain(..)));
 
-            self.context.timer.report(report_timings).wait();
+            self.context.clocks.report(report_timings).wait();
 
             result.unwrap();
         }
@@ -210,7 +211,7 @@ pub(crate) mod actor {
             (
                 RepositoryParams::new(actor.repo_path(name))
                     .with_device_id(actor.device_id)
-                    .with_timer(actor.context.timer.clone()),
+                    .with_clocks(actor.context.clocks.clone()),
                 actor
                     .context
                     .repo_map
@@ -258,7 +259,7 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    timer: timing::Timer,
+    clocks: Clocks,
 }
 
 impl Context {
@@ -269,7 +270,7 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            timer: timing::Timer::new(),
+            clocks: Clocks::new(),
         }
     }
 }
@@ -623,27 +624,27 @@ pub(crate) fn init_log() {
     result.ok();
 }
 
-fn report_timings(root: &timing::Root) {
+fn report_timings(report: &timing::Report) {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
         "name", "count", "min", "max", "mean", "50%", "90%", "99%", "99.9%",
     ]);
 
-    for (name, node) in &root.children {
-        add_to_table(&mut table, name, node, 0);
+    for item in report.items() {
+        add_to_table(&mut table, item, 0);
     }
 
     println!("{table}");
 }
 
-fn add_to_table(table: &mut Table, name: &str, node: &timing::Node, level: usize) {
-    let h = &node.histogram;
+fn add_to_table(table: &mut Table, item: timing::ReportItem<'_>, level: usize) {
+    let h = item.histogram();
 
     let count: u64 = h.len();
 
     table.add_row(vec![
-        format!("{}{}", " ".repeat(level * 2), name),
+        format!("{}{}", " ".repeat(level * 2), item.name()),
         format!("{:>5}", count),
         format!("{:.4}s", to_secs(h.min())),
         format!("{:.4}s", to_secs(h.max())),
@@ -654,8 +655,8 @@ fn add_to_table(table: &mut Table, name: &str, node: &timing::Node, level: usize
         format!("{:.4}s", to_secs(h.value_at_quantile(0.999))),
     ]);
 
-    for (name, report) in &node.children {
-        add_to_table(table, name, report, level + 1)
+    for item in item.items() {
+        add_to_table(table, item, level + 1)
     }
 }
 

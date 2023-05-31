@@ -1,6 +1,6 @@
 use crate::{
     state_monitor::{DurationRanges, MonitoredValue, StateMonitor},
-    timing,
+    timing::{Clock, ClockName, Clocks},
 };
 use btdht::InfoHash;
 use tracing::Span;
@@ -16,13 +16,14 @@ pub(crate) struct RepositoryMonitor {
     pub request_queue_durations: DurationRanges,
     pub request_inflight_durations: DurationRanges,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
+
     span: Span,
     node: StateMonitor,
-    timer: timing::Timer,
+    clocks: Clocks,
 }
 
 impl RepositoryMonitor {
-    pub fn new(parent: StateMonitor, timer: timing::Timer, name: &str) -> Self {
+    pub fn new(parent: StateMonitor, clocks: Clocks, name: &str) -> Self {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
@@ -39,9 +40,10 @@ impl RepositoryMonitor {
                 node.make_child("request inflight durations"),
             ),
             info_hash: node.make_value("info-hash", None),
+
             span,
             node,
-            timer,
+            clocks,
         }
     }
 
@@ -53,8 +55,8 @@ impl RepositoryMonitor {
         &self.node
     }
 
-    pub fn timer(&self) -> &timing::Timer {
-        &self.timer
+    pub fn clock(&self, name: impl Into<ClockName>) -> Clock {
+        self.clocks.clock(name)
     }
 
     pub fn name(&self) -> &str {

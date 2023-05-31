@@ -16,7 +16,6 @@ use crate::{
     },
     repository::RepositoryMonitor,
     store::{BlockRequestMode, Store},
-    timing,
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -129,14 +128,7 @@ impl Client {
     ) -> Result<()> {
         loop {
             match queued_responses_rx.recv().await {
-                Some(response) => {
-                    self.store
-                        .monitor
-                        .timer()
-                        .clone()
-                        .apply(self.handle_response(response))
-                        .await?
-                }
+                Some(response) => self.handle_response(response).await?,
                 None => return Ok(()),
             };
         }
@@ -149,40 +141,24 @@ impl Client {
                 block_presence,
                 permit: _permit,
                 debug,
-            } => {
-                timing::scope("handle_root_node")
-                    .apply(self.handle_root_node(proof, block_presence, debug))
-                    .await
-            }
+            } => self.handle_root_node(proof, block_presence, debug).await,
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => {
-                timing::scope("handle_inner_nodes")
-                    .apply(self.handle_inner_nodes(hash, debug))
-                    .await
-            }
+            } => self.handle_inner_nodes(hash, debug).await,
             PendingResponse::LeafNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => {
-                timing::scope("handle_leaf_nodes")
-                    .apply(self.handle_leaf_nodes(hash, debug))
-                    .await
-            }
+            } => self.handle_leaf_nodes(hash, debug).await,
             PendingResponse::Block {
                 data,
                 nonce,
                 block_promise,
                 permit: _permit,
                 debug,
-            } => {
-                timing::scope("handle_block")
-                    .apply(self.handle_block(data, nonce, block_promise, debug))
-                    .await
-            }
+            } => self.handle_block(data, nonce, block_promise, debug).await,
         };
 
         match result {
@@ -207,6 +183,8 @@ impl Client {
         block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
+        let _timing = self.store.monitor.clock("handle_root_node").started();
+
         let hash = proof.hash;
         let updated = self
             .store
@@ -234,6 +212,8 @@ impl Client {
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
+        let _timing = self.store.monitor.clock("handle_inner_nodes").started();
+
         let total = nodes.len();
 
         let quota = self.store.quota().await?.map(Into::into);
@@ -280,6 +260,8 @@ impl Client {
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
+        let _timing = self.store.monitor.clock("handle_leaf_nodes").started();
+
         let total = nodes.len();
         let quota = self.store.quota().await?.map(Into::into);
         let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
@@ -332,6 +314,8 @@ impl Client {
         block_promise: BlockPromise,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
+        let _timing = self.store.monitor.clock("handle_block_clock").started();
+
         match self
             .store
             .write_received_block(&data, &nonce, block_promise)

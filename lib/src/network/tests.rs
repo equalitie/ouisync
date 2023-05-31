@@ -16,7 +16,8 @@ use crate::{
     repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
-    test_utils, timing,
+    test_utils,
+    timing::Clocks,
     version_vector::VersionVector,
 };
 use futures_util::future;
@@ -385,7 +386,7 @@ async fn create_store<R: Rng + CryptoRng>(
         local_id: LocalId::new(),
         monitor: Arc::new(RepositoryMonitor::new(
             StateMonitor::make_root(),
-            timing::Timer::new(),
+            Clocks::new(),
             "test",
         )),
     };

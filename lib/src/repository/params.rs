@@ -1,12 +1,12 @@
 use super::RepositoryMonitor;
-use crate::{db, device_id::DeviceId, error::Result, state_monitor::StateMonitor, timing};
+use crate::{db, device_id::DeviceId, error::Result, state_monitor::StateMonitor, timing::Clocks};
 use std::path::{Path, PathBuf};
 
 pub struct RepositoryParams {
     store: Store,
     device_id: DeviceId,
     parent_monitor: StateMonitor,
-    timer: timing::Timer,
+    clocks: Clocks,
 }
 
 impl RepositoryParams {
@@ -27,7 +27,7 @@ impl RepositoryParams {
             store,
             device_id: rand::random(),
             parent_monitor: StateMonitor::make_root(),
-            timer: timing::Timer::new(),
+            clocks: Clocks::new(),
         }
     }
 
@@ -42,8 +42,8 @@ impl RepositoryParams {
         }
     }
 
-    pub fn with_timer(self, timer: timing::Timer) -> Self {
-        Self { timer, ..self }
+    pub fn with_clocks(self, clocks: Clocks) -> Self {
+        Self { clocks, ..self }
     }
 
     pub(super) async fn create(&self) -> Result<db::Pool, db::Error> {
@@ -75,7 +75,7 @@ impl RepositoryParams {
 
         RepositoryMonitor::new(
             self.parent_monitor.clone(),
-            self.timer.clone(),
+            self.clocks.clone(),
             name.as_ref(),
         )
     }

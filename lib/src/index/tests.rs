@@ -13,7 +13,7 @@ use crate::{
     repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
-    timing,
+    timing::Clocks,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -462,7 +462,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
         local_id: LocalId::new(),
         monitor: Arc::new(RepositoryMonitor::new(
             StateMonitor::make_root(),
-            timing::Timer::new(),
+            Clocks::new(),
             "test",
         )),
     };

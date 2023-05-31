@@ -3,48 +3,43 @@ pub use hdrhistogram::Histogram;
 use indexmap::IndexMap;
 use std::{
     borrow::Cow,
-    future::Future,
-    iter, mem, thread,
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    thread,
     time::{Duration, Instant},
 };
-use tokio::{task::futures::TaskLocalFuture, task_local};
 
 const MAX: Duration = Duration::from_secs(60 * 60);
-
-task_local! {
-    static TIMER: Timer;
-    static SCOPE: Scope;
-}
-
-pub fn scope(name: impl Into<Name>) -> Scope {
-    let name = name.into();
-    SCOPE
-        .try_with(|scope| scope.scope(name.clone()))
-        .unwrap_or_else(|_| TIMER.with(|timer| timer.scope(name)))
-}
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
-pub struct Timer {
+pub struct Clocks {
     tx: crossbeam_channel::Sender<Command>,
+    roots: Arc<ClockMap>,
 }
 
-impl Timer {
+impl Clocks {
     pub fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
-
         thread::spawn(move || run(rx));
 
-        Self { tx }
+        Self {
+            tx,
+            roots: Arc::new(ClockMap::default()),
+        }
     }
 
-    /// Creates a top-level timer scope
-    pub fn scope(&self, name: impl Into<Name>) -> Scope {
-        Scope::new(vec![name.into()], self.tx.clone())
+    /// Creates a sub-clock
+    pub fn clock(&self, name: impl Into<ClockName>) -> Clock {
+        self.roots.fetch(name.into(), 0, self.tx.clone())
     }
 
     pub fn report<F>(&self, reporter: F) -> ReportHandle
     where
-        F: FnOnce(&Root) + Send + 'static,
+        F: FnOnce(&Report) + Send + 'static,
     {
         let (complete_tx, complete_rx) = crossbeam_channel::bounded(0);
 
@@ -57,63 +52,93 @@ impl Timer {
 
         ReportHandle(complete_rx)
     }
-
-    /// Sets this timer as the default timer for the given future.
-    pub fn apply<F>(self, f: F) -> TaskLocalFuture<Self, F>
-    where
-        F: Future,
-    {
-        TIMER.scope(self, f)
-    }
 }
 
-impl Default for Timer {
+impl Default for Clocks {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub struct Scope {
-    path: Vec<Name>,
+#[derive(Clone)]
+pub struct Clock {
     tx: crossbeam_channel::Sender<Command>,
-    start: Instant,
+    id: u64,
+    children: Arc<ClockMap>,
 }
 
-impl Scope {
-    fn new(path: Vec<Name>, tx: crossbeam_channel::Sender<Command>) -> Self {
+impl Clock {
+    fn new(name: ClockName, parent_id: u64, tx: crossbeam_channel::Sender<Command>) -> Self {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+        tx.send(Command::Register {
+            name,
+            parent_id,
+            id,
+        })
+        .ok();
+
         Self {
-            path,
             tx,
+            id,
+            children: Arc::new(ClockMap::default()),
+        }
+    }
+
+    /// Creates a sub-clock
+    pub fn clock(&self, name: impl Into<ClockName>) -> Self {
+        self.children.fetch(name.into(), self.id, self.tx.clone())
+    }
+
+    pub fn start(&self) -> Recording {
+        Recording {
+            clock: Cow::Borrowed(self),
             start: Instant::now(),
         }
     }
 
-    /// Creates a subscope of this scope
-    pub fn scope(&self, name: impl Into<Name>) -> Self {
-        Self::new(
-            self.path
-                .iter()
-                .cloned()
-                .chain(iter::once(name.into()))
-                .collect(),
-            self.tx.clone(),
-        )
+    pub fn started(self) -> Recording<'static> {
+        Recording {
+            clock: Cow::Owned(self),
+            start: Instant::now(),
+        }
     }
 
-    /// Runs the future in this scope
-    pub fn apply<F>(self, f: F) -> TaskLocalFuture<Self, F>
-    where
-        F: Future,
-    {
-        SCOPE.scope(self, f)
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
-impl Drop for Scope {
+#[derive(Default)]
+struct ClockMap(Mutex<HashMap<ClockName, Clock>>);
+
+impl ClockMap {
+    fn fetch(
+        &self,
+        name: ClockName,
+        parent_id: u64,
+        tx: crossbeam_channel::Sender<Command>,
+    ) -> Clock {
+        self.0
+            .lock()
+            .unwrap()
+            .entry(name.clone())
+            .or_insert_with(|| Clock::new(name, parent_id, tx))
+            .clone()
+    }
+}
+
+pub struct Recording<'a> {
+    clock: Cow<'a, Clock>,
+    start: Instant,
+}
+
+impl Drop for Recording<'_> {
     fn drop(&mut self) {
-        self.tx
+        self.clock
+            .tx
             .send(Command::Record {
-                path: mem::take(&mut self.path),
+                id: self.clock.id,
                 value: self.start.elapsed(),
             })
             .ok();
@@ -129,82 +154,131 @@ impl ReportHandle {
     }
 }
 
-pub type Name = Cow<'static, str>;
+pub type ClockName = Cow<'static, str>;
 
 #[derive(Default)]
-pub struct Root {
-    pub children: IndexMap<Name, Node>,
+pub struct Report {
+    nodes: HashMap<u64, Node>,
+    roots: IndexMap<ClockName, u64>,
 }
 
-impl Root {
-    fn fetch(&mut self, path: Vec<Name>) -> &mut Node {
-        let mut path = path.into_iter();
+impl Report {
+    pub fn items(&self) -> impl Iterator<Item = ReportItem<'_>> {
+        self.iter_with(&self.roots)
+    }
 
-        let name = path.next().unwrap();
-        let mut current = self.children.entry(name).or_default();
+    fn iter_with<'a>(
+        &'a self,
+        index: &'a IndexMap<ClockName, u64>,
+    ) -> impl Iterator<Item = ReportItem<'a>> {
+        index.iter().filter_map(|(name, id)| {
+            let node = self.nodes.get(id)?;
 
-        for name in path {
-            current = current.children.entry(name).or_default();
+            Some(ReportItem {
+                report: self,
+                name,
+                node,
+            })
+        })
+    }
+
+    fn register(&mut self, name: ClockName, parent_id: u64, id: u64) {
+        self.nodes.insert(id, Node::new());
+
+        if parent_id == 0 {
+            self.roots.insert(name, id);
+        } else {
+            self.nodes
+                .get_mut(&parent_id)
+                .expect("missing parent node")
+                .children
+                .insert(name, id);
         }
+    }
 
-        current
+    fn record(&mut self, id: u64, value: Duration) {
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return;
+        };
+
+        if value
+            .as_nanos()
+            .try_into()
+            .ok()
+            .and_then(|value| node.histogram.record(value).ok())
+            .is_none()
+        {
+            tracing::warn!("timing out or range: {:?}", value);
+        }
     }
 }
 
-pub struct Node {
-    pub histogram: Histogram<u64>,
-    pub children: IndexMap<Name, Self>,
+pub struct ReportItem<'a> {
+    report: &'a Report,
+    name: &'a ClockName,
+    node: &'a Node,
+}
+
+impl<'a> ReportItem<'a> {
+    pub fn name(&self) -> &'a str {
+        self.name.as_ref()
+    }
+
+    pub fn histogram(&self) -> &'a Histogram<u64> {
+        &self.node.histogram
+    }
+
+    pub fn items(&self) -> impl Iterator<Item = ReportItem<'a>> {
+        self.report.iter_with(&self.node.children)
+    }
+}
+
+struct Node {
+    histogram: Histogram<u64>,
+    children: IndexMap<ClockName, u64>,
 }
 
 impl Node {
     fn new() -> Self {
         Self {
             histogram: Histogram::new_with_max(MAX.as_nanos().try_into().unwrap(), 2).unwrap(),
-            children: Default::default(),
+            children: IndexMap::new(),
         }
     }
 }
 
-impl Default for Node {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 enum Command {
+    Register {
+        name: ClockName,
+        parent_id: u64,
+        id: u64,
+    },
     Record {
-        path: Vec<Name>,
+        id: u64,
         value: Duration,
     },
     Report {
-        reporter: Box<dyn FnOnce(&Root) + Send + 'static>,
+        reporter: Box<dyn FnOnce(&Report) + Send + 'static>,
         complete_tx: crossbeam_channel::Sender<()>,
     },
 }
 
 fn run(rx: crossbeam_channel::Receiver<Command>) {
-    let mut root = Root::default();
+    let mut report = Report::default();
 
     for command in rx {
         match command {
-            Command::Record { path, value } => {
-                let node = root.fetch(path);
-
-                if value
-                    .as_nanos()
-                    .try_into()
-                    .ok()
-                    .and_then(|value| node.histogram.record(value).ok())
-                    .is_none()
-                {
-                    tracing::warn!("timing out or range: {:?}", value);
-                }
-            }
+            Command::Register {
+                name,
+                parent_id,
+                id,
+            } => report.register(name, parent_id, id),
+            Command::Record { id, value } => report.record(id, value),
             Command::Report {
                 reporter,
                 complete_tx: _complete_tx,
             } => {
-                reporter(&root);
+                reporter(&report);
             }
         }
     }

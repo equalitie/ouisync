@@ -287,7 +287,8 @@ mod tests {
         locator::Locator,
         repository::RepositoryId,
         state_monitor::StateMonitor,
-        test_utils, timing,
+        test_utils,
+        timing::Clocks,
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
@@ -775,7 +776,7 @@ mod tests {
             local_id: LocalId::new(),
             monitor: Arc::new(RepositoryMonitor::new(
                 StateMonitor::make_root(),
-                timing::Timer::new(),
+                Clocks::new(),
                 "test",
             )),
         }
