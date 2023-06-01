@@ -4,7 +4,7 @@ mod tests;
 use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
 use serde::{
     de::Error as _,
-    ser::{SerializeMap, SerializeStruct},
+    ser::{SerializeMap, SerializeSeq, SerializeStruct},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
@@ -14,10 +14,7 @@ use std::{
     fmt,
     ops::Drop,
     str::FromStr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Weak,
-    },
+    sync::{Arc, Weak},
 };
 use tokio::sync::watch;
 
@@ -104,28 +101,6 @@ impl fmt::Display for MonitorIdParseError {
     }
 }
 
-#[test]
-fn test_parse_monitor_id() {
-    let id: MonitorId = "foo".parse().unwrap();
-    assert_eq!(id.name, "foo");
-    assert_eq!(id.disambiguator, 0);
-
-    let id: MonitorId = "bar:0".parse().unwrap();
-    assert_eq!(id.name, "bar");
-    assert_eq!(id.disambiguator, 0);
-
-    let id: MonitorId = "baz:1".parse().unwrap();
-    assert_eq!(id.name, "baz");
-    assert_eq!(id.disambiguator, 1);
-
-    let id: MonitorId = "foo:bar:2".parse().unwrap();
-    assert_eq!(id.name, "foo:bar");
-    assert_eq!(id.disambiguator, 2);
-
-    assert!("baz:".parse::<MonitorId>().is_err());
-    assert!("baz:qux".parse::<MonitorId>().is_err());
-}
-
 // --- StateMonitor
 
 pub struct StateMonitor {
@@ -134,9 +109,6 @@ pub struct StateMonitor {
 
 struct StateMonitorShared {
     id: MonitorId,
-    // Incremented on each change, can be used by monitors to determine whether a child has
-    // changed.
-    version: AtomicU64,
     parent: Option<StateMonitor>,
     inner: BlockingMutex<StateMonitorInner>,
 }
@@ -194,7 +166,6 @@ impl StateMonitor {
 
                 let child = Arc::new(StateMonitorShared {
                     id: child_id,
-                    version: AtomicU64::new(0),
                     // We can't do `self.clone()` here because cloning calls `lock_inner` and thus
                     // we'd deadlock. We'll increment our `refcount` further down this function.
                     parent: Some(Self {
@@ -359,7 +330,6 @@ impl StateMonitorShared {
     fn make_root() -> Arc<Self> {
         Arc::new(StateMonitorShared {
             id: MonitorId::root(),
-            version: AtomicU64::new(0),
             parent: None,
             inner: BlockingMutex::new(StateMonitorInner {
                 values: BTreeMap::new(),
@@ -391,10 +361,8 @@ impl StateMonitorShared {
         self.lock_inner().on_change.subscribe()
     }
 
+    // TODO: Does this need the lock?
     fn changed(&self, lock: BlockingMutexGuard<'_, StateMonitorInner>) {
-        // The only important consideration here is that incrementing `version` happens before
-        // `on_change` is notified so that whoever will pick it up will see `version` increased.
-        self.version.fetch_add(1, Ordering::SeqCst);
         lock.on_change.send(()).unwrap_or(());
 
         // Let's not lock self and parent at the same time to avoid potential deadlocks.
@@ -547,8 +515,7 @@ impl Serialize for StateMonitor {
 
         // When serializing into the messagepack format, the `serialize_struct(_, N)` is serialized
         // into a list of size N (use `unpackList` in Dart).
-        let mut s = serializer.serialize_struct("StateMonitor", 3)?;
-        s.serialize_field("version", &self.shared.version.load(Ordering::SeqCst))?;
+        let mut s = serializer.serialize_struct("StateMonitor", 2)?;
         s.serialize_field("values", &ValuesSerializer(&lock.values))?;
         s.serialize_field("children", &ChildrenSerializer(&lock.children))?;
         s.end()
@@ -577,17 +544,9 @@ impl<'a> Serialize for ChildrenSerializer<'a> {
     where
         S: Serializer,
     {
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (id, entry) in self.0.iter() {
-            map.serialize_entry(
-                &id.to_string(),
-                &entry
-                    .child
-                    .upgrade()
-                    .unwrap()
-                    .version
-                    .load(Ordering::SeqCst),
-            )?;
+        let mut map = serializer.serialize_seq(Some(self.0.len()))?;
+        for id in self.0.keys() {
+            map.serialize_element(&id.to_string())?;
         }
         map.end()
     }
