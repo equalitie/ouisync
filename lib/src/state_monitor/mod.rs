@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::deadlock::{BlockingMutex, BlockingMutexGuard};
+use indexmap::{map::Entry, IndexMap};
 use serde::{
     de::Error as _,
     ser::{SerializeMap, SerializeSeq, SerializeStruct},
@@ -9,7 +10,6 @@ use serde::{
 };
 use std::{
     any::Any,
-    collections::{btree_map, BTreeMap},
     convert::Into,
     fmt,
     ops::Drop,
@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::sync::watch;
 
-#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct MonitorId {
     name: String,
     disambiguator: u64,
@@ -114,8 +114,8 @@ struct StateMonitorShared {
 }
 
 struct StateMonitorInner {
-    values: BTreeMap<String, MonitoredValueHandle>,
-    children: BTreeMap<MonitorId, ChildEntry>,
+    values: IndexMap<String, MonitoredValueHandle>,
+    children: IndexMap<MonitorId, ChildEntry>,
     // TODO: Why is this in mutex?
     on_change: watch::Sender<()>,
 }
@@ -161,7 +161,7 @@ impl StateMonitor {
         let mut is_new = false;
 
         let child = match lock.children.entry(child_id.clone()) {
-            btree_map::Entry::Vacant(e) => {
+            Entry::Vacant(e) => {
                 is_new = true;
 
                 let child = Arc::new(StateMonitorShared {
@@ -172,8 +172,8 @@ impl StateMonitor {
                         shared: self.shared.clone(),
                     }),
                     inner: BlockingMutex::new(StateMonitorInner {
-                        values: BTreeMap::new(),
-                        children: BTreeMap::new(),
+                        values: Default::default(),
+                        children: Default::default(),
                         on_change: watch::channel(()).0,
                     }),
                 });
@@ -184,7 +184,7 @@ impl StateMonitor {
                 });
                 child
             }
-            btree_map::Entry::Occupied(mut e) => {
+            Entry::Occupied(mut e) => {
                 e.get_mut().refcount += 1;
                 // Unwrap OK because children are responsible for removing themselves from the map
                 // on Drop.
@@ -230,13 +230,13 @@ impl StateMonitor {
         let value = Arc::new(BlockingMutex::new(value));
 
         match lock.values.entry(name.clone()) {
-            btree_map::Entry::Vacant(e) => {
+            Entry::Vacant(e) => {
                 e.insert(MonitoredValueHandle {
                     refcount: 1,
                     ptr: value.clone(),
                 });
             }
-            btree_map::Entry::Occupied(mut e) => {
+            Entry::Occupied(mut e) => {
                 tracing::error!(
                     "StateMonitor: Monitored value of the same name ({:?}) under monitor {:?} already exists",
                     name,
@@ -300,8 +300,8 @@ impl Drop for StateMonitor {
         let mut parent_inner = parent.shared.lock_inner();
 
         let mut entry = match parent_inner.children.entry(self.shared.id.clone()) {
-            btree_map::Entry::Occupied(entry) => entry,
-            btree_map::Entry::Vacant(_) => unreachable!(),
+            Entry::Occupied(entry) => entry,
+            Entry::Vacant(_) => unreachable!(),
         };
 
         let refcount = &mut entry.get_mut().refcount;
@@ -332,8 +332,8 @@ impl StateMonitorShared {
             id: MonitorId::root(),
             parent: None,
             inner: BlockingMutex::new(StateMonitorInner {
-                values: BTreeMap::new(),
-                children: BTreeMap::new(),
+                values: Default::default(),
+                children: Default::default(),
                 on_change: watch::channel(()).0,
             }),
         })
@@ -473,7 +473,7 @@ impl<T> Drop for MonitoredValue<T> {
 
         // Can we avoid cloning `self.name` (since we're droping anyway)?
         match lock.values.entry(self.name.clone()) {
-            btree_map::Entry::Occupied(mut e) => {
+            Entry::Occupied(mut e) => {
                 let v = e.get_mut();
                 v.refcount -= 1;
                 if v.refcount == 0 {
@@ -481,7 +481,7 @@ impl<T> Drop for MonitoredValue<T> {
                     self.monitor.shared.changed(lock);
                 }
             }
-            btree_map::Entry::Vacant(_) => unreachable!(),
+            Entry::Vacant(_) => unreachable!(),
         }
     }
 }
@@ -522,8 +522,8 @@ impl Serialize for StateMonitor {
     }
 }
 
-struct ValuesSerializer<'a>(&'a BTreeMap<String, MonitoredValueHandle>);
-struct ChildrenSerializer<'a>(&'a BTreeMap<MonitorId, ChildEntry>);
+struct ValuesSerializer<'a>(&'a IndexMap<String, MonitoredValueHandle>);
+struct ChildrenSerializer<'a>(&'a IndexMap<MonitorId, ChildEntry>);
 
 impl<'a> Serialize for ValuesSerializer<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
