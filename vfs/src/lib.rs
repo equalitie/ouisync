@@ -11,4 +11,4 @@ pub use crate::dokan::{
 mod fuse;
 
 #[cfg(not(target_os = "windows"))]
-pub use fuse::{mount, MountGuard};
+pub use fuse::{mount, multi_repo_mount::MultiRepoVFS, MountGuard};
