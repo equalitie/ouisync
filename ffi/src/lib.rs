@@ -17,23 +17,25 @@ mod transport;
 
 use crate::{
     dart::{Port, PortSender},
-    file::FileHolder,
     handler::Handler,
-    registry::Handle,
     state::State,
     transport::{ClientSender, Server},
     utils::UniqueHandle,
 };
+#[cfg(unix)]
+use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result},
     logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
+#[cfg(unix)]
+use std::os::raw::c_int;
 use std::{
     ffi::CString,
     mem,
-    os::raw::{c_char, c_int, c_void},
+    os::raw::{c_char, c_void},
     path::PathBuf,
     ptr, slice,
     sync::Arc,
@@ -96,6 +98,8 @@ pub unsafe extern "C" fn session_create(
         session
             .runtime
             .spawn(server.run(Handler::new(session.state.clone())));
+
+        session.mount();
     }
 
     result.into()
@@ -239,6 +243,45 @@ impl Session {
         };
 
         Ok(session)
+    }
+
+    // TODO: Linux, OSX
+    #[cfg(not(target_os = "windows"))]
+    fn mount(&self) {}
+
+    #[cfg(target_os = "windows")]
+    fn mount(&self) {
+        let state = self.state.clone();
+        let runtime = self.runtime.handle().clone();
+
+        self.runtime.spawn(async move {
+            use ouisync_vfs::MultiRepoVFS;
+
+            // TODO: Let the user chose what the mount point is.
+            let mounter = match MultiRepoVFS::mount(runtime, "O:\\").await {
+                Ok(mounter) => mounter,
+                Err(error) => {
+                    tracing::error!("Failed to mount session: {error:?}");
+                    return;
+                }
+            };
+
+            let repos = state.read_repositories();
+
+            for repo_holder in repos.values() {
+                if let Err(error) = mounter.add_repo(
+                    repo_holder.store_path.clone(),
+                    repo_holder.repository.clone(),
+                ) {
+                    tracing::error!(
+                        "Failed to mount repository {:?}: {error:?}",
+                        repo_holder.store_path
+                    );
+                }
+            }
+
+            *(state.mounter.lock().unwrap()) = Some(mounter);
+        });
     }
 }
 

@@ -5,19 +5,25 @@ use crate::{
 };
 use once_cell::sync::OnceCell;
 use ouisync_bridge::{config::ConfigStore, error::Result, transport::ClientConfig};
-use ouisync_lib::{network::Network, StateMonitor};
+use ouisync_lib::{
+    deadlock::{BlockingMutex, BlockingRwLockReadGuard},
+    network::Network,
+    StateMonitor,
+};
+use ouisync_vfs::MultiRepoVFS;
 use scoped_task::ScopedJoinHandle;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
     pub repos_monitor: StateMonitor,
     pub config: ConfigStore,
     pub network: Network,
-    pub repositories: Registry<RepositoryHolder>,
+    repositories: Registry<RepositoryHolder>,
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
     pub remote_client_config: OnceCell<ClientConfig>,
+    pub mounter: BlockingMutex<Option<MultiRepoVFS>>,
 }
 
 impl State {
@@ -40,6 +46,7 @@ impl State {
             files: Registry::new(),
             tasks: Registry::new(),
             remote_client_config: OnceCell::new(),
+            mounter: BlockingMutex::new(None),
         }
     }
 
@@ -52,6 +59,40 @@ impl State {
         self.remote_client_config
             .get_or_try_init(|| ClientConfig::new(&[]))
             .cloned()
+    }
+
+    pub fn insert_repository(&self, holder: RepositoryHolder) -> Handle<RepositoryHolder> {
+        if let Some(mounter) = &*self.mounter.lock().unwrap() {
+            if let Err(error) =
+                mounter.add_repo(holder.store_path.clone(), holder.repository.clone())
+            {
+                tracing::error!(
+                    "Failed to mount repository {:?}: {error:?}",
+                    holder.store_path
+                );
+            }
+        }
+
+        self.repositories.insert(holder)
+    }
+
+    pub fn remove_repository(&self, handle: Handle<RepositoryHolder>) -> Option<RepositoryHolder> {
+        if let Some(mounter) = &*self.mounter.lock().unwrap() {
+            let repository = self.repositories.get(handle);
+            mounter.remove_repo(repository.store_path.clone());
+        }
+
+        self.repositories.remove(handle)
+    }
+
+    pub fn get_repository(&self, handle: Handle<RepositoryHolder>) -> Arc<RepositoryHolder> {
+        self.repositories.get(handle)
+    }
+
+    pub fn read_repositories(
+        &self,
+    ) -> BlockingRwLockReadGuard<HashMap<u64, Arc<RepositoryHolder>>> {
+        self.repositories.read()
     }
 }
 

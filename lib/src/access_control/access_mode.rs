@@ -14,6 +14,12 @@ pub enum AccessMode {
     Write = 2,
 }
 
+impl AccessMode {
+    pub fn can_read(&self) -> bool {
+        self != &Self::Blind
+    }
+}
+
 impl FromStr for AccessMode {
     type Err = AccessModeParseError;
 

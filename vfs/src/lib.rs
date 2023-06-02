@@ -1,11 +1,14 @@
 #[cfg(target_os = "windows")]
-mod dokan_impl;
+mod dokan;
 
 #[cfg(target_os = "windows")]
-pub use dokan_impl::{mount, MountGuard};
+pub use crate::dokan::{
+    multi_repo_mount::MultiRepoVFS,
+    single_repo_mount::{mount, MountGuard},
+};
 
 #[cfg(not(target_os = "windows"))]
 mod fuse;
 
 #[cfg(not(target_os = "windows"))]
-pub use fuse::{mount, MountGuard};
+pub use fuse::{mount, multi_repo_mount::MultiRepoVFS, MountGuard};
