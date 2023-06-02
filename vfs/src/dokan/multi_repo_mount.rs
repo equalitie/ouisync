@@ -598,8 +598,27 @@ impl Handler {
     ) -> OperationResult<()> {
         match context {
             context @ MultiRepoEntryHandle::EntryHandle { .. } => {
-                let (vfs, file_name, handle) = context.as_inner_repo_handle(file_name)?;
-                vfs.move_file(&file_name, new_file_name, replace_if_existing, info, handle)
+                let (src_vfs, src_file_name, handle) = context.as_inner_repo_handle(file_name)?;
+                let (dst_vfs, dst_file_name) = self.get_repo_and_path(new_file_name)?;
+
+                let dst_vfs = match dst_vfs {
+                    Some(dst_vfs) => dst_vfs,
+                    // Moving not supported out of a repository.
+                    None => return Err(STATUS_NOT_IMPLEMENTED),
+                };
+
+                if !Arc::ptr_eq(&src_vfs, &dst_vfs) {
+                    // Moving from one repo to another is not supported.
+                    return Err(STATUS_NOT_IMPLEMENTED);
+                }
+
+                src_vfs.move_file(
+                    &src_file_name,
+                    &dst_file_name,
+                    replace_if_existing,
+                    info,
+                    handle,
+                )
             }
             MultiRepoEntryHandle::RepoList => {
                 // TODO: Or maybe we can delete the entire repo from here?
@@ -1191,8 +1210,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
 
         if self.debug_type == DebugType::Full {
             println!(
-                "{debug_id} Enter: move_file {:?}",
-                file_name.to_string_lossy()
+                "{debug_id} Enter: move_file {:?} -> {:?} replace_if_existing:{replace_if_existing:?}",
+                file_name.to_string_lossy(),
+                new_file_name.to_string_lossy(),
             );
         }
 
