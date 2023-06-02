@@ -638,7 +638,17 @@ impl Handler {
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<VolumeInfo> {
-        Err(STATUS_NOT_IMPLEMENTED)
+        Ok(VolumeInfo {
+            name: U16CString::from_str("Ouisync").unwrap(),
+            serial_number: 0,
+            max_component_length: super::MAX_COMPONENT_LENGTH,
+            fs_flags: winnt::FILE_CASE_PRESERVED_NAMES
+                | winnt::FILE_CASE_SENSITIVE_SEARCH
+                | winnt::FILE_UNICODE_ON_DISK,
+            // Copy/paste from dokan-rust memfs example, the comment there was:
+            // "Custom names don't play well with UAC".
+            fs_name: U16CString::from_str("NTFS").unwrap(),
+        })
     }
 
     fn mounted_<'c, 'h: 'c>(
