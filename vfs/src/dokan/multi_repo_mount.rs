@@ -83,7 +83,7 @@ impl MultiRepoVFS {
                     root_id,
                     repos,
                     next_debug_id: AtomicU64::new(0),
-                    debug_type: DebugType::Full,
+                    debug_type: DebugType::None,
                 };
 
                 let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
@@ -300,7 +300,6 @@ impl Handler {
         create_disposition: u32,
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
-        debug_id: u64,
     ) -> OperationResult<CreateFileInfo<MultiRepoEntryHandle>> {
         let (vfs, file_name) = self.get_repo_and_path(file_name)?;
         let vfs = match vfs {
@@ -488,7 +487,11 @@ impl Handler {
             MultiRepoEntryHandle::RepoList => {
                 let repos_lock = self.repos.read().unwrap();
 
-                for repo_name in repos_lock.name_to_repo.keys() {
+                for (repo_name, vfs) in repos_lock.name_to_repo.iter() {
+                    if !vfs.repo.access_mode().can_read() {
+                        continue;
+                    }
+
                     let ignore_case = true;
                     if !dokan::is_name_in_expression(pattern, repo_name, ignore_case) {
                         continue;
@@ -700,7 +703,6 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
             create_disposition,
             create_options,
             info,
-            debug_id,
         );
 
         match self.debug_type {
