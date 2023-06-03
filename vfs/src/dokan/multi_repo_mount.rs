@@ -801,8 +801,14 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         let debug_id = self.generate_debug_id();
 
         if self.debug_type == DebugType::Full {
+            let id = match context {
+                MultiRepoEntryHandle::EntryHandle { handle, .. } => handle.id,
+                MultiRepoEntryHandle::RepoList => self.root_id,
+            };
+
             println!(
-                "{debug_id} Enter: read_file {:?}",
+                "{debug_id} Enter: read_file id:{id} offset:{offset} buffer.len:{} {:?}",
+                buffer.len(),
                 file_name.to_string_lossy()
             );
         }
@@ -812,7 +818,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
         match self.debug_type {
             DebugType::None => (),
             DebugType::Full => match r {
-                Ok(_) => println!("{debug_id} Leave: read_file -> Ok"),
+                Ok(read) => println!("{debug_id} Leave: read_file -> Ok({read})"),
                 Err(error) => println!(
                     "{debug_id} Leave: read_file -> {:?}",
                     super::Error::NtStatus(error)
