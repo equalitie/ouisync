@@ -12,7 +12,7 @@ use dokan_sys::win32::{
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
 use ouisync_lib::{
-    deadlock::{AsyncMutex, AsyncMutexGuard},
+    deadlock::{AsyncMutex, AsyncMutexGuard, BlockingMutex},
     path, File, JointDirectory, JointEntryRef, Repository,
 };
 use std::{
@@ -25,6 +25,8 @@ use std::{
     },
     time::UNIX_EPOCH,
 };
+// TODO: We should have this in ouisync_lib::deadlock.
+use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard as AsyncRwLockReadGuard};
 use tracing::instrument;
 use widestring::{U16CStr, U16CString};
 use winapi::{shared::ntstatus::*, um::winnt};
@@ -57,7 +59,7 @@ impl VirtualFilesystem {
         &self,
         path: Utf8PathBuf,
         delete_on_close: bool,
-    ) -> (Arc<AsyncMutex<Shared>>, u64) {
+    ) -> (Arc<AsyncRwLock<Shared>>, u64) {
         // It is not clear whether `if path1 == path2 => id1 == id2` from the documentation, but
         // the memfs example in dokan-rust seems to always generate a new `id` in `create_file` so
         // the above probably doesn't have to hold.
@@ -67,17 +69,19 @@ impl VirtualFilesystem {
         match self.handles.lock().await.entry(path.clone()) {
             hash_map::Entry::Occupied(entry) => {
                 let shared = entry.get().clone();
-                let mut lock = shared.lock().await;
+                let mut lock = shared.write().await;
                 lock.handle_count += 1;
                 lock.delete_on_close |= delete_on_close;
+                lock.cached_dir = None;
                 drop(lock);
                 (shared, id)
             }
             hash_map::Entry::Vacant(entry) => {
-                let shared = Arc::new(AsyncMutex::new(Shared {
+                let shared = Arc::new(AsyncRwLock::new(Shared {
                     path: path.clone(),
                     handle_count: 1,
                     delete_on_close,
+                    cached_dir: None,
                 }));
                 entry.insert(shared.clone());
                 (shared, id)
@@ -93,7 +97,7 @@ impl VirtualFilesystem {
         create_directory: bool,
         create_disposition: CreateDisposition,
         delete_access: bool,
-        shared: Arc<AsyncMutex<Shared>>,
+        shared: Arc<AsyncRwLock<Shared>>,
     ) -> Result<(Entry, bool), Error> {
         use ouisync_lib::Error as E;
 
@@ -101,7 +105,10 @@ impl VirtualFilesystem {
             Some((parent, child)) => (parent, child),
             None => {
                 // It's the root.
-                return Ok((Entry::new_dir(self.repo.cd(path).await?, shared), false));
+                return Ok((
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?,
+                    false,
+                ));
             }
         };
 
@@ -116,7 +123,7 @@ impl VirtualFilesystem {
 
                 let entry = if delete_access {
                     if create_directory {
-                        Entry::new_dir(parent_dir.cd(child).await?, shared)
+                        Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
                         Entry::new_file(
                             OpenState::Lazy {
@@ -129,7 +136,7 @@ impl VirtualFilesystem {
                 } else {
                     if create_directory {
                         self.repo.create_directory(&path).await?;
-                        Entry::new_dir(self.repo.cd(path).await?, shared)
+                        Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
                         let mut file = self.repo.create_file(path).await?;
                         file.flush().await?;
@@ -151,7 +158,9 @@ impl VirtualFilesystem {
                     },
                     shared,
                 ),
-                JointEntryRef::Directory(_) => Entry::new_dir(parent_dir.cd(child).await?, shared),
+                JointEntryRef::Directory(_) => {
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
+                }
             }
         } else {
             match existing_entry {
@@ -159,7 +168,9 @@ impl VirtualFilesystem {
                     let file = file_entry.open().await?;
                     Entry::new_file(OpenState::Open(file), shared)
                 }
-                JointEntryRef::Directory(_) => Entry::new_dir(parent_dir.cd(child).await?, shared),
+                JointEntryRef::Directory(_) => {
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
+                }
             }
         };
 
@@ -198,7 +209,7 @@ impl VirtualFilesystem {
         if result.is_err() {
             match self.handles.lock().await.entry(path.clone()) {
                 hash_map::Entry::Occupied(entry) => {
-                    let mut handle = entry.get().lock().await;
+                    let mut handle = entry.get().write().await;
                     handle.handle_count -= 1;
                     if handle.handle_count == 0 {
                         drop(handle);
@@ -215,10 +226,10 @@ impl VirtualFilesystem {
 
     async fn close_shared(
         &self,
-        shared: &Arc<AsyncMutex<Shared>>,
+        shared: &Arc<AsyncRwLock<Shared>>,
         handles: &mut AsyncMutexGuard<'_, Handles>,
     ) -> Option<Utf8PathBuf> {
-        let mut lock = shared.lock().await;
+        let mut lock = shared.write().await;
 
         match handles.entry(lock.path.clone()) {
             hash_map::Entry::Occupied(occupied) => {
@@ -251,11 +262,11 @@ impl VirtualFilesystem {
     async fn find_files_impl(
         &self,
         mut fill_find_data: impl FnMut(&FindData) -> FillDataResult,
-        dir: &JointDirectory,
+        dir_entry: &DirEntry,
         pattern: Option<&U16CStr>,
     ) -> Result<(), Error> {
-        // TODO: We might want to check whether the root version vector of the repository has
-        // changed and reload the JointDirectory if so.
+        let dir = dir_entry.cached_or_load_dir().await?;
+
         for entry in dir.entries() {
             let name = entry.unique_name();
 
@@ -601,8 +612,7 @@ impl VirtualFilesystem {
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files");
         let dir_entry = context.entry.as_directory()?;
-        self.find_files_impl(fill_find_data, &dir_entry.dir, None)
-            .await
+        self.find_files_impl(fill_find_data, dir_entry, None).await
     }
 
     fn find_files<'c, 'h: 'c, Super: FileSystemHandler<'c, 'h>>(
@@ -628,7 +638,7 @@ impl VirtualFilesystem {
     ) -> Result<(), Error> {
         tracing::trace!("async_find_files_with_pattern");
         let dir_entry = context.entry.as_directory()?;
-        self.find_files_impl(fill_find_data, &dir_entry.dir, Some(pattern))
+        self.find_files_impl(fill_find_data, dir_entry, Some(pattern))
             .await
     }
 
@@ -719,7 +729,7 @@ impl VirtualFilesystem {
     ) -> Result<(), Error> {
         tracing::trace!("async_delete_file");
         let file_entry = context.entry.as_file()?;
-        file_entry.shared.lock().await.delete_on_close = info.delete_on_close();
+        file_entry.shared.write().await.delete_on_close = info.delete_on_close();
         Ok(())
     }
 
@@ -744,7 +754,7 @@ impl VirtualFilesystem {
         tracing::trace!("async_delete_directory");
         let dir_entry = context.entry.as_directory()?;
         let path = to_path(file_name)?;
-        let mut shared = dir_entry.shared.lock().await;
+        let mut shared = dir_entry.shared.write().await;
 
         let dir = self.repo.cd(&path).await?;
 
@@ -795,21 +805,26 @@ impl VirtualFilesystem {
 
         // Lock this entry in `self.shared` so that no other thread can open/create the `File`
         // while we're renaming it.
-        let _shared_lock = handle.entry.shared().lock().await;
+        let mut shared_lock = handle.entry.shared().write().await;
 
-        if let Entry::File(file_entry) = &handle.entry {
-            let mut file = file_entry.file.lock().await;
+        match &handle.entry {
+            Entry::File(file_entry) => {
+                let mut file = file_entry.file.lock().await;
 
-            match *file {
-                OpenState::Open(_) => {
-                    // TODO: If this is to be reopened (which it probably won't), we should
-                    // preserve the seek offset.
-                    *file = OpenState::Lazy {
-                        path: src_path.clone(),
-                        create_disposition: CreateDisposition::FileOpen,
+                match *file {
+                    OpenState::Open(_) => {
+                        // TODO: If this is to be reopened (which it probably won't), we should
+                        // preserve the seek offset.
+                        *file = OpenState::Lazy {
+                            path: src_path.clone(),
+                            create_disposition: CreateDisposition::FileOpen,
+                        }
                     }
+                    OpenState::Lazy { .. } | OpenState::Closed => {}
                 }
-                OpenState::Lazy { .. } | OpenState::Closed => {}
+            }
+            Entry::Directory(_) => {
+                shared_lock.cached_dir = None;
             }
         }
 
@@ -1130,22 +1145,64 @@ fn to_path(path_cstr: &U16CStr) -> OperationResult<Utf8PathBuf> {
     Ok(Utf8PathBuf::from(path_str))
 }
 
-type Handles = HashMap<Utf8PathBuf, Arc<AsyncMutex<Shared>>>;
+type Handles = HashMap<Utf8PathBuf, Arc<AsyncRwLock<Shared>>>;
 
 struct Shared {
     path: Utf8PathBuf,
     handle_count: usize,
     delete_on_close: bool,
+    // Only used when this is in an instance of a `DirectoryEntry`.
+    cached_dir: Option<JointDirectory>,
 }
 
 struct FileEntry {
-    shared: Arc<AsyncMutex<Shared>>,
+    shared: Arc<AsyncRwLock<Shared>>,
     file: AsyncMutex<OpenState>,
 }
 
 struct DirEntry {
-    shared: Arc<AsyncMutex<Shared>>,
-    dir: JointDirectory,
+    shared: Arc<AsyncRwLock<Shared>>,
+    repo: Arc<Repository>,
+    path: Utf8PathBuf,
+}
+
+impl DirEntry {
+    async fn cached_or_load_dir(&self) -> Result<AsyncRwLockReadGuard<JointDirectory>, Error> {
+        let cached_dir =
+            AsyncRwLockReadGuard::map(self.shared.read().await, |shared| &shared.cached_dir);
+
+        if cached_dir.is_some() {
+            return Ok(AsyncRwLockReadGuard::map(cached_dir, |cached_dir| {
+                cached_dir.as_ref().unwrap()
+            }));
+        }
+
+        drop(cached_dir);
+
+        let mut shared = self.shared.write().await;
+
+        if shared.cached_dir.is_some() {
+            return Ok(AsyncRwLockReadGuard::map(shared.downgrade(), |shared| {
+                shared.cached_dir.as_ref().unwrap()
+            }));
+        }
+
+        shared.cached_dir = Some(self.repo.cd(&self.path).await?);
+
+        Ok(AsyncRwLockReadGuard::map(shared.downgrade(), |shared| {
+            shared.cached_dir.as_ref().unwrap()
+        }))
+    }
+
+    async fn load(&self) -> Result<(), Error> {
+        // Note that these two (uncommented) lines are different from the line
+        // `self.shared.write().await.cached_dir = Some(self.repo.cd(&self.path).await?)`
+        // because above we create the `JointDirectory` before we acquire the lock while below we
+        // create it only after.
+        let mut lock = self.shared.write().await;
+        lock.cached_dir = Some(self.repo.cd(&self.path).await?);
+        Ok(())
+    }
 }
 
 enum Entry {
@@ -1154,15 +1211,21 @@ enum Entry {
 }
 
 impl Entry {
-    fn new_file(file: OpenState, shared: Arc<AsyncMutex<Shared>>) -> Entry {
+    fn new_file(file: OpenState, shared: Arc<AsyncRwLock<Shared>>) -> Entry {
         Entry::File(FileEntry {
             shared,
             file: AsyncMutex::new(file),
         })
     }
 
-    fn new_dir(dir: JointDirectory, shared: Arc<AsyncMutex<Shared>>) -> Entry {
-        Entry::Directory(DirEntry { shared, dir })
+    async fn new_dir(
+        repo: Arc<Repository>,
+        path: Utf8PathBuf,
+        shared: Arc<AsyncRwLock<Shared>>,
+    ) -> Result<Entry, Error> {
+        let dir = DirEntry { shared, repo, path };
+        dir.load().await?;
+        Ok(Entry::Directory(dir))
     }
 
     fn as_file(&self) -> Result<&FileEntry, Error> {
@@ -1179,7 +1242,7 @@ impl Entry {
         }
     }
 
-    fn shared(&self) -> &Arc<AsyncMutex<Shared>> {
+    fn shared(&self) -> &Arc<AsyncRwLock<Shared>> {
         match self {
             Entry::File(entry) => &entry.shared,
             Entry::Directory(entry) => &entry.shared,
