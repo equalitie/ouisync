@@ -26,7 +26,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 // TODO: We should have this in ouisync_lib::deadlock.
-use tokio::sync::RwLock as AsyncRwLock;
+use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard as AsyncRwLockReadGuard};
 use tracing::instrument;
 use widestring::{U16CStr, U16CString};
 use winapi::{shared::ntstatus::*, um::winnt};
@@ -72,6 +72,7 @@ impl VirtualFilesystem {
                 let mut lock = shared.write().await;
                 lock.handle_count += 1;
                 lock.delete_on_close |= delete_on_close;
+                lock.cached_dir = None;
                 drop(lock);
                 (shared, id)
             }
@@ -80,6 +81,7 @@ impl VirtualFilesystem {
                     path: path.clone(),
                     handle_count: 1,
                     delete_on_close,
+                    cached_dir: None,
                 }));
                 entry.insert(shared.clone());
                 (shared, id)
@@ -104,7 +106,7 @@ impl VirtualFilesystem {
             None => {
                 // It's the root.
                 return Ok((
-                    Entry::new_dir(self.repo.clone(), path.clone(), shared),
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?,
                     false,
                 ));
             }
@@ -121,7 +123,7 @@ impl VirtualFilesystem {
 
                 let entry = if delete_access {
                     if create_directory {
-                        Entry::new_dir(self.repo.clone(), path.clone(), shared)
+                        Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
                         Entry::new_file(
                             OpenState::Lazy {
@@ -134,7 +136,7 @@ impl VirtualFilesystem {
                 } else {
                     if create_directory {
                         self.repo.create_directory(&path).await?;
-                        Entry::new_dir(self.repo.clone(), path.clone(), shared)
+                        Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                     } else {
                         let mut file = self.repo.create_file(path).await?;
                         file.flush().await?;
@@ -157,7 +159,7 @@ impl VirtualFilesystem {
                     shared,
                 ),
                 JointEntryRef::Directory(_) => {
-                    Entry::new_dir(self.repo.clone(), path.clone(), shared)
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                 }
             }
         } else {
@@ -167,7 +169,7 @@ impl VirtualFilesystem {
                     Entry::new_file(OpenState::Open(file), shared)
                 }
                 JointEntryRef::Directory(_) => {
-                    Entry::new_dir(self.repo.clone(), path.clone(), shared)
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                 }
             }
         };
@@ -263,8 +265,7 @@ impl VirtualFilesystem {
         dir_entry: &DirEntry,
         pattern: Option<&U16CStr>,
     ) -> Result<(), Error> {
-        let _read_lock = dir_entry.shared.read().await;
-        let dir = dir_entry.dir().await?;
+        let dir = dir_entry.cached_or_load_dir().await?;
 
         for entry in dir.entries() {
             let name = entry.unique_name();
@@ -804,8 +805,7 @@ impl VirtualFilesystem {
 
         // Lock this entry in `self.shared` so that no other thread can open/create the `File`
         // while we're renaming it.
-        let shared_lock = handle.entry.shared().write().await;
-        println!("async_move_file handle_count:{}", shared_lock.handle_count);
+        let mut shared_lock = handle.entry.shared().write().await;
 
         match &handle.entry {
             Entry::File(file_entry) => {
@@ -823,7 +823,9 @@ impl VirtualFilesystem {
                     OpenState::Lazy { .. } | OpenState::Closed => {}
                 }
             }
-            Entry::Directory(dir_entry) => {}
+            Entry::Directory(_) => {
+                shared_lock.cached_dir = None;
+            }
         }
 
         self.repo
@@ -1149,6 +1151,8 @@ struct Shared {
     path: Utf8PathBuf,
     handle_count: usize,
     delete_on_close: bool,
+    // Only used when this is in an instance of a `DirectoryEntry`.
+    cached_dir: Option<JointDirectory>,
 }
 
 struct FileEntry {
@@ -1163,11 +1167,41 @@ struct DirEntry {
 }
 
 impl DirEntry {
-    async fn dir(&self) -> Result<JointDirectory, Error> {
-        self.repo
-            .cd(&self.path)
-            .await
-            .map_err(ouisync_lib::Error::into)
+    async fn cached_or_load_dir(&self) -> Result<AsyncRwLockReadGuard<JointDirectory>, Error> {
+        let cached_dir =
+            AsyncRwLockReadGuard::map(self.shared.read().await, |shared| &shared.cached_dir);
+
+        if cached_dir.is_some() {
+            return Ok(AsyncRwLockReadGuard::map(cached_dir, |cached_dir| {
+                cached_dir.as_ref().unwrap()
+            }));
+        }
+
+        drop(cached_dir);
+
+        let mut shared = self.shared.write().await;
+
+        if shared.cached_dir.is_some() {
+            return Ok(AsyncRwLockReadGuard::map(shared.downgrade(), |shared| {
+                shared.cached_dir.as_ref().unwrap()
+            }));
+        }
+
+        shared.cached_dir = Some(self.repo.cd(&self.path).await?);
+
+        Ok(AsyncRwLockReadGuard::map(shared.downgrade(), |shared| {
+            shared.cached_dir.as_ref().unwrap()
+        }))
+    }
+
+    async fn load(&self) -> Result<(), Error> {
+        // Note that these two (uncommented) lines are different from the line
+        // `self.shared.write().await.cached_dir = Some(self.repo.cd(&self.path).await?)`
+        // because above we create the `JointDirectory` before we acquire the lock while below we
+        // create it only after.
+        let mut lock = self.shared.write().await;
+        lock.cached_dir = Some(self.repo.cd(&self.path).await?);
+        Ok(())
     }
 }
 
@@ -1184,12 +1218,14 @@ impl Entry {
         })
     }
 
-    fn new_dir(
+    async fn new_dir(
         repo: Arc<Repository>,
         path: Utf8PathBuf,
         shared: Arc<AsyncRwLock<Shared>>,
-    ) -> Entry {
-        Entry::Directory(DirEntry { shared, repo, path })
+    ) -> Result<Entry, Error> {
+        let dir = DirEntry { shared, repo, path };
+        dir.load().await?;
+        Ok(Entry::Directory(dir))
     }
 
     fn as_file(&self) -> Result<&FileEntry, Error> {
