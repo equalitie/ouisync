@@ -662,10 +662,6 @@ fn add_to_table(table: &mut Table, item: timing::ReportItem<'_>, level: usize) {
         format!("{:.4}s", to_secs(h.value_at_quantile(0.99))),
         format!("{:.4}s", to_secs(h.value_at_quantile(0.999))),
     ]);
-
-    for item in item.items() {
-        add_to_table(table, item, level + 1)
-    }
 }
 
 fn to_secs(nanos: u64) -> f64 {

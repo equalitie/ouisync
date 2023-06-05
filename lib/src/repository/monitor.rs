@@ -92,28 +92,16 @@ async fn report_clocks(clocks: Clocks, monitor: StateMonitor) {
 
         clocks.report(move |report: &Report| {
             for item in report.items() {
-                report_clock(item, &monitor, &mut monitors);
+                monitors
+                    .entry(item.name().clone())
+                    .or_insert_with(|| ClockMonitor::new(monitor.make_child(item.name().as_ref())))
+                    .update(&item);
             }
 
             tx.send(monitors).ok();
         });
 
         monitors = rx.await.unwrap();
-    }
-}
-
-fn report_clock(
-    item: ReportItem<'_>,
-    parent_monitor: &StateMonitor,
-    monitors: &mut HashMap<u64, ClockMonitor>,
-) {
-    monitors
-        .entry(item.id())
-        .or_insert_with(|| ClockMonitor::new(parent_monitor.make_child(item.name())))
-        .update(&item);
-
-    for item in item.items() {
-        report_clock(item, parent_monitor, monitors);
     }
 }
 
