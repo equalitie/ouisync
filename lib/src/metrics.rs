@@ -53,8 +53,6 @@ pub struct Clock {
 
 impl Clock {
     fn new(name: ClockName, tx: crossbeam_channel::Sender<Command>) -> Self {
-        tx.send(Command::Register { name: name.clone() }).ok();
-
         Self { name, tx }
     }
 
@@ -103,14 +101,8 @@ impl Report {
             .map(|(name, node)| ReportItem { name, node })
     }
 
-    fn register(&mut self, name: ClockName) {
-        self.nodes.entry(name).or_insert_with(Node::new);
-    }
-
     fn record(&mut self, name: ClockName, value: Duration) {
-        let Some(node) = self.nodes.get_mut(&name) else {
-            return;
-        };
+        let node = self.nodes.entry(name).or_default();
 
         if value
             .as_nanos()
@@ -143,8 +135,8 @@ struct Node {
     histogram: Histogram<u64>,
 }
 
-impl Node {
-    fn new() -> Self {
+impl Default for Node {
+    fn default() -> Self {
         Self {
             histogram: Histogram::new_with_max(MAX.as_nanos().try_into().unwrap(), 2).unwrap(),
         }
@@ -152,9 +144,6 @@ impl Node {
 }
 
 enum Command {
-    Register {
-        name: ClockName,
-    },
     Record {
         name: ClockName,
         value: Duration,
@@ -169,7 +158,6 @@ fn run(rx: crossbeam_channel::Receiver<Command>) {
 
     for command in rx {
         match command {
-            Command::Register { name } => report.register(name),
             Command::Record { name, value } => report.record(name, value),
             Command::Report { reporter } => {
                 reporter(&report);
