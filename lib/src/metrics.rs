@@ -10,11 +10,11 @@ use std::{
 const MAX: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
-pub struct Clocks {
+pub struct Metrics {
     tx: crossbeam_channel::Sender<Command>,
 }
 
-impl Clocks {
+impl Metrics {
     pub fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         thread::spawn(move || run(rx));
@@ -39,7 +39,7 @@ impl Clocks {
     }
 }
 
-impl Default for Clocks {
+impl Default for Metrics {
     fn default() -> Self {
         Self::new()
     }
@@ -104,7 +104,7 @@ impl Report {
     }
 
     fn register(&mut self, name: ClockName) {
-        self.nodes.insert(name, Node::new());
+        self.nodes.entry(name).or_insert_with(Node::new);
     }
 
     fn record(&mut self, name: ClockName, value: Duration) {

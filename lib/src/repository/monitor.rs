@@ -2,8 +2,8 @@ use std::{fmt, time::Duration};
 
 use crate::{
     collections::HashMap,
+    metrics::{Clock, Metrics, Report, ReportItem},
     state_monitor::{MonitoredValue, StateMonitor},
-    timing::{Clock, Clocks, Report, ReportItem},
 };
 use btdht::InfoHash;
 use scoped_task::ScopedJoinHandle;
@@ -33,7 +33,7 @@ pub(crate) struct RepositoryMonitor {
 }
 
 impl RepositoryMonitor {
-    pub fn new(parent: StateMonitor, clocks: Clocks, name: &str) -> Self {
+    pub fn new(parent: StateMonitor, clocks: Metrics, name: &str) -> Self {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
@@ -80,7 +80,7 @@ impl RepositoryMonitor {
     }
 }
 
-async fn report_clocks(clocks: Clocks, monitor: StateMonitor) {
+async fn report_clocks(clocks: Metrics, monitor: StateMonitor) {
     let mut interval = time::interval(Duration::from_secs(1));
     let mut monitors = HashMap::new();
 

@@ -5,8 +5,8 @@ use comfy_table::{presets, Table};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
+    metrics::{self, Metrics},
     network::{Network, Registration},
-    timing::{self, Clocks},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
     Result,
 };
@@ -267,7 +267,7 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    clocks: Clocks,
+    clocks: Metrics,
 }
 
 impl Context {
@@ -278,7 +278,7 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            clocks: Clocks::new(),
+            clocks: Metrics::new(),
         }
     }
 }
@@ -632,7 +632,7 @@ pub(crate) fn init_log() {
     result.ok();
 }
 
-fn report_timings(report: &timing::Report) {
+fn report_timings(report: &metrics::Report) {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
@@ -646,7 +646,7 @@ fn report_timings(report: &timing::Report) {
     println!("{table}");
 }
 
-fn add_to_table(table: &mut Table, item: timing::ReportItem<'_>, level: usize) {
+fn add_to_table(table: &mut Table, item: metrics::ReportItem<'_>, level: usize) {
     let h = item.histogram();
 
     let count: u64 = h.len();
