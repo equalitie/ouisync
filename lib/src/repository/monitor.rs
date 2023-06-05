@@ -111,6 +111,7 @@ async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
 struct MetricMonitor {
     count: MonitoredValue<u64>,
 
+    time_recent: MonitoredValue<Seconds>,
     time_min: MonitoredValue<Seconds>,
     time_max: MonitoredValue<Seconds>,
     time_mean: MonitoredValue<Seconds>,
@@ -120,6 +121,7 @@ struct MetricMonitor {
     time_p99: MonitoredValue<Seconds>,
     time_p999: MonitoredValue<Seconds>,
 
+    throughput_recent: MonitoredValue<Float>,
     throughput_min: MonitoredValue<u64>,
     throughput_max: MonitoredValue<u64>,
     throughput_mean: MonitoredValue<Float>,
@@ -138,6 +140,7 @@ impl MetricMonitor {
         Self {
             count: node.make_value("count", 0),
 
+            time_recent: time.make_value("recent", Seconds(0.0)),
             time_min: time.make_value("min", Seconds(0.0)),
             time_max: time.make_value("max", Seconds(0.0)),
             time_mean: time.make_value("mean", Seconds(0.0)),
@@ -147,6 +150,7 @@ impl MetricMonitor {
             time_p99: time.make_value("99%", Seconds(0.0)),
             time_p999: time.make_value("99.9%", Seconds(0.0)),
 
+            throughput_recent: throughput.make_value("recent", Float(0.0)),
             throughput_min: throughput.make_value("min", 0),
             throughput_max: throughput.make_value("max", 0),
             throughput_mean: throughput.make_value("mean", Float(0.0)),
@@ -161,6 +165,7 @@ impl MetricMonitor {
     fn update(&self, item: ReportItem<'_>) {
         *self.count.get() = item.time_histogram.len();
 
+        *self.time_recent.get() = Seconds::from_ns_f(item.time_recent);
         *self.time_min.get() = Seconds::from_ns(item.time_histogram.min());
         *self.time_max.get() = Seconds::from_ns(item.time_histogram.max());
         *self.time_mean.get() = Seconds::from_ns_f(item.time_histogram.mean());
@@ -170,6 +175,7 @@ impl MetricMonitor {
         *self.time_p99.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.99));
         *self.time_p999.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.999));
 
+        *self.throughput_recent.get() = Float(item.throughput_recent);
         *self.throughput_min.get() = item.throughput_histogram.min();
         *self.throughput_max.get() = item.throughput_histogram.max();
         *self.throughput_mean.get() = Float(item.throughput_histogram.mean());

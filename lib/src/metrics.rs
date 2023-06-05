@@ -105,7 +105,9 @@ impl Report {
         self.metrics.iter().map(|(name, report)| ReportItem {
             name,
             time_histogram: &report.time_histogram,
+            time_recent: report.time_recent.get(),
             throughput_histogram: &report.throughput_histogram,
+            throughput_recent: report.throughput_recent.get(),
         })
     }
 
@@ -123,29 +125,40 @@ impl Report {
 pub struct ReportItem<'a> {
     pub name: &'a MetricName,
     pub time_histogram: &'a Histogram<u64>,
+    pub time_recent: f64,
     pub throughput_histogram: &'a Histogram<u64>,
+    pub throughput_recent: f64,
 }
 
 const PERIOD: Duration = Duration::from_secs(1);
+const RECENT_PERIODS: usize = 5;
 
 struct MetricReport {
     period_start: Option<Instant>,
     time_histogram: Histogram<u64>,
+    time_recent: MovingAverage<RECENT_PERIODS>,
     throughput_histogram: Histogram<u64>,
+    throughput_recent: MovingAverage<RECENT_PERIODS>,
     throughput_count: u64,
 }
 
 impl MetricReport {
     fn record(&mut self, value: Value) {
-        self.time_histogram
-            .saturating_record(value.duration.as_nanos().try_into().unwrap_or(u64::MAX));
+        let time = value.duration.as_nanos().try_into().unwrap_or(u64::MAX);
+        self.time_histogram.saturating_record(time);
+        self.time_recent.record(time);
 
         if let Some(period_start) = self.period_start {
             if value.timestamp.duration_since(period_start) > PERIOD {
                 self.throughput_histogram
                     .saturating_record(self.throughput_count);
+                self.throughput_recent.record(self.throughput_count);
+
                 self.throughput_count = 0;
                 self.period_start = Some(value.timestamp);
+
+                self.time_recent.advance();
+                self.throughput_recent.advance();
             }
         } else {
             self.period_start = Some(value.timestamp);
@@ -161,10 +174,64 @@ impl Default for MetricReport {
             period_start: None,
             time_histogram: Histogram::new_with_max(MAX_TIME.as_nanos().try_into().unwrap(), 2)
                 .unwrap(),
+            time_recent: MovingAverage::default(),
             throughput_histogram: Histogram::new_with_max(MAX_THROUGHPUT, 2).unwrap(),
+            throughput_recent: MovingAverage::default(),
             throughput_count: 0,
         }
     }
+}
+
+/// Maintains a moving average of some value during the last N time periods (typically seconds).
+struct MovingAverage<const N: usize> {
+    slots: [Slot; N],
+    curr: usize,
+}
+
+impl<const N: usize> MovingAverage<N> {
+    /// Records a new value in the current time period.
+    pub fn record(&mut self, value: u64) {
+        let slot = &mut self.slots[self.curr];
+
+        slot.sum += value;
+        slot.count += 1;
+    }
+
+    /// Starts a new time period.
+    pub fn advance(&mut self) {
+        let next = (self.curr + 1) % self.slots.len();
+        self.slots[next] = Slot::default();
+        self.curr = next;
+    }
+
+    /// Retrieves the current average value.
+    pub fn get(&self) -> f64 {
+        let total = self.slots.iter().fold(Slot::default(), |total, slot| Slot {
+            sum: total.sum + slot.sum,
+            count: total.count + slot.count,
+        });
+
+        if total.count > 0 {
+            total.sum as f64 / total.count as f64
+        } else {
+            0.0
+        }
+    }
+}
+
+impl<const N: usize> Default for MovingAverage<N> {
+    fn default() -> Self {
+        Self {
+            slots: [Slot::default(); N],
+            curr: 0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Default)]
+struct Slot {
+    sum: u64,
+    count: u64,
 }
 
 struct Value {
