@@ -1,4 +1,7 @@
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
 use crate::{
     collections::HashMap,
@@ -7,7 +10,12 @@ use crate::{
 };
 use btdht::InfoHash;
 use scoped_task::ScopedJoinHandle;
-use tokio::{sync::oneshot, time};
+use tokio::{
+    select,
+    sync::{oneshot, watch},
+    task,
+    time::{self, MissedTickBehavior},
+};
 use tracing::Span;
 
 pub(crate) struct RepositoryMonitor {
@@ -28,6 +36,9 @@ pub(crate) struct RepositoryMonitor {
     pub request_queued_metric: Metric,
     pub request_inflight_metric: Metric,
 
+    pub job_monitor: JobMonitor,
+    pub job_metric: Metric,
+
     span: Span,
     node: StateMonitor,
     _report_metrics_task: ScopedJoinHandle<()>,
@@ -38,6 +49,13 @@ impl RepositoryMonitor {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
+        let index_requests_inflight = node.make_value("index requests inflight", 0);
+        let block_requests_inflight = node.make_value("block requests inflight", 0);
+        let pending_requests = node.make_value("pending requests", 0);
+        let total_requests_cummulative = node.make_value("total requests cummulative", 0);
+        let request_timeouts = node.make_value("request timeouts", 0);
+        let info_hash = node.make_value("info-hash", None);
+
         let handle_response_metric = metrics.get("handle_response");
         let handle_root_node_metric = metrics.get("handle_root_node");
         let handle_inner_nodes_metric = metrics.get("handle_inner_node");
@@ -46,15 +64,18 @@ impl RepositoryMonitor {
         let request_queued_metric = metrics.get("request queued");
         let request_inflight_metric = metrics.get("request inflight");
 
+        let job_monitor = JobMonitor::new(node.make_value("background job state", JobState::Idle));
+        let job_metric = metrics.get("background job");
+
         let report_metrics_task = scoped_task::spawn(report_metrics(metrics, node.clone()));
 
         Self {
-            index_requests_inflight: node.make_value("index requests inflight", 0),
-            block_requests_inflight: node.make_value("block requests inflight", 0),
-            pending_requests: node.make_value("pending requests", 0),
-            total_requests_cummulative: node.make_value("total requests cummulative", 0),
-            request_timeouts: node.make_value("request timeouts", 0),
-            info_hash: node.make_value("info-hash", None),
+            index_requests_inflight,
+            block_requests_inflight,
+            pending_requests,
+            total_requests_cummulative,
+            request_timeouts,
+            info_hash,
 
             handle_response_metric,
             handle_root_node_metric,
@@ -63,6 +84,9 @@ impl RepositoryMonitor {
             handle_block_metric,
             request_queued_metric,
             request_inflight_metric,
+
+            job_monitor,
+            job_metric,
 
             span,
             node,
@@ -134,13 +158,13 @@ struct MetricMonitor {
 
 impl MetricMonitor {
     fn new(node: StateMonitor) -> Self {
-        let time = node.make_child("time");
-        let throughput = node.make_child("throughput");
+        let time = node.make_child("time stats");
+        let throughput = node.make_child("throughput stats");
 
         Self {
             count: node.make_value("count", 0),
 
-            time_recent: time.make_value("recent", Seconds(0.0)),
+            time_recent: node.make_value("time", Seconds(0.0)),
             time_min: time.make_value("min", Seconds(0.0)),
             time_max: time.make_value("max", Seconds(0.0)),
             time_mean: time.make_value("mean", Seconds(0.0)),
@@ -150,7 +174,7 @@ impl MetricMonitor {
             time_p99: time.make_value("99%", Seconds(0.0)),
             time_p999: time.make_value("99.9%", Seconds(0.0)),
 
-            throughput_recent: throughput.make_value("recent", Float(0.0)),
+            throughput_recent: node.make_value("throughput", Float(0.0)),
             throughput_min: throughput.make_value("min", 0),
             throughput_max: throughput.make_value("max", 0),
             throughput_mean: throughput.make_value("mean", Float(0.0)),
@@ -210,5 +234,75 @@ struct Float(f64);
 impl fmt::Debug for Float {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:.1}", self.0)
+    }
+}
+
+pub(crate) struct JobMonitor {
+    tx: watch::Sender<bool>,
+}
+
+impl JobMonitor {
+    fn new(value: MonitoredValue<JobState>) -> Self {
+        let (tx, mut rx) = watch::channel(false);
+
+        task::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            let mut start = None;
+
+            loop {
+                select! {
+                    result = rx.changed() => {
+                        if result.is_err() {
+                            *value.get() = JobState::Idle;
+                            break;
+                        }
+
+                        if *rx.borrow() {
+                            start = Some(Instant::now());
+                        } else {
+                            start = None;
+                            *value.get() = JobState::Idle;
+                        }
+                    }
+                    _ = interval.tick(), if start.is_some() => {
+                        *value.get() = JobState::Running(start.unwrap().elapsed());
+                    }
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    pub(crate) fn start(&self) -> Option<JobGuard<'_>> {
+        if self.tx.send_replace(true) {
+            None
+        } else {
+            Some(JobGuard(self))
+        }
+    }
+}
+
+pub(crate) struct JobGuard<'a>(&'a JobMonitor);
+
+impl Drop for JobGuard<'_> {
+    fn drop(&mut self) {
+        self.0.tx.send(false).ok();
+    }
+}
+
+enum JobState {
+    Idle,
+    Running(Duration),
+}
+
+impl fmt::Debug for JobState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Idle => write!(f, "idle"),
+            Self::Running(duration) => write!(f, "running for {:.1}s", duration.as_secs_f64()),
+        }
     }
 }

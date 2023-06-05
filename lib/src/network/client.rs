@@ -128,39 +128,67 @@ impl Client {
     ) -> Result<()> {
         loop {
             match queued_responses_rx.recv().await {
-                Some(response) => self.handle_response(response).await?,
+                Some(response) => {
+                    self.store
+                        .monitor
+                        .handle_response_metric
+                        .measure_ok(self.handle_response(response))
+                        .await?
+                }
                 None => return Ok(()),
             };
         }
     }
 
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
-        let _timing = self.store.monitor.handle_response_metric.start();
-
         let result = match response {
             PendingResponse::RootNode {
                 proof,
                 block_presence,
                 permit: _permit,
                 debug,
-            } => self.handle_root_node(proof, block_presence, debug).await,
+            } => {
+                self.store
+                    .monitor
+                    .handle_root_node_metric
+                    .measure_ok(self.handle_root_node(proof, block_presence, debug))
+                    .await
+            }
             PendingResponse::InnerNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => self.handle_inner_nodes(hash, debug).await,
+            } => {
+                self.store
+                    .monitor
+                    .handle_inner_nodes_metric
+                    .measure_ok(self.handle_inner_nodes(hash, debug))
+                    .await
+            }
             PendingResponse::LeafNodes {
                 hash,
                 permit: _permit,
                 debug,
-            } => self.handle_leaf_nodes(hash, debug).await,
+            } => {
+                self.store
+                    .monitor
+                    .handle_leaf_nodes_metric
+                    .measure_ok(self.handle_leaf_nodes(hash, debug))
+                    .await
+            }
             PendingResponse::Block {
                 data,
                 nonce,
                 block_promise,
                 permit: _permit,
                 debug,
-            } => self.handle_block(data, nonce, block_promise, debug).await,
+            } => {
+                self.store
+                    .monitor
+                    .handle_block_metric
+                    .measure_ok(self.handle_block(data, nonce, block_promise, debug))
+                    .await
+            }
         };
 
         match result {
@@ -185,8 +213,6 @@ impl Client {
         block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.handle_root_node_metric.start();
-
         let hash = proof.hash;
         let updated = self
             .store
@@ -214,8 +240,6 @@ impl Client {
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.handle_inner_nodes_metric.start();
-
         let total = nodes.len();
 
         let quota = self.store.quota().await?.map(Into::into);
@@ -262,8 +286,6 @@ impl Client {
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.handle_leaf_nodes_metric.start();
-
         let total = nodes.len();
         let quota = self.store.quota().await?.map(Into::into);
         let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
@@ -316,8 +338,6 @@ impl Client {
         block_promise: BlockPromise,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.handle_block_metric.start();
-
         match self
             .store
             .write_received_block(&data, &nonce, block_promise)

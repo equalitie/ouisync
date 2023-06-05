@@ -3,6 +3,7 @@ pub use hdrhistogram::Histogram;
 use indexmap::IndexMap;
 use std::{
     borrow::Cow,
+    future::Future,
     thread,
     time::{Duration, Instant},
 };
@@ -59,7 +60,6 @@ pub struct Metric {
 }
 
 impl Metric {
-    /// Records a duration directly
     pub fn record(&self, duration: Duration) {
         self.tx
             .send(Command::Record {
@@ -72,13 +72,26 @@ impl Metric {
             .ok();
     }
 
-    /// Starts measuring the duration of a section of code using this metric. The measuring stops
-    /// and the measured duration is recorded when the returned `Timing` goes out of scope.
-    pub fn start(&self) -> Timing {
+    pub fn start(&self) -> Timing<'_> {
         Timing {
             metric: self,
             start: Instant::now(),
         }
+    }
+
+    /// Measures the duration of running the given future and if it returns `Ok`, record it.
+    pub async fn measure_ok<F, T, E>(&self, f: F) -> F::Output
+    where
+        F: Future<Output = Result<T, E>>,
+    {
+        let start = Instant::now();
+        let output = f.await;
+
+        if output.is_ok() {
+            self.record(start.elapsed());
+        }
+
+        output
     }
 }
 
@@ -89,7 +102,7 @@ pub struct Timing<'a> {
 
 impl Drop for Timing<'_> {
     fn drop(&mut self) {
-        self.metric.record(self.start.elapsed())
+        self.metric.record(self.start.elapsed());
     }
 }
 
