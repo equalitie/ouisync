@@ -1,7 +1,7 @@
 mod wait_map;
 
 use camino::Utf8Path;
-use comfy_table::{presets, Table};
+use comfy_table::{presets, CellAlignment, Table};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
@@ -100,7 +100,7 @@ pub(crate) mod env {
             let (tx, rx) = oneshot::channel();
 
             self.context.clocks.report(|report| {
-                report_timings(report);
+                report_metrics(report);
                 tx.send(()).ok();
             });
 
@@ -632,36 +632,64 @@ pub(crate) fn init_log() {
     result.ok();
 }
 
-fn report_timings(report: &metrics::Report) {
+fn report_metrics(report: &metrics::Report) {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
-        "name", "count", "min", "max", "mean", "50%", "90%", "99%", "99.9%",
+        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
     ]);
 
-    for item in report.items() {
-        add_to_table(&mut table, item, 0);
+    for column in table.column_iter_mut().skip(1) {
+        column.set_cell_alignment(CellAlignment::Right);
     }
 
-    println!("{table}");
-}
+    for item in report.items() {
+        let h = item.time_histogram;
 
-fn add_to_table(table: &mut Table, item: metrics::ReportItem<'_>, level: usize) {
-    let h = item.histogram();
+        table.add_row(vec![
+            format!("{}", item.name),
+            format!("{}", h.len()),
+            format!("{:.4}", to_secs(h.min())),
+            format!("{:.4}", to_secs(h.max())),
+            format!("{:.4}", to_secs(h.mean() as u64)),
+            format!("{:.4}", to_secs(h.stdev() as u64)),
+            format!("{:.4}", to_secs(h.value_at_quantile(0.5)),),
+            format!("{:.4}", to_secs(h.value_at_quantile(0.9)),),
+            format!("{:.4}", to_secs(h.value_at_quantile(0.99))),
+            format!("{:.4}", to_secs(h.value_at_quantile(0.999))),
+        ]);
+    }
 
-    let count: u64 = h.len();
+    println!("Time (s)\n{table}");
 
-    table.add_row(vec![
-        format!("{}{}", " ".repeat(level * 2), item.name()),
-        format!("{:>5}", count),
-        format!("{:.4}s", to_secs(h.min())),
-        format!("{:.4}s", to_secs(h.max())),
-        format!("{:.4}s", to_secs(h.mean() as u64)),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.5))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.9))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.99))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.999))),
+    let mut table = Table::new();
+    table.load_preset(presets::UTF8_FULL_CONDENSED);
+    table.set_header(vec![
+        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
     ]);
+
+    for column in table.column_iter_mut().skip(1) {
+        column.set_cell_alignment(CellAlignment::Right);
+    }
+
+    for item in report.items() {
+        let h = item.throughput_histogram;
+
+        table.add_row(vec![
+            format!("{}", item.name),
+            format!("{}", h.len()),
+            format!("{}", h.min()),
+            format!("{}", h.max()),
+            format!("{:.1}", h.mean()),
+            format!("{:.1}", h.stdev()),
+            format!("{}", h.value_at_quantile(0.5)),
+            format!("{}", h.value_at_quantile(0.9)),
+            format!("{}", h.value_at_quantile(0.99)),
+            format!("{}", h.value_at_quantile(0.999)),
+        ]);
+    }
+
+    println!("Throughput (hits/s)\n{table}");
 }
 
 fn to_secs(nanos: u64) -> f64 {

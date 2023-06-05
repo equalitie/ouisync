@@ -2,7 +2,7 @@ use std::{fmt, time::Duration};
 
 use crate::{
     collections::HashMap,
-    metrics::{Metrics, Report, ReportItem, Time},
+    metrics::{Metric, Metrics, Report, ReportItem},
     state_monitor::{MonitoredValue, StateMonitor},
 };
 use btdht::InfoHash;
@@ -20,12 +20,13 @@ pub(crate) struct RepositoryMonitor {
     pub request_timeouts: MonitoredValue<u64>,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
 
-    pub handle_root_node_time: Time,
-    pub handle_inner_nodes_time: Time,
-    pub handle_leaf_nodes_time: Time,
-    pub handle_block_time: Time,
-    pub request_queued_time: Time,
-    pub request_inflight_time: Time,
+    pub handle_response_metric: Metric,
+    pub handle_root_node_metric: Metric,
+    pub handle_inner_nodes_metric: Metric,
+    pub handle_leaf_nodes_metric: Metric,
+    pub handle_block_metric: Metric,
+    pub request_queued_metric: Metric,
+    pub request_inflight_metric: Metric,
 
     span: Span,
     node: StateMonitor,
@@ -37,12 +38,13 @@ impl RepositoryMonitor {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
-        let handle_root_node_time = metrics.clock("handle_root_node");
-        let handle_inner_nodes_time = metrics.clock("handle_inner_node");
-        let handle_leaf_nodes_time = metrics.clock("handle_leaf_node");
-        let handle_block_time = metrics.clock("handle_block");
-        let request_queued_time = metrics.clock("request queued");
-        let request_inflight_time = metrics.clock("request inflight");
+        let handle_response_metric = metrics.get("handle_response");
+        let handle_root_node_metric = metrics.get("handle_root_node");
+        let handle_inner_nodes_metric = metrics.get("handle_inner_node");
+        let handle_leaf_nodes_metric = metrics.get("handle_leaf_node");
+        let handle_block_metric = metrics.get("handle_block");
+        let request_queued_metric = metrics.get("request queued");
+        let request_inflight_metric = metrics.get("request inflight");
 
         let report_metrics_task = scoped_task::spawn(report_metrics(metrics, node.clone()));
 
@@ -54,12 +56,13 @@ impl RepositoryMonitor {
             request_timeouts: node.make_value("request timeouts", 0),
             info_hash: node.make_value("info-hash", None),
 
-            handle_root_node_time,
-            handle_inner_nodes_time,
-            handle_leaf_nodes_time,
-            handle_block_time,
-            request_queued_time,
-            request_inflight_time,
+            handle_response_metric,
+            handle_root_node_metric,
+            handle_inner_nodes_metric,
+            handle_leaf_nodes_metric,
+            handle_block_metric,
+            request_queued_metric,
+            request_inflight_metric,
 
             span,
             node,
@@ -93,9 +96,9 @@ async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
         metrics.report(move |report: &Report| {
             for item in report.items() {
                 monitors
-                    .entry(item.name().clone())
-                    .or_insert_with(|| TimeMonitor::new(monitor.make_child(item.name().as_ref())))
-                    .update(&item);
+                    .entry(item.name.clone())
+                    .or_insert_with(|| MetricMonitor::new(monitor.make_child(item.name.as_ref())))
+                    .update(item);
             }
 
             tx.send(monitors).ok();
@@ -105,58 +108,101 @@ async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
     }
 }
 
-struct TimeMonitor {
+struct MetricMonitor {
     count: MonitoredValue<u64>,
-    mean: MonitoredValue<Seconds>,
-    max: MonitoredValue<Seconds>,
-    p50: MonitoredValue<Seconds>,
-    p90: MonitoredValue<Seconds>,
-    p99: MonitoredValue<Seconds>,
-    p999: MonitoredValue<Seconds>,
+
+    time_min: MonitoredValue<Seconds>,
+    time_max: MonitoredValue<Seconds>,
+    time_mean: MonitoredValue<Seconds>,
+    time_stdev: MonitoredValue<Seconds>,
+    time_p50: MonitoredValue<Seconds>,
+    time_p90: MonitoredValue<Seconds>,
+    time_p99: MonitoredValue<Seconds>,
+    time_p999: MonitoredValue<Seconds>,
+
+    throughput_min: MonitoredValue<u64>,
+    throughput_max: MonitoredValue<u64>,
+    throughput_mean: MonitoredValue<Float>,
+    throughput_stdev: MonitoredValue<Float>,
+    throughput_p50: MonitoredValue<u64>,
+    throughput_p90: MonitoredValue<u64>,
+    throughput_p99: MonitoredValue<u64>,
+    throughput_p999: MonitoredValue<u64>,
 }
 
-impl TimeMonitor {
+impl MetricMonitor {
     fn new(node: StateMonitor) -> Self {
+        let time = node.make_child("time");
+        let throughput = node.make_child("throughput");
+
         Self {
             count: node.make_value("count", 0),
-            mean: node.make_value("mean", Seconds::ZERO),
-            max: node.make_value("max", Seconds::ZERO),
-            p50: node.make_value("50%", Seconds::ZERO),
-            p90: node.make_value("90%", Seconds::ZERO),
-            p99: node.make_value("99%", Seconds::ZERO),
-            p999: node.make_value("99.9%", Seconds::ZERO),
+
+            time_min: time.make_value("min", Seconds(0.0)),
+            time_max: time.make_value("max", Seconds(0.0)),
+            time_mean: time.make_value("mean", Seconds(0.0)),
+            time_stdev: time.make_value("stdev", Seconds(0.0)),
+            time_p50: time.make_value("50%", Seconds(0.0)),
+            time_p90: time.make_value("90%", Seconds(0.0)),
+            time_p99: time.make_value("99%", Seconds(0.0)),
+            time_p999: time.make_value("99.9%", Seconds(0.0)),
+
+            throughput_min: throughput.make_value("min", 0),
+            throughput_max: throughput.make_value("max", 0),
+            throughput_mean: throughput.make_value("mean", Float(0.0)),
+            throughput_stdev: throughput.make_value("stdev", Float(0.0)),
+            throughput_p50: throughput.make_value("50%", 0),
+            throughput_p90: throughput.make_value("90%", 0),
+            throughput_p99: throughput.make_value("99%", 0),
+            throughput_p999: throughput.make_value("99.9%", 0),
         }
     }
 
-    fn update(&self, report: &ReportItem<'_>) {
-        let h = report.histogram();
+    fn update(&self, item: ReportItem<'_>) {
+        *self.count.get() = item.time_histogram.len();
 
-        *self.count.get() = h.len();
-        *self.mean.get() = Seconds::from_nanos_f(h.mean());
-        *self.max.get() = Seconds::from_nanos(h.max());
-        *self.p50.get() = Seconds::from_nanos(h.value_at_quantile(0.5));
-        *self.p90.get() = Seconds::from_nanos(h.value_at_quantile(0.9));
-        *self.p99.get() = Seconds::from_nanos(h.value_at_quantile(0.99));
-        *self.p999.get() = Seconds::from_nanos(h.value_at_quantile(0.999));
+        *self.time_min.get() = Seconds::from_ns(item.time_histogram.min());
+        *self.time_max.get() = Seconds::from_ns(item.time_histogram.max());
+        *self.time_mean.get() = Seconds::from_ns_f(item.time_histogram.mean());
+        *self.time_stdev.get() = Seconds::from_ns_f(item.time_histogram.stdev());
+        *self.time_p50.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.5));
+        *self.time_p90.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.9));
+        *self.time_p99.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.99));
+        *self.time_p999.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.999));
+
+        *self.throughput_min.get() = item.throughput_histogram.min();
+        *self.throughput_max.get() = item.throughput_histogram.max();
+        *self.throughput_mean.get() = Float(item.throughput_histogram.mean());
+        *self.throughput_stdev.get() = Float(item.throughput_histogram.stdev());
+        *self.throughput_p50.get() = item.throughput_histogram.value_at_quantile(0.5);
+        *self.throughput_p90.get() = item.throughput_histogram.value_at_quantile(0.9);
+        *self.throughput_p99.get() = item.throughput_histogram.value_at_quantile(0.99);
+        *self.throughput_p999.get() = item.throughput_histogram.value_at_quantile(0.999);
     }
 }
 
 struct Seconds(f64);
 
 impl Seconds {
-    const ZERO: Self = Self(0.0);
-
-    fn from_nanos(n: u64) -> Self {
-        Self::from_nanos_f(n as f64)
+    fn from_ns(ns: u64) -> Self {
+        Self::from_ns_f(ns as f64)
     }
 
-    fn from_nanos_f(n: f64) -> Self {
-        Self(n / 1_000_000_000.0)
+    fn from_ns_f(ns: f64) -> Self {
+        Self(ns / 1_000_000_000.0)
     }
 }
 
 impl fmt::Debug for Seconds {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:.4}s", self.0)
+    }
+}
+
+struct Float(f64);
+
+impl fmt::Debug for Float {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:.1}", self.0)
     }
 }
