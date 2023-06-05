@@ -23,8 +23,8 @@ impl Metrics {
     }
 
     /// Creates a clock
-    pub fn clock(&self, name: impl Into<ClockName>) -> Clock {
-        Clock::new(name.into(), self.tx.clone())
+    pub fn clock(&self, name: impl Into<MetricName>) -> Time {
+        Time::new(name.into(), self.tx.clone())
     }
 
     pub fn report<F>(&self, reporter: F)
@@ -46,13 +46,13 @@ impl Default for Metrics {
 }
 
 #[derive(Clone)]
-pub struct Clock {
-    name: ClockName,
+pub struct Time {
+    name: MetricName,
     tx: crossbeam_channel::Sender<Command>,
 }
 
-impl Clock {
-    fn new(name: ClockName, tx: crossbeam_channel::Sender<Command>) -> Self {
+impl Time {
+    fn new(name: MetricName, tx: crossbeam_channel::Sender<Command>) -> Self {
         Self { name, tx }
     }
 
@@ -66,7 +66,7 @@ impl Clock {
             .ok();
     }
 
-    /// Starts measuring the duration of a section of code using this clock. The measuring stops
+    /// Starts measuring the duration of a section of code using this metric. The measuring stops
     /// and the measured duration is recorded when the returned `Recording` goes out of scope.
     pub fn start(&self) -> Recording {
         Recording {
@@ -77,7 +77,7 @@ impl Clock {
 }
 
 pub struct Recording<'a> {
-    clock: &'a Clock,
+    clock: &'a Time,
     start: Instant,
 }
 
@@ -87,11 +87,11 @@ impl Drop for Recording<'_> {
     }
 }
 
-pub type ClockName = Cow<'static, str>;
+pub type MetricName = Cow<'static, str>;
 
 #[derive(Default)]
 pub struct Report {
-    nodes: IndexMap<ClockName, Node>,
+    nodes: IndexMap<MetricName, Node>,
 }
 
 impl Report {
@@ -101,7 +101,7 @@ impl Report {
             .map(|(name, node)| ReportItem { name, node })
     }
 
-    fn record(&mut self, name: ClockName, value: Duration) {
+    fn record(&mut self, name: MetricName, value: Duration) {
         let node = self.nodes.entry(name).or_default();
 
         if value
@@ -117,12 +117,12 @@ impl Report {
 }
 
 pub struct ReportItem<'a> {
-    name: &'a ClockName,
+    name: &'a MetricName,
     node: &'a Node,
 }
 
 impl<'a> ReportItem<'a> {
-    pub fn name(&self) -> &'a ClockName {
+    pub fn name(&self) -> &'a MetricName {
         self.name
     }
 
@@ -145,7 +145,7 @@ impl Default for Node {
 
 enum Command {
     Record {
-        name: ClockName,
+        name: MetricName,
         value: Duration,
     },
     Report {

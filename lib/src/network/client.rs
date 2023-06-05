@@ -183,7 +183,7 @@ impl Client {
         block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.clock_handle_root_node.start();
+        let _timing = self.store.monitor.handle_root_node_time.start();
 
         let hash = proof.hash;
         let updated = self
@@ -212,7 +212,7 @@ impl Client {
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.clock_handle_inner_nodes.start();
+        let _timing = self.store.monitor.handle_inner_nodes_time.start();
 
         let total = nodes.len();
 
@@ -260,7 +260,7 @@ impl Client {
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.clock_handle_leaf_nodes.start();
+        let _timing = self.store.monitor.handle_leaf_nodes_time.start();
 
         let total = nodes.len();
         let quota = self.store.quota().await?.map(Into::into);
@@ -314,7 +314,7 @@ impl Client {
         block_promise: BlockPromise,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
-        let _timing = self.store.monitor.clock_handle_block.start();
+        let _timing = self.store.monitor.handle_block_time.start();
 
         match self
             .store
@@ -386,7 +386,7 @@ fn start_sender(
 
                 let peer_permit = peer_request_limiter.clone().acquire_owned().await.unwrap();
 
-                monitor.clock_request_queued.record(time_created.elapsed());
+                monitor.request_queued_time.record(time_created.elapsed());
 
                 let msg = request.to_message();
 

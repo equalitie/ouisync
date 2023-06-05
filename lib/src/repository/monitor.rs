@@ -2,7 +2,7 @@ use std::{fmt, time::Duration};
 
 use crate::{
     collections::HashMap,
-    metrics::{Clock, Metrics, Report, ReportItem},
+    metrics::{Metrics, Report, ReportItem, Time},
     state_monitor::{MonitoredValue, StateMonitor},
 };
 use btdht::InfoHash;
@@ -20,31 +20,31 @@ pub(crate) struct RepositoryMonitor {
     pub request_timeouts: MonitoredValue<u64>,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
 
-    pub clock_handle_root_node: Clock,
-    pub clock_handle_inner_nodes: Clock,
-    pub clock_handle_leaf_nodes: Clock,
-    pub clock_handle_block: Clock,
-    pub clock_request_queued: Clock,
-    pub clock_request_inflight: Clock,
+    pub handle_root_node_time: Time,
+    pub handle_inner_nodes_time: Time,
+    pub handle_leaf_nodes_time: Time,
+    pub handle_block_time: Time,
+    pub request_queued_time: Time,
+    pub request_inflight_time: Time,
 
     span: Span,
     node: StateMonitor,
-    _report_clocks_task: ScopedJoinHandle<()>,
+    _report_metrics_task: ScopedJoinHandle<()>,
 }
 
 impl RepositoryMonitor {
-    pub fn new(parent: StateMonitor, clocks: Metrics, name: &str) -> Self {
+    pub fn new(parent: StateMonitor, metrics: Metrics, name: &str) -> Self {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
-        let clock_handle_root_node = clocks.clock("handle_root_node");
-        let clock_handle_inner_nodes = clocks.clock("handle_inner_node");
-        let clock_handle_leaf_nodes = clocks.clock("handle_leaf_node");
-        let clock_handle_block = clocks.clock("handle_block");
-        let clock_request_queued = clocks.clock("request queued");
-        let clock_request_inflight = clocks.clock("request inflight");
+        let handle_root_node_time = metrics.clock("handle_root_node");
+        let handle_inner_nodes_time = metrics.clock("handle_inner_node");
+        let handle_leaf_nodes_time = metrics.clock("handle_leaf_node");
+        let handle_block_time = metrics.clock("handle_block");
+        let request_queued_time = metrics.clock("request queued");
+        let request_inflight_time = metrics.clock("request inflight");
 
-        let report_clocks_task = scoped_task::spawn(report_clocks(clocks, node.clone()));
+        let report_metrics_task = scoped_task::spawn(report_metrics(metrics, node.clone()));
 
         Self {
             index_requests_inflight: node.make_value("index requests inflight", 0),
@@ -54,16 +54,16 @@ impl RepositoryMonitor {
             request_timeouts: node.make_value("request timeouts", 0),
             info_hash: node.make_value("info-hash", None),
 
-            clock_handle_root_node,
-            clock_handle_inner_nodes,
-            clock_handle_leaf_nodes,
-            clock_handle_block,
-            clock_request_queued,
-            clock_request_inflight,
+            handle_root_node_time,
+            handle_inner_nodes_time,
+            handle_leaf_nodes_time,
+            handle_block_time,
+            request_queued_time,
+            request_inflight_time,
 
             span,
             node,
-            _report_clocks_task: report_clocks_task,
+            _report_metrics_task: report_metrics_task,
         }
     }
 
@@ -80,7 +80,7 @@ impl RepositoryMonitor {
     }
 }
 
-async fn report_clocks(clocks: Metrics, monitor: StateMonitor) {
+async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
     let mut interval = time::interval(Duration::from_secs(1));
     let mut monitors = HashMap::new();
 
@@ -90,11 +90,11 @@ async fn report_clocks(clocks: Metrics, monitor: StateMonitor) {
         let (tx, rx) = oneshot::channel();
         let monitor = monitor.clone();
 
-        clocks.report(move |report: &Report| {
+        metrics.report(move |report: &Report| {
             for item in report.items() {
                 monitors
                     .entry(item.name().clone())
-                    .or_insert_with(|| ClockMonitor::new(monitor.make_child(item.name().as_ref())))
+                    .or_insert_with(|| TimeMonitor::new(monitor.make_child(item.name().as_ref())))
                     .update(&item);
             }
 
@@ -105,7 +105,7 @@ async fn report_clocks(clocks: Metrics, monitor: StateMonitor) {
     }
 }
 
-struct ClockMonitor {
+struct TimeMonitor {
     count: MonitoredValue<u64>,
     mean: MonitoredValue<Seconds>,
     max: MonitoredValue<Seconds>,
@@ -115,7 +115,7 @@ struct ClockMonitor {
     p999: MonitoredValue<Seconds>,
 }
 
-impl ClockMonitor {
+impl TimeMonitor {
     fn new(node: StateMonitor) -> Self {
         Self {
             count: node.make_value("count", 0),
