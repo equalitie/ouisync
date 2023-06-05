@@ -7,8 +7,14 @@ pub use crate::dokan::{
     single_repo_mount::{mount, MountGuard},
 };
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
 mod fuse;
 
-#[cfg(not(target_os = "windows"))]
-pub use fuse::{mount, multi_repo_mount::MultiRepoVFS, MountGuard};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod dummy_multi_repo_mount;
+
+#[cfg(target_os = "linux")]
+pub use fuse::{mount, MountGuard};
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use dummy_multi_repo_mount::MultiRepoVFS;

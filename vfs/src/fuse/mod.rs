@@ -1,6 +1,5 @@
 mod entry_map;
 mod inode;
-pub(crate) mod multi_repo_mount;
 mod open_flags;
 mod utils;
 

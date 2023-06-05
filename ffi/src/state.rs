@@ -89,6 +89,8 @@ impl State {
         self.repositories.get(handle)
     }
 
+    // Used on operating systems where `MultiRepoVFS` from `ouisync_vfs` is implemented.
+    #[allow(dead_code)]
     pub fn read_repositories(
         &self,
     ) -> BlockingRwLockReadGuard<HashMap<u64, Arc<RepositoryHolder>>> {
