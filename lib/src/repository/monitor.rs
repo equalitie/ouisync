@@ -135,25 +135,25 @@ async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
 struct MetricMonitor {
     count: MonitoredValue<u64>,
 
-    time_recent: MonitoredValue<Seconds>,
-    time_min: MonitoredValue<Seconds>,
-    time_max: MonitoredValue<Seconds>,
-    time_mean: MonitoredValue<Seconds>,
-    time_stdev: MonitoredValue<Seconds>,
-    time_p50: MonitoredValue<Seconds>,
-    time_p90: MonitoredValue<Seconds>,
-    time_p99: MonitoredValue<Seconds>,
-    time_p999: MonitoredValue<Seconds>,
+    time_last: MonitoredValue<Format<Duration>>,
+    time_min: MonitoredValue<Format<Duration>>,
+    time_max: MonitoredValue<Format<Duration>>,
+    time_mean: MonitoredValue<Format<Duration>>,
+    time_stdev: MonitoredValue<Format<Duration>>,
+    time_p50: MonitoredValue<Format<Duration>>,
+    time_p90: MonitoredValue<Format<Duration>>,
+    time_p99: MonitoredValue<Format<Duration>>,
+    time_p999: MonitoredValue<Format<Duration>>,
 
-    throughput_recent: MonitoredValue<Float>,
-    throughput_min: MonitoredValue<u64>,
-    throughput_max: MonitoredValue<u64>,
-    throughput_mean: MonitoredValue<Float>,
-    throughput_stdev: MonitoredValue<Float>,
-    throughput_p50: MonitoredValue<u64>,
-    throughput_p90: MonitoredValue<u64>,
-    throughput_p99: MonitoredValue<u64>,
-    throughput_p999: MonitoredValue<u64>,
+    throughput_last: MonitoredValue<Format<f64>>,
+    throughput_min: MonitoredValue<Format<f64>>,
+    throughput_max: MonitoredValue<Format<f64>>,
+    throughput_mean: MonitoredValue<Format<f64>>,
+    throughput_stdev: MonitoredValue<Format<f64>>,
+    throughput_p50: MonitoredValue<Format<f64>>,
+    throughput_p90: MonitoredValue<Format<f64>>,
+    throughput_p99: MonitoredValue<Format<f64>>,
+    throughput_p999: MonitoredValue<Format<f64>>,
 }
 
 impl MetricMonitor {
@@ -164,74 +164,62 @@ impl MetricMonitor {
         Self {
             count: node.make_value("count", 0),
 
-            time_recent: node.make_value("time", Seconds(0.0)),
-            time_min: time.make_value("min", Seconds(0.0)),
-            time_max: time.make_value("max", Seconds(0.0)),
-            time_mean: time.make_value("mean", Seconds(0.0)),
-            time_stdev: time.make_value("stdev", Seconds(0.0)),
-            time_p50: time.make_value("50%", Seconds(0.0)),
-            time_p90: time.make_value("90%", Seconds(0.0)),
-            time_p99: time.make_value("99%", Seconds(0.0)),
-            time_p999: time.make_value("99.9%", Seconds(0.0)),
+            time_last: node.make_value("time", Format(Duration::ZERO)),
+            time_min: time.make_value("min", Format(Duration::ZERO)),
+            time_max: time.make_value("max", Format(Duration::ZERO)),
+            time_mean: time.make_value("mean", Format(Duration::ZERO)),
+            time_stdev: time.make_value("stdev", Format(Duration::ZERO)),
+            time_p50: time.make_value("50%", Format(Duration::ZERO)),
+            time_p90: time.make_value("90%", Format(Duration::ZERO)),
+            time_p99: time.make_value("99%", Format(Duration::ZERO)),
+            time_p999: time.make_value("99.9%", Format(Duration::ZERO)),
 
-            throughput_recent: node.make_value("throughput", Float(0.0)),
-            throughput_min: throughput.make_value("min", 0),
-            throughput_max: throughput.make_value("max", 0),
-            throughput_mean: throughput.make_value("mean", Float(0.0)),
-            throughput_stdev: throughput.make_value("stdev", Float(0.0)),
-            throughput_p50: throughput.make_value("50%", 0),
-            throughput_p90: throughput.make_value("90%", 0),
-            throughput_p99: throughput.make_value("99%", 0),
-            throughput_p999: throughput.make_value("99.9%", 0),
+            throughput_last: node.make_value("throughput", Format(0.0)),
+            throughput_min: throughput.make_value("min", Format(0.0)),
+            throughput_max: throughput.make_value("max", Format(0.0)),
+            throughput_mean: throughput.make_value("mean", Format(0.0)),
+            throughput_stdev: throughput.make_value("stdev", Format(0.0)),
+            throughput_p50: throughput.make_value("50%", Format(0.0)),
+            throughput_p90: throughput.make_value("90%", Format(0.0)),
+            throughput_p99: throughput.make_value("99%", Format(0.0)),
+            throughput_p999: throughput.make_value("99.9%", Format(0.0)),
         }
     }
 
     fn update(&self, item: ReportItem<'_>) {
-        *self.count.get() = item.time_histogram.len();
+        *self.count.get() = item.time.count();
 
-        *self.time_recent.get() = Seconds::from_ns_f(item.time_recent);
-        *self.time_min.get() = Seconds::from_ns(item.time_histogram.min());
-        *self.time_max.get() = Seconds::from_ns(item.time_histogram.max());
-        *self.time_mean.get() = Seconds::from_ns_f(item.time_histogram.mean());
-        *self.time_stdev.get() = Seconds::from_ns_f(item.time_histogram.stdev());
-        *self.time_p50.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.5));
-        *self.time_p90.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.9));
-        *self.time_p99.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.99));
-        *self.time_p999.get() = Seconds::from_ns(item.time_histogram.value_at_quantile(0.999));
+        *self.time_last.get() = Format(item.time.last());
+        *self.time_min.get() = Format(item.time.min());
+        *self.time_max.get() = Format(item.time.max());
+        *self.time_mean.get() = Format(item.time.mean());
+        *self.time_stdev.get() = Format(item.time.stdev());
+        *self.time_p50.get() = Format(item.time.value_at_quantile(0.5));
+        *self.time_p90.get() = Format(item.time.value_at_quantile(0.9));
+        *self.time_p99.get() = Format(item.time.value_at_quantile(0.99));
+        *self.time_p999.get() = Format(item.time.value_at_quantile(0.999));
 
-        *self.throughput_recent.get() = Float(item.throughput_recent);
-        *self.throughput_min.get() = item.throughput_histogram.min();
-        *self.throughput_max.get() = item.throughput_histogram.max();
-        *self.throughput_mean.get() = Float(item.throughput_histogram.mean());
-        *self.throughput_stdev.get() = Float(item.throughput_histogram.stdev());
-        *self.throughput_p50.get() = item.throughput_histogram.value_at_quantile(0.5);
-        *self.throughput_p90.get() = item.throughput_histogram.value_at_quantile(0.9);
-        *self.throughput_p99.get() = item.throughput_histogram.value_at_quantile(0.99);
-        *self.throughput_p999.get() = item.throughput_histogram.value_at_quantile(0.999);
+        *self.throughput_last.get() = Format(item.throughput.last());
+        *self.throughput_min.get() = Format(item.throughput.min());
+        *self.throughput_max.get() = Format(item.throughput.max());
+        *self.throughput_mean.get() = Format(item.throughput.mean());
+        *self.throughput_stdev.get() = Format(item.throughput.stdev());
+        *self.throughput_p50.get() = Format(item.throughput.value_at_quantile(0.5));
+        *self.throughput_p90.get() = Format(item.throughput.value_at_quantile(0.9));
+        *self.throughput_p99.get() = Format(item.throughput.value_at_quantile(0.99));
+        *self.throughput_p999.get() = Format(item.throughput.value_at_quantile(0.999));
     }
 }
 
-struct Seconds(f64);
+struct Format<T>(T);
 
-impl Seconds {
-    fn from_ns(ns: u64) -> Self {
-        Self::from_ns_f(ns as f64)
-    }
-
-    fn from_ns_f(ns: f64) -> Self {
-        Self(ns / 1_000_000_000.0)
-    }
-}
-
-impl fmt::Debug for Seconds {
+impl fmt::Debug for Format<Duration> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:.4}s", self.0)
+        write!(f, "{:.4}s", self.0.as_secs_f64())
     }
 }
 
-struct Float(f64);
-
-impl fmt::Debug for Float {
+impl fmt::Debug for Format<f64> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:.1}", self.0)
     }

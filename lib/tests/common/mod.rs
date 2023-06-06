@@ -644,19 +644,19 @@ fn report_metrics(report: &metrics::Report) {
     }
 
     for item in report.items() {
-        let h = item.time_histogram;
+        let v = item.time;
 
         table.add_row(vec![
             format!("{}", item.name),
-            format!("{}", h.len()),
-            format!("{:.4}", to_secs(h.min())),
-            format!("{:.4}", to_secs(h.max())),
-            format!("{:.4}", to_secs(h.mean() as u64)),
-            format!("{:.4}", to_secs(h.stdev() as u64)),
-            format!("{:.4}", to_secs(h.value_at_quantile(0.5)),),
-            format!("{:.4}", to_secs(h.value_at_quantile(0.9)),),
-            format!("{:.4}", to_secs(h.value_at_quantile(0.99))),
-            format!("{:.4}", to_secs(h.value_at_quantile(0.999))),
+            format!("{}", v.count()),
+            format!("{:.4}", v.min().as_secs_f64()),
+            format!("{:.4}", v.max().as_secs_f64()),
+            format!("{:.4}", v.mean().as_secs_f64()),
+            format!("{:.4}", v.stdev().as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.5).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.9).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.99).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.999).as_secs_f64()),
         ]);
     }
 
@@ -673,25 +673,21 @@ fn report_metrics(report: &metrics::Report) {
     }
 
     for item in report.items() {
-        let h = item.throughput_histogram;
+        let v = item.throughput;
 
         table.add_row(vec![
             format!("{}", item.name),
-            format!("{}", h.len()),
-            format!("{}", h.min()),
-            format!("{}", h.max()),
-            format!("{:.1}", h.mean()),
-            format!("{:.1}", h.stdev()),
-            format!("{}", h.value_at_quantile(0.5)),
-            format!("{}", h.value_at_quantile(0.9)),
-            format!("{}", h.value_at_quantile(0.99)),
-            format!("{}", h.value_at_quantile(0.999)),
+            format!("{}", v.count()),
+            format!("{:.1}", v.min()),
+            format!("{:.1}", v.max()),
+            format!("{:.1}", v.mean()),
+            format!("{:.1}", v.stdev()),
+            format!("{:.1}", v.value_at_quantile(0.5)),
+            format!("{:.1}", v.value_at_quantile(0.9)),
+            format!("{:.1}", v.value_at_quantile(0.99)),
+            format!("{:.1}", v.value_at_quantile(0.999)),
         ]);
     }
 
     println!("Throughput (hits/s)\n{table}");
-}
-
-fn to_secs(nanos: u64) -> f64 {
-    nanos as f64 / 1_000_000_000.0
 }

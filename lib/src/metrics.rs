@@ -9,7 +9,6 @@ use std::{
 };
 
 const MAX_TIME: Duration = Duration::from_secs(60 * 60);
-const MAX_THROUGHPUT: u64 = 1_000_000;
 
 #[derive(Clone)]
 pub struct Metrics {
@@ -60,14 +59,11 @@ pub struct Metric {
 }
 
 impl Metric {
-    pub fn record(&self, duration: Duration) {
+    pub fn record(&self, value: Duration) {
         self.tx
             .send(Command::Record {
                 name: self.name.clone(),
-                value: Value {
-                    duration,
-                    timestamp: Instant::now(),
-                },
+                value,
             })
             .ok();
     }
@@ -117,10 +113,8 @@ impl Report {
     pub fn items(&self) -> impl Iterator<Item = ReportItem<'_>> + ExactSizeIterator {
         self.metrics.iter().map(|(name, report)| ReportItem {
             name,
-            time_histogram: &report.time_histogram,
-            time_recent: report.time_recent.get(),
-            throughput_histogram: &report.throughput_histogram,
-            throughput_recent: report.throughput_recent.get(),
+            time: TimeView(report),
+            throughput: ThroughputView(report),
         })
     }
 
@@ -128,7 +122,7 @@ impl Report {
         self.metrics.entry(name).or_default();
     }
 
-    fn record(&mut self, name: MetricName, value: Value) {
+    fn record(&mut self, name: MetricName, value: Duration) {
         if let Some(report) = self.metrics.get_mut(&name) {
             report.record(value);
         }
@@ -137,126 +131,132 @@ impl Report {
 
 pub struct ReportItem<'a> {
     pub name: &'a MetricName,
-    pub time_histogram: &'a Histogram<u64>,
-    pub time_recent: f64,
-    pub throughput_histogram: &'a Histogram<u64>,
-    pub throughput_recent: f64,
+    pub time: TimeView<'a>,
+    pub throughput: ThroughputView<'a>,
 }
 
-const PERIOD: Duration = Duration::from_secs(1);
-const RECENT_PERIODS: usize = 5;
+pub struct TimeView<'a>(&'a MetricReport);
+
+impl TimeView<'_> {
+    pub fn count(&self) -> u64 {
+        self.0.histogram.len()
+    }
+
+    pub fn last(&self) -> Duration {
+        Duration::from_nanos(self.0.last)
+    }
+
+    pub fn min(&self) -> Duration {
+        Duration::from_nanos(self.0.histogram.min())
+    }
+
+    pub fn max(&self) -> Duration {
+        Duration::from_nanos(self.0.histogram.max())
+    }
+
+    pub fn mean(&self) -> Duration {
+        Duration::from_nanos(self.0.histogram.mean().round() as u64)
+    }
+
+    pub fn stdev(&self) -> Duration {
+        Duration::from_nanos(self.0.histogram.stdev().round() as u64)
+    }
+
+    pub fn value_at_quantile(&self, quantile: f64) -> Duration {
+        Duration::from_nanos(self.0.histogram.value_at_quantile(quantile))
+    }
+}
+
+pub struct ThroughputView<'a>(&'a MetricReport);
+
+impl ThroughputView<'_> {
+    pub fn count(&self) -> u64 {
+        self.0.histogram.len()
+    }
+
+    pub fn last(&self) -> f64 {
+        throughput(self.0.last)
+    }
+
+    pub fn min(&self) -> f64 {
+        throughput(self.0.histogram.max())
+    }
+
+    pub fn max(&self) -> f64 {
+        throughput(self.0.histogram.min())
+    }
+
+    pub fn mean(&self) -> f64 {
+        // Modified version of https://docs.rs/hdrhistogram/latest/hdrhistogram/struct.Histogram.html#method.mean
+        let h = &self.0.histogram;
+
+        if h.is_empty() {
+            return 0.0;
+        }
+
+        h.iter_recorded().fold(0.0, |total, v| {
+            total
+                + throughput(h.median_equivalent(v.value_iterated_to())) * v.count_at_value() as f64
+                    / h.len() as f64
+        })
+    }
+
+    pub fn stdev(&self) -> f64 {
+        // Modified version of https://docs.rs/hdrhistogram/latest/hdrhistogram/struct.Histogram.html#method.stdev
+        let h = &self.0.histogram;
+
+        if h.is_empty() {
+            return 0.0;
+        }
+
+        let mean = self.mean();
+        let geom_dev_tot = h.iter_recorded().fold(0.0, |gdt, v| {
+            let dev = throughput(h.median_equivalent(v.value_iterated_to())) - mean;
+            gdt + (dev * dev) * v.count_since_last_iteration() as f64
+        });
+
+        (geom_dev_tot / h.len() as f64).sqrt()
+    }
+
+    pub fn value_at_quantile(&self, quantile: f64) -> f64 {
+        throughput(self.0.histogram.value_at_quantile(1.0 - quantile))
+    }
+}
+
+fn throughput(nanos: u64) -> f64 {
+    if nanos == 0 {
+        0.0
+    } else {
+        1.0 / Duration::from_nanos(nanos).as_secs_f64()
+    }
+}
 
 struct MetricReport {
-    period_start: Option<Instant>,
-    time_histogram: Histogram<u64>,
-    time_recent: MovingAverage<RECENT_PERIODS>,
-    throughput_histogram: Histogram<u64>,
-    throughput_recent: MovingAverage<RECENT_PERIODS>,
-    throughput_count: u64,
+    last: u64,
+    histogram: Histogram<u64>,
 }
 
 impl MetricReport {
-    fn record(&mut self, value: Value) {
-        let time = value.duration.as_nanos().try_into().unwrap_or(u64::MAX);
-        self.time_histogram.saturating_record(time);
-        self.time_recent.record(time);
-
-        if let Some(period_start) = self.period_start {
-            if value.timestamp.duration_since(period_start) > PERIOD {
-                self.throughput_histogram
-                    .saturating_record(self.throughput_count);
-                self.throughput_recent.record(self.throughput_count);
-
-                self.throughput_count = 0;
-                self.period_start = Some(value.timestamp);
-
-                self.time_recent.advance();
-                self.throughput_recent.advance();
-            }
-        } else {
-            self.period_start = Some(value.timestamp);
-        }
-
-        self.throughput_count += 1;
+    fn record(&mut self, value: Duration) {
+        self.last = value.as_nanos().try_into().unwrap_or(u64::MAX);
+        self.histogram.saturating_record(self.last);
     }
 }
 
 impl Default for MetricReport {
     fn default() -> Self {
         Self {
-            period_start: None,
-            time_histogram: Histogram::new_with_max(MAX_TIME.as_nanos().try_into().unwrap(), 2)
-                .unwrap(),
-            time_recent: MovingAverage::default(),
-            throughput_histogram: Histogram::new_with_max(MAX_THROUGHPUT, 2).unwrap(),
-            throughput_recent: MovingAverage::default(),
-            throughput_count: 0,
+            last: 0,
+            histogram: Histogram::new_with_max(MAX_TIME.as_nanos().try_into().unwrap(), 2).unwrap(),
         }
     }
-}
-
-/// Maintains a moving average of some value during the last N time periods (typically seconds).
-struct MovingAverage<const N: usize> {
-    slots: [Slot; N],
-    curr: usize,
-}
-
-impl<const N: usize> MovingAverage<N> {
-    /// Records a new value in the current time period.
-    pub fn record(&mut self, value: u64) {
-        let slot = &mut self.slots[self.curr];
-
-        slot.sum += value;
-        slot.count += 1;
-    }
-
-    /// Starts a new time period.
-    pub fn advance(&mut self) {
-        let next = (self.curr + 1) % self.slots.len();
-        self.slots[next] = Slot::default();
-        self.curr = next;
-    }
-
-    /// Retrieves the current average value.
-    pub fn get(&self) -> f64 {
-        let total = self.slots.iter().fold(Slot::default(), |total, slot| Slot {
-            sum: total.sum + slot.sum,
-            count: total.count + slot.count,
-        });
-
-        if total.count > 0 {
-            total.sum as f64 / total.count as f64
-        } else {
-            0.0
-        }
-    }
-}
-
-impl<const N: usize> Default for MovingAverage<N> {
-    fn default() -> Self {
-        Self {
-            slots: [Slot::default(); N],
-            curr: 0,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Default)]
-struct Slot {
-    sum: u64,
-    count: u64,
-}
-
-struct Value {
-    duration: Duration,
-    timestamp: Instant,
 }
 
 enum Command {
     Register(MetricName),
     Record {
         name: MetricName,
-        value: Value,
+        value: Duration,
     },
     Report {
         reporter: Box<dyn FnOnce(&Report) + Send + 'static>,
