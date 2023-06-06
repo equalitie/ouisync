@@ -10,6 +10,7 @@ pub(super) async fn run(pool: &Pool) -> Result<(), Error> {
     apply(pool, 6, include_str!("v6.sql")).await?;
     apply(pool, 7, include_str!("v7.sql")).await?;
     apply(pool, 8, include_str!("v8.sql")).await?;
+    apply(pool, 9, include_str!("v9.sql")).await?;
 
     Ok(())
 }

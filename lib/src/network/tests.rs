@@ -11,7 +11,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
+        BranchData, Index, ReceiveFilter, RootNode, SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
     repository::{LocalId, RepositoryId, RepositoryMonitor},
@@ -413,7 +413,17 @@ async fn save_snapshot(
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
-    receive_nodes(index, write_keys, writer_id, version_vector, snapshot).await;
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
+
+    receive_nodes(
+        index,
+        write_keys,
+        writer_id,
+        version_vector,
+        &receive_filter,
+        snapshot,
+    )
+    .await;
 }
 
 async fn wait_until_snapshots_in_sync(
