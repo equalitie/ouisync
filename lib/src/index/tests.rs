@@ -692,6 +692,51 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
     assert_eq!(count_snapshots(&index, &remote_id).await, 1);
 }
 
+#[tokio::test]
+async fn receive_existing_snapshot() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+
+    let remote_id = PublicKey::generate(&mut rng);
+    let snapshot = Snapshot::generate(&mut rng, 32);
+    let vv = VersionVector::first(remote_id);
+
+    let receive_filter = ReceiveFilter::new(index.pool.clone());
+
+    node_test_utils::receive_nodes(
+        &index,
+        &write_keys,
+        remote_id,
+        vv.clone(),
+        &receive_filter,
+        &snapshot,
+    )
+    .await;
+
+    // Same root node that we already received
+    let proof = Proof::new(remote_id, vv, *snapshot.root_hash(), &write_keys);
+    let updated = index
+        .receive_root_node(proof.into(), MultiBlockPresence::Full)
+        .await
+        .unwrap();
+
+    // TODO: eventually we want this to also return false
+    assert!(updated);
+
+    for layer in snapshot.inner_layers() {
+        for (_, nodes) in layer.inner_maps() {
+            let (updated, status) = index
+                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
+                .await
+                .unwrap();
+
+            assert!(updated.is_empty());
+            assert!(status.old_approved);
+            assert!(status.new_approved.is_empty());
+        }
+    }
+}
+
 async fn setup() -> (TempDir, Index, Keypair) {
     setup_with_rng(&mut StdRng::from_entropy()).await
 }
@@ -734,31 +779,10 @@ async fn receive_snapshot(
             .incremented(writer_id)
     };
 
-    index
-        .receive_root_node(
-            Proof::new(writer_id, vv, *snapshot.root_hash(), write_keys).into(),
-            MultiBlockPresence::Full,
-        )
-        .await
-        .unwrap();
-
     let receive_filter = ReceiveFilter::new(index.pool.clone());
 
-    for layer in snapshot.inner_layers() {
-        for (_, nodes) in layer.inner_maps() {
-            index
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
-                .await
-                .unwrap();
-        }
-    }
-
-    for (_, nodes) in snapshot.leaf_sets() {
-        index
-            .receive_leaf_nodes(nodes.clone().into(), None)
-            .await
-            .unwrap();
-    }
+    node_test_utils::receive_nodes(index, write_keys, writer_id, vv, &receive_filter, snapshot)
+        .await
 }
 
 async fn receive_block(index: &Index, block_id: &BlockId) {

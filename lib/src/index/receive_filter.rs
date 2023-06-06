@@ -43,6 +43,14 @@ impl ReceiveFilter {
 
         Ok(true)
     }
+
+    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+        sqlx::query("DELETE FROM received_nodes WHERE hash = ?")
+            .bind(hash)
+            .execute(tx)
+            .await?;
+        Ok(())
+    }
 }
 
 impl Drop for ReceiveFilter {
@@ -58,7 +66,7 @@ async fn load(
 ) -> Result<Option<(u64, MultiBlockPresence)>> {
     let row = sqlx::query(
         "SELECT rowid, block_presence
-         FROM received_inner_nodes
+         FROM received_nodes
          WHERE client_id = ? AND hash = ?",
     )
     .bind(db::encode_u64(client_id))
@@ -85,7 +93,7 @@ async fn insert(
     presence: &MultiBlockPresence,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO received_inner_nodes
+        "INSERT INTO received_nodes
          (client_id, hash, block_presence)
          VALUES (?, ?, ?)",
     )
@@ -104,7 +112,7 @@ async fn update(
     presence: &MultiBlockPresence,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE received_inner_nodes
+        "UPDATE received_nodes
          SET block_presence = ?
          WHERE rowid = ?",
     )
@@ -128,7 +136,7 @@ async fn remove_all(pool: db::Pool, client_id: u64) {
 
 async fn try_remove_all(pool: &db::Pool, client_id: u64) -> Result<()> {
     let mut tx = pool.begin_write().await?;
-    sqlx::query("DELETE FROM received_inner_nodes WHERE client_id = ?")
+    sqlx::query("DELETE FROM received_nodes WHERE client_id = ?")
         .bind(db::encode_u64(client_id))
         .execute(&mut tx)
         .await?;

@@ -96,7 +96,7 @@ impl InnerNode {
         conn: &'a mut db::Connection,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
-        sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
+        sqlx::query("SELECT DISTINCT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .fetch(conn)
             .map_ok(|row| row.get(0))

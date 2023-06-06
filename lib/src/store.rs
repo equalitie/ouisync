@@ -442,6 +442,7 @@ mod tests {
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
         let store = create_store(pool, repository_id);
+        let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
@@ -450,6 +451,7 @@ mod tests {
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
+            &receive_filter,
             &snapshot,
         )
         .await;
@@ -510,6 +512,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let store = create_store(pool, repository_id);
+        let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -541,6 +544,7 @@ mod tests {
                 &write_keys,
                 branch_id,
                 VersionVector::first(branch_id),
+                &receive_filter,
                 &snapshot,
             )
             .await;
@@ -610,6 +614,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -619,6 +624,7 @@ mod tests {
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
+            &receive_filter,
             &snapshot,
         )
         .await;
@@ -687,6 +693,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id_0 = PublicKey::random();
         let branch_id_1 = PublicKey::random();
@@ -704,6 +711,7 @@ mod tests {
             &write_keys,
             branch_id_0,
             VersionVector::first(branch_id_0),
+            &receive_filter,
             &snapshot_0,
         )
         .await;
@@ -713,6 +721,7 @@ mod tests {
             &write_keys,
             branch_id_1,
             VersionVector::first(branch_id_1),
+            &receive_filter,
             &snapshot_1,
         )
         .await;
@@ -732,6 +741,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
@@ -741,6 +751,7 @@ mod tests {
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
+            &receive_filter,
             &snapshot,
         )
         .await;

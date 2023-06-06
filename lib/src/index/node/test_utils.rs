@@ -1,6 +1,6 @@
 use super::{
     super::{proof::Proof, Index},
-    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, MultiBlockPresence,
+    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, MultiBlockPresence, NodeState,
     SingleBlockPresence, Summary, INNER_LAYER_COUNT,
 };
 use crate::{
@@ -48,7 +48,7 @@ impl Snapshot {
             leaves
                 .entry(BucketPath::new(&node.locator, INNER_LAYER_COUNT - 1))
                 .or_insert_with(LeafNodeSet::default)
-                .modify(&node.locator, &node.block_id, SingleBlockPresence::Missing);
+                .modify(&node.locator, &node.block_id, SingleBlockPresence::Present);
         }
 
         let mut inners: [HashMap<_, InnerNodeMap>; INNER_LAYER_COUNT] = Default::default();
@@ -165,20 +165,19 @@ pub(crate) async fn receive_nodes(
     write_keys: &Keypair,
     branch_id: PublicKey,
     version_vector: VersionVector,
+    receive_filter: &ReceiveFilter,
     snapshot: &Snapshot,
 ) {
-    let receive_filter = ReceiveFilter::new(index.pool.clone());
-
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
     index
-        .receive_root_node(proof.into(), MultiBlockPresence::None)
+        .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
             index
-                .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
+                .receive_inner_nodes(nodes.clone().into(), receive_filter, None)
                 .await
                 .unwrap();
         }
@@ -215,9 +214,16 @@ fn add_inner_node(
     hash: Hash,
 ) {
     let (bucket, parent_path) = path.pop(inner_layer);
-    maps.entry(parent_path)
-        .or_default()
-        .insert(bucket, InnerNode::new(hash, Summary::INCOMPLETE));
+    maps.entry(parent_path).or_default().insert(
+        bucket,
+        InnerNode::new(
+            hash,
+            Summary {
+                state: NodeState::Complete,
+                block_presence: MultiBlockPresence::Full,
+            },
+        ),
+    );
 }
 
 #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Debug)]
