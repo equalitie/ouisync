@@ -39,16 +39,25 @@ pub(crate) async fn update_summaries(
     let mut states = HashMap::default();
 
     while let Some(hash) = nodes.pop() {
-        match parent_kind(tx, &hash).await? {
-            Some(ParentNodeKind::Root) => {
-                let state = RootNode::update_summaries(tx, &hash).await?;
-                states.entry(hash).or_insert(state).update(state);
-            }
-            Some(ParentNodeKind::Inner) => {
-                InnerNode::update_summaries(tx, &hash).await?;
-                try_collect_into(InnerNode::load_parent_hashes(tx, &hash), &mut nodes).await?;
-            }
-            None => (),
+        let mut has_parent = false;
+
+        // NOTE: There are no orphaned nodes so when `load_parent_hashes` returns nothing it can
+        // only mean that the node is a root.
+
+        try_collect_into(
+            InnerNode::load_parent_hashes(tx, &hash).map_ok(|hash| {
+                has_parent = true;
+                hash
+            }),
+            &mut nodes,
+        )
+        .await?;
+
+        if has_parent {
+            InnerNode::update_summaries(tx, &hash).await?;
+        } else {
+            let state = RootNode::update_summaries(tx, &hash).await?;
+            states.entry(hash).or_insert(state).update(state);
         }
     }
 
@@ -143,33 +152,4 @@ pub(crate) async fn check_fallback(
     .fetch_optional(conn)
     .await?
     .is_some())
-}
-
-enum ParentNodeKind {
-    Root,
-    Inner,
-}
-
-async fn parent_kind(conn: &mut db::Connection, hash: &Hash) -> Result<Option<ParentNodeKind>> {
-    use sqlx::Row;
-
-    let kind: u8 = sqlx::query(
-        "SELECT CASE
-             WHEN EXISTS(SELECT 0 FROM snapshot_root_nodes  WHERE hash = ?) THEN 1
-             WHEN EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = ?) THEN 2
-             ELSE 0
-         END",
-    )
-    .bind(hash)
-    .bind(hash)
-    .fetch_one(conn)
-    .await?
-    .get(0);
-
-    match kind {
-        0 => Ok(None),
-        1 => Ok(Some(ParentNodeKind::Root)),
-        2 => Ok(Some(ParentNodeKind::Inner)),
-        _ => unreachable!(),
-    }
 }

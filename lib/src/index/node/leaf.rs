@@ -83,7 +83,7 @@ impl LeafNode {
         conn: &'a mut db::Connection,
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash>> + 'a {
-        sqlx::query("SELECT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
+        sqlx::query("SELECT DISTINCT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
             .bind(block_id)
             .fetch(conn)
             .map_ok(|row| row.get(0))
