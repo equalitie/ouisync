@@ -1,14 +1,16 @@
 use super::Shared;
 use crate::{
+    blob::BlockIds,
     blob_id::BlobId,
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
     event::{Event, EventScope, IgnoreScopeReceiver, Payload},
-    joint_directory::JointDirectory,
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     sync::AwaitDrop,
     versioned,
 };
+use async_recursion::async_recursion;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use std::{ops::ControlFlow, sync::Arc};
 use tokio::{
@@ -208,6 +210,11 @@ impl Inner {
         let _monitor_guard = self.shared.store.monitor.job_monitor.start();
         let _timing = self.shared.store.monitor.job_metric.start();
 
+        // Find missing blocks
+        let result = find_missing_blocks::run(&self.shared).await;
+        tracing::trace!(?result, "find_missing_blocks completed");
+        error_handling.apply(result)?;
+
         // Merge
         if let Some(local_branch) = &self.local_branch {
             let result = merge::run(&self.shared, local_branch).await;
@@ -220,10 +227,11 @@ impl Inner {
         tracing::trace!(?result, "prune completed");
         error_handling.apply(result)?;
 
-        // Scan for missing and unreachable blocks
+        // Collect unreachable blocks
         if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
-            tracing::trace!(?result, "scan completed");
+            let result =
+                collect_garbage::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
+            tracing::trace!(?result, "collect_garbage completed");
             error_handling.apply(result)?;
         }
 
@@ -306,6 +314,98 @@ impl ErrorHandling {
             (_, Ok(())) | (Self::Ignore, Err(_)) => Ok(()),
             (Self::Return, Err(error)) => Err(error),
         }
+    }
+}
+
+/// Find missing blocks and mark them as required.
+mod find_missing_blocks {
+    use super::*;
+
+    #[instrument(name = "find_missing_blocks", skip_all)]
+    pub(super) async fn run(shared: &Shared) -> Result<()> {
+        let branches = shared.load_branches().await?;
+        let mut versions = Vec::with_capacity(branches.len());
+
+        for branch in branches {
+            require_missing_blocks(shared, branch.clone(), BlobId::ROOT).await?;
+
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await.map_err(|error| {
+                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    error
+                })
+            {
+                Ok(dir) => versions.push(dir),
+                Err(Error::EntryNotFound) => {
+                    // `EntryNotFound` here just means this is a newly created branch with no
+                    // content yet. It is safe to ignore it.
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        traverse(shared, JointDirectory::new(None, versions)).await
+    }
+
+    #[async_recursion]
+    async fn traverse(shared: &Shared, dir: JointDirectory) -> Result<()> {
+        let mut subdirs = Vec::new();
+
+        for entry in dir.entries() {
+            match entry {
+                JointEntryRef::File(entry) => {
+                    require_missing_blocks(
+                        shared,
+                        entry.inner().branch().clone(),
+                        *entry.inner().blob_id(),
+                    )
+                    .await?;
+                }
+                JointEntryRef::Directory(entry) => {
+                    for version in entry.versions() {
+                        require_missing_blocks(
+                            shared,
+                            version.branch().clone(),
+                            *version.blob_id(),
+                        )
+                        .await?;
+                    }
+
+                    match entry
+                        .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
+                        .await
+                    {
+                        Ok(dir) => subdirs.push(dir),
+                        Err(error) => {
+                            // Continue processing the remaining entries
+                            tracing::warn!(name = entry.name(), ?error, "failed to open directory");
+                        }
+                    }
+                }
+            }
+        }
+
+        for dir in subdirs {
+            traverse(shared, dir).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn require_missing_blocks(
+        shared: &Shared,
+        branch: Branch,
+        blob_id: BlobId,
+    ) -> Result<()> {
+        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
+
+        while let Some(block_id) = blob_block_ids.try_next().await? {
+            shared.store.require_missing_block(block_id).await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -425,49 +525,20 @@ mod prune {
     }
 }
 
-/// Scan repository blocks to identify which ones are missing and which are no longer needed.
-mod scan {
+/// Remove unreachable blocks
+mod collect_garbage {
     use super::*;
     use crate::{
-        blob::BlockIds,
-        blob_id::BlobId,
         block::{self, BlockId},
         crypto::sign::Keypair,
         db,
         index::{self, LeafNode, SnapshotData, UpdateSummaryReason},
-        joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
-    use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
     use tracing::Instrument;
 
-    #[derive(Copy, Clone, Debug)]
-    enum Mode {
-        // only require missing blocks
-        Require,
-        // only collect unreachable blocks
-        Collect,
-        // require missing blocks and collect unreachable blocks
-        RequireAndCollect,
-    }
-
-    impl Mode {
-        fn intersect(self, other: Self) -> Option<Self> {
-            match (self, other) {
-                (Self::Require, Self::Require)
-                | (Self::Require, Self::RequireAndCollect)
-                | (Self::RequireAndCollect, Self::Require) => Some(Self::Require),
-                (Self::Collect, Self::Collect)
-                | (Self::Collect, Self::RequireAndCollect)
-                | (Self::RequireAndCollect, Self::Collect) => Some(Self::Collect),
-                (Self::RequireAndCollect, Self::RequireAndCollect) => Some(Self::RequireAndCollect),
-                (Self::Require, Self::Collect) | (Self::Collect, Self::Require) => None,
-            }
-        }
-    }
-
-    #[instrument(name = "scan", skip_all)]
+    #[instrument(name = "collect_garbage", skip_all)]
     pub(super) async fn run(
         shared: &Shared,
         local_branch: Option<&Branch>,
@@ -478,7 +549,6 @@ mod scan {
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        let mut mode = Mode::RequireAndCollect;
         let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
@@ -489,13 +559,7 @@ mod scan {
 
             process_locked_blocks(shared, &mut unreachable_block_ids, unlocked_tx).await?;
 
-            mode = traverse_root(shared, local_branch, mode, &mut unreachable_block_ids).await?;
-            mode = if let Some(mode) = mode.intersect(Mode::Collect) {
-                mode
-            } else {
-                break;
-            };
-
+            traverse_root(shared, local_branch, &mut unreachable_block_ids).await?;
             remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
@@ -505,16 +569,13 @@ mod scan {
     async fn traverse_root(
         shared: &Shared,
         local_branch: Option<&Branch>,
-        mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
-    ) -> Result<Mode> {
+    ) -> Result<()> {
         let branches = shared.load_branches().await?;
-
         let mut versions = Vec::with_capacity(branches.len());
-        let mut entries = Vec::new();
 
         for branch in branches {
-            entries.push((branch.clone(), BlobId::ROOT));
+            process_reachable_blocks(unreachable_block_ids, branch.clone(), BlobId::ROOT).await?;
 
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
@@ -529,22 +590,11 @@ mod scan {
                     // content yet. It is safe to ignore it.
                     continue;
                 }
-                Err(error) => {
-                    // On error, we can still proceed with finding missing blocks, but we can't
-                    // proceed with garbage collection because we could incorrectly mark some
-                    // blocks as unreachable due to not being able to descend into this directory.
-                    mode = mode.intersect(Mode::Require).ok_or(error)?;
-                }
+                Err(error) => return Err(error),
             }
         }
 
-        for (branch, blob_id) in entries {
-            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
-        }
-
         traverse(
-            shared,
-            mode,
             unreachable_block_ids,
             JointDirectory::new(local_branch.cloned(), versions),
         )
@@ -553,55 +603,47 @@ mod scan {
 
     #[async_recursion]
     async fn traverse(
-        shared: &Shared,
-        mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         dir: JointDirectory,
-    ) -> Result<Mode> {
-        let mut entries = Vec::new();
+    ) -> Result<()> {
         let mut subdirs = Vec::new();
 
         for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
-                    entries.push((entry.inner().branch().clone(), *entry.inner().blob_id()));
+                    process_reachable_blocks(
+                        unreachable_block_ids,
+                        entry.inner().branch().clone(),
+                        *entry.inner().blob_id(),
+                    )
+                    .await?;
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        entries.push((version.branch().clone(), *version.blob_id()));
+                        process_reachable_blocks(
+                            unreachable_block_ids,
+                            version.branch().clone(),
+                            *version.blob_id(),
+                        )
+                        .await?;
                     }
 
-                    match entry
+                    let dir = entry
                         .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
-                        .await
-                    {
-                        Ok(dir) => subdirs.push(dir),
-                        Err(error) => {
-                            // On error, we can still proceed with finding missing blocks, but we
-                            // can't proceed with garbage collection because we could incorrectly
-                            // mark some blocks as unreachable due to not being able to descend
-                            // into this directory.
-                            mode = mode.intersect(Mode::Require).ok_or(error)?;
-                        }
-                    }
+                        .await?;
+                    subdirs.push(dir);
                 }
             }
         }
 
-        for (branch, blob_id) in entries {
-            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
-        }
-
         for dir in subdirs {
-            mode = traverse(shared, mode, unreachable_block_ids, dir).await?;
+            traverse(unreachable_block_ids, dir).await?;
         }
 
-        Ok(mode)
+        Ok(())
     }
 
     async fn process_reachable_blocks(
-        shared: &Shared,
-        mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         branch: Branch,
         blob_id: BlobId,
@@ -609,13 +651,7 @@ mod scan {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
         while let Some(block_id) = blob_block_ids.try_next().await? {
-            if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
-                unreachable_block_ids.remove(&block_id);
-            }
-
-            if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
-                shared.store.require_missing_block(block_id).await?;
-            }
+            unreachable_block_ids.remove(&block_id);
         }
 
         Ok(())
