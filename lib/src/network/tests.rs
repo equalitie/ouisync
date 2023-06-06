@@ -13,11 +13,11 @@ use crate::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
         BranchData, Index, RootNode, SingleBlockPresence, VersionVectorOp,
     },
+    metrics::Metrics,
     repository::{LocalId, RepositoryId, RepositoryMonitor},
     state_monitor::StateMonitor,
     store::{BlockRequestMode, Store},
     test_utils,
-    timing::Clocks,
     version_vector::VersionVector,
 };
 use futures_util::future;
@@ -78,7 +78,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 
     assert!(load_latest_root_node(&b_store.index, a_id).await.is_none());
 
-    let mut server = create_server(a_store.index.clone());
+    let mut server = create_server(a_store.clone());
     let mut client = create_client(b_store.clone());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
@@ -131,7 +131,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
     save_snapshot(&b_store.index, b_id, &write_keys, &snapshot).await;
 
-    let mut server = create_server(a_store.index.clone());
+    let mut server = create_server(a_store.clone());
     let mut client = create_client(b_store.clone());
 
     let a_block_tracker = a_store.block_tracker.client();
@@ -179,7 +179,7 @@ async fn failed_block_only_peer() {
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
     receive_blocks(&a_store, &snapshot).await;
 
-    let mut server = create_server(a_store.index.clone());
+    let mut server = create_server(a_store.clone());
     let mut client = create_client(b_store.clone());
 
     simulate_connection_until(
@@ -193,7 +193,7 @@ async fn failed_block_only_peer() {
     drop(server);
     drop(client);
 
-    let mut server = create_server(a_store.index.clone());
+    let mut server = create_server(a_store.clone());
     let mut client = create_client(b_store.clone());
 
     simulate_connection_until(&mut server, &mut client, async {
@@ -229,10 +229,10 @@ async fn failed_block_same_peer() {
     //                   |
     // [B]-(server_bc)---+
 
-    let mut server_ac = create_server(a_store.index.clone());
+    let mut server_ac = create_server(a_store.clone());
     let mut client_ca = create_client(c_store.clone());
 
-    let mut server_bc = create_server(b_store.index.clone());
+    let mut server_bc = create_server(b_store.clone());
     let mut client_cb = create_client(c_store.clone());
 
     // Run both connections in parallel until C syncs its index (but not blocks) with A
@@ -253,7 +253,7 @@ async fn failed_block_same_peer() {
     drop(server_ac);
     drop(client_ca);
 
-    let mut server_ac = create_server(a_store.index.clone());
+    let mut server_ac = create_server(a_store.clone());
     let mut client_ca = create_client(c_store.clone());
 
     // Run the new A-C connection in parallel with the existing B-C connection until all blocks are
@@ -289,7 +289,7 @@ async fn failed_block_other_peer() {
         receive_blocks(&a_store, &snapshot).await;
 
         // Sync B with A
-        let mut server_ab = create_server(a_store.index.clone());
+        let mut server_ab = create_server(a_store.clone());
         let mut client_ba = create_client(b_store.clone());
         simulate_connection_until(&mut server_ab, &mut client_ba, async {
             for id in snapshot.blocks().keys() {
@@ -310,10 +310,10 @@ async fn failed_block_other_peer() {
         //                   |
         // [B]-(server_bc)---+
 
-        let mut server_ac = create_server(a_store.index.clone());
+        let mut server_ac = create_server(a_store.clone());
         let mut client_ca = create_client(c_store.clone());
 
-        let mut server_bc = create_server(b_store.index.clone());
+        let mut server_bc = create_server(b_store.clone());
         let mut client_cb = create_client(c_store.clone());
 
         // Run the two connections in parallel until C syncs its index with both A and B.
@@ -386,7 +386,7 @@ async fn create_store<R: Rng + CryptoRng>(
         local_id: LocalId::new(),
         monitor: Arc::new(RepositoryMonitor::new(
             StateMonitor::make_root(),
-            Clocks::new(),
+            Metrics::new(),
             "test",
         )),
     };
@@ -593,10 +593,10 @@ type ClientData = (
     mpsc::Sender<Response>,
 );
 
-fn create_server(index: Index) -> ServerData {
+fn create_server(store: Store) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let server = Server::new(index, send_tx, recv_rx);
+    let server = Server::new(store, send_tx, recv_rx);
 
     (server, send_rx, recv_tx)
 }

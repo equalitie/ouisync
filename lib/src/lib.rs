@@ -9,9 +9,9 @@ mod macros;
 
 pub mod crypto;
 pub mod deadlock;
+pub mod metrics;
 pub mod network;
 pub mod path;
-pub mod timing;
 
 mod access_control;
 mod blob;

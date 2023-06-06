@@ -285,7 +285,7 @@ async fn run_link(
     // Run everything in parallel:
     select! {
         flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
-        flow = run_server(store.index.clone(), content_tx.clone(), request_rx ) => flow,
+        flow = run_server(store.clone(), content_tx.clone(), request_rx ) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_discovery_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
         _ = pex_announcer.run(content_tx) => ControlFlow::Continue,
@@ -387,11 +387,11 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    index: Index,
+    store: Store,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
 ) -> ControlFlow {
-    let mut server = Server::new(index, content_tx, request_rx);
+    let mut server = Server::new(store, content_tx, request_rx);
 
     let result = server.run().await;
 

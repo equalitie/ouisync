@@ -7,7 +7,8 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{Index, InnerNode, LeafNode, RootNode},
+    index::{InnerNode, LeafNode, RootNode},
+    store::Store,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -17,24 +18,24 @@ use tokio::{
 use tracing::instrument;
 
 pub(crate) struct Server {
-    index: Index,
+    store: Store,
     tx: Sender,
     rx: Receiver,
 }
 
 impl Server {
-    pub fn new(index: Index, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
+    pub fn new(store: Store, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
         Self {
-            index,
+            store,
             tx: Sender(tx),
             rx,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let Self { index, tx, rx } = self;
-        let responder = Responder::new(index, tx);
-        let monitor = Monitor::new(index, tx);
+        let Self { store, tx, rx } = self;
+        let responder = Responder::new(store, tx);
+        let monitor = Monitor::new(store, tx);
 
         select! {
             result = responder.run(rx) => result,
@@ -45,13 +46,13 @@ impl Server {
 
 /// Receives requests from the peer and replies with responses.
 struct Responder<'a> {
-    index: &'a Index,
+    store: &'a Store,
     tx: &'a Sender,
 }
 
 impl<'a> Responder<'a> {
-    fn new(index: &'a Index, tx: &'a Sender) -> Self {
-        Self { index, tx }
+    fn new(store: &'a Store, tx: &'a Sender) -> Self {
+        Self { store, tx }
     }
 
     async fn run(self, rx: &'a mut Receiver) -> Result<()> {
@@ -66,7 +67,13 @@ impl<'a> Responder<'a> {
                 request = rx.recv() => {
                     match request {
                         Some(request) => {
-                            handlers.push(self.handle_request(request));
+                            let handler = self
+                                .store
+                                .monitor
+                                .handle_request_metric
+                                .measure_ok(self.handle_request(request));
+
+                            handlers.push(handler);
                         },
                         None => break,
                     }
@@ -100,7 +107,7 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.index.pool.acquire().await?;
+        let mut conn = self.store.db().acquire().await?;
         let root_node = RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await;
 
         match root_node {
@@ -141,7 +148,7 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.index.pool.acquire().await?;
+        let mut conn = self.store.db().acquire().await?;
 
         // At most one of these will be non-empty.
         let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
@@ -185,7 +192,7 @@ impl<'a> Responder<'a> {
     async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let mut conn = self.index.pool.acquire().await?;
+        let mut conn = self.store.db().acquire().await?;
         let result = block::read(&mut conn, &id, &mut content).await;
         drop(conn); // don't hold the connection while sending is in progress
 
@@ -216,17 +223,17 @@ impl<'a> Responder<'a> {
 
 /// Monitors the repository for changes and notifies the peer.
 struct Monitor<'a> {
-    index: &'a Index,
+    store: &'a Store,
     tx: &'a Sender,
 }
 
 impl<'a> Monitor<'a> {
-    fn new(index: &'a Index, tx: &'a Sender) -> Self {
-        Self { index, tx }
+    fn new(store: &'a Store, tx: &'a Sender) -> Self {
+        Self { store, tx }
     }
 
     async fn run(self) -> Result<()> {
-        let mut subscription = self.index.subscribe();
+        let mut subscription = self.store.index.subscribe();
 
         // send initial branches
         self.handle_all_branches_changed().await?;
@@ -302,14 +309,14 @@ impl<'a> Monitor<'a> {
     }
 
     async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
-        let mut conn = self.index.pool.acquire().await?;
+        let mut conn = self.store.db().acquire().await?;
         RootNode::load_all_latest_approved(&mut conn)
             .try_collect()
             .await
     }
 
     async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
-        let mut conn = self.index.pool.acquire().await?;
+        let mut conn = self.store.db().acquire().await?;
         RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await
     }
 }

@@ -1,12 +1,12 @@
 mod wait_map;
 
 use camino::Utf8Path;
-use comfy_table::{presets, Table};
+use comfy_table::{presets, CellAlignment, Table};
 use once_cell::sync::Lazy;
 use ouisync::{
     crypto::sign::PublicKey,
+    metrics::{self, Metrics},
     network::{Network, Registration},
-    timing::{self, Clocks},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
     Result,
 };
@@ -100,7 +100,7 @@ pub(crate) mod env {
             let (tx, rx) = oneshot::channel();
 
             self.context.clocks.report(|report| {
-                report_timings(report);
+                report_metrics(report);
                 tx.send(()).ok();
             });
 
@@ -267,7 +267,7 @@ struct Context {
     base_dir: TempDir,
     addr_map: WaitMap<String, PeerAddr>,
     repo_map: WaitMap<String, AccessSecrets>,
-    clocks: Clocks,
+    clocks: Metrics,
 }
 
 impl Context {
@@ -278,7 +278,7 @@ impl Context {
             base_dir: TempDir::new(),
             addr_map: WaitMap::new(),
             repo_map: WaitMap::new(),
-            clocks: Clocks::new(),
+            clocks: Metrics::new(),
         }
     }
 }
@@ -632,42 +632,62 @@ pub(crate) fn init_log() {
     result.ok();
 }
 
-fn report_timings(report: &timing::Report) {
+fn report_metrics(report: &metrics::Report) {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(vec![
-        "name", "count", "min", "max", "mean", "50%", "90%", "99%", "99.9%",
+        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
     ]);
+
+    for column in table.column_iter_mut().skip(1) {
+        column.set_cell_alignment(CellAlignment::Right);
+    }
 
     for item in report.items() {
-        add_to_table(&mut table, item, 0);
+        let v = item.time;
+
+        table.add_row(vec![
+            format!("{}", item.name),
+            format!("{}", v.count()),
+            format!("{:.4}", v.min().as_secs_f64()),
+            format!("{:.4}", v.max().as_secs_f64()),
+            format!("{:.4}", v.mean().as_secs_f64()),
+            format!("{:.4}", v.stdev().as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.5).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.9).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.99).as_secs_f64()),
+            format!("{:.4}", v.value_at_quantile(0.999).as_secs_f64()),
+        ]);
     }
 
-    println!("{table}");
-}
+    println!("Time (s)\n{table}");
 
-fn add_to_table(table: &mut Table, item: timing::ReportItem<'_>, level: usize) {
-    let h = item.histogram();
-
-    let count: u64 = h.len();
-
-    table.add_row(vec![
-        format!("{}{}", " ".repeat(level * 2), item.name()),
-        format!("{:>5}", count),
-        format!("{:.4}s", to_secs(h.min())),
-        format!("{:.4}s", to_secs(h.max())),
-        format!("{:.4}s", to_secs(h.mean() as u64)),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.5))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.9))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.99))),
-        format!("{:.4}s", to_secs(h.value_at_quantile(0.999))),
+    let mut table = Table::new();
+    table.load_preset(presets::UTF8_FULL_CONDENSED);
+    table.set_header(vec![
+        "name", "count", "min", "max", "mean", "stdev", "50%", "90%", "99%", "99.9%",
     ]);
 
-    for item in item.items() {
-        add_to_table(table, item, level + 1)
+    for column in table.column_iter_mut().skip(1) {
+        column.set_cell_alignment(CellAlignment::Right);
     }
-}
 
-fn to_secs(nanos: u64) -> f64 {
-    nanos as f64 / 1_000_000_000.0
+    for item in report.items() {
+        let v = item.throughput;
+
+        table.add_row(vec![
+            format!("{}", item.name),
+            format!("{}", v.count()),
+            format!("{:.1}", v.min()),
+            format!("{:.1}", v.max()),
+            format!("{:.1}", v.mean()),
+            format!("{:.1}", v.stdev()),
+            format!("{:.1}", v.value_at_quantile(0.5)),
+            format!("{:.1}", v.value_at_quantile(0.9)),
+            format!("{:.1}", v.value_at_quantile(0.99)),
+            format!("{:.1}", v.value_at_quantile(0.999)),
+        ]);
+    }
+
+    println!("Throughput (hits/s)\n{table}");
 }

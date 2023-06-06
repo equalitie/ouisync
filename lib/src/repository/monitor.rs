@@ -1,13 +1,21 @@
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
 use crate::{
     collections::HashMap,
+    metrics::{Metric, Metrics, Report, ReportItem},
     state_monitor::{MonitoredValue, StateMonitor},
-    timing::{Clock, Clocks, Report, ReportItem},
 };
 use btdht::InfoHash;
 use scoped_task::ScopedJoinHandle;
-use tokio::{sync::oneshot, time};
+use tokio::{
+    select,
+    sync::{oneshot, watch},
+    task,
+    time::{self, MissedTickBehavior},
+};
 use tracing::Span;
 
 pub(crate) struct RepositoryMonitor {
@@ -20,50 +28,72 @@ pub(crate) struct RepositoryMonitor {
     pub request_timeouts: MonitoredValue<u64>,
     pub info_hash: MonitoredValue<Option<InfoHash>>,
 
-    pub clock_handle_root_node: Clock,
-    pub clock_handle_inner_nodes: Clock,
-    pub clock_handle_leaf_nodes: Clock,
-    pub clock_handle_block: Clock,
-    pub clock_request_queued: Clock,
-    pub clock_request_inflight: Clock,
+    pub handle_response_metric: Metric,
+    pub handle_root_node_metric: Metric,
+    pub handle_inner_nodes_metric: Metric,
+    pub handle_leaf_nodes_metric: Metric,
+    pub handle_block_metric: Metric,
+    pub request_queued_metric: Metric,
+    pub request_inflight_metric: Metric,
+    pub handle_request_metric: Metric,
+
+    pub job_monitor: JobMonitor,
+    pub job_metric: Metric,
 
     span: Span,
     node: StateMonitor,
-    _report_clocks_task: ScopedJoinHandle<()>,
+    _report_metrics_task: ScopedJoinHandle<()>,
 }
 
 impl RepositoryMonitor {
-    pub fn new(parent: StateMonitor, clocks: Clocks, name: &str) -> Self {
+    pub fn new(parent: StateMonitor, metrics: Metrics, name: &str) -> Self {
         let span = tracing::info_span!("repo", name);
         let node = parent.make_child(name);
 
-        let clock_handle_root_node = clocks.clock("handle_root_node");
-        let clock_handle_inner_nodes = clocks.clock("handle_inner_node");
-        let clock_handle_leaf_nodes = clocks.clock("handle_leaf_node");
-        let clock_handle_block = clocks.clock("handle_block");
-        let clock_request_queued = clocks.clock("request queued");
-        let clock_request_inflight = clocks.clock("request inflight");
+        let index_requests_inflight = node.make_value("index requests inflight", 0);
+        let block_requests_inflight = node.make_value("block requests inflight", 0);
+        let pending_requests = node.make_value("pending requests", 0);
+        let total_requests_cummulative = node.make_value("total requests cummulative", 0);
+        let request_timeouts = node.make_value("request timeouts", 0);
+        let info_hash = node.make_value("info-hash", None);
 
-        let report_clocks_task = scoped_task::spawn(report_clocks(clocks, node.clone()));
+        let handle_response_metric = metrics.get("handle_response");
+        let handle_root_node_metric = metrics.get("handle_root_node");
+        let handle_inner_nodes_metric = metrics.get("handle_inner_node");
+        let handle_leaf_nodes_metric = metrics.get("handle_leaf_node");
+        let handle_block_metric = metrics.get("handle_block");
+        let request_queued_metric = metrics.get("request queued");
+        let request_inflight_metric = metrics.get("request inflight");
+        let handle_request_metric = metrics.get("handle_request");
+
+        let job_monitor = JobMonitor::new(node.make_value("background job state", JobState::Idle));
+        let job_metric = metrics.get("background job");
+
+        let report_metrics_task = scoped_task::spawn(report_metrics(metrics, node.clone()));
 
         Self {
-            index_requests_inflight: node.make_value("index requests inflight", 0),
-            block_requests_inflight: node.make_value("block requests inflight", 0),
-            pending_requests: node.make_value("pending requests", 0),
-            total_requests_cummulative: node.make_value("total requests cummulative", 0),
-            request_timeouts: node.make_value("request timeouts", 0),
-            info_hash: node.make_value("info-hash", None),
+            index_requests_inflight,
+            block_requests_inflight,
+            pending_requests,
+            total_requests_cummulative,
+            request_timeouts,
+            info_hash,
 
-            clock_handle_root_node,
-            clock_handle_inner_nodes,
-            clock_handle_leaf_nodes,
-            clock_handle_block,
-            clock_request_queued,
-            clock_request_inflight,
+            handle_response_metric,
+            handle_root_node_metric,
+            handle_inner_nodes_metric,
+            handle_leaf_nodes_metric,
+            handle_block_metric,
+            request_queued_metric,
+            request_inflight_metric,
+            handle_request_metric,
+
+            job_monitor,
+            job_metric,
 
             span,
             node,
-            _report_clocks_task: report_clocks_task,
+            _report_metrics_task: report_metrics_task,
         }
     }
 
@@ -80,7 +110,7 @@ impl RepositoryMonitor {
     }
 }
 
-async fn report_clocks(clocks: Clocks, monitor: StateMonitor) {
+async fn report_metrics(metrics: Metrics, monitor: StateMonitor) {
     let mut interval = time::interval(Duration::from_secs(1));
     let mut monitors = HashMap::new();
 
@@ -90,9 +120,12 @@ async fn report_clocks(clocks: Clocks, monitor: StateMonitor) {
         let (tx, rx) = oneshot::channel();
         let monitor = monitor.clone();
 
-        clocks.report(move |report: &Report| {
+        metrics.report(move |report: &Report| {
             for item in report.items() {
-                report_clock(item, &monitor, &mut monitors);
+                monitors
+                    .entry(item.name.clone())
+                    .or_insert_with(|| MetricMonitor::new(monitor.make_child(item.name.as_ref())))
+                    .update(item);
             }
 
             tx.send(monitors).ok();
@@ -102,73 +135,165 @@ async fn report_clocks(clocks: Clocks, monitor: StateMonitor) {
     }
 }
 
-fn report_clock(
-    item: ReportItem<'_>,
-    parent_monitor: &StateMonitor,
-    monitors: &mut HashMap<u64, ClockMonitor>,
-) {
-    monitors
-        .entry(item.id())
-        .or_insert_with(|| ClockMonitor::new(parent_monitor.make_child(item.name())))
-        .update(&item);
-
-    for item in item.items() {
-        report_clock(item, parent_monitor, monitors);
-    }
-}
-
-struct ClockMonitor {
+struct MetricMonitor {
     count: MonitoredValue<u64>,
-    mean: MonitoredValue<Seconds>,
-    max: MonitoredValue<Seconds>,
-    p50: MonitoredValue<Seconds>,
-    p90: MonitoredValue<Seconds>,
-    p99: MonitoredValue<Seconds>,
-    p999: MonitoredValue<Seconds>,
+
+    time_last: MonitoredValue<Format<Duration>>,
+    time_min: MonitoredValue<Format<Duration>>,
+    time_max: MonitoredValue<Format<Duration>>,
+    time_mean: MonitoredValue<Format<Duration>>,
+    time_stdev: MonitoredValue<Format<Duration>>,
+    time_p50: MonitoredValue<Format<Duration>>,
+    time_p90: MonitoredValue<Format<Duration>>,
+    time_p99: MonitoredValue<Format<Duration>>,
+    time_p999: MonitoredValue<Format<Duration>>,
+
+    throughput_last: MonitoredValue<Format<f64>>,
+    throughput_min: MonitoredValue<Format<f64>>,
+    throughput_max: MonitoredValue<Format<f64>>,
+    throughput_mean: MonitoredValue<Format<f64>>,
+    throughput_stdev: MonitoredValue<Format<f64>>,
+    throughput_p50: MonitoredValue<Format<f64>>,
+    throughput_p90: MonitoredValue<Format<f64>>,
+    throughput_p99: MonitoredValue<Format<f64>>,
+    throughput_p999: MonitoredValue<Format<f64>>,
 }
 
-impl ClockMonitor {
+impl MetricMonitor {
     fn new(node: StateMonitor) -> Self {
+        let time = node.make_child("time stats");
+        let throughput = node.make_child("throughput stats");
+
         Self {
             count: node.make_value("count", 0),
-            mean: node.make_value("mean", Seconds::ZERO),
-            max: node.make_value("max", Seconds::ZERO),
-            p50: node.make_value("50%", Seconds::ZERO),
-            p90: node.make_value("90%", Seconds::ZERO),
-            p99: node.make_value("99%", Seconds::ZERO),
-            p999: node.make_value("99.9%", Seconds::ZERO),
+
+            time_last: node.make_value("time", Format(Duration::ZERO)),
+            time_min: time.make_value("min", Format(Duration::ZERO)),
+            time_max: time.make_value("max", Format(Duration::ZERO)),
+            time_mean: time.make_value("mean", Format(Duration::ZERO)),
+            time_stdev: time.make_value("stdev", Format(Duration::ZERO)),
+            time_p50: time.make_value("50%", Format(Duration::ZERO)),
+            time_p90: time.make_value("90%", Format(Duration::ZERO)),
+            time_p99: time.make_value("99%", Format(Duration::ZERO)),
+            time_p999: time.make_value("99.9%", Format(Duration::ZERO)),
+
+            throughput_last: node.make_value("throughput", Format(0.0)),
+            throughput_min: throughput.make_value("min", Format(0.0)),
+            throughput_max: throughput.make_value("max", Format(0.0)),
+            throughput_mean: throughput.make_value("mean", Format(0.0)),
+            throughput_stdev: throughput.make_value("stdev", Format(0.0)),
+            throughput_p50: throughput.make_value("50%", Format(0.0)),
+            throughput_p90: throughput.make_value("90%", Format(0.0)),
+            throughput_p99: throughput.make_value("99%", Format(0.0)),
+            throughput_p999: throughput.make_value("99.9%", Format(0.0)),
         }
     }
 
-    fn update(&self, report: &ReportItem<'_>) {
-        let h = report.histogram();
+    fn update(&self, item: ReportItem<'_>) {
+        *self.count.get() = item.time.count();
 
-        *self.count.get() = h.len();
-        *self.mean.get() = Seconds::from_nanos_f(h.mean());
-        *self.max.get() = Seconds::from_nanos(h.max());
-        *self.p50.get() = Seconds::from_nanos(h.value_at_quantile(0.5));
-        *self.p90.get() = Seconds::from_nanos(h.value_at_quantile(0.9));
-        *self.p99.get() = Seconds::from_nanos(h.value_at_quantile(0.99));
-        *self.p999.get() = Seconds::from_nanos(h.value_at_quantile(0.999));
+        *self.time_last.get() = Format(item.time.last());
+        *self.time_min.get() = Format(item.time.min());
+        *self.time_max.get() = Format(item.time.max());
+        *self.time_mean.get() = Format(item.time.mean());
+        *self.time_stdev.get() = Format(item.time.stdev());
+        *self.time_p50.get() = Format(item.time.value_at_quantile(0.5));
+        *self.time_p90.get() = Format(item.time.value_at_quantile(0.9));
+        *self.time_p99.get() = Format(item.time.value_at_quantile(0.99));
+        *self.time_p999.get() = Format(item.time.value_at_quantile(0.999));
+
+        *self.throughput_last.get() = Format(item.throughput.last());
+        *self.throughput_min.get() = Format(item.throughput.min());
+        *self.throughput_max.get() = Format(item.throughput.max());
+        *self.throughput_mean.get() = Format(item.throughput.mean());
+        *self.throughput_stdev.get() = Format(item.throughput.stdev());
+        *self.throughput_p50.get() = Format(item.throughput.value_at_quantile(0.5));
+        *self.throughput_p90.get() = Format(item.throughput.value_at_quantile(0.9));
+        *self.throughput_p99.get() = Format(item.throughput.value_at_quantile(0.99));
+        *self.throughput_p999.get() = Format(item.throughput.value_at_quantile(0.999));
     }
 }
 
-struct Seconds(f64);
+struct Format<T>(T);
 
-impl Seconds {
-    const ZERO: Self = Self(0.0);
-
-    fn from_nanos(n: u64) -> Self {
-        Self::from_nanos_f(n as f64)
-    }
-
-    fn from_nanos_f(n: f64) -> Self {
-        Self(n / 1_000_000_000.0)
-    }
-}
-
-impl fmt::Debug for Seconds {
+impl fmt::Debug for Format<Duration> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:.4}s", self.0)
+        write!(f, "{:.4}s", self.0.as_secs_f64())
+    }
+}
+
+impl fmt::Debug for Format<f64> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:.1}", self.0)
+    }
+}
+
+pub(crate) struct JobMonitor {
+    tx: watch::Sender<bool>,
+}
+
+impl JobMonitor {
+    fn new(value: MonitoredValue<JobState>) -> Self {
+        let (tx, mut rx) = watch::channel(false);
+
+        task::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            let mut start = None;
+
+            loop {
+                select! {
+                    result = rx.changed() => {
+                        if result.is_err() {
+                            *value.get() = JobState::Idle;
+                            break;
+                        }
+
+                        if *rx.borrow() {
+                            start = Some(Instant::now());
+                        } else {
+                            start = None;
+                            *value.get() = JobState::Idle;
+                        }
+                    }
+                    _ = interval.tick(), if start.is_some() => {
+                        *value.get() = JobState::Running(start.unwrap().elapsed());
+                    }
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    pub(crate) fn start(&self) -> Option<JobGuard<'_>> {
+        if self.tx.send_replace(true) {
+            None
+        } else {
+            Some(JobGuard(self))
+        }
+    }
+}
+
+pub(crate) struct JobGuard<'a>(&'a JobMonitor);
+
+impl Drop for JobGuard<'_> {
+    fn drop(&mut self) {
+        self.0.tx.send(false).ok();
+    }
+}
+
+enum JobState {
+    Idle,
+    Running(Duration),
+}
+
+impl fmt::Debug for JobState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Idle => write!(f, "idle"),
+            Self::Running(duration) => write!(f, "running for {:.1}s", duration.as_secs_f64()),
+        }
     }
 }

@@ -205,25 +205,25 @@ impl Inner {
     ) -> Result<()> {
         tracing::trace!("job started");
 
+        let _monitor_guard = self.shared.store.monitor.job_monitor.start();
+        let _timing = self.shared.store.monitor.job_metric.start();
+
         // Merge
         if let Some(local_branch) = &self.local_branch {
             let result = merge::run(&self.shared, local_branch).await;
             tracing::trace!(?result, "merge completed");
-
             error_handling.apply(result)?;
         }
 
         // Prune outdated branches and snapshots
         let result = prune::run(&self.shared, unlocked_tx).await;
         tracing::trace!(?result, "prune completed");
-
         error_handling.apply(result)?;
 
         // Scan for missing and unreachable blocks
         if self.shared.secrets.can_read() {
             let result = scan::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
             tracing::trace!(?result, "scan completed");
-
             error_handling.apply(result)?;
         }
 
