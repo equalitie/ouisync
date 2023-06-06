@@ -35,6 +35,7 @@ pub(crate) struct RepositoryMonitor {
     pub handle_block_metric: Metric,
     pub request_queued_metric: Metric,
     pub request_inflight_metric: Metric,
+    pub handle_request_metric: Metric,
 
     pub job_monitor: JobMonitor,
     pub job_metric: Metric,
@@ -63,6 +64,7 @@ impl RepositoryMonitor {
         let handle_block_metric = metrics.get("handle_block");
         let request_queued_metric = metrics.get("request queued");
         let request_inflight_metric = metrics.get("request inflight");
+        let handle_request_metric = metrics.get("handle_request");
 
         let job_monitor = JobMonitor::new(node.make_value("background job state", JobState::Idle));
         let job_metric = metrics.get("background job");
@@ -84,6 +86,7 @@ impl RepositoryMonitor {
             handle_block_metric,
             request_queued_metric,
             request_inflight_metric,
+            handle_request_metric,
 
             job_monitor,
             job_metric,
