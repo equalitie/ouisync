@@ -610,7 +610,10 @@ async fn check_complete_case(leaf_count: usize, rng_seed: u64) {
     pool.close().await.unwrap();
 
     async fn update_summaries(tx: &mut db::WriteTransaction, hash: Hash) {
-        for (hash, state) in super::update_summaries(tx, vec![hash]).await.unwrap() {
+        for (hash, state) in super::update_summaries(tx, vec![hash], UpdateSummaryReason::Other)
+            .await
+            .unwrap()
+        {
             match state {
                 NodeState::Complete => {
                     RootNode::approve(tx, &hash).await.unwrap();
@@ -654,9 +657,13 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
     .unwrap();
 
     if snapshot.leaf_count() == 0 {
-        super::update_summaries(&mut tx, vec![root_node.proof.hash])
-            .await
-            .unwrap();
+        super::update_summaries(
+            &mut tx,
+            vec![root_node.proof.hash],
+            UpdateSummaryReason::Other,
+        )
+        .await
+        .unwrap();
     }
 
     for layer in snapshot.inner_layers() {
@@ -678,7 +685,7 @@ async fn summary_case(leaf_count: usize, rng_seed: u64) {
             .await
             .unwrap();
 
-        super::update_summaries(&mut tx, vec![*parent_hash])
+        super::update_summaries(&mut tx, vec![*parent_hash], UpdateSummaryReason::Other)
             .await
             .unwrap();
     }

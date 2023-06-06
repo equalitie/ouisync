@@ -13,7 +13,7 @@ pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
         receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MultiBlockPresence, NodeState, RootNode, SingleBlockPresence, Summary,
+        MultiBlockPresence, NodeState, RootNode, SingleBlockPresence, Summary, UpdateSummaryReason,
     },
     proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
@@ -259,7 +259,8 @@ impl Index {
         // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
         // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
-        let states = node::update_summaries(&mut tx, vec![hash]).await?;
+        let states =
+            node::update_summaries(&mut tx, vec![hash], UpdateSummaryReason::Other).await?;
 
         let mut old_approved = false;
         let mut new_approved = Vec::new();

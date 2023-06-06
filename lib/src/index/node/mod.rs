@@ -15,7 +15,7 @@ pub(crate) use self::{
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
 
-use super::try_collect_into;
+use super::{receive_filter::ReceiveFilter, try_collect_into};
 use crate::{
     block::BlockId,
     collections::{HashMap, HashSet},
@@ -30,11 +30,20 @@ pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
     locator.as_ref()[inner_layer]
 }
 
+/// Reason for updating the summary
+pub(crate) enum UpdateSummaryReason {
+    /// Updating summary because a block was removed
+    BlockRemoved,
+    /// Updating summary for some other reason
+    Other,
+}
+
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
 /// Returns the affected snapshots and their states.
 pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     mut nodes: Vec<Hash>,
+    reason: UpdateSummaryReason,
 ) -> Result<HashMap<Hash, NodeState>> {
     let mut states = HashMap::default();
 
@@ -55,6 +64,13 @@ pub(crate) async fn update_summaries(
 
         if has_parent {
             InnerNode::update_summaries(tx, &hash).await?;
+
+            match reason {
+                // If block was removed we need to remove the corresponding receive filter entries
+                // so if the block becomes needed again we can request it again.
+                UpdateSummaryReason::BlockRemoved => ReceiveFilter::remove(tx, &hash).await?,
+                UpdateSummaryReason::Other => (),
+            }
         } else {
             let state = RootNode::update_summaries(tx, &hash).await?;
             states.entry(hash).or_insert(state).update(state);
@@ -77,7 +93,7 @@ pub(crate) async fn receive_block(
     let nodes = LeafNode::load_parent_hashes(tx, id).try_collect().await?;
     let mut branch_ids = HashSet::default();
 
-    for (hash, state) in update_summaries(tx, nodes).await? {
+    for (hash, state) in update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {
         if !state.is_approved() {
             continue;
         }

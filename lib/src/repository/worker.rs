@@ -434,7 +434,7 @@ mod scan {
         block::{self, BlockId},
         crypto::sign::Keypair,
         db,
-        index::{self, LeafNode, SnapshotData},
+        index::{self, LeafNode, SnapshotData, UpdateSummaryReason},
         joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
     use async_recursion::async_recursion;
@@ -755,7 +755,7 @@ mod scan {
                 .try_collect()
                 .await?;
 
-            index::update_summaries(tx, parent_hashes).await?;
+            index::update_summaries(tx, parent_hashes, UpdateSummaryReason::BlockRemoved).await?;
         }
 
         Ok(())
