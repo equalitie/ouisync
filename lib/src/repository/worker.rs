@@ -1,311 +1,222 @@
+use self::utils::{unlock, Command};
 use super::Shared;
 use crate::{
+    blob::BlockIds,
     blob_id::BlobId,
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
     event::{Event, EventScope, IgnoreScopeReceiver, Payload},
-    joint_directory::JointDirectory,
-    sync::AwaitDrop,
+    joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     versioned,
 };
-use futures_util::{stream::FuturesUnordered, StreamExt};
-use std::{ops::ControlFlow, sync::Arc};
+use async_recursion::async_recursion;
+use futures_util::{stream, Stream};
+use std::sync::Arc;
 use tokio::{
     select,
-    sync::{
-        broadcast::{self, error::RecvError},
-        mpsc, oneshot,
-    },
+    sync::broadcast::{self, error::RecvError},
 };
-use tracing::instrument;
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
 /// - remove outdated branches and snapshots
 /// - remove unreachable blocks
 /// - find missing blocks
-pub(super) struct Worker {
-    inner: Inner,
-    command_rx: mpsc::Receiver<Command>,
-    abort_rx: oneshot::Receiver<()>,
-}
+pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
+    let event_scope = EventScope::new();
 
-impl Worker {
-    pub fn new(shared: Arc<Shared>, local_branch: Option<Branch>) -> (Self, WorkerHandle) {
-        let (command_tx, command_rx) = mpsc::channel(1);
-        let (abort_tx, abort_rx) = oneshot::channel();
-
-        let event_scope = EventScope::new();
+    // Maintain (merge, prune and trash)
+    let maintain = async {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
+        let (unlock_tx, unlock_rx) = unlock::channel();
+        let commands = stream::select(
+            from_events(shared.store.index.subscribe(), event_scope),
+            from_unlocks(unlock_rx),
+        );
 
-        let inner = Inner {
-            shared,
-            local_branch,
-            event_scope,
-        };
+        utils::run(
+            || maintain(&shared, local_branch.as_ref(), &unlock_tx),
+            commands,
+        )
+        .await;
+    };
 
-        let worker = Self {
-            inner,
-            command_rx,
-            abort_rx,
-        };
-        let handle = WorkerHandle {
-            command_tx,
-            _abort_tx: abort_tx,
-        };
+    // Scan
+    let scan = async {
+        let commands = from_events(shared.store.index.subscribe(), event_scope);
+        utils::run(|| scan(&shared), commands).await;
+    };
 
-        (worker, handle)
+    // Run them in parallel so missing blocks are found as soon as possible
+    select! {
+        _ = maintain => (),
+        _ = scan => (),
     }
+}
 
-    pub async fn run(self) {
-        select! {
-            _ = self.inner.run(self.command_rx) => (),
-            _ = self.abort_rx => (),
+fn from_events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
+    let rx = IgnoreScopeReceiver::new(rx, scope);
+
+    stream::unfold(rx, |mut rx| async move {
+        let event = rx.recv().await;
+
+        match &event {
+            Ok(payload) => tracing::trace!(?payload, "event received"),
+            Err(RecvError::Lagged(_)) => tracing::trace!("event receiver lagged"),
+            Err(RecvError::Closed) => tracing::trace!("event receiver closed"),
         }
+
+        match event {
+            Ok(Payload::BranchChanged(_)) => {
+                // On `BranchChanged`, interrupt the current job and
+                // immediately start a new one.
+                Some((Command::Interrupt, rx))
+            }
+            Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
+                // On any other event, let the current job run to completion
+                // and then start a new one.
+                Some((Command::Wait, rx))
+            }
+            Err(RecvError::Closed) => None,
+        }
+    })
+}
+
+fn from_unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
+    stream::unfold(rx, |mut rx| async move {
+        if rx.recv().await {
+            tracing::trace!("lock released");
+            Some((Command::Wait, rx))
+        } else {
+            None
+        }
+    })
+}
+
+async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
+    // Merge branches
+    if let Some(local_branch) = local_branch {
+        shared
+            .store
+            .monitor
+            .merge_job
+            .run(merge::run(shared, local_branch))
+            .await;
+    }
+
+    // Prune outdated branches and snapshots
+    shared
+        .store
+        .monitor
+        .prune_job
+        .run(prune::run(shared, unlock_tx))
+        .await;
+
+    // Collect unreachable blocks
+    if shared.secrets.can_read() {
+        shared
+            .store
+            .monitor
+            .trash_job
+            .run(trash::run(shared, local_branch, unlock_tx))
+            .await;
     }
 }
 
-/// Handle to interact with the worker. Aborts the worker task when dropped.
-pub(super) struct WorkerHandle {
-    command_tx: mpsc::Sender<Command>,
-    _abort_tx: oneshot::Sender<()>,
+async fn scan(shared: &Shared) {
+    // Find missing blocks
+    shared.store.monitor.scan_job.run(scan::run(shared)).await
 }
 
-impl WorkerHandle {
-    pub async fn work(&self) -> Result<()> {
-        self.oneshot(Command::Work).await
-    }
+/// Find missing blocks and mark them as required.
+mod scan {
+    use super::*;
 
-    pub async fn shutdown(&self) {
-        let (result_tx, result_rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::Shutdown(result_tx))
-            .await
-            .unwrap_or(());
-        result_rx.await.unwrap_or(())
-    }
+    pub(super) async fn run(shared: &Shared) -> Result<()> {
+        let branches = shared.load_branches().await?;
+        let mut versions = Vec::with_capacity(branches.len());
 
-    async fn oneshot<F>(&self, command_fn: F) -> Result<()>
-    where
-        F: FnOnce(oneshot::Sender<Result<()>>) -> Command,
-    {
-        let (result_tx, result_rx) = oneshot::channel();
-        self.command_tx
-            .send(command_fn(result_tx))
-            .await
-            .unwrap_or(());
+        for branch in branches {
+            require_missing_blocks(shared, branch.clone(), BlobId::ROOT).await?;
 
-        // When this returns error it means the worker has been terminated which we treat as
-        // success, for simplicity.
-        result_rx.await.unwrap_or(Ok(()))
-    }
-}
-
-enum Command {
-    Work(oneshot::Sender<Result<()>>),
-    Shutdown(oneshot::Sender<()>),
-}
-
-struct Inner {
-    shared: Arc<Shared>,
-    local_branch: Option<Branch>,
-    event_scope: EventScope,
-}
-
-impl Inner {
-    async fn run(self, mut command_rx: mpsc::Receiver<Command>) {
-        let event_rx = self.shared.store.index.subscribe();
-        // NOTE: using unbounded here to prevent hang in `handle_command`
-        let (unlocked_tx, unlocked_rx) = mpsc::unbounded_channel();
-        let mut waiter = Waiter::new(event_rx, self.event_scope, unlocked_rx);
-        let mut state = State::Working;
-
-        loop {
-            match state {
-                State::Working => {
-                    state = State::Waiting;
-
-                    let work = async {
-                        self.work(ErrorHandling::Ignore, &unlocked_tx).await.ok();
-                    };
-
-                    let wait = async {
-                        loop {
-                            match waiter.wait(state).await {
-                                ControlFlow::Continue(new_state) => {
-                                    state = new_state;
-                                }
-                                ControlFlow::Break(new_state) => {
-                                    state = new_state;
-                                    break;
-                                }
-                            }
-                        }
-
-                        tracing::trace!("job interrupted");
-                    };
-
-                    select! {
-                        _ = work => (),
-                        _ = wait => (),
-                    }
+            match branch
+                .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
+                .await.map_err(|error| {
+                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    error
+                })
+            {
+                Ok(dir) => versions.push(dir),
+                Err(Error::EntryNotFound) => {
+                    // `EntryNotFound` here just means this is a newly created branch with no
+                    // content yet. It is safe to ignore it.
+                    continue;
                 }
-                State::Waiting => {
-                    state = select! {
-                        new_state = waiter.wait(state) => {
-                            match new_state {
-                                ControlFlow::Continue(new_state) => new_state,
-                                ControlFlow::Break(new_state) => new_state,
-                            }
-                        }
-                        command = command_rx.recv() => {
-                            let Some(command) = command else {
-                                break;
-                            };
-
-                            match self.handle_command(command, &unlocked_tx).await {
-                                ControlFlow::Continue(()) => State::Waiting,
-                                ControlFlow::Break(tx) => {
-                                    // Ensure that when the reply is received it's guaranteed that
-                                    // self has already been destroyed.
-                                    drop(self);
-                                    tx.send(()).ok();
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                State::Terminated => break,
+                Err(error) => return Err(error),
             }
         }
+
+        traverse(shared, JointDirectory::new(None, versions)).await
     }
 
-    async fn handle_command(
-        &self,
-        command: Command,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> ControlFlow<oneshot::Sender<()>> {
-        match command {
-            Command::Work(result_tx) => {
-                result_tx
-                    .send(self.work(ErrorHandling::Return, unlocked_tx).await)
-                    .unwrap_or(());
-                ControlFlow::Continue(())
+    #[async_recursion]
+    async fn traverse(shared: &Shared, dir: JointDirectory) -> Result<()> {
+        let mut subdirs = Vec::new();
+
+        for entry in dir.entries() {
+            match entry {
+                JointEntryRef::File(entry) => {
+                    require_missing_blocks(
+                        shared,
+                        entry.inner().branch().clone(),
+                        *entry.inner().blob_id(),
+                    )
+                    .await?;
+                }
+                JointEntryRef::Directory(entry) => {
+                    for version in entry.versions() {
+                        require_missing_blocks(
+                            shared,
+                            version.branch().clone(),
+                            *version.blob_id(),
+                        )
+                        .await?;
+                    }
+
+                    match entry
+                        .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
+                        .await
+                    {
+                        Ok(dir) => subdirs.push(dir),
+                        Err(error) => {
+                            // Continue processing the remaining entries
+                            tracing::warn!(name = entry.name(), ?error, "failed to open directory");
+                        }
+                    }
+                }
             }
-            Command::Shutdown(result_tx) => ControlFlow::Break(result_tx),
-        }
-    }
-
-    async fn work(
-        &self,
-        error_handling: ErrorHandling,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> Result<()> {
-        tracing::trace!("job started");
-
-        let _monitor_guard = self.shared.store.monitor.job_monitor.start();
-        let _timing = self.shared.store.monitor.job_metric.start();
-
-        // Merge
-        if let Some(local_branch) = &self.local_branch {
-            let result = merge::run(&self.shared, local_branch).await;
-            tracing::trace!(?result, "merge completed");
-            error_handling.apply(result)?;
         }
 
-        // Prune outdated branches and snapshots
-        let result = prune::run(&self.shared, unlocked_tx).await;
-        tracing::trace!(?result, "prune completed");
-        error_handling.apply(result)?;
-
-        // Scan for missing and unreachable blocks
-        if self.shared.secrets.can_read() {
-            let result = scan::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
-            tracing::trace!(?result, "scan completed");
-            error_handling.apply(result)?;
+        for dir in subdirs {
+            traverse(shared, dir).await?;
         }
-
-        tracing::trace!("job completed");
 
         Ok(())
     }
-}
 
-#[derive(Copy, Clone)]
-enum State {
-    Working,
-    Waiting,
-    Terminated,
-}
+    async fn require_missing_blocks(
+        shared: &Shared,
+        branch: Branch,
+        blob_id: BlobId,
+    ) -> Result<()> {
+        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-struct Waiter {
-    event_rx: IgnoreScopeReceiver,
-    unlocked: FuturesUnordered<AwaitDrop>,
-    unlocked_rx: mpsc::UnboundedReceiver<AwaitDrop>,
-}
-
-impl Waiter {
-    fn new(
-        event_rx: broadcast::Receiver<Event>,
-        event_scope: EventScope,
-        unlocked_rx: mpsc::UnboundedReceiver<AwaitDrop>,
-    ) -> Self {
-        Self {
-            event_rx: IgnoreScopeReceiver::new(event_rx, event_scope),
-            unlocked: FuturesUnordered::new(),
-            unlocked_rx,
+        while let Some(block_id) = blob_block_ids.try_next().await? {
+            shared.store.require_missing_block(block_id).await?;
         }
-    }
 
-    async fn wait(&mut self, state: State) -> ControlFlow<State, State> {
-        select! {
-            event = self.event_rx.recv() => {
-                tracing::trace!(?event, "event received");
-
-                match event {
-                    Ok(Payload::BranchChanged(_)) => {
-                        // On `BranchChanged`, interrupt the current job and
-                        // immediately start a new one.
-                        ControlFlow::Break(State::Working)
-                    }
-                    Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                        // On any other event, let the current job run to completion
-                        // and then start a new one.
-                        ControlFlow::Continue(State::Working)
-                    }
-                    Err(RecvError::Closed) => {
-                        ControlFlow::Break(State::Terminated)
-                    }
-                }
-            }
-            _ = self.unlocked.next(), if !self.unlocked.is_empty() => {
-                tracing::trace!("lock released");
-                ControlFlow::Continue(State::Working)
-            }
-            notify = self.unlocked_rx.recv() => {
-                // unwrap ok because the sender is not destroyed until the end
-                // of this function.
-                self.unlocked.push(notify.unwrap());
-                ControlFlow::Continue(state)
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-enum ErrorHandling {
-    Return,
-    Ignore,
-}
-
-impl ErrorHandling {
-    fn apply(self, result: Result<()>) -> Result<()> {
-        match (self, result) {
-            (_, Ok(())) | (Self::Ignore, Err(_)) => Ok(()),
-            (Self::Return, Err(error)) => Err(error),
-        }
+        Ok(())
     }
 }
 
@@ -313,7 +224,6 @@ impl ErrorHandling {
 mod merge {
     use super::*;
 
-    #[instrument(name = "merge", skip_all)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
@@ -348,11 +258,7 @@ mod prune {
     };
     use std::cmp::Ordering;
 
-    #[instrument(name = "prune", skip_all)]
-    pub(super) async fn run(
-        shared: &Shared,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> Result<()> {
+    pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
 
         // When there are multiple branches with the same vv but different hash we need to preserve
@@ -380,7 +286,7 @@ mod prune {
                 Ok(lock) => lock,
                 Err((notify, _)) => {
                     tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
-                    unlocked_tx.send(notify).ok();
+                    unlock_tx.send(notify).await;
                     continue;
                 }
             };
@@ -425,60 +331,29 @@ mod prune {
     }
 }
 
-/// Scan repository blocks to identify which ones are missing and which are no longer needed.
-mod scan {
+/// Remove unreachable blocks
+mod trash {
     use super::*;
     use crate::{
-        blob::BlockIds,
-        blob_id::BlobId,
         block::{self, BlockId},
         crypto::sign::Keypair,
         db,
         index::{self, LeafNode, SnapshotData, UpdateSummaryReason},
-        joint_directory::{JointEntryRef, MissingVersionStrategy},
     };
-    use async_recursion::async_recursion;
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
     use tracing::Instrument;
 
-    #[derive(Copy, Clone, Debug)]
-    enum Mode {
-        // only require missing blocks
-        Require,
-        // only collect unreachable blocks
-        Collect,
-        // require missing blocks and collect unreachable blocks
-        RequireAndCollect,
-    }
-
-    impl Mode {
-        fn intersect(self, other: Self) -> Option<Self> {
-            match (self, other) {
-                (Self::Require, Self::Require)
-                | (Self::Require, Self::RequireAndCollect)
-                | (Self::RequireAndCollect, Self::Require) => Some(Self::Require),
-                (Self::Collect, Self::Collect)
-                | (Self::Collect, Self::RequireAndCollect)
-                | (Self::RequireAndCollect, Self::Collect) => Some(Self::Collect),
-                (Self::RequireAndCollect, Self::RequireAndCollect) => Some(Self::RequireAndCollect),
-                (Self::Require, Self::Collect) | (Self::Collect, Self::Require) => None,
-            }
-        }
-    }
-
-    #[instrument(name = "scan", skip_all)]
     pub(super) async fn run(
         shared: &Shared,
         local_branch: Option<&Branch>,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
+        unlock_tx: &unlock::Sender,
     ) -> Result<()> {
         // Perform the scan in multiple passes, to avoid loading too many block ids into memory.
         // The first pass is used both for requiring missing blocks and collecting unreachable
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        let mut mode = Mode::RequireAndCollect;
         let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
@@ -487,15 +362,9 @@ mod scan {
                 break;
             }
 
-            process_locked_blocks(shared, &mut unreachable_block_ids, unlocked_tx).await?;
+            process_locked_blocks(shared, &mut unreachable_block_ids, unlock_tx).await?;
 
-            mode = traverse_root(shared, local_branch, mode, &mut unreachable_block_ids).await?;
-            mode = if let Some(mode) = mode.intersect(Mode::Collect) {
-                mode
-            } else {
-                break;
-            };
-
+            traverse_root(shared, local_branch, &mut unreachable_block_ids).await?;
             remove_unreachable_blocks(shared, local_branch, unreachable_block_ids).await?;
         }
 
@@ -505,17 +374,15 @@ mod scan {
     async fn traverse_root(
         shared: &Shared,
         local_branch: Option<&Branch>,
-        mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
-    ) -> Result<Mode> {
+    ) -> Result<()> {
         let branches = shared.load_branches().await?;
-
         let mut versions = Vec::with_capacity(branches.len());
-        let mut entries = Vec::new();
 
         for branch in branches {
-            entries.push((branch.clone(), BlobId::ROOT));
+            process_reachable_blocks(unreachable_block_ids, branch.clone(), BlobId::ROOT).await?;
 
+            // TODO: enable fallback so fallback blocks are not collected
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
@@ -529,22 +396,11 @@ mod scan {
                     // content yet. It is safe to ignore it.
                     continue;
                 }
-                Err(error) => {
-                    // On error, we can still proceed with finding missing blocks, but we can't
-                    // proceed with garbage collection because we could incorrectly mark some
-                    // blocks as unreachable due to not being able to descend into this directory.
-                    mode = mode.intersect(Mode::Require).ok_or(error)?;
-                }
+                Err(error) => return Err(error),
             }
         }
 
-        for (branch, blob_id) in entries {
-            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
-        }
-
         traverse(
-            shared,
-            mode,
             unreachable_block_ids,
             JointDirectory::new(local_branch.cloned(), versions),
         )
@@ -553,55 +409,47 @@ mod scan {
 
     #[async_recursion]
     async fn traverse(
-        shared: &Shared,
-        mut mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         dir: JointDirectory,
-    ) -> Result<Mode> {
-        let mut entries = Vec::new();
+    ) -> Result<()> {
         let mut subdirs = Vec::new();
 
         for entry in dir.entries() {
             match entry {
                 JointEntryRef::File(entry) => {
-                    entries.push((entry.inner().branch().clone(), *entry.inner().blob_id()));
+                    process_reachable_blocks(
+                        unreachable_block_ids,
+                        entry.inner().branch().clone(),
+                        *entry.inner().blob_id(),
+                    )
+                    .await?;
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        entries.push((version.branch().clone(), *version.blob_id()));
+                        process_reachable_blocks(
+                            unreachable_block_ids,
+                            version.branch().clone(),
+                            *version.blob_id(),
+                        )
+                        .await?;
                     }
 
-                    match entry
+                    let dir = entry
                         .open_with(MissingVersionStrategy::Fail, DirectoryFallback::Disabled)
-                        .await
-                    {
-                        Ok(dir) => subdirs.push(dir),
-                        Err(error) => {
-                            // On error, we can still proceed with finding missing blocks, but we
-                            // can't proceed with garbage collection because we could incorrectly
-                            // mark some blocks as unreachable due to not being able to descend
-                            // into this directory.
-                            mode = mode.intersect(Mode::Require).ok_or(error)?;
-                        }
-                    }
+                        .await?;
+                    subdirs.push(dir);
                 }
             }
         }
 
-        for (branch, blob_id) in entries {
-            process_reachable_blocks(shared, mode, unreachable_block_ids, branch, blob_id).await?;
-        }
-
         for dir in subdirs {
-            mode = traverse(shared, mode, unreachable_block_ids, dir).await?;
+            traverse(unreachable_block_ids, dir).await?;
         }
 
-        Ok(mode)
+        Ok(())
     }
 
     async fn process_reachable_blocks(
-        shared: &Shared,
-        mode: Mode,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
         branch: Branch,
         blob_id: BlobId,
@@ -609,13 +457,7 @@ mod scan {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
         while let Some(block_id) = blob_block_ids.try_next().await? {
-            if matches!(mode, Mode::RequireAndCollect | Mode::Collect) {
-                unreachable_block_ids.remove(&block_id);
-            }
-
-            if matches!(mode, Mode::RequireAndCollect | Mode::Require) {
-                shared.store.require_missing_block(block_id).await?;
-            }
+            unreachable_block_ids.remove(&block_id);
         }
 
         Ok(())
@@ -625,7 +467,7 @@ mod scan {
     async fn process_locked_blocks(
         shared: &Shared,
         unreachable_block_ids: &mut BTreeSet<BlockId>,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
+        unlock_tx: &unlock::Sender,
     ) -> Result<()> {
         // This can sometimes include pruned branches. It happens when a branch is first loaded,
         // then pruned, then in an attempt to open the root directory, it's read lock is acquired
@@ -647,7 +489,7 @@ mod scan {
                     Err(error) => return Err(error),
                 };
 
-                unlocked_tx.send(notify).ok();
+                unlock_tx.send(notify).await;
 
                 while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
@@ -759,5 +601,126 @@ mod scan {
         }
 
         Ok(())
+    }
+}
+
+mod utils {
+    use futures_util::{Stream, StreamExt};
+    use std::{future::Future, pin::pin};
+    use tokio::select;
+
+    /// Control how the next job should run
+    pub(super) enum Command {
+        // Wait for the current job to finish before starting a new one
+        Wait,
+        // Interrupt the current job and start a new one immediatelly
+        Interrupt,
+    }
+
+    /// Runs the given job in a loop based on commands received from the given command stream.
+    pub(super) async fn run<JobFn, Job, Commands>(mut job_fn: JobFn, commands: Commands)
+    where
+        JobFn: FnMut() -> Job,
+        Job: Future<Output = ()>,
+        Commands: Stream<Item = Command>,
+    {
+        enum State {
+            Working,
+            Waiting,
+            Terminated,
+        }
+
+        let mut state = State::Working;
+        let mut commands = pin!(commands);
+
+        loop {
+            match state {
+                State::Working => {
+                    state = State::Waiting;
+
+                    let work = job_fn();
+                    let wait = async {
+                        loop {
+                            match commands.next().await {
+                                Some(Command::Wait) => {
+                                    state = State::Working;
+                                }
+                                Some(Command::Interrupt) => {
+                                    state = State::Working;
+                                    break;
+                                }
+                                None => {
+                                    state = State::Terminated;
+                                    break;
+                                }
+                            }
+                        }
+                    };
+
+                    select! {
+                        _ = work => (),
+                        _ = wait => (),
+                    }
+                }
+                State::Waiting => {
+                    state = match commands.next().await {
+                        Some(Command::Wait | Command::Interrupt) => State::Working,
+                        None => State::Terminated,
+                    }
+                }
+                State::Terminated => break,
+            }
+        }
+    }
+
+    /// Register and await unlock notifications.
+    pub(super) mod unlock {
+        use crate::sync::AwaitDrop;
+        use futures_util::{stream::FuturesUnordered, StreamExt};
+        use tokio::{select, sync::mpsc};
+
+        pub(crate) struct Sender(mpsc::Sender<AwaitDrop>);
+
+        impl Sender {
+            pub(crate) async fn send(&self, notify: AwaitDrop) {
+                self.0.send(notify).await.ok();
+            }
+        }
+
+        pub(crate) struct Receiver {
+            pending: FuturesUnordered<AwaitDrop>,
+            rx: mpsc::Receiver<AwaitDrop>,
+        }
+
+        impl Receiver {
+            pub(crate) async fn recv(&mut self) -> bool {
+                loop {
+                    select! {
+                        _ = self.pending.next(), if !self.pending.is_empty() => {
+                            return true;
+                        }
+                        notify = self.rx.recv() => {
+                            if let Some(notify) = notify {
+                                self.pending.push(notify);
+                            } else {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        pub(crate) fn channel() -> (Sender, Receiver) {
+            let (tx, rx) = mpsc::channel(1);
+
+            (
+                Sender(tx),
+                Receiver {
+                    pending: FuturesUnordered::new(),
+                    rx,
+                },
+            )
+        }
     }
 }

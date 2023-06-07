@@ -523,7 +523,6 @@ fn recreate_local_branch() {
 
         // 9. Modify the repo
         repo.create_file("bar.txt").await.unwrap();
-        repo.force_work().await.unwrap();
 
         // 10. Make sure the local version changed monotonically.
         let vv_b: VersionVector = rx.recv().await.unwrap();
@@ -535,14 +534,11 @@ fn recreate_local_branch() {
             vv_a_0
         );
 
-        let vv_a_1 = repo.local_branch().unwrap().version_vector().await.unwrap();
-        assert_eq!(
-            vv_a_1.partial_cmp(&vv_b),
-            Some(Ordering::Greater),
-            "expected {:?} > {:?}",
-            vv_a_1,
-            vv_b
-        );
+        common::eventually(&repo, || async {
+            let vv_a_1 = repo.local_branch().unwrap().version_vector().await.unwrap();
+            vv_a_1 > vv_b
+        })
+        .await;
     });
 
     env.actor("bob", async move {
@@ -554,7 +550,6 @@ fn recreate_local_branch() {
         // 5. Sync with Alice
         common::expect_file_version_content(&repo, "foo.txt", Some(&id_b), b"hello from Alice\n")
             .await;
-        repo.force_work().await.unwrap();
 
         // 6. Modify the repo. This makes Bob's branch newer than Alice's
         let mut file = repo.open_file("foo.txt").await.unwrap();

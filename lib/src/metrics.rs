@@ -89,6 +89,10 @@ impl Metric {
 
         output
     }
+
+    pub fn name(&self) -> &MetricName {
+        &self.name
+    }
 }
 
 pub struct Timing<'a> {
