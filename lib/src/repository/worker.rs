@@ -75,10 +75,6 @@ pub(super) struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub async fn work(&self) -> Result<()> {
-        self.oneshot(Command::Work).await
-    }
-
     pub async fn shutdown(&self) {
         let (result_tx, result_rx) = oneshot::channel();
         self.command_tx
@@ -87,25 +83,9 @@ impl WorkerHandle {
             .unwrap_or(());
         result_rx.await.unwrap_or(())
     }
-
-    async fn oneshot<F>(&self, command_fn: F) -> Result<()>
-    where
-        F: FnOnce(oneshot::Sender<Result<()>>) -> Command,
-    {
-        let (result_tx, result_rx) = oneshot::channel();
-        self.command_tx
-            .send(command_fn(result_tx))
-            .await
-            .unwrap_or(());
-
-        // When this returns error it means the worker has been terminated which we treat as
-        // success, for simplicity.
-        result_rx.await.unwrap_or(Ok(()))
-    }
 }
 
 enum Command {
-    Work(oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -128,10 +108,7 @@ impl Inner {
                 State::Working => {
                     state = State::Waiting;
 
-                    let work = async {
-                        self.work(ErrorHandling::Ignore, &unlocked_tx).await.ok();
-                    };
-
+                    let work = self.work(&unlocked_tx);
                     let wait = async {
                         loop {
                             match waiter.wait(state).await {
@@ -166,7 +143,7 @@ impl Inner {
                                 break;
                             };
 
-                            match self.handle_command(command, &unlocked_tx).await {
+                            match self.handle_command(command).await {
                                 ControlFlow::Continue(()) => State::Waiting,
                                 ControlFlow::Break(tx) => {
                                     // Ensure that when the reply is received it's guaranteed that
@@ -184,27 +161,13 @@ impl Inner {
         }
     }
 
-    async fn handle_command(
-        &self,
-        command: Command,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> ControlFlow<oneshot::Sender<()>> {
+    async fn handle_command(&self, command: Command) -> ControlFlow<oneshot::Sender<()>> {
         match command {
-            Command::Work(result_tx) => {
-                result_tx
-                    .send(self.work(ErrorHandling::Return, unlocked_tx).await)
-                    .unwrap_or(());
-                ControlFlow::Continue(())
-            }
             Command::Shutdown(result_tx) => ControlFlow::Break(result_tx),
         }
     }
 
-    async fn work(
-        &self,
-        error_handling: ErrorHandling,
-        unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>,
-    ) -> Result<()> {
+    async fn work(&self, unlocked_tx: &mpsc::UnboundedSender<AwaitDrop>) {
         tracing::trace!("job started");
 
         let _monitor_guard = self.shared.store.monitor.job_monitor.start();
@@ -213,31 +176,25 @@ impl Inner {
         // Find missing blocks
         let result = find_missing_blocks::run(&self.shared).await;
         tracing::trace!(?result, "find_missing_blocks completed");
-        error_handling.apply(result)?;
 
         // Merge
         if let Some(local_branch) = &self.local_branch {
             let result = merge::run(&self.shared, local_branch).await;
             tracing::trace!(?result, "merge completed");
-            error_handling.apply(result)?;
         }
 
         // Prune outdated branches and snapshots
         let result = prune::run(&self.shared, unlocked_tx).await;
         tracing::trace!(?result, "prune completed");
-        error_handling.apply(result)?;
 
         // Collect unreachable blocks
         if self.shared.secrets.can_read() {
             let result =
                 collect_garbage::run(&self.shared, self.local_branch.as_ref(), unlocked_tx).await;
             tracing::trace!(?result, "collect_garbage completed");
-            error_handling.apply(result)?;
         }
 
         tracing::trace!("job completed");
-
-        Ok(())
     }
 }
 
@@ -298,21 +255,6 @@ impl Waiter {
                 self.unlocked.push(notify.unwrap());
                 ControlFlow::Continue(state)
             }
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-enum ErrorHandling {
-    Return,
-    Ignore,
-}
-
-impl ErrorHandling {
-    fn apply(self, result: Result<()>) -> Result<()> {
-        match (self, result) {
-            (_, Ok(())) | (Self::Ignore, Err(_)) => Ok(()),
-            (Self::Return, Err(error)) => Err(error),
         }
     }
 }

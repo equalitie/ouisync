@@ -636,14 +636,6 @@ impl Repository {
         self.shared.store.sync_progress().await
     }
 
-    /// Force the background worker to run one job and wait for it to complete, returning its result.
-    ///
-    /// It's usually not necessary to call this method because the worker runs automatically in the
-    /// background. It might still e.g. be useful for testing/debugging.
-    pub async fn force_work(&self) -> Result<()> {
-        self.worker_handle.work().await
-    }
-
     // Opens the root directory across all branches as JointDirectory.
     async fn root(&self) -> Result<JointDirectory> {
         let local_branch = self.local_branch()?;
