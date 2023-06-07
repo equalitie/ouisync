@@ -13,7 +13,10 @@ use crate::{
 use async_recursion::async_recursion;
 use futures_util::{stream, Stream};
 use std::sync::Arc;
-use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::{
+    select,
+    sync::broadcast::{self, error::RecvError},
+};
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
@@ -22,20 +25,37 @@ use tokio::sync::broadcast::{self, error::RecvError};
 /// - find missing blocks
 pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     let event_scope = EventScope::new();
-    let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
 
-    let event_rx = shared.store.index.subscribe();
-    let (unlock_tx, unlock_rx) = unlock::channel();
-    let commands = stream::select(events(event_rx, event_scope), unlocks(unlock_rx));
+    // Maintain (merge, prune and trash)
+    let maintain = async {
+        let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
+        let (unlock_tx, unlock_rx) = unlock::channel();
+        let commands = stream::select(
+            from_events(shared.store.index.subscribe(), event_scope),
+            from_unlocks(unlock_rx),
+        );
 
-    utils::run(
-        || maintain(&shared, local_branch.as_ref(), &unlock_tx),
-        commands,
-    )
-    .await;
+        utils::run(
+            || maintain(&shared, local_branch.as_ref(), &unlock_tx),
+            commands,
+        )
+        .await;
+    };
+
+    // Scan
+    let scan = async {
+        let commands = from_events(shared.store.index.subscribe(), event_scope);
+        utils::run(|| scan(&shared), commands).await;
+    };
+
+    // Run them in parallel so missing blocks are found as soon as possible
+    select! {
+        _ = maintain => (),
+        _ = scan => (),
+    }
 }
 
-fn events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
+fn from_events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
     let rx = IgnoreScopeReceiver::new(rx, scope);
 
     stream::unfold(rx, |mut rx| async move {
@@ -63,7 +83,7 @@ fn events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item
     })
 }
 
-fn unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
+fn from_unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
     stream::unfold(rx, |mut rx| async move {
         if rx.recv().await {
             tracing::trace!("lock released");
@@ -75,9 +95,6 @@ fn unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
 }
 
 async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
-    // Find missing blocks
-    shared.store.monitor.scan_job.run(scan::run(shared)).await;
-
     // Merge branches
     if let Some(local_branch) = local_branch {
         shared
@@ -105,6 +122,11 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
             .run(trash::run(shared, local_branch, unlock_tx))
             .await;
     }
+}
+
+async fn scan(shared: &Shared) {
+    // Find missing blocks
+    shared.store.monitor.scan_job.run(scan::run(shared)).await
 }
 
 /// Find missing blocks and mark them as required.
@@ -360,6 +382,7 @@ mod trash {
         for branch in branches {
             process_reachable_blocks(unreachable_block_ids, branch.clone(), BlobId::ROOT).await?;
 
+            // TODO: enable fallback so fallback blocks are not collected
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
