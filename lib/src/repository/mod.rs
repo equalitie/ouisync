@@ -13,7 +13,6 @@ pub use self::{
 
 pub(crate) use self::{id::LocalId, metadata::quota, monitor::RepositoryMonitor};
 
-use self::worker::{Worker, WorkerHandle};
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
     block::{BlockTracker, BLOCK_SIZE},
@@ -46,7 +45,6 @@ use std::{io, path::Path, sync::Arc};
 use tokio::{
     fs,
     sync::broadcast::{self, error::RecvError},
-    task,
     time::Duration,
 };
 use tracing::{instrument, instrument::Instrument};
@@ -55,7 +53,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 pub struct Repository {
     shared: Arc<Shared>,
-    worker_handle: WorkerHandle,
+    worker_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
     progress_reporter_handle: BlockingMutex<Option<ScopedJoinHandle<()>>>,
 }
 
@@ -196,8 +194,11 @@ impl Repository {
             None
         };
 
-        let (worker, worker_handle) = Worker::new(shared.clone(), local_branch);
-        task::spawn(worker.run().instrument(shared.store.monitor.span().clone()));
+        let worker_handle = scoped_task::spawn(
+            worker::run(shared.clone(), local_branch)
+                .instrument(shared.store.monitor.span().clone()),
+        );
+        let worker_handle = BlockingMutex::new(Some(worker_handle));
 
         let progress_reporter_handle = scoped_task::spawn(
             report_sync_progress(shared.store.clone())
@@ -698,16 +699,17 @@ impl Repository {
     /// Close all db connections held by this repository. After this function returns, any
     /// subsequent operation on this repository that requires to access the db returns an error.
     pub async fn close(&self) -> Result<()> {
-        self.worker_handle.shutdown().await;
-        self.shared.store.db().close().await?;
-
-        // Abort and *await* the task to make sure that the state it's holding is definitely
+        // Abort and *await* the tasks to make sure that the state they are holding is definitely
         // dropped before we return from this function.
-        let task = self.progress_reporter_handle.lock().unwrap().take();
-        if let Some(task) = task {
-            task.abort();
-            task.await.ok();
+        for task in [&self.worker_handle, &self.progress_reporter_handle] {
+            let task = task.lock().unwrap().take();
+            if let Some(task) = task {
+                task.abort();
+                task.await.ok();
+            }
         }
+
+        self.shared.store.db().close().await?;
 
         Ok(())
     }
