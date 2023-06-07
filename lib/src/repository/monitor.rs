@@ -1,22 +1,22 @@
-use std::{
-    fmt,
-    time::{Duration, Instant},
-};
-
 use crate::{
     collections::HashMap,
-    metrics::{Metric, Metrics, Report, ReportItem},
+    metrics::{Metric, MetricName, Metrics, Report, ReportItem},
     state_monitor::{MonitoredValue, StateMonitor},
 };
 use btdht::InfoHash;
 use scoped_task::ScopedJoinHandle;
+use std::{
+    fmt,
+    future::Future,
+    time::{Duration, Instant},
+};
 use tokio::{
     select,
     sync::{oneshot, watch},
     task,
     time::{self, MissedTickBehavior},
 };
-use tracing::Span;
+use tracing::{Instrument, Span};
 
 pub(crate) struct RepositoryMonitor {
     // This indicates how many requests for index nodes are currently in flight.  It is used by the
@@ -37,8 +37,10 @@ pub(crate) struct RepositoryMonitor {
     pub request_inflight_metric: Metric,
     pub handle_request_metric: Metric,
 
-    pub job_monitor: JobMonitor,
-    pub job_metric: Metric,
+    pub scan_job: JobMonitor,
+    pub merge_job: JobMonitor,
+    pub prune_job: JobMonitor,
+    pub trash_job: JobMonitor,
 
     span: Span,
     node: StateMonitor,
@@ -66,8 +68,10 @@ impl RepositoryMonitor {
         let request_inflight_metric = metrics.get("request inflight");
         let handle_request_metric = metrics.get("handle_request");
 
-        let job_monitor = JobMonitor::new(node.make_value("background job state", JobState::Idle));
-        let job_metric = metrics.get("background job");
+        let scan_job = JobMonitor::new(&node, &metrics, "scan".into());
+        let merge_job = JobMonitor::new(&node, &metrics, "merge".into());
+        let prune_job = JobMonitor::new(&node, &metrics, "prune".into());
+        let trash_job = JobMonitor::new(&node, &metrics, "trash".into());
 
         let report_metrics_task = scoped_task::spawn(report_metrics(metrics, node.clone()));
 
@@ -88,8 +92,10 @@ impl RepositoryMonitor {
             request_inflight_metric,
             handle_request_metric,
 
-            job_monitor,
-            job_metric,
+            scan_job,
+            merge_job,
+            prune_job,
+            trash_job,
 
             span,
             node,
@@ -230,10 +236,14 @@ impl fmt::Debug for Format<f64> {
 
 pub(crate) struct JobMonitor {
     tx: watch::Sender<bool>,
+    metric: Metric,
 }
 
 impl JobMonitor {
-    fn new(value: MonitoredValue<JobState>) -> Self {
+    fn new(parent_node: &StateMonitor, metrics: &Metrics, name: MetricName) -> Self {
+        let value = parent_node.make_value(format!("{name} state"), JobState::Idle);
+        let metric = metrics.get(name);
+
         let (tx, mut rx) = watch::channel(false);
 
         task::spawn(async move {
@@ -264,23 +274,52 @@ impl JobMonitor {
             }
         });
 
-        Self { tx }
+        Self { tx, metric }
     }
 
-    pub(crate) fn start(&self) -> Option<JobGuard<'_>> {
+    pub(crate) async fn run<F, E>(&self, f: F)
+    where
+        F: Future<Output = Result<(), E>>,
+        E: fmt::Debug,
+    {
         if self.tx.send_replace(true) {
-            None
-        } else {
-            Some(JobGuard(self))
+            panic!("job monitor can monitor at most one job at a time");
         }
+
+        async move {
+            tracing::trace!("job started");
+
+            let mut guard = JobGuard {
+                monitor: self,
+                completed: false,
+            };
+            let _timing = self.metric.start();
+
+            let result = f.await;
+            guard.completed = true;
+
+            tracing::trace!(?result, "job completed");
+        }
+        .instrument(tracing::info_span!(
+            "job",
+            name = self.metric.name().as_ref()
+        ))
+        .await
     }
 }
 
-pub(crate) struct JobGuard<'a>(&'a JobMonitor);
+pub(crate) struct JobGuard<'a> {
+    monitor: &'a JobMonitor,
+    completed: bool,
+}
 
 impl Drop for JobGuard<'_> {
     fn drop(&mut self) {
-        self.0.tx.send(false).ok();
+        if !self.completed {
+            tracing::trace!("job interrupted");
+        }
+
+        self.monitor.tx.send(false).ok();
     }
 }
 

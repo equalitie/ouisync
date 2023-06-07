@@ -14,7 +14,6 @@ use async_recursion::async_recursion;
 use futures_util::{stream, Stream};
 use std::sync::Arc;
 use tokio::sync::broadcast::{self, error::RecvError};
-use tracing::instrument;
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
@@ -29,7 +28,11 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     let (unlock_tx, unlock_rx) = unlock::channel();
     let commands = stream::select(events(event_rx, event_scope), unlocks(unlock_rx));
 
-    utils::run_loop(|| job(&shared, local_branch.as_ref(), &unlock_tx), commands).await;
+    utils::run(
+        || maintain(&shared, local_branch.as_ref(), &unlock_tx),
+        commands,
+    )
+    .await;
 }
 
 fn events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
@@ -71,40 +74,43 @@ fn unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
     })
 }
 
-async fn job(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
-    tracing::trace!("job started");
-
-    let _monitor_guard = shared.store.monitor.job_monitor.start();
-    let _timing = shared.store.monitor.job_metric.start();
-
+async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
     // Find missing blocks
-    let result = find_missing_blocks::run(shared).await;
-    tracing::trace!(?result, "find_missing_blocks completed");
+    shared.store.monitor.scan_job.run(scan::run(shared)).await;
 
-    // Merge
+    // Merge branches
     if let Some(local_branch) = local_branch {
-        let result = merge::run(shared, local_branch).await;
-        tracing::trace!(?result, "merge completed");
+        shared
+            .store
+            .monitor
+            .merge_job
+            .run(merge::run(shared, local_branch))
+            .await;
     }
 
     // Prune outdated branches and snapshots
-    let result = prune::run(shared, unlock_tx).await;
-    tracing::trace!(?result, "prune completed");
+    shared
+        .store
+        .monitor
+        .prune_job
+        .run(prune::run(shared, unlock_tx))
+        .await;
 
     // Collect unreachable blocks
     if shared.secrets.can_read() {
-        let result = collect_garbage::run(shared, local_branch, unlock_tx).await;
-        tracing::trace!(?result, "collect_garbage completed");
+        shared
+            .store
+            .monitor
+            .trash_job
+            .run(trash::run(shared, local_branch, unlock_tx))
+            .await;
     }
-
-    tracing::trace!("job completed");
 }
 
 /// Find missing blocks and mark them as required.
-mod find_missing_blocks {
+mod scan {
     use super::*;
 
-    #[instrument(name = "find_missing_blocks", skip_all)]
     pub(super) async fn run(shared: &Shared) -> Result<()> {
         let branches = shared.load_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
@@ -196,7 +202,6 @@ mod find_missing_blocks {
 mod merge {
     use super::*;
 
-    #[instrument(name = "merge", skip_all)]
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches: Vec<_> = shared.load_branches().await?;
         let mut roots = Vec::with_capacity(branches.len());
@@ -231,7 +236,6 @@ mod prune {
     };
     use std::cmp::Ordering;
 
-    #[instrument(name = "prune", skip_all)]
     pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
 
@@ -306,7 +310,7 @@ mod prune {
 }
 
 /// Remove unreachable blocks
-mod collect_garbage {
+mod trash {
     use super::*;
     use crate::{
         block::{self, BlockId},
@@ -318,7 +322,6 @@ mod collect_garbage {
     use std::collections::BTreeSet;
     use tracing::Instrument;
 
-    #[instrument(name = "collect_garbage", skip_all)]
     pub(super) async fn run(
         shared: &Shared,
         local_branch: Option<&Branch>,
@@ -592,7 +595,7 @@ mod utils {
     }
 
     /// Runs the given job in a loop based on commands received from the given command stream.
-    pub(super) async fn run_loop<JobFn, Job, Commands>(mut job_fn: JobFn, commands: Commands)
+    pub(super) async fn run<JobFn, Job, Commands>(mut job_fn: JobFn, commands: Commands)
     where
         JobFn: FnMut() -> Job,
         Job: Future<Output = ()>,
