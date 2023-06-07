@@ -2,15 +2,17 @@ use super::*;
 use crate::{
     blob,
     block::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    db, test_utils, WriteSecrets,
+    db, test_utils,
+    version_vector::VersionVector,
+    WriteSecrets,
 };
 use assert_matches::assert_matches;
 use rand::Rng;
-use std::io::SeekFrom;
+use std::{future::Future, io::SeekFrom};
 use tempfile::TempDir;
 use tokio::{
     sync::broadcast::Receiver,
-    time::{timeout, Duration},
+    time::{self, timeout, Duration},
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -23,8 +25,6 @@ async fn root_directory_always_exists() {
 
 // Count leaf nodes in the index of the local branch.
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
-    test_utils::init_log();
-
     let store = repo.store();
     let branch = repo.local_branch().unwrap();
     let mut conn = store.db().acquire().await.unwrap();
@@ -64,12 +64,13 @@ async fn count_leaf_nodes_sanity_checks() {
 
     drop(file);
     repo.remove_entry(file_name).await.unwrap();
-    repo.force_work().await.unwrap(); // run the garbage collector
-
-    // 1 = one for the root with a tombstone entry
-    assert_eq!(count_local_index_leaf_nodes(&repo).await, 1);
 
     //------------------------------------------------------------------------
+    // 1 = one for the root with a tombstone entry
+    wait_for(&repo, || async {
+        count_local_index_leaf_nodes(&repo).await == 1
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -85,7 +86,11 @@ async fn merge() {
     let local_branch = repo.local_branch().unwrap();
     let mut local_root = local_branch.open_or_create_root().await.unwrap();
 
-    repo.force_work().await.unwrap();
+    let remote_vv = VersionVector::first(remote_id);
+    wait_for(&repo, || async {
+        local_branch.version_vector().await.unwrap() > remote_vv
+    })
+    .await;
 
     local_root.refresh().await.unwrap();
     let content = local_root
@@ -904,4 +909,24 @@ async fn wait_for_notification(rx: &mut Receiver<Event>) {
         }
         Err(_) => panic!("timeout waiting for notification"),
     }
+}
+
+async fn wait_for<F, Fut>(repo: &Repository, mut f: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let mut rx = repo.subscribe();
+
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            if f().await {
+                break;
+            }
+
+            wait_for_notification(&mut rx).await
+        }
+    })
+    .await
+    .expect("timeout waiting for condition")
 }

@@ -3,9 +3,8 @@
 mod common;
 
 use self::common::{actor, Env, DEFAULT_REPO};
-use ouisync::{File, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use ouisync::{File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
 use tokio::sync::mpsc;
-use tracing::Instrument;
 
 #[test]
 fn local_delete_local_file() {
@@ -22,10 +21,9 @@ fn local_delete_local_file() {
         assert_eq!(repo.count_blocks().await.unwrap(), 2);
 
         repo.remove_entry("test.dat").await.unwrap();
-        repo.force_work().await.unwrap();
 
         // just 1 block for the root directory
-        assert_eq!(repo.count_blocks().await.unwrap(), 1);
+        expect_block_count(&repo, 1).await;
     });
 }
 
@@ -57,17 +55,15 @@ fn local_delete_remote_file() {
             network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
-            repo.force_work().await.unwrap();
 
             // 2 blocks for the file + 1 block for the remote root directory
-            assert_eq!(repo.count_blocks().await.unwrap(), 3);
+            expect_block_count(&repo, 3).await;
 
             repo.remove_entry("test.dat").await.unwrap();
-            repo.force_work().await.unwrap();
 
             // Both the file and the remote root are deleted, only the local root remains to track the
             // tombstone.
-            assert_eq!(repo.count_blocks().await.unwrap(), 1);
+            expect_block_count(&repo, 1).await;
 
             tx.send(()).await.unwrap();
         }
@@ -95,17 +91,15 @@ fn remote_delete_remote_file() {
         network.add_user_provided_peer(&peer_addr);
 
         common::expect_file_content(&repo, "test.dat", &[]).await;
-        repo.force_work().await.unwrap();
 
         // 1 block for the file + 1 block for the remote root directory
-        assert_eq!(repo.count_blocks().await.unwrap(), 2);
+        expect_block_count(&repo, 2).await;
         tx.send(()).await.unwrap();
 
         common::expect_entry_not_found(&repo, "test.dat").await;
-        repo.force_work().await.unwrap();
 
         // The remote file is removed but the remote root remains to track the tombstone
-        assert_eq!(repo.count_blocks().await.unwrap(), 1);
+        expect_block_count(&repo, 1).await;
         tx.send(()).await.unwrap();
     });
 }
@@ -121,24 +115,14 @@ fn local_truncate_local_file() {
         write_to_file(&mut file, 2 * BLOCK_SIZE - BLOB_HEADER_SIZE).await;
         file.flush().await.unwrap();
 
-        repo.force_work()
-            .instrument(tracing::info_span!("force_work", step = 1))
-            .await
-            .unwrap();
-
         // 2 blocks for the file + 1 block for the root directory
         assert_eq!(repo.count_blocks().await.unwrap(), 3);
 
         file.truncate(0).await.unwrap();
         file.flush().await.unwrap();
 
-        repo.force_work()
-            .instrument(tracing::info_span!("force_work", step = 2))
-            .await
-            .unwrap();
-
         // 1 block for the file + 1 block for the root directory
-        assert_eq!(repo.count_blocks().await.unwrap(), 2);
+        expect_block_count(&repo, 2).await;
     });
 }
 
@@ -171,21 +155,18 @@ fn local_truncate_remote_file() {
             network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
-            repo.force_work().await.unwrap();
 
             // 2 blocks for the file + 1 block for the remote root directory
-            assert_eq!(repo.count_blocks().await.unwrap(), 3);
+            expect_block_count(&repo, 3).await;
 
             let mut file = repo.open_file("test.dat").await.unwrap();
             file.fork(repo.local_branch().unwrap()).await.unwrap();
             file.truncate(0).await.unwrap();
             file.flush().await.unwrap();
 
-            repo.force_work().await.unwrap();
-
             //   1 block for the file (the original 2 blocks were removed)
             // + 1 block for the local root (created when the file was forked)
-            assert_eq!(repo.count_blocks().await.unwrap(), 2);
+            expect_block_count(&repo, 2).await;
 
             tx.send(()).await.unwrap();
         }
@@ -225,17 +206,15 @@ fn remote_truncate_remote_file() {
             network.add_user_provided_peer(&peer_addr);
 
             common::expect_file_content(&repo, "test.dat", &content).await;
-            repo.force_work().await.unwrap();
 
             // 2 blocks for the file + 1 block for the remote root
-            assert_eq!(repo.count_blocks().await.unwrap(), 3);
+            expect_block_count(&repo, 3).await;
             tx.send(()).await.unwrap();
 
             common::expect_file_content(&repo, "test.dat", &[]).await;
-            repo.force_work().await.unwrap();
 
             // 1 block for the file + 1 block for the remote root
-            assert_eq!(repo.count_blocks().await.unwrap(), 2);
+            expect_block_count(&repo, 2).await;
             tx.send(()).await.unwrap();
         }
     });
@@ -243,4 +222,11 @@ fn remote_truncate_remote_file() {
 
 async fn write_to_file(file: &mut File, size: usize) {
     file.write(&common::random_content(size)).await.unwrap();
+}
+
+async fn expect_block_count(repo: &Repository, expected_block_count: usize) {
+    common::eventually(repo, || async {
+        repo.count_blocks().await.unwrap() == expected_block_count
+    })
+    .await
 }
