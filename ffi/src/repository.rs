@@ -129,7 +129,7 @@ pub(crate) async fn set_read_access(
     share_token: Option<ShareToken>,
 ) -> Result<()> {
     let holder = state.get_repository(handle);
-    repository::set_read_access(&*holder.repository, local_read_password, share_token).await
+    repository::set_read_access(&holder.repository, local_read_password, share_token).await
 }
 
 pub(crate) async fn set_read_and_write_access(
@@ -141,7 +141,7 @@ pub(crate) async fn set_read_and_write_access(
 ) -> Result<()> {
     let holder = state.get_repository(handle);
     repository::set_read_and_write_access(
-        &*holder.repository,
+        &holder.repository,
         local_old_rw_password,
         local_new_rw_password,
         share_token,
