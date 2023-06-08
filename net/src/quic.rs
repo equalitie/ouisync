@@ -643,7 +643,7 @@ mod tests {
         let message = b"hello world";
 
         let h1 = task::spawn(async move {
-            let mut conn = acceptor.accept().await.unwrap();
+            let mut conn = acceptor.accept().await.unwrap().finish().await.unwrap();
             let mut buf = [0; 32];
             let n = conn.read(&mut buf).await.unwrap();
             assert_eq!(message, &buf[..n]);
