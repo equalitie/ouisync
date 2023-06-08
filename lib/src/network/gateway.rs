@@ -6,11 +6,15 @@ use net::{
     tcp::{TcpListener, TcpStream},
 };
 use scoped_task::ScopedJoinHandle;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
 use tokio::{
     select,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     time::{self, Duration},
 };
 use tracing::{field, Instrument, Span};
@@ -510,6 +514,11 @@ async fn run_quic_listener(
     mut listener: quic::Acceptor,
     tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
 ) {
+    // Using `futures_util::stream::FuturesUnordered` may have been a nicer solution but I'm not
+    // sure whether `quic::Acceptor::accept()` is cancel safe.
+    let connectings = Arc::new(Mutex::new(HashMap::new()));
+    let mut next_connecting_id = 0;
+
     loop {
         let result = select! {
             result = listener.accept() => result,
@@ -517,14 +526,41 @@ async fn run_quic_listener(
         };
 
         match result {
-            Ok(socket) => {
-                let addr = *socket.remote_address();
-                tx.send((raw::Stream::Quic(socket), PeerAddr::Quic(addr)))
-                    .await
-                    .ok();
+            Some(connecting) => {
+                // Using this channel to ensure the task is not removed from `connectings` before
+                // it's inserted.
+                let (start_task_tx, start_task_rx) = oneshot::channel();
+
+                let connecting_id = next_connecting_id;
+                next_connecting_id += 1;
+
+                // Spawn so we can start listening for the next connection ASAP.
+                let task = scoped_task::spawn({
+                    let tx = tx.clone();
+                    let connectings = connectings.clone();
+                    async move {
+                        if start_task_rx.await.is_ok() {
+                            match connecting.finish().await {
+                                Ok(socket) => {
+                                    let addr = *socket.remote_address();
+                                    tx.send((raw::Stream::Quic(socket), PeerAddr::Quic(addr)))
+                                        .await
+                                        .ok();
+                                }
+                                Err(error) => {
+                                    tracing::info!("Failed to accept connection {error:?}");
+                                }
+                            };
+                        }
+                        connectings.lock().unwrap().remove(&connecting_id);
+                    }
+                });
+
+                connectings.lock().unwrap().insert(connecting_id, task);
+                start_task_tx.send(()).unwrap_or(());
             }
-            Err(error) => {
-                tracing::error!("Failed to accept incoming connection: {}", error);
+            None => {
+                tracing::error!("Stopped accepting new connections");
                 break;
             }
         }
