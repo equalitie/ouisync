@@ -47,20 +47,27 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub async fn accept(&mut self) -> Result<Connection> {
-        let connecting = match self.endpoint.accept().await {
-            Some(connecting) => connecting,
-            None => return Err(Error::DoneAccepting),
-        };
-        // TODO: These following `await` steps should be done outside of this function so we can
-        // start accepting again as soon as possible.
-        let connection = connecting.await?;
-        let (tx, rx) = connection.accept_bi().await?;
-        Ok(Connection::new(rx, tx, connection.remote_address()))
+    pub async fn accept(&mut self) -> Option<Connecting> {
+        self.endpoint
+            .accept()
+            .await
+            .map(|connecting| Connecting { connecting })
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
         &self.local_addr
+    }
+}
+
+pub struct Connecting {
+    connecting: quinn::Connecting,
+}
+
+impl Connecting {
+    pub async fn finish(self) -> Result<Connection> {
+        let connection = self.connecting.await?;
+        let (tx, rx) = connection.accept_bi().await?;
+        Ok(Connection::new(rx, tx, connection.remote_address()))
     }
 }
 
@@ -636,7 +643,7 @@ mod tests {
         let message = b"hello world";
 
         let h1 = task::spawn(async move {
-            let mut conn = acceptor.accept().await.unwrap();
+            let mut conn = acceptor.accept().await.unwrap().finish().await.unwrap();
             let mut buf = [0; 32];
             let n = conn.read(&mut buf).await.unwrap();
             assert_eq!(message, &buf[..n]);

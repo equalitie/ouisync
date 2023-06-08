@@ -84,7 +84,12 @@ impl ConnectionDeduplicator {
                 })
             }
             Entry::Occupied(entry) => {
-                ReserveResult::Occupied(entry.get().on_release.subscribe(), entry.get().source)
+                let peer_permit = entry.get();
+                ReserveResult::Occupied(
+                    peer_permit.on_release.subscribe(),
+                    peer_permit.source,
+                    peer_permit.id,
+                )
             }
         }
     }
@@ -125,7 +130,7 @@ impl ConnectionDeduplicator {
 pub(super) enum ReserveResult {
     Permit(ConnectionPermit),
     // Use the receiver to get notified when the existing permit is destroyed.
-    Occupied(AwaitDrop, PeerSource),
+    Occupied(AwaitDrop, PeerSource, PermitId),
 }
 
 /// Information about a peer.
