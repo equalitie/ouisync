@@ -596,28 +596,33 @@ impl Inner {
         mut rx: mpsc::Receiver<(raw::Stream, PeerAddr)>,
     ) {
         while let Some((stream, addr)) = rx.recv().await {
-            if let ReserveResult::Permit(permit) = self
+            match self
                 .connection_deduplicator
                 .reserve(addr, PeerSource::Listener)
             {
-                if self.is_shutdown() {
-                    break;
+                ReserveResult::Permit(permit) => {
+                    if self.is_shutdown() {
+                        break;
+                    }
+
+                    let this = self.clone();
+
+                    let monitor = self.span.in_scope(|| {
+                        ConnectionMonitor::new(
+                            &self.connections_monitor,
+                            &permit.addr(),
+                            permit.source(),
+                        )
+                    });
+                    monitor.mark_as_connecting(permit.id());
+
+                    self.spawn(async move {
+                        this.handle_connection(stream, permit, &monitor).await;
+                    });
                 }
-
-                let this = self.clone();
-
-                let monitor = self.span.in_scope(|| {
-                    ConnectionMonitor::new(
-                        &self.connections_monitor,
-                        &permit.addr(),
-                        permit.source(),
-                    )
-                });
-                monitor.mark_as_connecting(permit.id());
-
-                self.spawn(async move {
-                    this.handle_connection(stream, permit, &monitor).await;
-                });
+                ReserveResult::Occupied(_, _their_source, permit_id) => {
+                    tracing::info!("Dropping accepted connection from {addr:?} due to deduplication (permit_id:{permit_id})");
+                }
             }
         }
     }
@@ -664,7 +669,7 @@ impl Inner {
 
             let permit = match self.connection_deduplicator.reserve(addr, source) {
                 ReserveResult::Permit(permit) => permit,
-                ReserveResult::Occupied(on_release, their_source) => {
+                ReserveResult::Occupied(on_release, their_source, permit_id) => {
                     if source == their_source {
                         // This is a duplicate from the same source, ignore it.
                         return;
@@ -675,7 +680,7 @@ impl Inner {
                     monitor.mark_as_awaiting_permit();
                     tracing::debug!(
                         parent: monitor.span(),
-                        "duplicate from different source - awaiting permit"
+                        "duplicate from different source - awaiting permit (permit_id:{permit_id})"
                     );
 
                     on_release.await;
