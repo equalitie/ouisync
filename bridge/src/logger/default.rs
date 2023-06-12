@@ -27,9 +27,9 @@ impl Logger {
                     .with_line_number(true)
                     .with_filter(
                         EnvFilter::builder()
-                            // Only show the logs if explicitly enabled with the `RUST_LOG` env
-                            // variable.
-                            .with_default_directive(LevelFilter::OFF.into())
+                            // TODO: Allow changing the log level at runtime or at least at init
+                            // time (via a command-line option or so)
+                            .with_default_directive(LevelFilter::DEBUG.into())
                             .from_env_lossy(),
                     ),
             )
