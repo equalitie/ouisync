@@ -8,6 +8,7 @@ use scoped_task::ScopedJoinHandle;
 use std::{
     fmt,
     future::Future,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -237,6 +238,7 @@ impl fmt::Debug for Format<f64> {
 pub(crate) struct JobMonitor {
     tx: watch::Sender<bool>,
     metric: Metric,
+    counter: AtomicU64,
 }
 
 impl JobMonitor {
@@ -274,7 +276,11 @@ impl JobMonitor {
             }
         });
 
-        Self { tx, metric }
+        Self {
+            tx,
+            metric,
+            counter: AtomicU64::new(0),
+        }
     }
 
     pub(crate) async fn run<F, E>(&self, f: F)
@@ -287,7 +293,7 @@ impl JobMonitor {
         }
 
         async move {
-            tracing::trace!("job started");
+            tracing::debug!("job started");
 
             let mut guard = JobGuard {
                 monitor: self,
@@ -298,11 +304,12 @@ impl JobMonitor {
             let result = f.await;
             guard.completed = true;
 
-            tracing::trace!(?result, "job completed");
+            tracing::debug!(?result, "job completed");
         }
         .instrument(tracing::info_span!(
             "job",
-            name = self.metric.name().as_ref()
+            name = self.metric.name().as_ref(),
+            id = self.counter.fetch_add(1, Ordering::Relaxed),
         ))
         .await
     }
@@ -316,7 +323,7 @@ pub(crate) struct JobGuard<'a> {
 impl Drop for JobGuard<'_> {
     fn drop(&mut self) {
         if !self.completed {
-            tracing::trace!("job interrupted");
+            tracing::debug!("job interrupted");
         }
 
         self.monitor.tx.send(false).ok();
