@@ -183,29 +183,12 @@ impl Directory {
         name: &str,
         merge_vv: &VersionVector,
     ) -> Result<Self> {
-        loop {
-            let entry = match self.lookup(name) {
-                Ok(EntryRef::Directory(entry)) => Some(entry),
-                Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => None,
-                Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
-                Err(error) => return Err(error),
-            };
-
-            if let Some(entry) = entry {
-                match entry.open(DirectoryFallback::Disabled).await {
-                    Ok(mut dir) => {
-                        dir.merge_version_vector(merge_vv).await?;
-                        return Ok(dir);
-                    }
-                    Err(Error::EntryNotFound | Error::BlockNotFound(_)) => {
-                        // Directory entry exists, but the directory itself might have already been
-                        // garbage-collected. Here we treat it the same as if the directory didn't
-                        // exist.
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-
+        if let Some(dir) = self
+            .try_open_directory_and_merge_version_vector(name, merge_vv)
+            .await?
+        {
+            Ok(dir)
+        } else {
             match self
                 .create_directory_with_version_vector_op(
                     name.to_owned(),
@@ -213,14 +196,36 @@ impl Directory {
                 )
                 .await
             {
-                Ok(dir) => return Ok(dir),
+                Ok(dir) => Ok(dir),
                 Err(Error::EntryExists) => {
-                    // The directory might have been created in the meantime by some other task.
-                    // Try to open it again on the next iteration of the loop.
+                    // The entry have been created in the meantime by some other task. Try to open
+                    // it again (this time it must exist).
+                    self.try_open_directory_and_merge_version_vector(name, merge_vv)
+                        .await
+                        .transpose()
+                        .expect("entry must exist")
                 }
-                Err(error) => return Err(error),
+                Err(error) => Err(error),
             }
         }
+    }
+
+    async fn try_open_directory_and_merge_version_vector(
+        &self,
+        name: &str,
+        merge_vv: &VersionVector,
+    ) -> Result<Option<Self>> {
+        let entry = match self.lookup(name) {
+            Ok(EntryRef::Directory(entry)) => entry,
+            Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => return Ok(None),
+            Ok(EntryRef::File(_)) => return Err(Error::EntryIsFile),
+            Err(error) => return Err(error),
+        };
+
+        let mut dir = entry.open(DirectoryFallback::Disabled).await?;
+        dir.merge_version_vector(merge_vv).await?;
+
+        Ok(Some(dir))
     }
 
     fn create_parent_context(&self, entry_name: String) -> ParentContext {
