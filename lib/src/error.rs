@@ -44,8 +44,6 @@ pub enum Error {
     OperationNotSupported,
     #[error("failed to write into writer")]
     Writer(#[source] io::Error),
-    #[error("request timeout")]
-    RequestTimeout,
     #[error("storage version mismatch")]
     StorageVersionMismatch,
     #[error("file or directory is locked")]
