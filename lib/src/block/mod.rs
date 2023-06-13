@@ -5,8 +5,10 @@ use std::{array::TryFromSliceError, fmt};
 mod store;
 pub(crate) mod tracker;
 
+#[cfg(test)]
+pub(crate) use self::store::exists;
 pub(crate) use self::{
-    store::{count, exists, read, remove, write, BlockNonce, BLOCK_NONCE_SIZE},
+    store::{count, read, remove, write, BlockNonce, BLOCK_NONCE_SIZE},
     tracker::{BlockTracker, BlockTrackerClient},
 };
 

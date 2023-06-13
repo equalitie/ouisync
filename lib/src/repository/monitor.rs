@@ -293,18 +293,12 @@ impl JobMonitor {
         }
 
         async move {
-            tracing::debug!("job started");
-
-            let mut guard = JobGuard {
-                monitor: self,
-                completed: false,
-            };
+            let guard = JobGuard::start(self);
             let _timing = self.metric.start();
 
             let result = f.await;
-            guard.completed = true;
 
-            tracing::debug!(?result, "job completed");
+            guard.complete(result);
         }
         .instrument(tracing::info_span!(
             "job",
@@ -317,13 +311,33 @@ impl JobMonitor {
 
 pub(crate) struct JobGuard<'a> {
     monitor: &'a JobMonitor,
+    span: Span,
     completed: bool,
+}
+
+impl<'a> JobGuard<'a> {
+    fn start(monitor: &'a JobMonitor) -> Self {
+        let span = Span::current();
+
+        tracing::debug!(parent: &span, "job started");
+
+        Self {
+            monitor,
+            span,
+            completed: false,
+        }
+    }
+
+    fn complete<E: fmt::Debug>(mut self, result: Result<(), E>) {
+        self.completed = true;
+        tracing::debug!(parent: &self.span, ?result, "job completed");
+    }
 }
 
 impl Drop for JobGuard<'_> {
     fn drop(&mut self) {
         if !self.completed {
-            tracing::debug!("job interrupted");
+            tracing::debug!(parent: &self.span, "job interrupted");
         }
 
         self.monitor.tx.send(false).ok();

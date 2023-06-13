@@ -58,17 +58,6 @@ impl Store {
         })
     }
 
-    pub(crate) async fn require_missing_block(&self, block_id: BlockId) -> Result<()> {
-        let require = self.block_tracker.begin_require(block_id);
-        let mut conn = self.db().acquire().await?;
-
-        if !block::exists(&mut conn, &block_id).await? {
-            require.commit();
-        }
-
-        Ok(())
-    }
-
     /// Write a block received from a remote replica to the block store. The block must already be
     /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
     pub(crate) async fn write_received_block(
@@ -478,7 +467,7 @@ mod tests {
         let block_tracker = store.block_tracker.client();
 
         for block in snapshot.blocks().values() {
-            store.block_tracker.begin_require(*block.id()).commit();
+            store.block_tracker.require(*block.id());
             block_tracker.offer(*block.id(), OfferState::Approved);
             let promise = block_tracker.acceptor().try_accept().unwrap();
 

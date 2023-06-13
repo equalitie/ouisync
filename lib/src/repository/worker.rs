@@ -212,8 +212,10 @@ mod scan {
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
-            shared.store.require_missing_block(block_id).await?;
+        while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
+            if !presence.is_present() {
+                shared.store.block_tracker.require(block_id);
+            }
         }
 
         Ok(())
@@ -252,20 +254,15 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
-    use crate::{
-        crypto::sign::PublicKey,
-        index::{MultiBlockPresence, SnapshotData},
-    };
-    use std::cmp::Ordering;
 
     pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
         let all = shared.store.index.load_snapshots().await?;
 
-        // When there are multiple branches with the same vv but different hash we need to preserve
-        // them because we might need them to request missing blocks. But once the local branch has
-        // all blocks we can prune them.
-        let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, Tiebreaker(&shared.this_writer_id));
+        // Currently it's possible that multiple branches have the same vv but different hash.
+        // There is no good and simple way to pick one over the other so we currently keep all.
+        // TODO: When https://github.com/equalitie/ouisync/issues/113 is fixed, change this to use
+        // the `PreferBranch` tiebreaker using the local branch id.
+        let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
 
         // Remove outdated branches
         for snapshot in outdated {
@@ -310,24 +307,6 @@ mod prune {
         }
 
         Ok(())
-    }
-
-    // If one of the snapshots is local and has all blocks discard the other one, otherwise keep
-    // both.
-    struct Tiebreaker<'a>(&'a PublicKey);
-
-    impl versioned::Tiebreaker<SnapshotData> for Tiebreaker<'_> {
-        fn break_tie(&self, lhs: &SnapshotData, rhs: &SnapshotData) -> Ordering {
-            match (lhs.branch_id() == self.0, rhs.branch_id() == self.0) {
-                (true, false) if lhs.block_presence() == &MultiBlockPresence::Full => {
-                    Ordering::Greater
-                }
-                (false, true) if rhs.block_presence() == &MultiBlockPresence::Full => {
-                    Ordering::Less
-                }
-                _ => Ordering::Equal,
-            }
-        }
     }
 }
 
@@ -456,7 +435,7 @@ mod trash {
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
+        while let Some((block_id, _)) = blob_block_ids.try_next().await? {
             unreachable_block_ids.remove(&block_id);
         }
 
@@ -491,7 +470,7 @@ mod trash {
 
                 unlock_tx.send(notify).await;
 
-                while let Some(block_id) = blob_block_ids.try_next().await? {
+                while let Some((block_id, _)) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
                 }
             }

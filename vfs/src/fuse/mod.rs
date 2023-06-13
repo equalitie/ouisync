@@ -956,7 +956,6 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::PermissionDenied => libc::EACCES,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,
         Error::OperationNotSupported => libc::ENOTSUP,
-        Error::RequestTimeout => libc::ETIMEDOUT,
         Error::Locked => libc::EBUSY,
     }
 }
