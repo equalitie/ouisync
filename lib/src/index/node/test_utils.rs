@@ -196,7 +196,7 @@ pub(crate) async fn receive_blocks(store: &Store, snapshot: &Snapshot) {
     let acceptor = client.acceptor();
 
     for block in snapshot.blocks().values() {
-        store.block_tracker.begin_require(*block.id()).commit();
+        store.block_tracker.require(*block.id());
         client.offer(*block.id(), OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 

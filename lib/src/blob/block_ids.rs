@@ -4,7 +4,7 @@ use crate::{
     block::BlockId,
     branch::Branch,
     error::{Error, Result},
-    index::SnapshotData,
+    index::{SingleBlockPresence, SnapshotData},
     locator::Locator,
 };
 
@@ -47,7 +47,7 @@ impl BlockIds {
         })
     }
 
-    pub async fn try_next(&mut self) -> Result<Option<BlockId>> {
+    pub async fn try_next(&mut self) -> Result<Option<(BlockId, SingleBlockPresence)>> {
         if let Some(upper_bound) = self.upper_bound {
             if self.locator.number() >= upper_bound {
                 return Ok(None);
@@ -58,9 +58,9 @@ impl BlockIds {
         let mut tx = self.branch.db().begin_read().await?;
 
         match self.snapshot.get_block(&mut tx, &encoded).await {
-            Ok((block_id, _)) => {
+            Ok(block) => {
                 self.locator = self.locator.next();
-                Ok(Some(block_id))
+                Ok(Some(block))
             }
             Err(error @ Error::EntryNotFound) => {
                 // There are two reasons why `EntryNotFound` can be returned here:

@@ -140,7 +140,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            a_store.block_tracker.begin_require(*id).commit();
+            a_store.block_tracker.require(*id);
             a_block_tracker.offer(*id, OfferState::Approved);
             let promise = a_block_tracker.acceptor().try_accept().unwrap();
 

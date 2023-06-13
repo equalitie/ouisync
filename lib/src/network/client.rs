@@ -313,7 +313,7 @@ impl Client {
             BlockRequestMode::Greedy => {
                 for block_id in updated_blocks {
                     if self.block_tracker.offer(block_id, offer_state) {
-                        self.store.require_missing_block(block_id).await?;
+                        self.store.block_tracker.require(block_id);
                     }
                 }
             }

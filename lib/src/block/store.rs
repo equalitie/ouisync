@@ -81,6 +81,7 @@ pub(crate) async fn write(
 }
 
 /// Checks whether the block exists in the store.
+#[cfg(test)]
 pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
