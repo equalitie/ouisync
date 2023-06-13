@@ -532,7 +532,7 @@ fn block_count(len: u64) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
-#[instrument(skip(tx, snapshot, read_key), fields(branch.id = ?snapshot.branch_id()), err(Debug))]
+#[instrument(skip(tx, snapshot, read_key), fields(branch.id = ?snapshot.branch_id(), id), err(Debug))]
 async fn read_block(
     tx: &mut db::ReadTransaction,
     snapshot: &SnapshotData,
@@ -540,11 +540,14 @@ async fn read_block(
     locator: &Locator,
 ) -> Result<(BlockId, Buffer)> {
     let (id, _) = snapshot.get_block(tx, &locator.encode(read_key)).await?;
+    Span::current().record("id", field::debug(&id));
 
     let mut buffer = Buffer::new();
     let nonce = block::read(tx, &id, &mut buffer).await?;
 
     decrypt_block(read_key, &nonce, &mut buffer);
+
+    tracing::trace!("read_block");
 
     Ok((id, buffer))
 }
@@ -587,6 +590,8 @@ async fn write_block(
     assert!(inserted);
 
     block::write(tx, &id, &buffer, &nonce).await?;
+
+    tracing::trace!("write_block");
 
     Ok(id)
 }

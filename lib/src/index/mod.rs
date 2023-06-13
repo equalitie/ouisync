@@ -452,6 +452,17 @@ async fn decide_root_node_action(
                     {
                         action.request_children = false;
                     }
+                } else {
+                    // NOTE: Currently it's possible for two branches to have the same vv but
+                    // different hash so we need to accept them.
+                    // TODO: When https://github.com/equalitie/ouisync/issues/113 is fixed we can
+                    // reject them.
+                    tracing::trace!(
+                        vv = ?old_node.proof.version_vector,
+                        old_hash = ?old_node.proof.hash,
+                        new_hash = ?new_proof.hash,
+                        "received root node with same vv but different hash"
+                    );
                 }
             }
             Some(Ordering::Greater) => (),

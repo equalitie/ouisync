@@ -450,7 +450,10 @@ pub(crate) async fn check_file_version_content(
             tracing::warn!(path, ?error, "open failed");
             return false;
         }
-        Err(error) => panic!("unexpected error: {error:?}"),
+        Err(error) => {
+            tracing::error!(path, ?error);
+            panic!("unexpected error: {error:?}");
+        }
     };
 
     tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
@@ -462,7 +465,10 @@ pub(crate) async fn check_file_version_content(
             tracing::warn!(path, ?error, "read failed");
             return false;
         }
-        Err(error) => panic!("unexpected error: {error:?}"),
+        Err(error) => {
+            tracing::error!(path, ?error);
+            panic!("unexpected error: {error:?}");
+        }
     };
 
     if actual_content == expected_content {
@@ -501,7 +507,10 @@ pub(crate) async fn check_entry_exists(
             tracing::warn!(path, ?error, "open failed");
             false
         }
-        Err(error) => panic!("unexpected error: {error:?}"),
+        Err(error) => {
+            tracing::error!(path, ?error);
+            panic!("unexpected error: {error:?}");
+        }
     }
 }
 
@@ -517,7 +526,10 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
         match parent.lookup_unique(name) {
             Ok(_) => false,
             Err(Error::EntryNotFound) => true,
-            Err(error) => panic!("unexpected error: {error:?}"),
+            Err(error) => {
+                tracing::error!(%path, ?error);
+                panic!("unexpected error: {error:?}");
+            }
         }
     })
     .await

@@ -26,7 +26,7 @@ pub(crate) trait BranchItem {
     fn branch_id(&self) -> &PublicKey;
 }
 
-/// Tiebreaker that prefers the item that belongs to the given branch. If not item belongs to it or
+/// Tiebreaker that prefers the item that belongs to the given branch. If no item belongs to it or
 /// if no branch specified, arbitrarily prefers the one whose branch id is greater.
 pub(crate) struct PreferBranch<'a>(pub Option<&'a PublicKey>);
 
