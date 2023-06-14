@@ -9,9 +9,12 @@ use once_cell::sync::Lazy;
 use os_pipe::PipeWriter;
 use std::{
     ffi::{CStr, CString},
+    fs::File,
     io::{self, BufRead, BufReader, Stderr, Stdout},
     os::{raw, unix::io::AsRawFd},
     panic::{self, PanicInfo},
+    path::Path,
+    process::{Child, Command},
     thread,
 };
 
@@ -27,8 +30,6 @@ pub struct Logger {
 
 impl Logger {
     pub(crate) fn new() -> Result<Self, io::Error> {
-        // This should be set up before `setup_logger` is called, otherwise we won't see
-        // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
         let stdout = redirect(io::stdout(), ANDROID_LOG_DEBUG)?;
         let stderr = redirect(io::stderr(), ANDROID_LOG_ERROR)?;
 
@@ -42,7 +43,21 @@ impl Logger {
     }
 }
 
-pub struct CaptureOutput {}
+pub struct Capture {
+    _logcat: Child,
+}
+
+impl Capture {
+    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
+        let file = File::create(path)?;
+        let logcat = Command::new("logcat")
+            .args(["-vtime", "-vyear", "*:S", "flutter:V", "flutter-ouisync:V"])
+            .stdout(file)
+            .spawn()?;
+
+        Ok(Self { _logcat: logcat })
+    }
+}
 
 fn redirect<S: AsRawFd>(
     stream: S,

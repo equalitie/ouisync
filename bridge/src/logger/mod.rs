@@ -5,10 +5,10 @@ mod default;
 mod redirect;
 
 #[cfg(target_os = "android")]
-pub use self::android::{CaptureOutput, Logger};
+pub use self::android::{Capture, Logger};
 
 #[cfg(not(target_os = "android"))]
-pub use self::default::{CaptureOutput, Logger};
+pub use self::default::{Capture, Logger};
 
 use crate::error::{Error, Result};
 use ouisync_lib::StateMonitor;

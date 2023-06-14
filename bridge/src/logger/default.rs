@@ -1,4 +1,4 @@
-use std::io;
+use std::{fs::File, io, path::Path};
 use tracing_subscriber::{
     filter::{LevelFilter, Targets},
     fmt,
@@ -6,6 +6,8 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     EnvFilter, Layer,
 };
+
+use super::redirect::Redirect;
 
 pub struct Logger;
 
@@ -52,4 +54,24 @@ impl Logger {
     }
 }
 
-pub struct CaptureOutput {}
+/// Capture output (stdout and stderr) into a file.
+pub struct Capture {
+    _stdout: Redirect<io::Stdout, File>,
+    _stderr: Redirect<io::Stderr, io::Stdout>,
+}
+
+impl Capture {
+    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
+        // Redirect stdout to file
+        let file = File::create(path)?;
+        let stdout = Redirect::new(io::stdout(), file)?;
+
+        // Redirect stderr to stdout
+        let stderr = Redirect::new(io::stderr(), io::stdout())?;
+
+        Ok(Self {
+            _stdout: stdout,
+            _stderr: stderr,
+        })
+    }
+}
