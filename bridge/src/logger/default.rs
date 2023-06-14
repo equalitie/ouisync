@@ -51,3 +51,5 @@ impl Logger {
         Ok(Self)
     }
 }
+
+pub struct CaptureOutput {}

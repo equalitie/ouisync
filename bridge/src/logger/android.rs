@@ -1,3 +1,4 @@
+use super::redirect::Redirect;
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -5,18 +6,13 @@ use ndk_sys::{
     android_LogPriority_ANDROID_LOG_FATAL as ANDROID_LOG_FATAL,
 };
 use once_cell::sync::Lazy;
-use os_pipe::{PipeReader, PipeWriter};
+use os_pipe::PipeWriter;
 use std::{
     ffi::{CStr, CString},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Stderr, Stdout},
     os::{raw, unix::io::AsRawFd},
     panic::{self, PanicInfo},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     thread,
-    thread::JoinHandle,
 };
 
 // Android log tag.
@@ -25,16 +21,16 @@ use std::{
 const TAG: &str = "flutter-ouisync";
 
 pub struct Logger {
-    _stdout: StdRedirect,
-    _stderr: StdRedirect,
+    _stdout: Redirect<Stdout, PipeWriter>,
+    _stderr: Redirect<Stderr, PipeWriter>,
 }
 
 impl Logger {
     pub(crate) fn new() -> Result<Self, io::Error> {
         // This should be set up before `setup_logger` is called, otherwise we won't see
         // `println!`s from inside the TracingLayer. Not really sure why that's the case though.
-        let stdout = StdRedirect::new(io::stdout(), ANDROID_LOG_DEBUG)?;
-        let stderr = StdRedirect::new(io::stderr(), ANDROID_LOG_ERROR)?;
+        let stdout = redirect(io::stdout(), ANDROID_LOG_DEBUG)?;
+        let stderr = redirect(io::stderr(), ANDROID_LOG_ERROR)?;
 
         panic::set_hook(Box::new(panic_hook));
         setup_logger();
@@ -46,104 +42,40 @@ impl Logger {
     }
 }
 
-// Redirect stdout or stderr into android log.
-struct StdRedirect {
-    handle: Option<JoinHandle<()>>,
-    active: Arc<AtomicBool>,
-    writer: PipeWriter,
-    old_fd: libc::c_int,
-    old_fd_dup: libc::c_int,
-}
+pub struct CaptureOutput {}
 
-impl StdRedirect {
-    fn new<T: AsRawFd>(stream: T, priority: LogPriority) -> Result<Self, io::Error> {
-        let (reader, writer) = os_pipe::pipe()?;
+fn redirect<S: AsRawFd>(
+    stream: S,
+    priority: LogPriority,
+) -> Result<Redirect<S, PipeWriter>, io::Error> {
+    let (reader, writer) = os_pipe::pipe()?;
+    let redirect = Redirect::new(stream, writer)?;
 
-        // Remember these so we can point the old stream FD to where it pointed before.
-        //
-        // SAFETY: The file descriptor should be valid because it was obtained using
-        // `as_raw_fd` from a valid rust io object.
-        let (old_fd, old_fd_dup) = unsafe {
-            let old_fd = stream.as_raw_fd();
-            let old_fd_dup = libc::dup(old_fd);
-            (old_fd, old_fd_dup)
-        };
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
 
-        // SAFETY: Both file descriptors should be valid because they are obtained using
-        // `as_raw_fd` from valid rust io objects.
-        unsafe {
-            if libc::dup2(writer.as_raw_fd(), stream.as_raw_fd()) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-        }
+        loop {
+            match reader.read_line(&mut line) {
+                Ok(n) if n > 0 => {
+                    // Remove the trailing newline
+                    if line.ends_with('\n') {
+                        line.pop();
+                    }
 
-        let active = Arc::new(AtomicBool::new(true));
-        let handle = thread::spawn({
-            let active = active.clone();
-            move || run(priority, reader, active)
-        });
-
-        Ok(Self {
-            handle: Some(handle),
-            active,
-            writer,
-            old_fd,
-            old_fd_dup,
-        })
-    }
-}
-
-impl Drop for StdRedirect {
-    fn drop(&mut self) {
-        // Let the thread know we're done
-        self.active.store(false, Ordering::Release);
-
-        // Write empty line to the pipe to wake up the reader
-        self.writer.write_all(b"\n").unwrap_or(());
-        self.writer.flush().unwrap_or(());
-
-        unsafe {
-            // Point the original FD to it's previous target.
-            let r = libc::dup2(self.old_fd_dup, self.old_fd);
-            if r < 0 {
-                print(
-                    ANDROID_LOG_FATAL,
-                    format!(
-                        "Failed to point the redirected file descriptor \
-                            to its original target (error code:{r})",
-                    ),
-                );
-            }
-        }
-
-        if let Some(handle) = self.handle.take() {
-            handle.join().unwrap_or(());
-        }
-    }
-}
-
-fn run(priority: LogPriority, reader: PipeReader, active: Arc<AtomicBool>) {
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-
-    while active.load(Ordering::Acquire) {
-        match reader.read_line(&mut line) {
-            Ok(n) if n > 0 => {
-                // Remove the trailing newline
-                if line.ends_with('\n') {
-                    line.pop();
+                    line = print(priority, line);
+                    line.clear();
                 }
-
-                line = print(priority, line);
-                line.clear();
-            }
-            Ok(_) => break, // EOF
-            Err(error) => {
-                print(ANDROID_LOG_ERROR, error.to_string());
-                break;
+                Ok(_) => break, // EOF
+                Err(error) => {
+                    print(ANDROID_LOG_ERROR, error.to_string());
+                    break;
+                }
             }
         }
-    }
+    });
+
+    Ok(redirect)
 }
 
 // Prints `message` to the android log using zero allocations. Returns the original message.

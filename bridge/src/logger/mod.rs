@@ -2,12 +2,13 @@
 mod android;
 #[cfg(not(target_os = "android"))]
 mod default;
+mod redirect;
 
 #[cfg(target_os = "android")]
-pub use self::android::Logger;
+pub use self::android::{CaptureOutput, Logger};
 
 #[cfg(not(target_os = "android"))]
-pub use self::default::Logger;
+pub use self::default::{CaptureOutput, Logger};
 
 use crate::error::{Error, Result};
 use ouisync_lib::StateMonitor;
