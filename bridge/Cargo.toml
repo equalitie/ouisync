@@ -43,6 +43,9 @@ paranoid-android = "0.2.1"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["minwindef", "processenv", "winbase"] }
+
 [dev-dependencies]
 rcgen = { workspace = true }
 tempfile = "3.2"

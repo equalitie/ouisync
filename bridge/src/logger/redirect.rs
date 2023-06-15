@@ -99,4 +99,52 @@ mod sys {
     }
 }
 
-// TODO: windows
+#[cfg(windows)]
+mod sys {
+    use std::{
+        io::{Stderr, Stdout},
+        os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle},
+    };
+    use winapi::shared::minwindef::DWORD;
+    use winapi::um::winbase::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+
+    pub(crate) type OwnedDescriptor = OwnedHandle;
+    pub(crate) type BorrowedDescriptor<'a> = BorrowedHandle<'a>;
+
+    pub(crate) trait AsDescriptor: AsHandle {
+        fn as_descriptor(&self) -> BorrowedDescriptor<'_>;
+    }
+
+    impl<T> AsDescriptor for T
+    where
+        T: AsHandle,
+    {
+        fn as_descriptor(&self) -> BorrowedDescriptor<'_> {
+            AsHandle::as_handle(self)
+        }
+    }
+
+    pub(crate) trait SetDescriptor {
+        fn set_descriptor(&self, d: BorrowedDescriptor<'_>) -> io::Result<()>;
+    }
+
+    impl SetDescriptor for Stdout {
+        fn set_descriptor(&self, d: BorrowedDescriptor<'_>) -> io::Result<()> {
+            unsafe { set_std_handle(STD_OUTPUT_HANDLE, d) }
+        }
+    }
+
+    impl SetDescriptor for Stderr {
+        fn set_descriptor(&self, d: BorrowedDescriptor<'_>) -> io::Result<()> {
+            unsafe { set_std_handle(STD_ERROR_HANDLE, d) }
+        }
+    }
+
+    unsafe fn set_std_handle(device: DWORD, d: BorrowedDescriptor<'_>) -> io::Result<()> {
+        if winapi::um::processenv::SetStdHandle(device, d.as_raw_handle()) != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+}
