@@ -9,12 +9,11 @@ use once_cell::sync::Lazy;
 use os_pipe::PipeWriter;
 use std::{
     ffi::{CStr, CString},
-    fs::{self, File},
     io::{self, BufRead, BufReader, Stderr, Stdout},
     os::raw,
     panic::{self, PanicInfo},
     path::Path,
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     thread,
 };
 
@@ -44,29 +43,39 @@ impl Logger {
 }
 
 pub struct Capture {
-    _process: Child,
+    process: Child,
 }
 
 impl Capture {
-    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
-        if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = File::create(path)?;
+    pub fn new(path: &Path) -> io::Result<Self> {
+        let mut rotate = super::create_rotate(path)?;
 
         let mut command = Command::new("logcat");
         command
-            .args(["-vtime", "-vyear", "*:S", "flutter:V", "flutter-ouisync:V"])
-            .stdout(file);
+            .args(["-vraw", "*:S", "flutter:V"])
+            .arg(format!("{TAG}:V"))
+            .stdout(Stdio::piped());
 
-        // HACK: Spawning the sub-process in a separate thread because trying to spawn it in the
+        // HACK: Spawning the logcat process in a separate thread because trying to spawn it in the
         // main thread causes hang on android for some reason.
-        let process = thread::spawn(move || command.spawn())
+        let mut process = thread::spawn(move || command.spawn())
             .join()
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "panic when spawning logcat"))??;
 
-        Ok(Self { _process: process })
+        // Pipe the logcat output to the log file
+        let mut stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "failed to take logcat output"))?;
+        thread::spawn(move || io::copy(&mut stdout, &mut rotate).ok());
+
+        Ok(Self { process })
+    }
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        self.process.kill().ok();
     }
 }
 

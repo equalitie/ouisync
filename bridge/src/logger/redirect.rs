@@ -1,6 +1,6 @@
 //! stdout and stderr redirection
 
-use std::{fs::File, io};
+use std::io;
 use sys::OwnedDescriptor;
 pub(crate) use sys::{AsDescriptor, SetDescriptor};
 
@@ -33,7 +33,8 @@ where
     }
 
     // Returns a file representing the original, unredirected stream.
-    pub fn orig(&self) -> io::Result<File> {
+    #[cfg(not(target_os = "android"))] // not used on android
+    pub fn orig(&self) -> io::Result<std::fs::File> {
         Ok(self.src_orig.try_clone()?.into())
     }
 }

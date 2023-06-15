@@ -261,10 +261,9 @@ impl Session {
 
         // Capture output to the log file
         let capture = log_path.and_then(|path| {
-            Capture::new(path)
+            Capture::new(&path)
                 .map_err(|error| {
-                    // capture failed so this will be printed to stderr
-                    eprintln!("failed to capture output: {:?}", error);
+                    tracing::error!(?error, "failed to capture output");
                     error
                 })
                 .ok()

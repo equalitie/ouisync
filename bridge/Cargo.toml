@@ -13,6 +13,7 @@ version.workspace = true
 async-trait = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
+file-rotate = "0.7.5"
 futures-util = { workspace = true }
 indexmap = "1.9.3"
 num_enum = { workspace = true }

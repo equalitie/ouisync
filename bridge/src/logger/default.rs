@@ -1,6 +1,5 @@
 use os_pipe::PipeWriter;
 use std::{
-    fs::{self, File},
     io::{self, Write},
     path::Path,
     thread,
@@ -67,12 +66,8 @@ pub struct Capture {
 }
 
 impl Capture {
-    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
-        if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = File::create(path)?;
+    pub fn new(path: &Path) -> io::Result<Self> {
+        let rotate = super::create_rotate(path)?;
 
         // Print both to stdout/stderr and to log file:
 
@@ -82,7 +77,7 @@ impl Capture {
         let stdout_orig = stdout.orig()?;
 
         thread::spawn(move || {
-            io::copy(&mut reader, &mut FanOut(stdout_orig, file)).ok();
+            io::copy(&mut reader, &mut FanOut(stdout_orig, rotate)).ok();
         });
 
         // Stderr

@@ -11,8 +11,9 @@ pub use self::android::{Capture, Logger};
 pub use self::default::{Capture, Logger};
 
 use crate::error::{Error, Result};
+use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use ouisync_lib::StateMonitor;
-use std::panic;
+use std::{fs, io, panic, path::Path};
 
 pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
     let logger = Logger::new().map_err(Error::InitializeLogger)?;
@@ -33,4 +34,18 @@ pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
     }
 
     Ok(logger)
+}
+
+fn create_rotate(path: &Path) -> io::Result<FileRotate<AppendCount>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    Ok(FileRotate::new(
+        path,
+        AppendCount::new(1),
+        ContentLimit::BytesSurpassed(10 * 1024 * 1024),
+        Compression::None,
+        None,
+    ))
 }
