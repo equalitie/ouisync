@@ -1,6 +1,6 @@
 //! stdout and stderr redirection
 
-use std::io;
+use std::{fs::File, io};
 use sys::OwnedDescriptor;
 pub(crate) use sys::{AsDescriptor, SetDescriptor};
 
@@ -10,7 +10,7 @@ where
     D: AsDescriptor,
 {
     src: S,
-    src_old: OwnedDescriptor,
+    src_orig: OwnedDescriptor,
     _dst: D,
 }
 
@@ -21,15 +21,20 @@ where
 {
     pub fn new(src: S, dst: D) -> io::Result<Self> {
         // Remember the old fd so we can point it to where it pointed before when we are done.
-        let src_old = src.as_descriptor().try_clone_to_owned()?;
+        let src_orig = src.as_descriptor().try_clone_to_owned()?;
 
         src.set_descriptor(dst.as_descriptor())?;
 
         Ok(Self {
             src,
-            src_old,
+            src_orig,
             _dst: dst,
         })
+    }
+
+    // Returns a file representing the original, unredirected stream.
+    pub fn orig(&self) -> io::Result<File> {
+        Ok(self.src_orig.try_clone()?.into())
     }
 }
 
@@ -39,7 +44,7 @@ where
     D: AsDescriptor,
 {
     fn drop(&mut self) {
-        if let Err(error) = self.src.set_descriptor(self.src_old.as_descriptor()) {
+        if let Err(error) = self.src.set_descriptor(self.src_orig.as_descriptor()) {
             tracing::error!(
                 ?error,
                 "Failed to point the redirected descriptor to its original target"

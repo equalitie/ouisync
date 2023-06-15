@@ -1,7 +1,9 @@
+use os_pipe::PipeWriter;
 use std::{
     fs::{self, File},
-    io,
+    io::{self, Write},
     path::Path,
+    thread,
 };
 use tracing_subscriber::{
     filter::{LevelFilter, Targets},
@@ -58,10 +60,10 @@ impl Logger {
     }
 }
 
-/// Capture output (stdout and stderr) into a file.
+/// Capture output (stdout and stderr) into the log file.
 pub struct Capture {
-    _stdout: Redirect<io::Stdout, File>,
-    _stderr: Redirect<io::Stderr, io::Stdout>,
+    _stdout: Redirect<io::Stdout, PipeWriter>,
+    _stderr: Redirect<io::Stderr, PipeWriter>,
 }
 
 impl Capture {
@@ -70,16 +72,54 @@ impl Capture {
             fs::create_dir_all(parent)?;
         }
 
-        // Redirect stdout to file
         let file = File::create(path)?;
-        let stdout = Redirect::new(io::stdout(), file)?;
 
-        // Redirect stderr to stdout
-        let stderr = Redirect::new(io::stderr(), io::stdout())?;
+        // Print both to stdout/stderr and to log file:
+
+        // Stdout
+        let (mut reader, writer) = os_pipe::pipe()?;
+        let stdout = Redirect::new(io::stdout(), writer)?;
+        let stdout_orig = stdout.orig()?;
+
+        thread::spawn(move || {
+            io::copy(&mut reader, &mut FanOut(stdout_orig, file)).ok();
+        });
+
+        // Stderr
+        let (mut reader, writer) = os_pipe::pipe()?;
+        let stderr = Redirect::new(io::stderr(), writer)?;
+        let stderr_orig = stderr.orig()?;
+
+        thread::spawn(move || {
+            io::copy(&mut reader, &mut FanOut(stderr_orig, io::stdout())).ok();
+        });
 
         Ok(Self {
             _stdout: stdout,
             _stderr: stderr,
         })
+    }
+}
+
+/// Writer that clones written data into two writers.
+struct FanOut<A, B>(pub A, pub B);
+
+impl<A, B> Write for FanOut<A, B>
+where
+    A: Write,
+    B: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let len = self.0.write(buf)?;
+        self.1.write_all(&buf[..len])?;
+
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()?;
+        self.1.flush()?;
+
+        Ok(())
     }
 }
