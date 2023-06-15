@@ -1,4 +1,4 @@
-use super::redirect::Redirect;
+use super::redirect::{AsDescriptor, Redirect};
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -9,9 +9,9 @@ use once_cell::sync::Lazy;
 use os_pipe::PipeWriter;
 use std::{
     ffi::{CStr, CString},
-    fs::File,
+    fs::{self, File},
     io::{self, BufRead, BufReader, Stderr, Stdout},
-    os::{raw, unix::io::AsRawFd},
+    os::raw,
     panic::{self, PanicInfo},
     path::Path,
     process::{Child, Command},
@@ -44,7 +44,7 @@ impl Logger {
 }
 
 pub struct Capture {
-    _logcat: Child,
+    _process: Child,
 }
 
 impl Capture {
@@ -54,16 +54,23 @@ impl Capture {
         }
 
         let file = File::create(path)?;
-        let logcat = Command::new("logcat")
-            .args(["-vtime", "-vyear", "*:S", "flutter:V", "flutter-ouisync:V"])
-            .stdout(file)
-            .spawn()?;
 
-        Ok(Self { _logcat: logcat })
+        let mut command = Command::new("logcat");
+        command
+            .args(["-vtime", "-vyear", "*:S", "flutter:V", "flutter-ouisync:V"])
+            .stdout(file);
+
+        // HACK: Spawning the sub-process in a separate thread because trying to spawn it in the
+        // main thread causes hang on android for some reason.
+        let process = thread::spawn(move || command.spawn())
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "panic when spawning logcat"))??;
+
+        Ok(Self { _process: process })
     }
 }
 
-fn redirect<S: AsRawFd>(
+fn redirect<S: AsDescriptor>(
     stream: S,
     priority: LogPriority,
 ) -> Result<Redirect<S, PipeWriter>, io::Error> {

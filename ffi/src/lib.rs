@@ -256,10 +256,11 @@ impl Session {
     ) -> Result<Self> {
         let root_monitor = StateMonitor::make_root();
 
+        // Init logger
+        let logger = logger::new(Some(root_monitor.clone()))?;
+
         // Capture output to the log file
         let capture = log_path.and_then(|path| {
-            println!("log path: {}", path.display());
-
             Capture::new(path)
                 .map_err(|error| {
                     // capture failed so this will be printed to stderr
@@ -268,9 +269,6 @@ impl Session {
                 })
                 .ok()
         });
-
-        // Init logger
-        let logger = logger::new(Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()

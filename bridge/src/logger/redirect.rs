@@ -58,7 +58,7 @@ mod sys {
     pub(crate) type OwnedDescriptor = OwnedFd;
     pub(crate) type BorrowedDescriptor<'a> = BorrowedFd<'a>;
 
-    pub(crate) trait AsDescriptor {
+    pub(crate) trait AsDescriptor: AsFd {
         fn as_descriptor(&self) -> BorrowedDescriptor<'_>;
     }
 

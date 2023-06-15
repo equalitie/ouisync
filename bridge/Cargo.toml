@@ -16,7 +16,7 @@ camino = { workspace = true, features = ["serde1"] }
 futures-util = { workspace = true }
 indexmap = "1.9.3"
 num_enum = { workspace = true }
-os_pipe = "0.9.2"
+os_pipe = { version = "1.1.4", features = ["io_safety"] }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rand = { workspace = true }
 rmp-serde = { workspace = true }
