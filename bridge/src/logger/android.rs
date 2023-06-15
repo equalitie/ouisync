@@ -49,6 +49,10 @@ pub struct Capture {
 
 impl Capture {
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
+
         let file = File::create(path)?;
         let logcat = Command::new("logcat")
             .args(["-vtime", "-vyear", "*:S", "flutter:V", "flutter-ouisync:V"])

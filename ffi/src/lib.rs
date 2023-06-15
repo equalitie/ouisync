@@ -258,6 +258,8 @@ impl Session {
 
         // Capture output to the log file
         let capture = log_path.and_then(|path| {
+            println!("log path: {}", path.display());
+
             Capture::new(path)
                 .map_err(|error| {
                     // capture failed so this will be printed to stderr

@@ -1,4 +1,8 @@
-use std::{fs::File, io, path::Path};
+use std::{
+    fs::{self, File},
+    io,
+    path::Path,
+};
 use tracing_subscriber::{
     filter::{LevelFilter, Targets},
     fmt,
@@ -62,6 +66,10 @@ pub struct Capture {
 
 impl Capture {
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
+
         // Redirect stdout to file
         let file = File::create(path)?;
         let stdout = Redirect::new(io::stdout(), file)?;
