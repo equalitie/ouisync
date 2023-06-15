@@ -1124,7 +1124,6 @@ impl From<Error> for i32 {
                     E::DirectoryNotEmpty => STATUS_DIRECTORY_NOT_EMPTY,
                     E::OperationNotSupported => STATUS_NOT_IMPLEMENTED,
                     E::Writer(_) => STATUS_IO_DEVICE_ERROR,
-                    E::RequestTimeout => STATUS_TIMEOUT,
                     E::StorageVersionMismatch => STATUS_IO_DEVICE_ERROR,
                     E::Locked => STATUS_LOCK_NOT_GRANTED,
                 }
