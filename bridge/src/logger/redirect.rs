@@ -101,9 +101,11 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
+    use std::io;
+
     use std::{
         io::{Stderr, Stdout},
-        os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle},
+        os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle},
     };
     use winapi::shared::minwindef::DWORD;
     use winapi::um::winbase::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};

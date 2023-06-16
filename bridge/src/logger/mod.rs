@@ -46,6 +46,7 @@ fn create_rotate(path: &Path) -> io::Result<FileRotate<AppendCount>> {
         AppendCount::new(1),
         ContentLimit::BytesSurpassed(10 * 1024 * 1024),
         Compression::None,
+        #[cfg(unix)]
         None,
     ))
 }
