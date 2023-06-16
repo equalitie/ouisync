@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use ouisync_bridge::error::{ErrorCode, Result};
+use ouisync_vfs::MountErrorCode;
 use std::{ffi::CString, marker::PhantomData, mem, os::raw::c_char};
 
 #[repr(C)]
@@ -90,6 +91,12 @@ impl From<String> for DartCObject {
 impl From<ErrorCode> for DartCObject {
     fn from(value: ErrorCode) -> Self {
         Self::from(value as u32)
+    }
+}
+
+impl From<MountErrorCode> for DartCObject {
+    fn from(value: MountErrorCode) -> Self {
+        Self::from(value as u16)
     }
 }
 

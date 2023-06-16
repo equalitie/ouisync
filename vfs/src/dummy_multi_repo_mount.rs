@@ -1,3 +1,4 @@
+use super::MountErrorCode;
 use camino::Utf8PathBuf;
 use ouisync_lib::Repository;
 use std::{io, path::Path, sync::Arc};
@@ -9,8 +10,8 @@ impl MultiRepoVFS {
     pub async fn mount(
         _runtime_handle: tokio::runtime::Handle,
         _mount_point: impl AsRef<Path>,
-    ) -> Result<Self, io::Error> {
-        todo!()
+    ) -> Result<Self, MountErrorCode> {
+        Err(MountErrorCode::UnsupportedOs)
     }
 
     pub fn add_repo(

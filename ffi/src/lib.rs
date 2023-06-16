@@ -30,6 +30,7 @@ use ouisync_bridge::{
     logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
+use ouisync_vfs::MountErrorCode;
 #[cfg(unix)]
 use std::os::raw::c_int;
 use std::{
@@ -98,8 +99,6 @@ pub unsafe extern "C" fn session_create(
         session
             .runtime
             .spawn(server.run(Handler::new(session.state.clone())));
-
-        session.mount();
     }
 
     result.into()
@@ -113,6 +112,32 @@ pub unsafe extern "C" fn session_create(
 #[no_mangle]
 pub unsafe extern "C" fn session_destroy(session: SessionHandle) {
     session.release();
+}
+
+/// Mount all repositories that are or will be opened in read and/or write mode.
+///
+/// # Safety
+///
+/// `session` must be a valid session handle.
+#[no_mangle]
+pub unsafe extern "C" fn session_mount_all(
+    session: SessionHandle,
+    mount_point: *const c_char,
+    port: Port<MountErrorCode>,
+) {
+    let session = session.get();
+
+    let mount_point = match utils::ptr_to_str(mount_point) {
+        Ok(mount_point) => PathBuf::from(mount_point),
+        Err(error) => {
+            session
+                .port_sender
+                .send(port, MountErrorCode::FailedToParseMountPoint);
+            return;
+        }
+    };
+
+    session.mount_all(mount_point, port)
 }
 
 /// # Safety
@@ -247,21 +272,25 @@ impl Session {
 
     // TODO: Linux, OSX
     #[cfg(not(target_os = "windows"))]
-    fn mount(&self) {}
+    fn mount_all(&self, _mount_point: PathBuf, port: Port<MountErrorCode>) {
+        self.port_sender.send(port, MountErrorCode::UnsupportedOs)
+    }
 
     #[cfg(target_os = "windows")]
-    fn mount(&self) {
+    fn mount_all(&self, mount_point: PathBuf, port: Port<MountErrorCode>) {
         let state = self.state.clone();
         let runtime = self.runtime.handle().clone();
+        let port_sender = self.port_sender;
 
         self.runtime.spawn(async move {
             use ouisync_vfs::MultiRepoVFS;
 
             // TODO: Let the user chose what the mount point is.
-            let mounter = match MultiRepoVFS::mount(runtime, "O:\\").await {
+            let mounter = match MultiRepoVFS::mount(runtime, mount_point).await {
                 Ok(mounter) => mounter,
                 Err(error) => {
                     tracing::error!("Failed to mount session: {error:?}");
+                    port_sender.send(port, error);
                     return;
                 }
             };
@@ -281,6 +310,8 @@ impl Session {
             }
 
             *(state.mounter.lock().unwrap()) = Some(mounter);
+
+            port_sender.send(port, MountErrorCode::Success);
         });
     }
 }
