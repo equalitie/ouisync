@@ -1,10 +1,11 @@
-use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
+use super::{super::MountError, EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use camino::Utf8PathBuf;
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
-    FileSystemMounter, FileTimeOperation, FillDataResult, FindData, MountOptions, OperationInfo,
-    OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
+    FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
+    MountOptions, OperationInfo, OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
 };
+use ouisync_bridge::error::{ErrorCode, ToErrorCode};
 use ouisync_lib::{deadlock::BlockingRwLock, Repository};
 use std::io;
 use std::{
@@ -49,7 +50,7 @@ impl MultiRepoVFS {
     pub async fn mount(
         runtime_handle: tokio::runtime::Handle,
         mount_point: impl AsRef<Path>,
-    ) -> Result<Self, io::Error> {
+    ) -> Result<Self, MountError> {
         let options = MountOptions {
             single_thread: false,
             flags: super::default_mount_flags(),
@@ -59,10 +60,8 @@ impl MultiRepoVFS {
         let mount_point = match U16CString::from_os_str(mount_point.as_ref().as_os_str()) {
             Ok(mount_point) => mount_point,
             Err(error) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to convert mount point to U16CString: {error:?}"),
-                ));
+                tracing::error!("Failed to convert mount point to U16CString: {error:?}");
+                return Err(MountError::FailedToParseMountPoint);
             }
         };
 
@@ -91,12 +90,8 @@ impl MultiRepoVFS {
                 let file_system = match mounter.mount() {
                     Ok(file_system) => file_system,
                     Err(error) => {
-                        on_mount_tx
-                            .send(Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("Failed to mount: {error:?}"),
-                            )))
-                            .unwrap_or(());
+                        tracing::error!("Failed to mount: {error:?}");
+                        on_mount_tx.send(Err(error)).unwrap_or(());
                         return;
                     }
                 };
@@ -120,7 +115,7 @@ impl MultiRepoVFS {
 
         // Unwrap is OK because we make sure we always send to `on_mount_tx` above.
         if let Err(error) = on_mount_rx.await.unwrap() {
-            return Err(error);
+            return Err(error.into());
         }
 
         Ok(Self {
@@ -1499,5 +1494,36 @@ fn decompose_path<'a>(path: &'a U16CStr) -> OperationResult<(Option<U16CString>,
             .map_err(|_| STATUS_INVALID_PARAMETER)?;
         let path = U16CString::from_str("\\").map_err(|_| STATUS_INVALID_PARAMETER)?;
         Ok((Some(name), path))
+    }
+}
+
+// https://github.com/dokan-dev/dokan-rust/blob/master/dokan/src/file_system.rs
+impl From<FileSystemMountError> for MountError {
+    fn from(error: FileSystemMountError) -> Self {
+        match error {
+            FileSystemMountError::Start => MountError::Start,
+            FileSystemMountError::General => MountError::General,
+            FileSystemMountError::DriveLetter => MountError::DriveLetter,
+            FileSystemMountError::DriverInstall => MountError::DriverInstall,
+            FileSystemMountError::Mount => MountError::Mount,
+            FileSystemMountError::MountPoint => MountError::MountPoint,
+            FileSystemMountError::Version => MountError::Version,
+        }
+    }
+}
+
+impl ToErrorCode for MountError {
+    fn to_error_code(&self) -> ErrorCode {
+        match self {
+            MountError::FailedToParseMountPoint => ErrorCode::VfsFailedToParseMountPoint,
+            MountError::UnsupportedOs => ErrorCode::VfsUnsupportedOs,
+            MountError::Start => ErrorCode::VfsStart,
+            MountError::General => ErrorCode::VfsGeneral,
+            MountError::DriveLetter => ErrorCode::VfsDriveLetter,
+            MountError::DriverInstall => ErrorCode::VfsDriverInstall,
+            MountError::Mount => ErrorCode::VfsMount,
+            MountError::MountPoint => ErrorCode::VfsMountPoint,
+            MountError::Version => ErrorCode::VfsVersion,
+        }
     }
 }
