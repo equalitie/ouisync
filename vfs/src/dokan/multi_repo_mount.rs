@@ -1,10 +1,11 @@
-use super::{super::MountErrorCode, EntryHandle, EntryIdGenerator, VirtualFilesystem};
+use super::{super::MountError, EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use camino::Utf8PathBuf;
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
     FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
     MountOptions, OperationInfo, OperationResult, VolumeInfo, IO_SECURITY_CONTEXT,
 };
+use ouisync_bridge::error::{ErrorCode, ToErrorCode};
 use ouisync_lib::{deadlock::BlockingRwLock, Repository};
 use std::io;
 use std::{
@@ -49,7 +50,7 @@ impl MultiRepoVFS {
     pub async fn mount(
         runtime_handle: tokio::runtime::Handle,
         mount_point: impl AsRef<Path>,
-    ) -> Result<Self, MountErrorCode> {
+    ) -> Result<Self, MountError> {
         let options = MountOptions {
             single_thread: false,
             flags: super::default_mount_flags(),
@@ -60,7 +61,7 @@ impl MultiRepoVFS {
             Ok(mount_point) => mount_point,
             Err(error) => {
                 tracing::error!("Failed to convert mount point to U16CString: {error:?}");
-                return Err(MountErrorCode::FailedToParseMountPoint);
+                return Err(MountError::FailedToParseMountPoint);
             }
         };
 
@@ -1497,16 +1498,32 @@ fn decompose_path<'a>(path: &'a U16CStr) -> OperationResult<(Option<U16CString>,
 }
 
 // https://github.com/dokan-dev/dokan-rust/blob/master/dokan/src/file_system.rs
-impl From<FileSystemMountError> for MountErrorCode {
+impl From<FileSystemMountError> for MountError {
     fn from(error: FileSystemMountError) -> Self {
         match error {
-            FileSystemMountError::Start => MountErrorCode::Start,
-            FileSystemMountError::General => MountErrorCode::General,
-            FileSystemMountError::DriveLetter => MountErrorCode::DriveLetter,
-            FileSystemMountError::DriverInstall => MountErrorCode::DriverInstall,
-            FileSystemMountError::Mount => MountErrorCode::Mount,
-            FileSystemMountError::MountPoint => MountErrorCode::MountPoint,
-            FileSystemMountError::Version => MountErrorCode::Version,
+            FileSystemMountError::Start => MountError::Start,
+            FileSystemMountError::General => MountError::General,
+            FileSystemMountError::DriveLetter => MountError::DriveLetter,
+            FileSystemMountError::DriverInstall => MountError::DriverInstall,
+            FileSystemMountError::Mount => MountError::Mount,
+            FileSystemMountError::MountPoint => MountError::MountPoint,
+            FileSystemMountError::Version => MountError::Version,
+        }
+    }
+}
+
+impl ToErrorCode for MountError {
+    fn to_error_code(&self) -> ErrorCode {
+        match self {
+            MountError::FailedToParseMountPoint => ErrorCode::VfsFailedToParseMountPoint,
+            MountError::UnsupportedOs => ErrorCode::VfsUnsupportedOs,
+            MountError::Start => ErrorCode::VfsStart,
+            MountError::General => ErrorCode::VfsGeneral,
+            MountError::DriveLetter => ErrorCode::VfsDriveLetter,
+            MountError::DriverInstall => ErrorCode::VfsDriverInstall,
+            MountError::Mount => ErrorCode::VfsMount,
+            MountError::MountPoint => ErrorCode::VfsMountPoint,
+            MountError::Version => ErrorCode::VfsVersion,
         }
     }
 }

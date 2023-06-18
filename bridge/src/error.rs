@@ -31,8 +31,12 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
-impl Error {
-    pub fn to_error_code(&self) -> ErrorCode {
+pub trait ToErrorCode {
+    fn to_error_code(&self) -> ErrorCode;
+}
+
+impl ToErrorCode for Error {
+    fn to_error_code(&self) -> ErrorCode {
         match self {
             Self::Library(error) => {
                 use ouisync_lib::Error::*;
@@ -101,6 +105,33 @@ pub enum ErrorCode {
     ConnectionLost = 14,
     /// Request is forbidden
     ForbiddenRequest = 15,
+
+    /// Failed to parse the mount point string
+    VfsFailedToParseMountPoint = 2048,
+
+    /// Mounting is not yes supported on this Operating System
+    VfsUnsupportedOs = 2048 + 1,
+
+    // These are equivalents of the dokan::file_system::FileSystemMountError errors
+    // https://github.com/dokan-dev/dokan-rust/blob/master/dokan/src/file_system.rs
+    /// A general error
+    VfsGeneral = 2048 + 3,
+    /// Bad drive letter
+    VfsDriveLetter = 2048 + 4,
+    /// Can't install the Dokan driver.
+    VfsDriverInstall = 2048 + 5,
+    /// The driver responds that something is wrong.
+    VfsStart = 2048 + 2,
+    /// Can't assign a drive letter or mount point.
+    ///
+    /// This probably means that the mount point is already used by another volume.
+    VfsMount = 2048 + 6,
+    /// The mount point is invalid.
+    VfsMountPoint = 2048 + 7,
+    /// The Dokan version that this wrapper is targeting is incompatible with the loaded Dokan
+    /// library.
+    VfsVersion = 2048 + 8,
+
     /// Unspecified error
     Other = 65535,
 }

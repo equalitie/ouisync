@@ -4,9 +4,8 @@
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
 use bytes::Bytes;
-use ouisync_bridge::error::{ErrorCode, Result};
-use ouisync_vfs::MountErrorCode;
-use std::{ffi::CString, marker::PhantomData, mem, os::raw::c_char};
+use ouisync_bridge::error::{ErrorCode, ToErrorCode};
+use std::{ffi::CString, marker::PhantomData, mem, os::raw::c_char, result::Result};
 
 #[repr(C)]
 pub(crate) struct DartCObject {
@@ -91,12 +90,6 @@ impl From<String> for DartCObject {
 impl From<ErrorCode> for DartCObject {
     fn from(value: ErrorCode) -> Self {
         Self::from(value as u32)
-    }
-}
-
-impl From<MountErrorCode> for DartCObject {
-    fn from(value: MountErrorCode) -> Self {
-        Self::from(value as u16)
     }
 }
 
@@ -266,9 +259,10 @@ impl PortSender {
         self.send_raw(port.into(), &mut value.into())
     }
 
-    pub fn send_result<T>(&self, port: Port<Result<T>>, value: Result<T>)
+    pub fn send_result<T, E>(&self, port: Port<Result<T, E>>, value: Result<T, E>)
     where
         T: Into<DartCObject>,
+        E: ToErrorCode + std::error::Error,
     {
         let port = port.into();
 

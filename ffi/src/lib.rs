@@ -26,11 +26,11 @@ use crate::{
 use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
-    error::{Error, ErrorCode, Result},
+    error::{Error, ErrorCode, Result, ToErrorCode},
     logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
-use ouisync_vfs::MountErrorCode;
+use ouisync_vfs::MountError;
 #[cfg(unix)]
 use std::os::raw::c_int;
 use std::{
@@ -123,7 +123,7 @@ pub unsafe extern "C" fn session_destroy(session: SessionHandle) {
 pub unsafe extern "C" fn session_mount_all(
     session: SessionHandle,
     mount_point: *const c_char,
-    port: Port<MountErrorCode>,
+    port: Port<Result<(), MountError>>,
 ) {
     let session = session.get();
 
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn session_mount_all(
         Err(error) => {
             session
                 .port_sender
-                .send(port, MountErrorCode::FailedToParseMountPoint);
+                .send_result(port, Err(MountError::FailedToParseMountPoint));
             return;
         }
     };
@@ -272,12 +272,13 @@ impl Session {
 
     // TODO: Linux, OSX
     #[cfg(not(target_os = "windows"))]
-    fn mount_all(&self, _mount_point: PathBuf, port: Port<MountErrorCode>) {
-        self.port_sender.send(port, MountErrorCode::UnsupportedOs)
+    fn mount_all(&self, _mount_point: PathBuf, port: Port<Result<(), MountError>>) {
+        self.port_sender
+            .send_result(port, Err(MountError::UnsupportedOs))
     }
 
     #[cfg(target_os = "windows")]
-    fn mount_all(&self, mount_point: PathBuf, port: Port<MountErrorCode>) {
+    fn mount_all(&self, mount_point: PathBuf, port: Port<Result<(), MountError>>) {
         let state = self.state.clone();
         let runtime = self.runtime.handle().clone();
         let port_sender = self.port_sender;
@@ -290,7 +291,7 @@ impl Session {
                 Ok(mounter) => mounter,
                 Err(error) => {
                     tracing::error!("Failed to mount session: {error:?}");
-                    port_sender.send(port, error);
+                    port_sender.send_result(port, Err(error));
                     return;
                 }
             };
@@ -311,7 +312,7 @@ impl Session {
 
             *(state.mounter.lock().unwrap()) = Some(mounter);
 
-            port_sender.send(port, MountErrorCode::Success);
+            port_sender.send_result(port, Ok(()));
         });
     }
 }
