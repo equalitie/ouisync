@@ -1,4 +1,9 @@
-use std::io;
+use os_pipe::PipeWriter;
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+    thread,
+};
 use tracing_subscriber::{
     filter::{LevelFilter, Targets},
     fmt,
@@ -7,10 +12,14 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 
-pub struct Logger;
+use super::redirect::Redirect;
+
+pub struct Logger {
+    _capture: Option<Capture>,
+}
 
 impl Logger {
-    pub(crate) fn new() -> Result<Self, io::Error> {
+    pub(crate) fn new(log_path: Option<PathBuf>) -> Result<Self, io::Error> {
         // Disable colors in output on Windows as `cmd` doesn't seem to support it.
         #[cfg(target_os = "windows")]
         let colors = false;
@@ -48,6 +57,69 @@ impl Logger {
             // `Err` here just means the logger is already initialized, it's OK to ignore it.
             .unwrap_or(());
 
-        Ok(Self)
+        // Capture output to the log file
+        let capture = log_path.map(|path| Capture::new(&path)).transpose()?;
+
+        Ok(Self { _capture: capture })
+    }
+}
+
+/// Capture output (stdout and stderr) into the log file.
+struct Capture {
+    _stdout: Redirect<io::Stdout, PipeWriter>,
+    _stderr: Redirect<io::Stderr, PipeWriter>,
+}
+
+impl Capture {
+    fn new(path: &Path) -> io::Result<Self> {
+        let rotate = super::create_rotate(path)?;
+
+        // Print both to stdout/stderr and to log file:
+
+        // Stdout
+        let (mut reader, writer) = os_pipe::pipe()?;
+        let stdout = Redirect::new(io::stdout(), writer)?;
+        let stdout_orig = stdout.orig()?;
+
+        thread::spawn(move || {
+            io::copy(&mut reader, &mut FanOut(stdout_orig, rotate)).ok();
+        });
+
+        // Stderr
+        let (mut reader, writer) = os_pipe::pipe()?;
+        let stderr = Redirect::new(io::stderr(), writer)?;
+        let stderr_orig = stderr.orig()?;
+
+        thread::spawn(move || {
+            io::copy(&mut reader, &mut FanOut(stderr_orig, io::stdout())).ok();
+        });
+
+        Ok(Self {
+            _stdout: stdout,
+            _stderr: stderr,
+        })
+    }
+}
+
+/// Writer that clones written data into two writers.
+struct FanOut<A, B>(pub A, pub B);
+
+impl<A, B> Write for FanOut<A, B>
+where
+    A: Write,
+    B: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let len = self.0.write(buf)?;
+        self.1.write_all(&buf[..len])?;
+
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()?;
+        self.1.flush()?;
+
+        Ok(())
     }
 }

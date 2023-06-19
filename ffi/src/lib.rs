@@ -83,6 +83,7 @@ impl From<Result<Session>> for SessionCreateResult {
 pub unsafe extern "C" fn session_create(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
+    log_path: *const c_char,
     server_tx_port: Port<Bytes>,
 ) -> SessionCreateResult {
     let port_sender = PortSender::new(mem::transmute(post_c_object_fn));
@@ -92,8 +93,13 @@ pub unsafe extern "C" fn session_create(
         Err(error) => return Err(error).into(),
     };
 
+    let log_path = match utils::ptr_to_maybe_str(log_path) {
+        Ok(log_path) => log_path.map(PathBuf::from),
+        Err(error) => return Err(error).into(),
+    };
+
     let (server, client_tx) = Server::new(port_sender, server_tx_port);
-    let result = Session::create(configs_path, port_sender, client_tx);
+    let result = Session::create(configs_path, log_path, port_sender, client_tx);
 
     if let Ok(session) = &result {
         session
@@ -243,13 +249,14 @@ pub struct Session {
 impl Session {
     pub(crate) fn create(
         configs_path: PathBuf,
+        log_path: Option<PathBuf>,
         port_sender: PortSender,
         client_sender: ClientSender,
     ) -> Result<Self> {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = logger::new(Some(root_monitor.clone()))?;
+        let logger = logger::new(log_path, Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()

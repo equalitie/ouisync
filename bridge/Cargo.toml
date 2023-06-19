@@ -13,9 +13,11 @@ version.workspace = true
 async-trait = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
+file-rotate = "0.7.5"
 futures-util = { workspace = true }
 indexmap = "1.9.3"
 num_enum = { workspace = true }
+os_pipe = { version = "1.1.4", features = ["io_safety"] }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 rand = { workspace = true }
 rmp-serde = { workspace = true }
@@ -29,16 +31,20 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webpki-roots = "0.22.6"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.126"
+
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-sys = "0.3.0"
-libc = "0.2.126"
 log = "0.4.17"
 once_cell = { workspace = true }
-os_pipe = "0.9.2"
 paranoid-android = "0.2.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["minwindef", "processenv", "winbase"] }
 
 [dev-dependencies]
 rcgen = { workspace = true }

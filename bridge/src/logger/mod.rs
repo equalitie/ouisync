@@ -2,6 +2,7 @@
 mod android;
 #[cfg(not(target_os = "android"))]
 mod default;
+mod redirect;
 
 #[cfg(target_os = "android")]
 pub use self::android::Logger;
@@ -10,11 +11,15 @@ pub use self::android::Logger;
 pub use self::default::Logger;
 
 use crate::error::{Error, Result};
+use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use ouisync_lib::StateMonitor;
-use std::panic;
+use std::{
+    fs, io, panic,
+    path::{Path, PathBuf},
+};
 
-pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
-    let logger = Logger::new().map_err(Error::InitializeLogger)?;
+pub fn new(log_path: Option<PathBuf>, root_monitor: Option<StateMonitor>) -> Result<Logger> {
+    let logger = Logger::new(log_path).map_err(Error::InitializeLogger)?;
 
     // Setup panic counter
     if let Some(root_monitor) = root_monitor {
@@ -32,4 +37,19 @@ pub fn new(root_monitor: Option<StateMonitor>) -> Result<Logger> {
     }
 
     Ok(logger)
+}
+
+fn create_rotate(path: &Path) -> io::Result<FileRotate<AppendCount>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    Ok(FileRotate::new(
+        path,
+        AppendCount::new(1),
+        ContentLimit::BytesSurpassed(10 * 1024 * 1024),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    ))
 }
