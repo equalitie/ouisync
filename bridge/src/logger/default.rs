@@ -1,7 +1,7 @@
 use os_pipe::PipeWriter;
 use std::{
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     thread,
 };
 use tracing_subscriber::{
@@ -14,10 +14,12 @@ use tracing_subscriber::{
 
 use super::redirect::Redirect;
 
-pub struct Logger;
+pub struct Logger {
+    _capture: Option<Capture>,
+}
 
 impl Logger {
-    pub(crate) fn new() -> Result<Self, io::Error> {
+    pub(crate) fn new(log_path: Option<PathBuf>) -> Result<Self, io::Error> {
         // Disable colors in output on Windows as `cmd` doesn't seem to support it.
         #[cfg(target_os = "windows")]
         let colors = false;
@@ -55,18 +57,21 @@ impl Logger {
             // `Err` here just means the logger is already initialized, it's OK to ignore it.
             .unwrap_or(());
 
-        Ok(Self)
+        // Capture output to the log file
+        let capture = log_path.map(|path| Capture::new(&path)).transpose()?;
+
+        Ok(Self { _capture: capture })
     }
 }
 
 /// Capture output (stdout and stderr) into the log file.
-pub struct Capture {
+struct Capture {
     _stdout: Redirect<io::Stdout, PipeWriter>,
     _stderr: Redirect<io::Stderr, PipeWriter>,
 }
 
 impl Capture {
-    pub fn new(path: &Path) -> io::Result<Self> {
+    fn new(path: &Path) -> io::Result<Self> {
         let rotate = super::create_rotate(path)?;
 
         // Print both to stdout/stderr and to log file:

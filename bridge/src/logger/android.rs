@@ -12,7 +12,7 @@ use std::{
     io::{self, BufRead, BufReader, Stderr, Stdout},
     os::raw,
     panic::{self, PanicInfo},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
 };
@@ -25,29 +25,34 @@ const TAG: &str = "flutter-ouisync";
 pub struct Logger {
     _stdout: Redirect<Stdout, PipeWriter>,
     _stderr: Redirect<Stderr, PipeWriter>,
+    _capture: Option<Capture>,
 }
 
 impl Logger {
-    pub(crate) fn new() -> Result<Self, io::Error> {
+    pub(crate) fn new(log_path: Option<PathBuf>) -> Result<Self, io::Error> {
         let stdout = redirect(io::stdout(), ANDROID_LOG_DEBUG)?;
         let stderr = redirect(io::stderr(), ANDROID_LOG_ERROR)?;
 
         panic::set_hook(Box::new(panic_hook));
         setup_logger();
 
+        // Capture logcat to the log file
+        let capture = log_path.map(|path| Capture::new(&path)).transpose()?;
+
         Ok(Self {
             _stdout: stdout,
             _stderr: stderr,
+            _capture: capture,
         })
     }
 }
 
-pub struct Capture {
+struct Capture {
     process: Child,
 }
 
 impl Capture {
-    pub fn new(path: &Path) -> io::Result<Self> {
+    fn new(path: &Path) -> io::Result<Self> {
         let mut rotate = super::create_rotate(path)?;
 
         let mut command = Command::new("logcat");

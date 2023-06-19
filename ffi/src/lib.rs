@@ -27,7 +27,7 @@ use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result, ToErrorCode},
-    logger::{self, Capture, Logger},
+    logger::{self, Logger},
 };
 use ouisync_lib::StateMonitor;
 use ouisync_vfs::MountError;
@@ -244,7 +244,6 @@ pub struct Session {
     client_sender: ClientSender,
     pub(crate) port_sender: PortSender,
     _logger: Logger,
-    _capture: Option<Capture>,
 }
 
 impl Session {
@@ -257,17 +256,7 @@ impl Session {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = logger::new(Some(root_monitor.clone()))?;
-
-        // Capture output to the log file
-        let capture = log_path.and_then(|path| {
-            Capture::new(&path)
-                .map_err(|error| {
-                    tracing::error!(?error, "failed to capture output");
-                    error
-                })
-                .ok()
-        });
+        let logger = logger::new(log_path, Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()
@@ -283,7 +272,6 @@ impl Session {
             client_sender,
             port_sender,
             _logger: logger,
-            _capture: capture,
         };
 
         Ok(session)
