@@ -72,26 +72,41 @@ struct Capture {
 
 impl Capture {
     fn new(path: &Path) -> io::Result<Self> {
-        let rotate = super::create_rotate(path)?;
+        // Log file
+        let mut log_file = super::create_rotate(path)?;
 
-        // Print both to stdout/stderr and to log file:
+        // Multiplex stdout and stderr to the log file via pipes.
+        let (mut log_reader, log_writer_stdout) = os_pipe::pipe()?;
+        let log_writer_stderr = log_writer_stdout.try_clone()?;
 
-        // Stdout
-        let (mut reader, writer) = os_pipe::pipe()?;
-        let stdout = Redirect::new(io::stdout(), writer)?;
+        thread::spawn(move || {
+            io::copy(&mut log_reader, &mut log_file).ok();
+        });
+
+        // Redirect stdout and demultiplex it to the original stdout and to the log file.
+        let (mut stdout_reader, stdout_writer) = os_pipe::pipe()?;
+        let stdout = Redirect::new(io::stdout(), stdout_writer)?;
         let stdout_orig = stdout.orig()?;
 
         thread::spawn(move || {
-            io::copy(&mut reader, &mut FanOut(stdout_orig, rotate)).ok();
+            io::copy(
+                &mut stdout_reader,
+                &mut Demux(stdout_orig, log_writer_stdout),
+            )
+            .ok();
         });
 
-        // Stderr
-        let (mut reader, writer) = os_pipe::pipe()?;
-        let stderr = Redirect::new(io::stderr(), writer)?;
+        // Redirect stderr and demultiplex it to the original stderr and to the log file.
+        let (mut stderr_reader, stderr_writer) = os_pipe::pipe()?;
+        let stderr = Redirect::new(io::stderr(), stderr_writer)?;
         let stderr_orig = stderr.orig()?;
 
         thread::spawn(move || {
-            io::copy(&mut reader, &mut FanOut(stderr_orig, io::stdout())).ok();
+            io::copy(
+                &mut stderr_reader,
+                &mut Demux(stderr_orig, log_writer_stderr),
+            )
+            .ok();
         });
 
         Ok(Self {
@@ -101,10 +116,10 @@ impl Capture {
     }
 }
 
-/// Writer that clones written data into two writers.
-struct FanOut<A, B>(pub A, pub B);
+/// Writer that demultiplexes written data into two writers.
+struct Demux<A, B>(pub A, pub B);
 
-impl<A, B> Write for FanOut<A, B>
+impl<A, B> Write for Demux<A, B>
 where
     A: Write,
     B: Write,
