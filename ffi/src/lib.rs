@@ -129,7 +129,7 @@ pub unsafe extern "C" fn session_mount_all(
 
     let mount_point = match utils::ptr_to_str(mount_point) {
         Ok(mount_point) => PathBuf::from(mount_point),
-        Err(error) => {
+        Err(_error) => {
             session
                 .port_sender
                 .send_result(port, Err(MountError::FailedToParseMountPoint));

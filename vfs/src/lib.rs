@@ -19,6 +19,7 @@ pub use fuse::{mount, MountGuard};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use dummy_multi_repo_mount::MultiRepoVFS;
 
+use ouisync_bridge::error::{ErrorCode, ToErrorCode};
 use thiserror::Error;
 
 #[derive(Copy, Clone, Debug, Error)]
@@ -41,4 +42,20 @@ pub enum MountError {
     MountPoint,
     #[error("The Dokan version that this wrapper is targeting is incompatible with the loaded Dokan library")]
     Version,
+}
+
+impl ToErrorCode for MountError {
+    fn to_error_code(&self) -> ErrorCode {
+        match self {
+            MountError::FailedToParseMountPoint => ErrorCode::VfsFailedToParseMountPoint,
+            MountError::UnsupportedOs => ErrorCode::VfsUnsupportedOs,
+            MountError::Start => ErrorCode::VfsStart,
+            MountError::General => ErrorCode::VfsGeneral,
+            MountError::DriveLetter => ErrorCode::VfsDriveLetter,
+            MountError::DriverInstall => ErrorCode::VfsDriverInstall,
+            MountError::Mount => ErrorCode::VfsMount,
+            MountError::MountPoint => ErrorCode::VfsMountPoint,
+            MountError::Version => ErrorCode::VfsVersion,
+        }
+    }
 }
