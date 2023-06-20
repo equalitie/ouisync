@@ -27,7 +27,7 @@ use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result, ToErrorCode},
-    logger::{self, Logger},
+    logger::Logger,
 };
 use ouisync_lib::StateMonitor;
 use ouisync_vfs::MountError;
@@ -238,6 +238,53 @@ pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
     let _ = CString::from_raw(ptr);
 }
 
+/// Print log message
+///
+/// # Safety
+///
+/// `message_ptr` must be a pointer to a nul-terminated utf-8 encoded string
+#[no_mangle]
+pub unsafe extern "C" fn log_print(
+    level: u8,
+    scope_ptr: *const c_char,
+    message_ptr: *const c_char,
+) {
+    let scope = match utils::ptr_to_str(scope_ptr) {
+        Ok(scope) => scope,
+        Err(error) => {
+            tracing::error!(?error, "invalid log scope string");
+            return;
+        }
+    };
+
+    let _enter = tracing::info_span!("app", scope).entered();
+
+    let message = match utils::ptr_to_str(message_ptr) {
+        Ok(message) => message,
+        Err(error) => {
+            tracing::error!(?error, "invalid log message string");
+            return;
+        }
+    };
+
+    match level {
+        LOG_LEVEL_ERROR => tracing::error!("{}", message),
+        LOG_LEVEL_WARN => tracing::warn!("{}", message),
+        LOG_LEVEL_INFO => tracing::info!("{}", message),
+        LOG_LEVEL_DEBUG => tracing::debug!("{}", message),
+        LOG_LEVEL_TRACE => tracing::trace!("{}", message),
+        _ => {
+            tracing::error!(level, "invalid log level");
+        }
+    }
+}
+
+pub const LOG_LEVEL_ERROR: u8 = 1;
+pub const LOG_LEVEL_WARN: u8 = 2;
+pub const LOG_LEVEL_INFO: u8 = 3;
+pub const LOG_LEVEL_DEBUG: u8 = 4;
+pub const LOG_LEVEL_TRACE: u8 = 5;
+
 pub struct Session {
     pub(crate) runtime: Runtime,
     pub(crate) state: Arc<State>,
@@ -256,7 +303,7 @@ impl Session {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = logger::new(log_path, Some(root_monitor.clone()))?;
+        let logger = Logger::new(log_path.as_deref(), Some(root_monitor.clone()))?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()
