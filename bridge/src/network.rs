@@ -1,10 +1,10 @@
 use crate::{
     config::{ConfigKey, ConfigStore},
-    error::Result,
+    error::{Error, Result},
 };
 use ouisync_lib::network::{peer_addr::PeerAddr, Network};
 use serde::{Deserialize, Serialize};
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, num::ParseIntError};
 use tokio::net;
 
 const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
@@ -46,6 +46,8 @@ const LAST_USED_UDP_PORT_COMMENT: &str =
      connections. It is used to avoid binding to a random port every time the application starts.\n\
      This, in turn, is mainly useful for users who can't or don't want to use UPnP and have to\n\
      default to manually setting up port forwarding on their routers.";
+
+pub const DEFAULT_STORAGE_SERVER_PORT: u16 = 20209;
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkDefaults {
@@ -165,7 +167,13 @@ pub async fn remove_user_provided_peers(
 ///
 /// NOTE: Currently this is not persisted.
 pub async fn add_storage_server(network: &Network, host: &str) -> Result<()> {
-    let addrs = net::lookup_host(host)
+    let (hostname, port) = split_port(host).map_err(|_| {
+        tracing::error!(host, "invalid storage server host");
+        Error::InvalidArgument
+    })?;
+    let port = port.unwrap_or(DEFAULT_STORAGE_SERVER_PORT);
+
+    let addrs = net::lookup_host((hostname, port))
         .await
         .map(|addrs| addrs.peekable())
         .and_then(|mut addrs| {
@@ -182,6 +190,7 @@ pub async fn add_storage_server(network: &Network, host: &str) -> Result<()> {
 
     for addr in addrs {
         network.add_user_provided_peer(&PeerAddr::Quic(addr));
+        tracing::info!(host, %addr, "storage server added");
     }
 
     Ok(())
@@ -291,6 +300,15 @@ impl LastUsedPorts {
         }) {
             self.tcp_v6 = port;
         }
+    }
+}
+
+fn split_port(s: &str) -> Result<(&str, Option<u16>), ParseIntError> {
+    if let Some(index) = s.rfind(':') {
+        let port = s[index..].parse()?;
+        Ok((&s[..index], Some(port)))
+    } else {
+        Ok((s, None))
     }
 }
 

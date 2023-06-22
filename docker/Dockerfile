@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM scratch as runtime
 
 EXPOSE 443/tcp
-EXPOSE 2000/tcp 2000/udp
+EXPOSE 20209/tcp 20209/udp
 
 ENV PATH=/                       \
     OUISYNC_CONFIG_DIR=/config   \
@@ -23,7 +23,7 @@ ENV PATH=/                       \
 
 COPY --from=builder /usr/bin/ouisync /
 
-RUN ["ouisync", "bind", "quic/0.0.0.0:2000", "quic/[::]:2000", "tcp/[::]:2000"]
+RUN ["ouisync", "bind", "quic/0.0.0.0:20209", "quic/[::]:20209", "tcp/[::]:20209"]
 
 ENTRYPOINT ["ouisync"]
 CMD ["start"]

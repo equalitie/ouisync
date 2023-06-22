@@ -229,8 +229,17 @@ pub async fn mirror(
         let client_config = client_config.clone();
         let share_token = share_token.clone();
 
+        // Stip port, if any.
+        let host = strip_port(host);
+
         async move {
-            let client = RemoteClient::connect(host, client_config).await?;
+            let client = RemoteClient::connect(host, client_config)
+                .await
+                .map_err(|error| {
+                    tracing::error!(host, ?error, "failed to connect to the storage server");
+                    error
+                })?;
+
             let request = Request::Mirror {
                 share_token: share_token.into(),
             };
@@ -254,5 +263,13 @@ pub async fn mirror(
         Ok(())
     } else {
         results.into_iter().next().unwrap_or(Ok(()))
+    }
+}
+
+fn strip_port(s: &str) -> &str {
+    if let Some(index) = s.rfind(':') {
+        &s[..index]
+    } else {
+        s
     }
 }
