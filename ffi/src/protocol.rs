@@ -80,7 +80,6 @@ pub(crate) enum Request {
     RepositorySyncProgress(Handle<RepositoryHolder>),
     RepositoryMirror {
         repository: Handle<RepositoryHolder>,
-        host: String,
     },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
@@ -155,6 +154,7 @@ pub(crate) enum Request {
     NetworkSetPortForwardingEnabled(bool),
     NetworkIsLocalDiscoveryEnabled,
     NetworkSetLocalDiscoveryEnabled(bool),
+    NetworkAddStorageServer(String),
     NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),

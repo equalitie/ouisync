@@ -12,7 +12,11 @@ use ouisync_lib::{
 };
 use ouisync_vfs::MultiRepoVFS;
 use scoped_task::ScopedJoinHandle;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+    sync::Arc,
+};
 
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
@@ -22,6 +26,7 @@ pub(crate) struct State {
     repositories: Registry<RepositoryHolder>,
     pub files: Registry<FileHolder>,
     pub tasks: Registry<ScopedJoinHandle<()>>,
+    pub storage_servers: BlockingMutex<BTreeSet<String>>,
     pub remote_client_config: OnceCell<ClientConfig>,
     pub mounter: BlockingMutex<Option<MultiRepoVFS>>,
 }
@@ -45,6 +50,7 @@ impl State {
             repositories: Registry::new(),
             files: Registry::new(),
             tasks: Registry::new(),
+            storage_servers: BlockingMutex::new(BTreeSet::new()),
             remote_client_config: OnceCell::new(),
             mounter: BlockingMutex::new(None),
         }

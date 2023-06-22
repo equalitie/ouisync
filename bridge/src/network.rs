@@ -1,7 +1,11 @@
-use crate::config::{ConfigKey, ConfigStore};
+use crate::{
+    config::{ConfigKey, ConfigStore},
+    error::Result,
+};
 use ouisync_lib::network::{peer_addr::PeerAddr, Network};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{io, net::SocketAddr};
+use tokio::net;
 
 const BIND_KEY: ConfigKey<Vec<PeerAddr>> =
     ConfigKey::new("bind", "Addresses to bind the network listeners to");
@@ -154,6 +158,33 @@ pub async fn remove_user_provided_peers(
     for peer in peers {
         network.remove_user_provided_peer(peer);
     }
+}
+
+/// Add a storage server. This adds it as a user provided peers so we can immediatelly connect to
+/// it and don't have to wait for it to be discovered (e.g. on the DHT).
+///
+/// NOTE: Currently this is not persisted.
+pub async fn add_storage_server(network: &Network, host: &str) -> Result<()> {
+    let addrs = net::lookup_host(host)
+        .await
+        .map(|addrs| addrs.peekable())
+        .and_then(|mut addrs| {
+            if addrs.peek().is_some() {
+                Ok(addrs)
+            } else {
+                Err(io::Error::new(io::ErrorKind::Other, "no DNS records found"))
+            }
+        })
+        .map_err(|error| {
+            tracing::error!(host, ?error, "failed to lookup storage server host");
+            error
+        })?;
+
+    for addr in addrs {
+        network.add_user_provided_peer(&PeerAddr::Quic(addr));
+    }
+
+    Ok(())
 }
 
 /// Utility to help reuse bind ports across network restarts.
