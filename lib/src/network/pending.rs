@@ -70,7 +70,9 @@ pub(super) enum PendingResponse {
     Block {
         data: BlockData,
         nonce: BlockNonce,
-        block_promise: BlockPromise,
+        // This will be `None` if the request timeouted but we still received the response
+        // afterwards.
+        block_promise: Option<BlockPromise>,
         permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
@@ -173,9 +175,7 @@ impl PendingRequests {
                                 nonce,
                                 permit,
                                 debug,
-                                // unwrap is ok because `block_promise` is always set for block
-                                // requests.
-                                block_promise: request_data.block_promise.unwrap(),
+                                block_promise: request_data.block_promise,
                             }
                         }
                     };

@@ -201,7 +201,7 @@ pub(crate) async fn receive_blocks(store: &Store, snapshot: &Snapshot) {
         let promise = acceptor.try_accept().unwrap();
 
         store
-            .write_received_block(&block.data, &block.nonce, promise)
+            .write_received_block(&block.data, &block.nonce, Some(promise))
             .await
             .unwrap();
     }

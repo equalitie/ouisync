@@ -64,7 +64,7 @@ impl Store {
         &self,
         data: &BlockData,
         nonce: &BlockNonce,
-        promise: BlockPromise,
+        promise: Option<BlockPromise>,
     ) -> Result<()> {
         let mut tx = self.db().begin_write().await?;
 
@@ -73,7 +73,9 @@ impl Store {
             Err(error) => {
                 if matches!(error, Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
-                    promise.complete();
+                    if let Some(promise) = promise {
+                        promise.complete();
+                    }
                 }
 
                 return Err(error);
@@ -94,7 +96,9 @@ impl Store {
                 });
             }
 
-            promise.complete();
+            if let Some(promise) = promise {
+                promise.complete();
+            }
         })
         .await?;
 
@@ -473,7 +477,7 @@ mod tests {
 
             assert_matches!(
                 store
-                    .write_received_block(&block.data, &block.nonce, promise)
+                    .write_received_block(&block.data, &block.nonce, Some(promise))
                     .await,
                 Err(Error::BlockNotReferenced)
             );

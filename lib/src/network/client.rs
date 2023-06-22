@@ -335,7 +335,7 @@ impl Client {
         &self,
         data: BlockData,
         nonce: BlockNonce,
-        block_promise: BlockPromise,
+        block_promise: Option<BlockPromise>,
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         match self
