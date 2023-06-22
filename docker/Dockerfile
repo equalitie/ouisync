@@ -24,7 +24,6 @@ ENV PATH=/                       \
 COPY --from=builder /usr/bin/ouisync /
 
 RUN ["ouisync", "bind", "quic/0.0.0.0:2000", "quic/[::]:2000", "tcp/[::]:2000"]
-RUN ["ouisync", "bind-rpc", "--delay", "[::]:443"]
 
 ENTRYPOINT ["ouisync"]
 CMD ["start"]

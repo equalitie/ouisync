@@ -93,19 +93,13 @@ impl ServerContainer {
         &self,
         state: Arc<State>,
         addrs: &[SocketAddr],
-        delay_start: bool,
     ) -> Result<Vec<SocketAddr>, Error> {
         let entry = state.config.entry(BIND_RPC_KEY);
 
-        if delay_start {
-            entry.set(addrs).await?;
-            Ok(Vec::new())
-        } else {
-            let (handles, addrs) = start(state, addrs).await?;
-            *self.handles.lock().unwrap() = handles;
-            entry.set(&addrs).await?;
-            Ok(addrs)
-        }
+        let (handles, addrs) = start(state, addrs).await?;
+        *self.handles.lock().unwrap() = handles;
+        entry.set(&addrs).await?;
+        Ok(addrs)
     }
 
     pub fn close(&self) {
