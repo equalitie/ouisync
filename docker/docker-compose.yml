@@ -6,8 +6,8 @@ services:
     container_name: ouisync
     ports:
       - "443:443/tcp"
-      - "2000:2000/tcp"
-      - "2000:2000/udp"
+      - "20209:20209/tcp"
+      - "20209:20209/udp"
     volumes:
       - "config:/config"
       - "store:/store"
