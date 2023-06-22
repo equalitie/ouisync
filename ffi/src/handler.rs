@@ -150,10 +150,8 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
-            Request::RepositoryMirror { repository, host } => {
-                repository::mirror(&self.state, repository, host)
-                    .await?
-                    .into()
+            Request::RepositoryMirror { repository } => {
+                repository::mirror(&self.state, repository).await?.into()
             }
             Request::ShareTokenMode(token) => share_token::mode(token).into(),
             Request::ShareTokenInfoHash(token) => share_token::info_hash(token).into(),
@@ -311,6 +309,11 @@ impl ouisync_bridge::transport::Handler for Handler {
                     enabled,
                 )
                 .await;
+                ().into()
+            }
+            Request::NetworkAddStorageServer(host) => {
+                ouisync_bridge::network::add_storage_server(&self.state.network, &host).await?;
+                self.state.storage_servers.lock().unwrap().insert(host);
                 ().into()
             }
             Request::NetworkShutdown => {

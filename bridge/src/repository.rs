@@ -2,8 +2,11 @@ use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
     device_id,
     error::Result,
+    protocol::remote::{Request, Response},
+    transport::{ClientConfig, RemoteClient},
 };
 use camino::Utf8PathBuf;
+use futures_util::future;
 use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
     RepositoryParams, ShareToken, StateMonitor, StorageSize,
@@ -211,5 +214,62 @@ pub async fn get_default_quota(config: &ConfigStore) -> Result<Option<StorageSiz
         Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
         Err(ConfigError::NotFound) => Ok(None),
         Err(error) => Err(error.into()),
+    }
+}
+
+/// Mirror the repository to the storage servers
+pub async fn mirror(
+    repository: &Repository,
+    client_config: ClientConfig,
+    hosts: &[String],
+) -> Result<()> {
+    let share_token = repository.secrets().with_mode(AccessMode::Blind);
+
+    let tasks = hosts.iter().map(|host| {
+        let client_config = client_config.clone();
+        let share_token = share_token.clone();
+
+        // Stip port, if any.
+        let host = strip_port(host);
+
+        async move {
+            let client = RemoteClient::connect(host, client_config)
+                .await
+                .map_err(|error| {
+                    tracing::error!(host, ?error, "failed to connect to the storage server");
+                    error
+                })?;
+
+            let request = Request::Mirror {
+                share_token: share_token.into(),
+            };
+
+            match client.invoke(request).await {
+                Ok(Response::None) => {
+                    tracing::info!(host, "mirror request successfull");
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!(host, ?error, "mirror request failed");
+                    Err(error)
+                }
+            }
+        }
+    });
+
+    let results = future::join_all(tasks).await;
+
+    if results.iter().any(|result| result.is_ok()) {
+        Ok(())
+    } else {
+        results.into_iter().next().unwrap_or(Ok(()))
+    }
+}
+
+fn strip_port(s: &str) -> &str {
+    if let Some(index) = s.rfind(':') {
+        &s[..index]
+    } else {
+        s
     }
 }

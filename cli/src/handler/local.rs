@@ -41,10 +41,10 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
 
         match request {
             Request::Start => Err(Error::ForbiddenRequest),
-            Request::BindRpc { addrs, delay } => Ok(self
+            Request::BindRpc { addrs } => Ok(self
                 .state
                 .servers
-                .set(self.state.clone(), &addrs, delay)
+                .set(self.state.clone(), &addrs)
                 .await?
                 .into()),
             Request::Create {

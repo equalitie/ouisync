@@ -6,12 +6,9 @@ use camino::Utf8PathBuf;
 use ouisync_bridge::{
     constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
     error::Result,
-    protocol::{
-        remote::{Request, Response},
-        Notification,
-    },
+    protocol::Notification,
     repository,
-    transport::{NotificationSender, RemoteClient},
+    transport::NotificationSender,
 };
 use ouisync_lib::{
     network::{self, Registration},
@@ -344,27 +341,19 @@ pub(crate) async fn sync_progress(
         .await?)
 }
 
-/// Mirror the repository to the specified server
-pub(crate) async fn mirror(
-    state: &State,
-    handle: Handle<RepositoryHolder>,
-    host: String,
-) -> Result<()> {
+/// Mirror the repository to the storage servers
+pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
     let holder = state.get_repository(handle);
-    let share_token = holder
-        .repository
-        .secrets()
-        .with_mode(AccessMode::Blind)
-        .into();
-
     let config = state.get_remote_client_config()?;
-    let client = RemoteClient::connect(&host, config).await?;
-    let request = Request::Mirror { share_token };
-    let response = client.invoke(request).await?;
+    let hosts: Vec<_> = state
+        .storage_servers
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect();
 
-    match response {
-        Response::None => Ok(()),
-    }
+    ouisync_bridge::repository::mirror(&holder.repository, config, &hosts).await
 }
 
 pub(crate) fn entry_type_to_num(entry_type: EntryType) -> u8 {

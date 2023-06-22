@@ -17,12 +17,6 @@ pub(crate) enum Request {
         /// disables the remote API.
         #[arg(value_name = "IP:PORT")]
         addrs: Vec<SocketAddr>,
-
-        /// Store the bind addresses in the config but delay starting the listeners until the next
-        /// time the server is started. (This option is useful if you want to specify the RPC
-        /// bind address before you have the SSL certificate, e.g. when building a Docker image)
-        #[arg(long)]
-        delay: bool,
     },
     /// Create a new repository
     Create {
