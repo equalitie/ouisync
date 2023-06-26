@@ -81,8 +81,9 @@ pub async fn init(network: &Network, config: &ConfigStore, defaults: NetworkDefa
 }
 
 /// Binds the network to the specified addresses.
-/// Rebinds if already bound. If any of the addresses are missing, that particular protocol/family
-/// combination is not bound. If all are missing the network is disabled.
+/// Rebinds all stacks (TCP/QUIC, IPv4/IPv6) if any of them needs rebinding (address or port
+/// changes). If any of the addresses are missing, that particular protocol/family combination is
+/// not bound. If all are missing the network is disabled.
 pub async fn bind(network: &Network, config: &ConfigStore, addrs: &[PeerAddr]) {
     config.entry(BIND_KEY).set(addrs).await.ok();
     bind_with_reuse_ports(network, config, addrs).await;

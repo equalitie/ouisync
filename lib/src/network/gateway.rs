@@ -67,7 +67,7 @@ impl Gateway {
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
     pub async fn bind(
         &self,
-        bind: &[PeerAddr],
+        bind: &StackAddresses,
     ) -> (
         Option<quic::SideChannelMaker>,
         Option<quic::SideChannelMaker>,
@@ -156,6 +156,10 @@ impl Gateway {
             }
         }
     }
+
+    pub fn addresses(&self) -> StackAddresses {
+        self.stacks.read().addresses()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -197,32 +201,14 @@ impl Stacks {
     }
 
     async fn bind(
-        bind: &[PeerAddr],
+        bind: &StackAddresses,
         incoming_tx: mpsc::Sender<(raw::Stream, PeerAddr)>,
     ) -> (
         Self,
         Option<quic::SideChannelMaker>,
         Option<quic::SideChannelMaker>,
     ) {
-        let bind_quic_v4 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-
-        let bind_quic_v6 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
-        let bind_tcp_v4 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-        let bind_tcp_v6 = bind.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
-
-        let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind_quic_v4 {
+        let (quic_v4, side_channel_maker_v4) = if let Some(addr) = bind.quic_v4 {
             QuicStack::new(addr, incoming_tx.clone())
                 .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
@@ -231,7 +217,7 @@ impl Stacks {
             (None, None)
         };
 
-        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind_quic_v6 {
+        let (quic_v6, side_channel_maker_v6) = if let Some(addr) = bind.quic_v6 {
             QuicStack::new(addr, incoming_tx.clone())
                 .await
                 .map(|(stack, side_channel)| (Some(stack), Some(side_channel)))
@@ -240,13 +226,13 @@ impl Stacks {
             (None, None)
         };
 
-        let tcp_v4 = if let Some(addr) = bind_tcp_v4 {
+        let tcp_v4 = if let Some(addr) = bind.tcp_v4 {
             TcpStack::new(addr, incoming_tx.clone()).await
         } else {
             None
         };
 
-        let tcp_v6 = if let Some(addr) = bind_tcp_v6 {
+        let tcp_v6 = if let Some(addr) = bind.tcp_v6 {
             TcpStack::new(addr, incoming_tx).await
         } else {
             None
@@ -260,6 +246,15 @@ impl Stacks {
         };
 
         (this, side_channel_maker_v4, side_channel_maker_v6)
+    }
+
+    fn addresses(&self) -> StackAddresses {
+        StackAddresses {
+            quic_v4: self.quic_v4.as_ref().map(|stack| stack.listener_local_addr),
+            quic_v6: self.quic_v6.as_ref().map(|stack| stack.listener_local_addr),
+            tcp_v4: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
+            tcp_v6: self.tcp_v6.as_ref().map(|stack| stack.listener_local_addr),
+        }
     }
 
     fn quic_listener_local_addr_v4(&self) -> Option<&SocketAddr> {
@@ -611,4 +606,92 @@ fn ok_to_connect(addr: &SocketAddr, source: PeerSource) -> bool {
     }
 
     true
+}
+
+#[derive(Debug)]
+pub(super) struct StackAddresses {
+    quic_v4: Option<SocketAddr>,
+    quic_v6: Option<SocketAddr>,
+    tcp_v4: Option<SocketAddr>,
+    tcp_v6: Option<SocketAddr>,
+}
+
+impl StackAddresses {
+    pub(super) fn any_stack_needs_rebind(&self, new_stack_addresses: &StackAddresses) -> bool {
+        needs_rebind(&self.quic_v4, &new_stack_addresses.quic_v4)
+            || needs_rebind(&self.quic_v6, &new_stack_addresses.quic_v6)
+            || needs_rebind(&self.tcp_v4, &new_stack_addresses.tcp_v4)
+            || needs_rebind(&self.tcp_v6, &new_stack_addresses.tcp_v6)
+    }
+}
+
+fn needs_rebind(old_addr: &Option<SocketAddr>, new_addr: &Option<SocketAddr>) -> bool {
+    match (old_addr, new_addr) {
+        (Some(old_addr), Some(new_addr)) => {
+            let old_ip = old_addr.ip();
+            let old_port = old_addr.port();
+            let new_ip = new_addr.ip();
+            let new_port = new_addr.port();
+
+            // Just for readability as "true" and "false" have different lengths.
+            const T: bool = true;
+            const F: bool = false;
+
+            // `old_port` is not expected to be 0, but doesn't hurt to cover that case as well.
+            match (
+                old_ip.is_unspecified(),
+                old_port == 0,
+                new_ip.is_unspecified(),
+                new_port == 0,
+            ) {
+                (T, T, T, T) => false,
+                (F, T, T, T) => true,
+                (T, F, T, T) => false,
+                (F, F, T, T) => true,
+                (T, T, F, T) => true,
+                (F, T, F, T) => old_ip != new_ip,
+                (T, F, F, T) => true,
+                (F, F, F, T) => old_ip != new_ip,
+                (T, T, T, F) => true,
+                (F, T, T, F) => true,
+                (T, F, T, F) => old_port != new_port,
+                (F, F, T, F) => true,
+                (T, T, F, F) => true,
+                (F, T, F, F) => true,
+                (T, F, F, F) => true,
+                (F, F, F, F) => old_ip != new_ip || old_port != new_port,
+            }
+        }
+        (Some(_), None) => true,
+        (None, Some(_)) => true,
+        (None, None) => false,
+    }
+}
+
+impl From<&[PeerAddr]> for StackAddresses {
+    fn from(addrs: &[PeerAddr]) -> Self {
+        let quic_v4 = addrs.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+        let quic_v6 = addrs.iter().find_map(|addr| match addr {
+            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+        let tcp_v4 = addrs.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
+            _ => None,
+        });
+        let tcp_v6 = addrs.iter().find_map(|addr| match addr {
+            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
+            _ => None,
+        });
+
+        StackAddresses {
+            quic_v4,
+            quic_v6,
+            tcp_v4,
+            tcp_v6,
+        }
+    }
 }

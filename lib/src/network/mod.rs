@@ -32,7 +32,7 @@ use self::{
     connection::{ConnectionDeduplicator, ConnectionPermit, ReserveResult},
     connection_monitor::ConnectionMonitor,
     dht_discovery::{DhtContactsStoreTrait, DhtDiscovery},
-    gateway::Gateway,
+    gateway::{Gateway, StackAddresses},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::{PeerAddr, PeerPort},
@@ -428,8 +428,15 @@ impl Inner {
     async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
         let conn = Connectivity::infer(bind);
 
+        let bind = StackAddresses::from(bind);
+
+        // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
+        if !self.gateway.addresses().any_stack_needs_rebind(&bind) {
+            return;
+        }
+
         // Gateway
-        let side_channel_makers = self.gateway.bind(bind).instrument(self.span.clone()).await;
+        let side_channel_makers = self.gateway.bind(&bind).instrument(self.span.clone()).await;
 
         // DHT
         let (side_channel_maker_v4, side_channel_maker_v6) = match conn {
