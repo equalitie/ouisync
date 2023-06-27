@@ -88,7 +88,12 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                     .set(OPEN_ON_START, true)
                     .await
                     .ok();
-                holder.registration.set_dht_enabled(true).await;
+
+                // NOTE: DHT is disabled to prevent spamming the DHT when there is a lot of repos.
+                // This is fine because the clients add the storage servers as user-provided peers.
+                // TODO: After we address https://github.com/equalitie/ouisync/issues/128 we should
+                // consider enabling it again.
+                holder.registration.set_dht_enabled(false).await;
                 holder.registration.set_pex_enabled(true).await;
 
                 Ok(().into())
