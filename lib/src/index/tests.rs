@@ -155,7 +155,7 @@ async fn receive_root_node_with_existing_hash() {
     let local_id = PublicKey::generate(&mut rng);
     let remote_id = PublicKey::generate(&mut rng);
 
-    let local_branch = index.get_branch(local_id);
+    let local_branch = BranchData::new(local_id);
 
     // Create one block locally
     let mut content = vec![0; BLOCK_SIZE];
@@ -246,7 +246,7 @@ mod receive_and_create_root_node {
         let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
 
         let local_id = PublicKey::generate(&mut rng);
-        let local_branch = index.get_branch(local_id);
+        let local_branch = BranchData::new(local_id);
 
         let locator_0 = rng.gen();
         let block_id_0_0 = rng.gen();
@@ -479,7 +479,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     receive_snapshot(&store.index, remote_id, &snapshot0, &write_keys).await;
     node_test_utils::receive_blocks(&store, &snapshot0).await;
 
-    let remote_branch = store.index.get_branch(remote_id);
+    let remote_branch = BranchData::new(remote_id);
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
@@ -771,8 +771,7 @@ async fn receive_snapshot(
 ) {
     let vv = {
         let mut conn = index.pool.acquire().await.unwrap();
-        index
-            .get_branch(writer_id)
+        BranchData::new(writer_id)
             .load_version_vector(&mut conn)
             .await
             .unwrap()
@@ -801,8 +800,7 @@ async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
 
 async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
     let mut conn = index.pool.acquire().await.unwrap();
-    let snapshot = index
-        .get_branch(*writer_id)
+    let snapshot = BranchData::new(*writer_id)
         .load_snapshot(&mut conn)
         .await
         .unwrap();

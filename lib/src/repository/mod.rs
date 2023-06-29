@@ -775,7 +775,7 @@ impl Shared {
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        self.inflate(self.store.index.get_branch(id))
+        self.inflate(BranchData::new(id))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {

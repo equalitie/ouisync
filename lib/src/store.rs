@@ -574,7 +574,7 @@ mod tests {
         let write_keys = Keypair::random();
         let store = create_store(pool, RepositoryId::from(write_keys.public));
 
-        let branch = store.index.get_branch(PublicKey::random());
+        let branch = BranchData::new(PublicKey::random());
 
         let locator = Locator::head(rand::random());
         let locator = locator.encode(&read_key);
