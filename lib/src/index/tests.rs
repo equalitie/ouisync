@@ -11,9 +11,8 @@ use crate::{
     db,
     event::EventSender,
     metrics::Metrics,
-    repository::{LocalId, RepositoryId, RepositoryMonitor},
+    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
     state_monitor::StateMonitor,
-    store::{BlockRequestMode, Store},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -455,7 +454,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let (_base_dir, index, write_keys) = setup().await;
-    let store = Store {
+    let repo = RepositoryState {
         index,
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,
@@ -476,14 +475,14 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let vv0 = VersionVector::first(remote_id);
 
     // Receive it all.
-    receive_snapshot(&store.index, remote_id, &snapshot0, &write_keys).await;
-    node_test_utils::receive_blocks(&store, &snapshot0).await;
+    receive_snapshot(&repo.index, remote_id, &snapshot0, &write_keys).await;
+    node_test_utils::receive_blocks(&repo, &snapshot0).await;
 
     let remote_branch = BranchData::new(remote_id);
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut store.db().begin_read().await.unwrap(),
+        &mut repo.db().begin_read().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )
@@ -494,8 +493,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let vv1 = vv0.incremented(remote_id);
 
     // Receive its root node only.
-    store
-        .index
+    repo.index
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
             MultiBlockPresence::Full,
@@ -505,7 +503,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut store.db().begin_read().await.unwrap(),
+        &mut repo.db().begin_read().await.unwrap(),
         &remote_branch,
         &snapshot0,
     )

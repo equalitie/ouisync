@@ -31,7 +31,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
         let commands = stream::select(
-            from_events(shared.store.index.subscribe(), event_scope),
+            from_events(shared.state.index.subscribe(), event_scope),
             from_unlocks(unlock_rx),
         );
 
@@ -44,7 +44,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
 
     // Scan
     let scan = async {
-        let commands = from_events(shared.store.index.subscribe(), event_scope);
+        let commands = from_events(shared.state.index.subscribe(), event_scope);
         utils::run(|| scan(&shared), commands).await;
     };
 
@@ -98,7 +98,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     // Merge branches
     if let Some(local_branch) = local_branch {
         shared
-            .store
+            .state
             .monitor
             .merge_job
             .run(merge::run(shared, local_branch))
@@ -107,7 +107,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
 
     // Prune outdated branches and snapshots
     shared
-        .store
+        .state
         .monitor
         .prune_job
         .run(prune::run(shared, unlock_tx))
@@ -116,7 +116,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     // Collect unreachable blocks
     if shared.secrets.can_read() {
         shared
-            .store
+            .state
             .monitor
             .trash_job
             .run(trash::run(shared, local_branch, unlock_tx))
@@ -126,7 +126,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
 
 async fn scan(shared: &Shared) {
     // Find missing blocks
-    shared.store.monitor.scan_job.run(scan::run(shared)).await
+    shared.state.monitor.scan_job.run(scan::run(shared)).await
 }
 
 /// Find missing blocks and mark them as required.
@@ -214,7 +214,7 @@ mod scan {
 
         while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
             if !presence.is_present() {
-                shared.store.block_tracker.require(block_id);
+                shared.state.block_tracker.require(block_id);
             }
         }
 
@@ -256,7 +256,7 @@ mod prune {
     use super::*;
 
     pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
-        let all = shared.store.index.load_snapshots().await?;
+        let all = shared.state.index.load_snapshots().await?;
 
         // Currently it's possible that multiple branches have the same vv but different hash.
         // There is no good and simple way to pick one over the other so we currently keep all.
@@ -288,7 +288,7 @@ mod prune {
                 }
             };
 
-            let mut tx = shared.store.db().begin_write().await?;
+            let mut tx = shared.state.db().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
@@ -303,7 +303,7 @@ mod prune {
 
         // Remove outdated snapshots.
         for snapshot in uptodate {
-            snapshot.prune(shared.store.db()).await?;
+            snapshot.prune(shared.state.db()).await?;
         }
 
         Ok(())
@@ -333,7 +333,7 @@ mod trash {
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        let mut unreachable_block_ids_page = shared.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+        let mut unreachable_block_ids_page = shared.state.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
@@ -506,7 +506,7 @@ mod trash {
                 break;
             }
 
-            let mut tx = shared.store.db().begin_write().await?;
+            let mut tx = shared.state.db().begin_write().await?;
 
             total_count += batch.len();
 

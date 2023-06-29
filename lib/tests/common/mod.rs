@@ -245,7 +245,7 @@ pub(crate) mod actor {
         network: &Network,
     ) -> (Repository, Registration) {
         let repo = create_repo(name).await;
-        let reg = network.register(repo.store().clone()).await;
+        let reg = network.register(repo.handle()).await;
 
         (repo, reg)
     }
