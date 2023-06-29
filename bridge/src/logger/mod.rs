@@ -90,14 +90,15 @@ fn init_log(log_path: Option<&Path>) {
     const TAG: &str = "flutter-ouisync";
 
     let android_log_layer = fmt::layer()
-        .with_writer(AndroidLogMakeWriter::with_buffer(
-            TAG.to_owned(),
-            Buffer::Main,
-        ))
+        .with_ansi(false)
         .with_target(false)
         .with_file(true)
         .with_line_number(true)
-        .without_time(); // android log adds its own timestamp
+        .without_time()
+        .with_writer(AndroidLogMakeWriter::with_buffer(
+            TAG.to_owned(),
+            Buffer::Main,
+        )); // android log adds its own timestamp
 
     let file_layer = log_path.map(create_file_log_layer);
 

@@ -629,7 +629,7 @@ impl Inner {
                     });
                 }
                 ReserveResult::Occupied(_, _their_source, permit_id) => {
-                    tracing::info!("Dropping accepted connection from {addr:?} due to deduplication (permit_id:{permit_id})");
+                    tracing::debug!(?addr, ?permit_id, "dropping accepted duplicate connection");
                 }
             }
         }
@@ -688,7 +688,8 @@ impl Inner {
                     monitor.mark_as_awaiting_permit();
                     tracing::debug!(
                         parent: monitor.span(),
-                        "duplicate from different source - awaiting permit (permit_id:{permit_id})"
+                        permit_id,
+                        "duplicate from different source - awaiting permit"
                     );
 
                     on_release.await;
