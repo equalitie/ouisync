@@ -59,10 +59,6 @@ impl Index {
         &self.repository_id
     }
 
-    pub fn get_branch(&self, writer_id: PublicKey) -> BranchData {
-        BranchData::new(writer_id)
-    }
-
     pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.pool.acquire().await?;
         BranchData::load_all(&mut conn).try_collect().await
@@ -306,7 +302,7 @@ impl Index {
             let mut snapshots = Vec::with_capacity(new_approved.len());
 
             for branch_id in &new_approved {
-                snapshots.push(self.get_branch(*branch_id).load_snapshot(&mut tx).await?);
+                snapshots.push(BranchData::new(*branch_id).load_snapshot(&mut tx).await?);
             }
 
             snapshots

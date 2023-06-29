@@ -1,5 +1,6 @@
-//! Operation that affect both the index and the block store.
+//! Internal state of the repository which allows only operations that don't require read or write access.
 
+use super::{quota, LocalId, Metadata, RepositoryMonitor};
 use crate::{
     block::{self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
     crypto::sign::PublicKey,
@@ -8,7 +9,6 @@ use crate::{
     event::Payload,
     index::{self, Index, NodeState, SingleBlockPresence},
     progress::Progress,
-    repository::{quota, LocalId, Metadata, RepositoryMonitor},
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -16,15 +16,15 @@ use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Clone)]
-pub struct Store {
-    pub(crate) index: Index,
-    pub(crate) block_tracker: BlockTracker,
-    pub(crate) block_request_mode: BlockRequestMode,
-    pub(crate) local_id: LocalId,
-    pub(crate) monitor: Arc<RepositoryMonitor>,
+pub(crate) struct RepositoryState {
+    pub index: Index,
+    pub block_tracker: BlockTracker,
+    pub block_request_mode: BlockRequestMode,
+    pub local_id: LocalId,
+    pub monitor: Arc<RepositoryMonitor>,
 }
 
-impl Store {
+impl RepositoryState {
     pub(crate) fn db(&self) -> &db::Pool {
         &self.index.pool
     }
@@ -434,7 +434,7 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let store = create_store(pool, repository_id);
+        let store = create_state(pool, repository_id);
         let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
@@ -465,7 +465,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_orphaned_block() {
         let (_base_dir, pool) = setup().await;
-        let store = create_store(pool, RepositoryId::random());
+        let store = create_state(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
         let block_tracker = store.block_tracker.client();
@@ -504,7 +504,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let store = create_store(pool, repository_id);
+        let store = create_state(pool, repository_id);
         let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let all_blocks: Vec<(Hash, Block)> =
@@ -572,9 +572,9 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let store = create_state(pool, RepositoryId::from(write_keys.public));
 
-        let branch = store.index.get_branch(PublicKey::random());
+        let branch = BranchData::new(PublicKey::random());
 
         let locator = Locator::head(rand::random());
         let locator = locator.encode(&read_key);
@@ -606,7 +606,7 @@ mod tests {
     async fn block_ids_remote() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let store = create_state(pool, RepositoryId::from(write_keys.public));
         let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id = PublicKey::random();
@@ -632,7 +632,7 @@ mod tests {
     async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let store = create_state(pool, RepositoryId::from(write_keys.public));
 
         let branch_id = PublicKey::random();
 
@@ -685,7 +685,7 @@ mod tests {
     async fn block_ids_multiple_branches() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let store = create_state(pool, RepositoryId::from(write_keys.public));
         let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id_0 = PublicKey::random();
@@ -733,7 +733,7 @@ mod tests {
     async fn block_ids_pagination() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_store(pool, RepositoryId::from(write_keys.public));
+        let store = create_state(pool, RepositoryId::from(write_keys.public));
         let receive_filter = ReceiveFilter::new(store.db().clone());
 
         let branch_id = PublicKey::random();
@@ -770,10 +770,10 @@ mod tests {
         db::create_temp().await.unwrap()
     }
 
-    fn create_store(pool: db::Pool, repo_id: RepositoryId) -> Store {
+    fn create_state(pool: db::Pool, repo_id: RepositoryId) -> RepositoryState {
         let event_tx = EventSender::new(1);
         let index = Index::new(pool, repo_id, event_tx);
-        Store {
+        RepositoryState {
             index,
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,

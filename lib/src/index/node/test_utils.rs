@@ -11,7 +11,7 @@ use crate::{
         Hash, Hashable,
     },
     index::ReceiveFilter,
-    store::Store,
+    repository::RepositoryState,
     version_vector::VersionVector,
 };
 use rand::{
@@ -191,17 +191,16 @@ pub(crate) async fn receive_nodes(
     }
 }
 
-pub(crate) async fn receive_blocks(store: &Store, snapshot: &Snapshot) {
-    let client = store.block_tracker.client();
+pub(crate) async fn receive_blocks(repo: &RepositoryState, snapshot: &Snapshot) {
+    let client = repo.block_tracker.client();
     let acceptor = client.acceptor();
 
     for block in snapshot.blocks().values() {
-        store.block_tracker.require(*block.id());
+        repo.block_tracker.require(*block.id());
         client.offer(*block.id(), OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 
-        store
-            .write_received_block(&block.data, &block.nonce, Some(promise))
+        repo.write_received_block(&block.data, &block.nonce, Some(promise))
             .await
             .unwrap();
     }

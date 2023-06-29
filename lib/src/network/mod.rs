@@ -48,9 +48,8 @@ pub use self::{
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
     deadlock::BlockingMutex,
-    repository::RepositoryId,
+    repository::{RepositoryHandle, RepositoryId, RepositoryState},
     state_monitor::StateMonitor,
-    store::Store,
     sync::uninitialized_watch,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -249,17 +248,18 @@ impl Network {
     /// repositories of currently connected remote replicas as well as any replicas connected in
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
-    pub async fn register(&self, store: Store) -> Registration {
-        *store.monitor.info_hash.get() = Some(repository_info_hash(store.index.repository_id()));
+    pub async fn register(&self, handle: RepositoryHandle) -> Registration {
+        *handle.state.monitor.info_hash.get() =
+            Some(repository_info_hash(handle.state.index.repository_id()));
 
-        let metadata = store.metadata();
+        let metadata = handle.state.metadata();
         let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
         let pex_enabled = metadata.get(PEX_ENABLED).await.unwrap_or(false);
 
         let dht = if dht_enabled {
             Some(
                 self.inner
-                    .start_dht_lookup(repository_info_hash(store.index.repository_id())),
+                    .start_dht_lookup(repository_info_hash(handle.state.index.repository_id())),
             )
         } else {
             None
@@ -273,11 +273,13 @@ impl Network {
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(store.clone(), &pex);
+        network_state.create_link(handle.state.clone(), &pex);
 
-        let key = network_state
-            .registry
-            .insert(RegistrationHolder { store, dht, pex });
+        let key = network_state.registry.insert(RegistrationHolder {
+            repository: handle.state,
+            dht,
+            pex,
+        });
 
         Registration {
             inner: self.inner.clone(),
@@ -321,10 +323,9 @@ impl Registration {
         let holder = &mut state.registry[self.key];
 
         if enabled {
-            holder.dht = Some(
-                self.inner
-                    .start_dht_lookup(repository_info_hash(holder.store.index.repository_id())),
-            );
+            holder.dht = Some(self.inner.start_dht_lookup(repository_info_hash(
+                holder.repository.index.repository_id(),
+            )));
         } else {
             holder.dht = None;
         }
@@ -353,7 +354,7 @@ impl Registration {
 
     async fn set_metadata_bool(&self, name: &str, value: bool) {
         let metadata = self.inner.state.lock().unwrap().registry[self.key]
-            .store
+            .repository
             .metadata();
         metadata.set(name, value).await.ok();
     }
@@ -366,7 +367,7 @@ impl Drop for Registration {
         if let Some(holder) = state.registry.try_remove(self.key) {
             if let Some(brokers) = &mut state.message_brokers {
                 for broker in brokers.values_mut() {
-                    broker.destroy_link(holder.store.local_id);
+                    broker.destroy_link(holder.repository.local_id);
                 }
             }
         }
@@ -374,7 +375,7 @@ impl Drop for Registration {
 }
 
 struct RegistrationHolder {
-    store: Store,
+    repository: RepositoryState,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
 }
@@ -411,10 +412,10 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, store: Store, pex: &PexController) {
+    fn create_link(&mut self, repo: RepositoryState, pex: &PexController) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
-                broker.create_link(store.clone(), pex)
+                broker.create_link(repo.clone(), pex)
             }
         }
     }
@@ -788,7 +789,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.store.clone(), &holder.pex);
+                        broker.create_link(holder.repository.clone(), &holder.pex);
                     }
 
                     entry.insert(broker);

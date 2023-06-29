@@ -228,9 +228,7 @@ impl BranchEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        access_control::WriteSecrets, db, event::EventSender, index::Index, locator::Locator,
-    };
+    use crate::{access_control::WriteSecrets, db, event::EventSender, locator::Locator};
     use assert_matches::assert_matches;
     use tempfile::TempDir;
 
@@ -298,13 +296,10 @@ mod tests {
 
         let writer_id = PublicKey::random();
         let secrets = WriteSecrets::random();
-        let repository_id = secrets.id;
         let event_tx = EventSender::new(1);
 
-        let index = Index::new(pool.clone(), repository_id, event_tx.clone());
-
         let shared = BranchShared::new();
-        let data = index.get_branch(writer_id);
+        let data = BranchData::new(writer_id);
         let branch = Branch::new(pool, data, secrets.into(), shared, event_tx);
 
         (base_dir, branch)

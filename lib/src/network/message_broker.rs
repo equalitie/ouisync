@@ -14,9 +14,8 @@ use super::{
 use crate::{
     collections::{hash_map::Entry, HashMap},
     index::Index,
-    repository::LocalId,
+    repository::{LocalId, RepositoryState},
     state_monitor::StateMonitor,
-    store::Store,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
 use std::{future, sync::Arc};
@@ -87,19 +86,19 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(&mut self, store: Store, pex: &PexController) {
-        let monitor = self.monitor.make_child(store.monitor.name());
+    pub fn create_link(&mut self, repo: RepositoryState, pex: &PexController) {
+        let monitor = self.monitor.make_child(repo.monitor.name());
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repo = store.monitor.name(),
+            repo = repo.monitor.name(),
         );
 
         let span_enter = span.enter();
 
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(store.local_id) {
+        match self.links.entry(repo.local_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
@@ -114,13 +113,13 @@ impl MessageBroker {
         }
 
         let role = Role::determine(
-            store.index.repository_id(),
+            repo.index.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
 
         let channel_id = MessageChannel::new(
-            store.index.repository_id(),
+            repo.index.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
             role,
@@ -143,7 +142,7 @@ impl MessageBroker {
                     role,
                     stream,
                     sink,
-                    store,
+                    repo,
                     request_limiter,
                     pex_discovery_tx,
                     pex_announcer,
@@ -183,7 +182,7 @@ async fn maintain_link(
     role: Role,
     mut stream: ContentStream,
     mut sink: ContentSink,
-    store: Store,
+    repo: RepositoryState,
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
@@ -226,7 +225,7 @@ async fn maintain_link(
         *state.get() = State::EstablishingChannel;
 
         let (crypto_stream, crypto_sink) =
-            match establish_channel(role, &mut stream, &mut sink, &store.index).await {
+            match establish_channel(role, &mut stream, &mut sink, &repo.index).await {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
@@ -238,7 +237,7 @@ async fn maintain_link(
         match run_link(
             crypto_stream,
             crypto_sink,
-            &store,
+            &repo,
             request_limiter.clone(),
             pex_discovery_tx.clone(),
             &mut pex_announcer,
@@ -273,7 +272,7 @@ async fn establish_channel<'a>(
 async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
-    store: &Store,
+    repo: &RepositoryState,
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     pex_announcer: &mut PexAnnouncer,
@@ -284,8 +283,8 @@ async fn run_link(
 
     // Run everything in parallel:
     select! {
-        flow = run_client(store.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
-        flow = run_server(store.clone(), content_tx.clone(), request_rx ) => flow,
+        flow = run_client(repo.clone(), content_tx.clone(), response_rx, request_limiter) => flow,
+        flow = run_server(repo.clone(), content_tx.clone(), request_rx ) => flow,
         flow = recv_messages(stream, request_tx, response_tx, pex_discovery_tx) => flow,
         flow = send_messages(content_rx, sink) => flow,
         _ = pex_announcer.run(content_tx) => ControlFlow::Continue,
@@ -368,12 +367,12 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    store: Store,
+    repo: RepositoryState,
     content_tx: mpsc::Sender<Content>,
     mut response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
 ) -> ControlFlow {
-    let mut client = Client::new(store, content_tx, request_limiter);
+    let mut client = Client::new(repo, content_tx, request_limiter);
 
     let result = client.run(&mut response_rx).await;
 
@@ -387,11 +386,11 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    store: Store,
+    repo: RepositoryState,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
 ) -> ControlFlow {
-    let mut server = Server::new(store, content_tx, request_rx);
+    let mut server = Server::new(repo, content_tx, request_rx);
 
     let result = server.run().await;
 

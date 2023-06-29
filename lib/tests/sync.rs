@@ -176,7 +176,7 @@ fn relink_repository() {
         writer_rx.recv().await;
 
         // Relink the repo
-        let _reg = network.register(repo.store().clone()).await;
+        let _reg = network.register(repo.handle()).await;
 
         // Wait until the file is updated
         common::expect_file_content(&repo, "test.txt", b"second").await;
@@ -243,7 +243,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
         async move {
             let network = actor::create_network(proto).await;
             let repo = actor::create_repo_with_mode(DEFAULT_REPO, relay_access_mode).await;
-            let _reg = network.register(repo.store().clone()).await;
+            let _reg = network.register(repo.handle()).await;
 
             rx.recv().await.unwrap();
         }
@@ -508,7 +508,7 @@ fn recreate_local_branch() {
             .unwrap();
 
         // 4. Establish link
-        let reg = network.register(repo.store().clone()).await;
+        let reg = network.register(repo.handle()).await;
 
         // 7. Sync with Bob. Afterwards our local branch will become outdated compared to Bob's
         common::expect_file_content(&repo, "foo.txt", b"hello from Alice\nhello from Bob\n").await;
@@ -722,7 +722,7 @@ fn remote_rename_directory_during_conflict() {
         // Create file before linking the repo to ensure we create conflict.
         repo.create_file("dummy.txt").await.unwrap();
 
-        let _reg = network.register(repo.store().clone()).await;
+        let _reg = network.register(repo.handle()).await;
 
         repo.create_directory("foo").await.unwrap();
         rx.recv().await;
@@ -741,7 +741,7 @@ fn remote_rename_directory_during_conflict() {
         // This prevents the remote branch from being pruned.
         repo.create_file("dummy.txt").await.unwrap();
 
-        let _reg = network.register(repo.store().clone()).await;
+        let _reg = network.register(repo.handle()).await;
 
         expect_local_directory_exists(&repo, "foo").await;
         tx.send(()).await.unwrap();
@@ -826,7 +826,7 @@ fn concurrent_update_and_delete_during_conflict() {
             // branch from being pruned.
             repo.create_file("dummy.txt").await.unwrap();
 
-            let reg = network.register(repo.store().clone()).await;
+            let reg = network.register(repo.handle()).await;
 
             // 3. Wait until the file gets merged
             common::expect_file_version_content(&repo, "data.txt", Some(&id_a), &content_v0).await;
@@ -839,7 +839,7 @@ fn concurrent_update_and_delete_during_conflict() {
             repo.remove_entry("data.txt").await.unwrap();
 
             // 6a. Relink
-            let _reg = network.register(repo.store().clone()).await;
+            let _reg = network.register(repo.handle()).await;
 
             // 7. We are able to read the whole file again including the previously gc-ed blocks.
             common::expect_file_version_content(&repo, "data.txt", Some(&id_b), &content_v1).await;
@@ -864,7 +864,7 @@ fn concurrent_update_and_delete_during_conflict() {
             // from being pruned.
             repo.create_file("dummy.txt").await.unwrap();
 
-            let reg = network.register(repo.store().clone()).await;
+            let reg = network.register(repo.handle()).await;
 
             // 2. Create the file and wait until alice sees it
             let mut file = repo.create_file("data.txt").await.unwrap();
@@ -892,7 +892,7 @@ fn concurrent_update_and_delete_during_conflict() {
             .await;
 
             // 6b. Relink
-            let _reg = network.register(repo.store().clone()).await;
+            let _reg = network.register(repo.handle()).await;
 
             alice_rx.recv().await.unwrap();
         }
@@ -938,7 +938,7 @@ fn content_stays_available_during_sync() {
             // Bob is read-only to disable the merger which could otherwise interfere with this test.
             let network = actor::create_network(Proto::Tcp).await;
             let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
-            let _reg = network.register(repo.store().clone()).await;
+            let _reg = network.register(repo.handle()).await;
             network.add_user_provided_peer(&actor::lookup_addr("alice").await);
 
             // 2. Sync "b/c.dat"
@@ -1026,7 +1026,7 @@ fn quota_exceed() {
             let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
             repo.set_quota(Some(quota)).await.unwrap();
 
-            let _reg = network.register(repo.store().clone()).await;
+            let _reg = network.register(repo.handle()).await;
 
             // The first file is within the quota
             common::expect_file_content(&repo, "0.dat", &content0).await;
@@ -1097,7 +1097,7 @@ fn quota_concurrent_writes() {
 
         let mut traffic = TrafficMonitor::new(&repo);
 
-        let _reg = network.register(repo.store().clone()).await;
+        let _reg = network.register(repo.handle()).await;
 
         traffic.wait_start().await;
         traffic.wait_stop().await;

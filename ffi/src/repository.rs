@@ -42,7 +42,7 @@ pub(crate) async fn create(
 
     let repository = Arc::new(repository);
 
-    let registration = state.network.register(repository.store().clone()).await;
+    let registration = state.network.register(repository.handle()).await;
 
     let holder = RepositoryHolder {
         store_path,
@@ -69,7 +69,7 @@ pub(crate) async fn open(
     )
     .await?;
     let repository = Arc::new(repository);
-    let registration = state.network.register(repository.store().clone()).await;
+    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository,
@@ -108,7 +108,7 @@ pub(crate) async fn reopen(
 ) -> Result<Handle<RepositoryHolder>> {
     let repository = repository::reopen(store_path.clone(), token, &state.repos_monitor).await?;
     let repository = Arc::new(repository);
-    let registration = state.network.register(repository.store().clone()).await;
+    let registration = state.network.register(repository.handle()).await;
     let holder = RepositoryHolder {
         store_path,
         repository,

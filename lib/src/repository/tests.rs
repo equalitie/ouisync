@@ -25,9 +25,8 @@ async fn root_directory_always_exists() {
 
 // Count leaf nodes in the index of the local branch.
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
-    let store = repo.store();
     let branch = repo.local_branch().unwrap();
-    let mut conn = store.db().acquire().await.unwrap();
+    let mut conn = repo.db().acquire().await.unwrap();
     branch.data().count_leaf_nodes(&mut conn).await.unwrap()
 }
 

@@ -14,9 +14,8 @@ use crate::{
         BranchData, Index, ReceiveFilter, RootNode, SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
-    repository::{LocalId, RepositoryId, RepositoryMonitor},
+    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
     state_monitor::StateMonitor,
-    store::{BlockRequestMode, Store},
     test_utils,
     version_vector::VersionVector,
 };
@@ -69,8 +68,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -123,8 +122,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, b_id) = create_repository(&mut rng, &write_keys).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
@@ -172,8 +171,8 @@ async fn failed_block_only_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (_a_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, b_store, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -211,9 +210,9 @@ async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_store, _) = create_store(&mut rng, &write_keys).await;
-    let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_store, _) = create_repository(&mut rng, &write_keys).await;
+    let (_c_base_dir, c_store, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
     save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
@@ -279,9 +278,9 @@ async fn failed_block_other_peer() {
         let mut rng = StdRng::seed_from_u64(0);
 
         let write_keys = Keypair::generate(&mut rng);
-        let (_a_base_dir, a_store, a_id) = create_store(&mut rng, &write_keys).await;
-        let (_b_base_dir, b_store, b_id) = create_store(&mut rng, &write_keys).await;
-        let (_c_base_dir, c_store, _) = create_store(&mut rng, &write_keys).await;
+        let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
+        let (_b_base_dir, b_store, b_id) = create_repository(&mut rng, &write_keys).await;
+        let (_c_base_dir, c_store, _) = create_repository(&mut rng, &write_keys).await;
 
         // Create the snapshot by A
         let snapshot = Snapshot::generate(&mut rng, 1);
@@ -367,10 +366,10 @@ async fn failed_block_other_peer() {
     }
 }
 
-async fn create_store<R: Rng + CryptoRng>(
+async fn create_repository<R: Rng + CryptoRng>(
     rng: &mut R,
     write_keys: &Keypair,
-) -> (TempDir, Store, PublicKey) {
+) -> (TempDir, RepositoryState, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
@@ -379,7 +378,7 @@ async fn create_store<R: Rng + CryptoRng>(
     let index = Index::new(db, repository_id, event_tx);
     // index.create_branch(writer_id, write_keys).await.unwrap();
 
-    let store = Store {
+    let store = RepositoryState {
         index,
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Greedy,
@@ -488,7 +487,7 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
-    let branch = index.get_branch(*writer_id);
+    let branch = BranchData::new(*writer_id);
 
     for _ in 0..size {
         create_block(rng, index, &branch, write_keys).await;
@@ -603,19 +602,19 @@ type ClientData = (
     mpsc::Sender<Response>,
 );
 
-fn create_server(store: Store) -> ServerData {
+fn create_server(repo: RepositoryState) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
-    let server = Server::new(store, send_tx, recv_rx);
+    let server = Server::new(repo, send_tx, recv_rx);
 
     (server, send_rx, recv_tx)
 }
 
-fn create_client(store: Store) -> ClientData {
+fn create_client(repo: RepositoryState) -> ClientData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let client = Client::new(
-        store,
+        repo,
         send_tx,
         Arc::new(Semaphore::new(MAX_REQUESTS_IN_FLIGHT)),
     );

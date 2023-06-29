@@ -102,7 +102,7 @@ pub(crate) struct RepositoryHolder {
 impl RepositoryHolder {
     pub async fn new(repository: Repository, name: RepositoryName, network: &Network) -> Self {
         let repository = Arc::new(repository);
-        let registration = network.register(repository.store().clone()).await;
+        let registration = network.register(repository.handle()).await;
 
         Self {
             repository,

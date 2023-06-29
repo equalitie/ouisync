@@ -14,8 +14,7 @@ use crate::{
     index::{
         InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof,
     },
-    repository::RepositoryMonitor,
-    store::{BlockRequestMode, Store},
+    repository::{BlockRequestMode, RepositoryMonitor, RepositoryState},
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -26,7 +25,7 @@ use tokio::{
 use tracing::{instrument, instrument::Instrument, Span};
 
 pub(super) struct Client {
-    store: Store,
+    repository: RepositoryState,
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
@@ -36,14 +35,14 @@ pub(super) struct Client {
 
 impl Client {
     pub fn new(
-        store: Store,
+        repo: RepositoryState,
         tx: mpsc::Sender<Content>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let pool = store.db().clone();
-        let block_tracker = store.block_tracker.client();
+        let db = repo.db().clone();
+        let block_tracker = repo.block_tracker.client();
 
-        let pending_requests = Arc::new(PendingRequests::new(store.monitor.clone()));
+        let pending_requests = Arc::new(PendingRequests::new(repo.monitor.clone()));
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
@@ -51,14 +50,14 @@ impl Client {
             tx,
             pending_requests.clone(),
             peer_request_limiter,
-            store.monitor.clone(),
+            repo.monitor.clone(),
         );
 
         Self {
-            store,
+            repository: repo,
             pending_requests,
             request_tx,
-            receive_filter: ReceiveFilter::new(pool),
+            receive_filter: ReceiveFilter::new(db),
             block_tracker,
             _request_sender: request_sender,
         }
@@ -129,7 +128,7 @@ impl Client {
         loop {
             match queued_responses_rx.recv().await {
                 Some(response) => {
-                    self.store
+                    self.repository
                         .monitor
                         .handle_response_metric
                         .measure_ok(self.handle_response(response))
@@ -148,7 +147,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.store
+                self.repository
                     .monitor
                     .handle_root_node_metric
                     .measure_ok(self.handle_root_node(proof, block_presence, debug))
@@ -159,7 +158,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.store
+                self.repository
                     .monitor
                     .handle_inner_nodes_metric
                     .measure_ok(self.handle_inner_nodes(hash, debug))
@@ -170,7 +169,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.store
+                self.repository
                     .monitor
                     .handle_leaf_nodes_metric
                     .measure_ok(self.handle_leaf_nodes(hash, debug))
@@ -183,7 +182,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.store
+                self.repository
                     .monitor
                     .handle_block_metric
                     .measure_ok(self.handle_block(data, nonce, block_promise, debug))
@@ -215,7 +214,7 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         let hash = proof.hash;
         let updated = self
-            .store
+            .repository
             .index
             .receive_root_node(proof, block_presence)
             .await?;
@@ -242,9 +241,9 @@ impl Client {
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
 
-        let quota = self.store.quota().await?.map(Into::into);
+        let quota = self.repository.quota().await?.map(Into::into);
         let (updated_nodes, status) = self
-            .store
+            .repository
             .index
             .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
@@ -271,7 +270,7 @@ impl Client {
 
         if quota.is_some() {
             for branch_id in &status.new_approved {
-                self.store.approve_offers(branch_id).await?;
+                self.repository.approve_offers(branch_id).await?;
             }
         }
 
@@ -287,8 +286,12 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         let total = nodes.len();
-        let quota = self.store.quota().await?.map(Into::into);
-        let (updated_blocks, status) = self.store.index.receive_leaf_nodes(nodes, quota).await?;
+        let quota = self.repository.quota().await?.map(Into::into);
+        let (updated_blocks, status) = self
+            .repository
+            .index
+            .receive_leaf_nodes(nodes, quota)
+            .await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",
@@ -304,7 +307,7 @@ impl Client {
                 OfferState::Pending
             };
 
-        match self.store.block_request_mode {
+        match self.repository.block_request_mode {
             BlockRequestMode::Lazy => {
                 for block_id in updated_blocks {
                     self.block_tracker.offer(block_id, offer_state);
@@ -313,7 +316,7 @@ impl Client {
             BlockRequestMode::Greedy => {
                 for block_id in updated_blocks {
                     if self.block_tracker.offer(block_id, offer_state) {
-                        self.store.block_tracker.require(block_id);
+                        self.repository.block_tracker.require(block_id);
                     }
                 }
             }
@@ -321,7 +324,7 @@ impl Client {
 
         if quota.is_some() {
             for branch_id in &status.new_approved {
-                self.store.approve_offers(branch_id).await?;
+                self.repository.approve_offers(branch_id).await?;
             }
         }
 
@@ -339,7 +342,7 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<(), ReceiveError> {
         match self
-            .store
+            .repository
             .write_received_block(&data, &nonce, block_promise)
             .await
         {

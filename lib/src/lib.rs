@@ -37,7 +37,6 @@ mod progress;
 mod repository;
 mod state_monitor;
 mod storage_size;
-mod store;
 mod sync;
 #[cfg(test)]
 mod test_utils;
@@ -61,11 +60,10 @@ pub use self::{
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
     repository::{
-        delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryId,
-        RepositoryParams,
+        delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryHandle,
+        RepositoryId, RepositoryParams,
     },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
-    store::Store,
     version_vector::VersionVector,
 };
