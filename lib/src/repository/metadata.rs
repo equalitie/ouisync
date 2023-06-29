@@ -12,7 +12,7 @@ use crate::{
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
 use std::{borrow::Cow, fmt};
-use tracing::{field, instrument, Span};
+use tracing::instrument;
 use zeroize::Zeroize;
 
 // Metadata keys
@@ -50,16 +50,25 @@ impl Metadata {
         Self { db }
     }
 
-    #[instrument(skip(self), fields(value), err(Debug))]
+    #[instrument(skip(self), fields(value))]
     pub async fn get<T>(&self, name: &str) -> Result<T>
     where
         T: MetadataGet + fmt::Debug,
     {
-        let mut conn = self.db.acquire().await?;
-        let value = get_public(&mut conn, name.as_bytes()).await?;
+        let mut conn = self.db.acquire().await.map_err(|error| {
+            tracing::error!(?error);
+            error
+        })?;
+        let value = get_public(&mut conn, name.as_bytes())
+            .await
+            .map_err(|error| {
+                match error {
+                    Error::EntryNotFound => (),
+                    _ => tracing::error!(?error),
+                }
 
-        Span::current().record("value", field::debug(&value));
-        tracing::debug!("ok");
+                error
+            })?;
 
         Ok(value)
     }
@@ -73,8 +82,6 @@ impl Metadata {
         set_public(&mut tx, name.as_bytes(), value).await?;
         tx.commit().await?;
 
-        tracing::debug!("ok");
-
         Ok(())
     }
 
@@ -83,8 +90,6 @@ impl Metadata {
         let mut tx = self.db.begin_write().await?;
         remove_public(&mut tx, name.as_bytes()).await?;
         tx.commit().await?;
-
-        tracing::debug!("ok");
 
         Ok(())
     }

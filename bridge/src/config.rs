@@ -110,17 +110,18 @@ impl<T> ConfigEntry<T> {
         file.write_all(b"\n").await?;
         file.flush().await?;
 
-        tracing::debug!(?value);
-
         Ok(())
     }
 
-    #[instrument(name = "config.remove", skip(self), err(Debug))]
+    #[instrument(name = "config.remove", skip(self))]
     pub async fn remove(&self) -> Result<(), ConfigError> {
         match fs::remove_file(self.path()).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
+            Err(error) => {
+                tracing::error!(?error);
+                Err(error.into())
+            }
         }
     }
 
@@ -133,7 +134,7 @@ impl<T> ConfigEntry<T>
 where
     T: DeserializeOwned + fmt::Debug,
 {
-    #[instrument(name = "config.get", skip(self), fields(key = self.key.name), err(Debug))]
+    #[instrument(name = "config.get", skip(self), fields(key = self.key.name))]
     pub async fn get(&self) -> Result<T, ConfigError> {
         let path = self.path();
 
@@ -142,20 +143,29 @@ where
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(ConfigError::NotFound);
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                tracing::error!(?error);
+                return Err(error.into());
+            }
         };
 
         let content: String = str::from_utf8(&content)
-            .map_err(|error| ConfigError::Malformed(Box::new(error)))?
+            .map_err(|error| ConfigError::Malformed(Box::new(error)))
+            .map_err(|error| {
+                tracing::error!(?error);
+                error
+            })?
             .lines()
             .map(|line| line.trim())
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect();
 
         let value = serde_json::from_str(&content)
-            .map_err(|error| ConfigError::Malformed(Box::new(error)))?;
-
-        tracing::debug!(?value);
+            .map_err(|error| ConfigError::Malformed(Box::new(error)))
+            .map_err(|error| {
+                tracing::error!(?error);
+                error
+            })?;
 
         Ok(value)
     }
