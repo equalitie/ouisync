@@ -1,3 +1,5 @@
+use futures_util::{stream, Stream};
+
 use super::{block_count, read_len};
 use crate::{
     blob_id::BlobId,
@@ -36,15 +38,21 @@ impl BlockIds {
             Err(error) => return Err(error),
         };
 
-        // DEBUG
-        // tracing::trace!(?upper_bound, ?blob_id);
+        Ok(Self::new(branch, blob_id, snapshot, upper_bound))
+    }
 
-        Ok(Self {
+    pub fn new(
+        branch: Branch,
+        blob_id: BlobId,
+        snapshot: SnapshotData,
+        upper_bound: Option<u32>,
+    ) -> Self {
+        Self {
             branch,
             snapshot,
             locator: Locator::head(blob_id),
             upper_bound,
-        })
+        }
     }
 
     pub async fn try_next(&mut self) -> Result<Option<(BlockId, SingleBlockPresence)>> {
@@ -80,5 +88,11 @@ impl BlockIds {
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub fn as_stream(&mut self) -> impl Stream<Item = Result<(BlockId, SingleBlockPresence)>> + '_ {
+        stream::try_unfold(self, |block_ids| async move {
+            Ok(block_ids.try_next().await?.map(|item| (item, block_ids)))
+        })
     }
 }

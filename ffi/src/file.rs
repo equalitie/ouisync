@@ -135,7 +135,12 @@ pub(crate) async fn truncate(state: &State, handle: Handle<FileHolder>, len: u64
     Ok(())
 }
 
-/// Retrieve the size of the file in bytes.
+/// Retrieve the total size of the file in bytes.
 pub(crate) async fn len(state: &State, handle: Handle<FileHolder>) -> u64 {
     state.files.get(handle).file.lock().await.len()
+}
+
+/// Retrieve the sync progress of the file.
+pub(crate) async fn progress(state: &State, handle: Handle<FileHolder>) -> Result<u64> {
+    Ok(state.files.get(handle).file.lock().await.progress().await?)
 }
