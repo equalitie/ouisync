@@ -142,5 +142,9 @@ pub(crate) async fn len(state: &State, handle: Handle<FileHolder>) -> u64 {
 
 /// Retrieve the sync progress of the file.
 pub(crate) async fn progress(state: &State, handle: Handle<FileHolder>) -> Result<u64> {
-    Ok(state.files.get(handle).file.lock().await.progress().await?)
+    // Don't keep the file locked while progress is being awaited.
+    let progress = state.files.get(handle).file.lock().await.progress();
+    let progress = progress.await?;
+
+    Ok(progress)
 }
