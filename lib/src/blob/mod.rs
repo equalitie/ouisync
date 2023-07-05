@@ -336,7 +336,7 @@ impl Blob {
             - HEADER_SIZE as u64
     }
 
-    fn block_count(&self) -> u32 {
+    pub fn block_count(&self) -> u32 {
         block_count(self.len)
     }
 

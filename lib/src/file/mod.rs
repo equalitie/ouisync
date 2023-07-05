@@ -1,5 +1,5 @@
 use crate::{
-    blob::{lock::UpgradableLock, Blob},
+    blob::{lock::UpgradableLock, Blob, BlockIds},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -9,7 +9,12 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use std::{fmt, io::SeekFrom};
+use futures_util::TryStreamExt;
+use std::{
+    fmt,
+    future::{self, Future},
+    io::SeekFrom,
+};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tracing::instrument;
 
@@ -82,6 +87,38 @@ impl File {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.blob.len()
+    }
+
+    /// Sync progress of this file, that is, what part of this file (in bytes) is available locally.
+    /// NOTE: The future returned from this function doesn't borrow from `self` so it's possible
+    /// to drop the `self` before/while awaiting it. This is useful to avoid keeping the file lock
+    /// while awaiting the result.
+    pub fn progress(&self) -> impl Future<Output = Result<u64>> {
+        let branch = self.branch().clone();
+        let blob_id = *self.blob.locator().blob_id();
+        let block_count = self.blob.block_count();
+
+        async move {
+            let snapshot = {
+                let mut tx = branch.db().begin_read().await?;
+                branch.data().load_snapshot(&mut tx).await?
+            };
+
+            let mut block_ids = BlockIds::new(branch, blob_id, snapshot, Some(block_count));
+
+            let count = block_ids
+                .as_stream()
+                .try_fold(0u32, |count, (_, presence)| {
+                    future::ready(Ok(count.saturating_add(if presence.is_present() {
+                        1
+                    } else {
+                        0
+                    })))
+                })
+                .await?;
+
+            Ok(count as u64 * BLOCK_SIZE as u64)
+        }
     }
 
     /// Reads data from this file. See [`Blob::read`] for more info.

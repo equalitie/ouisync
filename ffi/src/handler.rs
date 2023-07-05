@@ -199,6 +199,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 file::truncate(&self.state, file, len).await?.into()
             }
             Request::FileLen(file) => file::len(&self.state, file).await.into(),
+            Request::FileProgress(file) => file::progress(&self.state, file).await?.into(),
             Request::FileFlush(file) => file::flush(&self.state, file).await?.into(),
             Request::FileClose(file) => file::close(&self.state, file).await?.into(),
             Request::NetworkInit(defaults) => {

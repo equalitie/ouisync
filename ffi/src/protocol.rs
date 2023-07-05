@@ -126,6 +126,7 @@ pub(crate) enum Request {
         len: u64,
     },
     FileLen(Handle<FileHolder>),
+    FileProgress(Handle<FileHolder>),
     FileFlush(Handle<FileHolder>),
     FileClose(Handle<FileHolder>),
     NetworkInit(NetworkDefaults),
