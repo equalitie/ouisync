@@ -1,5 +1,3 @@
-use futures_util::{stream, Stream};
-
 use super::{block_count, read_len};
 use crate::{
     blob_id::BlobId,
@@ -88,11 +86,5 @@ impl BlockIds {
             }
             Err(error) => Err(error),
         }
-    }
-
-    pub fn as_stream(&mut self) -> impl Stream<Item = Result<(BlockId, SingleBlockPresence)>> + '_ {
-        stream::try_unfold(self, |block_ids| async move {
-            Ok(block_ids.try_next().await?.map(|item| (item, block_ids)))
-        })
     }
 }

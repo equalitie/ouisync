@@ -1,5 +1,5 @@
 use crate::{
-    blob::{lock::UpgradableLock, Blob, BlockIds},
+    blob::{lock::UpgradableLock, Blob},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -9,18 +9,18 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use futures_util::TryStreamExt;
-use std::{
-    fmt,
-    future::{self, Future},
-    io::SeekFrom,
-};
+use std::{fmt, future::Future, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tracing::instrument;
 
 // When this many blocks are written, the shared transaction is forcefully commited. This prevents
 // the shared transaction from becoming too big.
 const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
+
+// Maximum number of `File.progress` calls that can be executed concurrently. We limit this because
+// the operation is currently slow and we don't want to exhaust all db connections when multiple
+// files are queries for progress.
+pub(crate) const MAX_CONCURRENT_FILE_PROGRESS_QUERIES: usize = 3;
 
 pub struct File {
     blob: Blob,
@@ -95,29 +95,30 @@ impl File {
     /// while awaiting the result.
     pub fn progress(&self) -> impl Future<Output = Result<u64>> {
         let branch = self.branch().clone();
-        let blob_id = *self.blob.locator().blob_id();
+        let locator = *self.blob.locator();
         let block_count = self.blob.block_count();
 
         async move {
-            let snapshot = {
-                let mut tx = branch.db().begin_read().await?;
-                branch.data().load_snapshot(&mut tx).await?
-            };
+            let _permit = branch.acquire_file_progress_query_permit().await;
 
-            let mut block_ids = BlockIds::new(branch, blob_id, snapshot, Some(block_count));
+            let mut tx = branch.db().begin_read().await?;
+            let snapshot = branch.data().load_snapshot(&mut tx).await?;
 
-            let count = block_ids
-                .as_stream()
-                .try_fold(0u32, |count, (_, presence)| {
-                    future::ready(Ok(count.saturating_add(if presence.is_present() {
-                        1
-                    } else {
-                        0
-                    })))
-                })
-                .await?;
+            let mut count = 0u64;
 
-            Ok(count as u64 * BLOCK_SIZE as u64)
+            for locator in locator
+                .sequence()
+                .map(|locator| locator.encode(branch.keys().read()))
+                .take(block_count as usize)
+            {
+                let (_, presence) = snapshot.get_block(&mut tx, &locator).await?;
+
+                if presence.is_present() {
+                    count = count.saturating_add(1);
+                }
+            }
+
+            Ok(count * BLOCK_SIZE as u64)
         }
     }
 
