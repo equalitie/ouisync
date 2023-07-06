@@ -52,7 +52,7 @@ use tokio::{
     sync::broadcast::{self, error::RecvError},
     time::Duration,
 };
-use tracing::{instrument, instrument::Instrument};
+use tracing::instrument::Instrument;
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
@@ -459,7 +459,6 @@ impl Repository {
     }
 
     /// Opens a file at the given path (relative to the repository root)
-    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::EntryIsDirectory)?;
 
@@ -472,7 +471,6 @@ impl Repository {
     }
 
     /// Open a specific version of the file at the given path.
-    #[instrument(skip(self, path), fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_file_version<P: AsRef<Utf8Path>>(
         &self,
         path: P,
@@ -488,13 +486,11 @@ impl Repository {
     }
 
     /// Opens a directory at the given path (relative to the repository root)
-    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn open_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<JointDirectory> {
         self.cd(path).await
     }
 
     /// Creates a new file at the given path.
-    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_file<P: AsRef<Utf8Path>>(&self, path: P) -> Result<File> {
         let file = self
             .local_branch()?
@@ -505,7 +501,6 @@ impl Repository {
     }
 
     /// Creates a new directory at the given path.
-    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn create_directory<P: AsRef<Utf8Path>>(&self, path: P) -> Result<Directory> {
         let dir = self
             .local_branch()?
@@ -516,7 +511,6 @@ impl Repository {
     }
 
     /// Removes the file or directory (must be empty) and flushes its parent directory.
-    #[instrument(skip_all, fields(path = %path.as_ref()), err(Debug))]
     pub async fn remove_entry<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -526,7 +520,6 @@ impl Repository {
     }
 
     /// Removes the file or directory (including its content) and flushes its parent directory.
-    #[instrument(skip_all, fields(path = %path.as_ref()), err)]
     pub async fn remove_entry_recursively<P: AsRef<Utf8Path>>(&self, path: P) -> Result<()> {
         let (parent, name) = path::decompose(path.as_ref()).ok_or(Error::OperationNotSupported)?;
         let mut parent = self.cd(parent).await?;
@@ -537,14 +530,6 @@ impl Repository {
 
     /// Moves (renames) an entry from the source path to the destination path.
     /// If both source and destination refer to the same entry, this is a no-op.
-    #[instrument(
-        skip_all,
-        fields(
-            src = %src_dir_path.as_ref().join(src_name),
-            dst = %dst_dir_path.as_ref().join(dst_name),
-        ),
-        err(Debug)
-    )]
     pub async fn move_entry<S: AsRef<Utf8Path>, D: AsRef<Utf8Path>>(
         &self,
         src_dir_path: S,

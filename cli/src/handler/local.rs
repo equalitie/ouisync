@@ -37,8 +37,6 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         request: Self::Request,
         _notification_tx: &NotificationSender,
     ) -> Result<Self::Response> {
-        tracing::debug!(?request);
-
         match request {
             Request::Start => Err(Error::ForbiddenRequest),
             Request::BindRpc { addrs } => Ok(self

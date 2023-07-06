@@ -532,7 +532,6 @@ fn block_count(len: u64) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
-#[instrument(skip(tx, snapshot, read_key), fields(branch.id = ?snapshot.branch_id()), err(Debug))]
 async fn read_block(
     tx: &mut db::ReadTransaction,
     snapshot: &SnapshotData,
@@ -549,11 +548,7 @@ async fn read_block(
     Ok((id, buffer))
 }
 
-#[instrument(
-    skip(tx, snapshot, read_key, write_keys, buffer),
-    fields(id),
-    err(Debug)
-)]
+#[instrument(skip(tx, snapshot, read_key, write_keys, buffer), fields(id))]
 async fn write_block(
     tx: &mut db::WriteTransaction,
     snapshot: &mut SnapshotData,

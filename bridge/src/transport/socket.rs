@@ -43,10 +43,6 @@ pub mod server_connection {
                             Err(error) => Err(error),
                         };
 
-                        if let Err(error) = &result {
-                            tracing::error!(?error, "failed to handle request");
-                        }
-
                         (id, result)
                     };
 
@@ -205,10 +201,7 @@ where
     loop {
         let buffer = match reader.try_next().await {
             Ok(Some(buffer)) => buffer,
-            Ok(None) => {
-                tracing::debug!("disconnected");
-                return None;
-            }
+            Ok(None) => return None,
             Err(error) => {
                 tracing::error!(?error, "failed to receive message");
                 return None;

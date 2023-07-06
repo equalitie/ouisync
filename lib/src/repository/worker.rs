@@ -143,7 +143,7 @@ mod scan {
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
-                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    tracing::trace!(branch_id = ?branch.id(), ?error, "failed to open root directory");
                     error
                 })
             {
@@ -191,7 +191,11 @@ mod scan {
                         Ok(dir) => subdirs.push(dir),
                         Err(error) => {
                             // Continue processing the remaining entries
-                            tracing::warn!(name = entry.name(), ?error, "failed to open directory");
+                            tracing::trace!(
+                                name = entry.name(),
+                                ?error,
+                                "failed to open directory"
+                            );
                         }
                     }
                 }
@@ -374,7 +378,7 @@ mod trash {
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
-                    tracing::warn!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    tracing::trace!(branch_id = ?branch.id(), ?error, "failed to open root directory");
                     error
                 })
             {
