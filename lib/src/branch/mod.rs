@@ -8,7 +8,7 @@ use crate::{
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
-    file::File,
+    file::{File, FileProgressCache},
     index::BranchData,
     locator::Locator,
     path,
@@ -149,6 +149,10 @@ impl Branch {
         &self.shared.uncommitted_block_counter
     }
 
+    pub(crate) fn file_progress_cache(&self) -> &FileProgressCache {
+        &self.shared.file_progress_cache
+    }
+
     pub(crate) fn notify(&self) -> BranchEventSender {
         BranchEventSender {
             event_tx: self.event_tx.clone(),
@@ -180,6 +184,7 @@ pub(crate) struct BranchShared {
     pub locker: Locker,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
+    pub file_progress_cache: FileProgressCache,
 }
 
 impl BranchShared {
@@ -187,6 +192,7 @@ impl BranchShared {
         Self {
             locker: Locker::new(),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
+            file_progress_cache: FileProgressCache::new(),
         }
     }
 }

@@ -1,5 +1,9 @@
+mod progress_cache;
+
+pub(crate) use progress_cache::FileProgressCache;
+
 use crate::{
-    blob::{lock::UpgradableLock, Blob, BlockIds},
+    blob::{lock::UpgradableLock, Blob},
     block::BLOCK_SIZE,
     branch::Branch,
     db,
@@ -9,12 +13,7 @@ use crate::{
     locator::Locator,
     version_vector::VersionVector,
 };
-use futures_util::TryStreamExt;
-use std::{
-    fmt,
-    future::{self, Future},
-    io::SeekFrom,
-};
+use std::{fmt, future::Future, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tracing::instrument;
 
@@ -95,27 +94,30 @@ impl File {
     /// while awaiting the result.
     pub fn progress(&self) -> impl Future<Output = Result<u64>> {
         let branch = self.branch().clone();
-        let blob_id = *self.blob.locator().blob_id();
+        let locator = *self.blob.locator();
         let block_count = self.blob.block_count();
 
         async move {
-            let snapshot = {
-                let mut tx = branch.db().begin_read().await?;
-                branch.data().load_snapshot(&mut tx).await?
-            };
+            let permit = branch.file_progress_cache().acquire().await;
 
-            let mut block_ids = BlockIds::new(branch, blob_id, snapshot, Some(block_count));
+            let mut tx = branch.db().begin_read().await?;
+            let snapshot = branch.data().load_snapshot(&mut tx).await?;
 
-            let count = block_ids
-                .as_stream()
-                .try_fold(0u32, |count, (_, presence)| {
-                    future::ready(Ok(count.saturating_add(if presence.is_present() {
-                        1
-                    } else {
-                        0
-                    })))
-                })
-                .await?;
+            let mut entry = permit.get(*locator.blob_id());
+            let mut count = *entry;
+
+            for index in *entry..block_count {
+                let encoded_locator = locator.nth(index).encode(branch.keys().read());
+                let (_, presence) = snapshot.get_block(&mut tx, &encoded_locator).await?;
+
+                if presence.is_present() {
+                    count = count.saturating_add(1);
+                } else {
+                    break;
+                }
+            }
+
+            *entry = count;
 
             Ok(count as u64 * BLOCK_SIZE as u64)
         }

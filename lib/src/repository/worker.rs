@@ -210,12 +210,21 @@ mod scan {
         branch: Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
+        let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
+        let mut block_number = 0;
+        let mut file_progress_cache_reset = false;
 
         while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
             if !presence.is_present() {
                 shared.state.block_tracker.require(block_id);
+
+                if !file_progress_cache_reset {
+                    file_progress_cache_reset = true;
+                    branch.file_progress_cache().reset(&blob_id, block_number);
+                }
             }
+
+            block_number = block_number.saturating_add(1);
         }
 
         Ok(())
