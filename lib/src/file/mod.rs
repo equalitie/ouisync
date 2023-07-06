@@ -1,3 +1,7 @@
+mod progress_cache;
+
+pub(crate) use progress_cache::FileProgressCache;
+
 use crate::{
     blob::{lock::UpgradableLock, Blob},
     block::BLOCK_SIZE,
@@ -16,11 +20,6 @@ use tracing::instrument;
 // When this many blocks are written, the shared transaction is forcefully commited. This prevents
 // the shared transaction from becoming too big.
 const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
-
-// Maximum number of `File.progress` calls that can be executed concurrently. We limit this because
-// the operation is currently slow and we don't want to exhaust all db connections when multiple
-// files are queries for progress.
-pub(crate) const MAX_CONCURRENT_FILE_PROGRESS_QUERIES: usize = 3;
 
 pub struct File {
     blob: Blob,
@@ -99,26 +98,28 @@ impl File {
         let block_count = self.blob.block_count();
 
         async move {
-            let _permit = branch.acquire_file_progress_query_permit().await;
+            let permit = branch.file_progress_cache().acquire().await;
 
             let mut tx = branch.db().begin_read().await?;
             let snapshot = branch.data().load_snapshot(&mut tx).await?;
 
-            let mut count = 0u64;
+            let mut entry = permit.get(*locator.blob_id());
+            let mut count = *entry;
 
-            for locator in locator
-                .sequence()
-                .map(|locator| locator.encode(branch.keys().read()))
-                .take(block_count as usize)
-            {
-                let (_, presence) = snapshot.get_block(&mut tx, &locator).await?;
+            for index in *entry..block_count {
+                let encoded_locator = locator.nth(index).encode(branch.keys().read());
+                let (_, presence) = snapshot.get_block(&mut tx, &encoded_locator).await?;
 
                 if presence.is_present() {
                     count = count.saturating_add(1);
+                } else {
+                    break;
                 }
             }
 
-            Ok(count * BLOCK_SIZE as u64)
+            *entry = count;
+
+            Ok(count as u64 * BLOCK_SIZE as u64)
         }
     }
 

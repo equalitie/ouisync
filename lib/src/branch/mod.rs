@@ -8,7 +8,7 @@ use crate::{
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
-    file::{File, MAX_CONCURRENT_FILE_PROGRESS_QUERIES},
+    file::{File, FileProgressCache},
     index::BranchData,
     locator::Locator,
     path,
@@ -19,7 +19,6 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(Clone)]
 pub struct Branch {
@@ -150,14 +149,8 @@ impl Branch {
         &self.shared.uncommitted_block_counter
     }
 
-    pub(crate) async fn acquire_file_progress_query_permit(&self) -> OwnedSemaphorePermit {
-        // unwrap is ok because we never `close` the semaphore.
-        self.shared
-            .file_progress_query_limiter
-            .clone()
-            .acquire_owned()
-            .await
-            .unwrap()
+    pub(crate) fn file_progress_cache(&self) -> &FileProgressCache {
+        &self.shared.file_progress_cache
     }
 
     pub(crate) fn notify(&self) -> BranchEventSender {
@@ -191,8 +184,7 @@ pub(crate) struct BranchShared {
     pub locker: Locker,
     // Number of blocks written without committing the shared transaction.
     pub uncommitted_block_counter: Arc<AtomicCounter>,
-    // Limits the number of concurrent `File.progress` queries.
-    pub file_progress_query_limiter: Arc<Semaphore>,
+    pub file_progress_cache: FileProgressCache,
 }
 
 impl BranchShared {
@@ -200,9 +192,7 @@ impl BranchShared {
         Self {
             locker: Locker::new(),
             uncommitted_block_counter: Arc::new(AtomicCounter::new()),
-            file_progress_query_limiter: Arc::new(Semaphore::new(
-                MAX_CONCURRENT_FILE_PROGRESS_QUERIES,
-            )),
+            file_progress_cache: FileProgressCache::new(),
         }
     }
 }
