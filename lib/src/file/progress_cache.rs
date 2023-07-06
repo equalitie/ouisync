@@ -38,6 +38,12 @@ impl FileProgressCache {
             permit,
         }
     }
+
+    pub fn reset(&self, blob_id: &BlobId, new_count: u32) {
+        if let Some((count, _)) = self.shared.block_counts.lock().unwrap().get_mut(blob_id) {
+            *count = new_count;
+        }
+    }
 }
 
 struct Shared {
