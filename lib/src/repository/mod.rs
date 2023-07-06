@@ -41,6 +41,7 @@ use crate::{
     progress::Progress,
     state_monitor::StateMonitor,
     storage_size::StorageSize,
+    store::{self, Store},
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
@@ -164,7 +165,8 @@ impl Repository {
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-        let index = Index::new(pool, *secrets.id(), event_tx);
+        let store = Store::new(pool);
+        let index = Index::new(store, *secrets.id(), event_tx);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -438,7 +440,7 @@ impl Repository {
     }
 
     pub(crate) fn db(&self) -> &db::Pool {
-        self.shared.state.db()
+        self.shared.state.store().raw()
     }
 
     /// Get the state monitor node of this repository.
@@ -658,14 +660,25 @@ impl Repository {
                 .await
             {
                 Ok(dir) => dir,
-                Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-                    tracing::warn!(
+                Err(error @ Error::Store(store::Error::BranchNotFound))
+                    if branch.id() == local_branch.id() =>
+                {
+                    tracing::trace!(
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory on local branch"
+                    );
+                    // Local branch doesn't exist yet in the store. This is safe to ignore.
+                    continue;
+                }
+                Err(error @ Error::Store(store::Error::BlockNotFound)) => {
+                    tracing::trace!(
                         branch_id = ?branch.id(),
                         ?error,
                         "failed to open root directory"
                     );
-                    // Some branch roots may not have been loaded across the network yet. We'll
-                    // ignore those.
+                    // Some branch root blocks may not have been loaded across the network yet.
+                    // This is safe to ignore.
                     continue;
                 }
                 Err(error) => {
@@ -701,7 +714,7 @@ impl Repository {
             }
         }
 
-        self.shared.state.db().close().await?;
+        self.shared.state.store().close().await?;
 
         Ok(())
     }
@@ -796,7 +809,7 @@ impl Shared {
         };
 
         Ok(Branch::new(
-            self.state.db().clone(),
+            Store::new(self.state.store().raw().clone()),
             data,
             keys,
             self.branch_shared.clone(),

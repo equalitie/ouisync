@@ -23,12 +23,12 @@ use crate::{
     },
     branch::Branch,
     crypto::sign::PublicKey,
-    db,
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    index::{SnapshotData, VersionVectorOp},
+    index::VersionVectorOp,
     locator::Locator,
+    store::{self, ReadTransaction, RootNode, WriteTransaction},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -62,7 +62,7 @@ impl Directory {
         let locator = Locator::ROOT;
 
         let lock = branch.locker().read(*locator.blob_id()).await;
-        let mut tx = branch.db().begin_write().await?;
+        let mut tx = branch.store().begin_write().await?;
 
         let dir = match Self::open_in(
             Some(lock),
@@ -75,7 +75,7 @@ impl Directory {
         .await
         {
             Ok(dir) => Some(dir),
-            Err(Error::EntryNotFound) => None,
+            Err(Error::Store(store::Error::BranchNotFound)) => None,
             Err(error) => return Err(error),
         };
 
@@ -94,7 +94,7 @@ impl Directory {
 
     /// Reloads this directory from the db.
     pub(crate) async fn refresh(&mut self) -> Result<()> {
-        let mut tx = self.branch().db().begin_read().await?;
+        let mut tx = self.branch().store().begin_read().await?;
         self.refresh_in(&mut tx).await
     }
 
@@ -115,7 +115,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let mut tx = self.branch().db().begin_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -150,7 +150,7 @@ impl Directory {
         name: String,
         op: VersionVectorOp<'_>,
     ) -> Result<Self> {
-        let mut tx = self.branch().db().begin_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -250,7 +250,7 @@ impl Directory {
         branch_id: &PublicKey,
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
-        let mut tx = self.branch().db().begin_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
 
         let (content, _old_lock) = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
@@ -299,7 +299,7 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        let mut tx = self.branch().db().begin_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
 
         let (dst_content, _old_dst_lock) = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
@@ -356,7 +356,7 @@ impl Directory {
     /// Updates the version vector of this directory by merging it with `vv`.
     #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
-        let mut tx = self.branch().db().begin_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
         self.bump(&mut tx, VersionVectorOp::Merge(vv)).await?;
         self.commit(tx).await
     }
@@ -371,7 +371,7 @@ impl Directory {
 
     async fn open_in(
         lock: Option<ReadLock>,
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
         branch: Branch,
         locator: Locator,
         parent: Option<ParentContext>,
@@ -388,7 +388,7 @@ impl Directory {
     }
 
     async fn open_snapshot(
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
         branch: Branch,
         locator: Locator,
         fallback: DirectoryFallback,
@@ -409,7 +409,7 @@ impl Directory {
             DirectoryLocking::Disabled => None,
         };
 
-        let mut tx = branch.db().begin_read().await?;
+        let mut tx = branch.store().begin_read().await?;
         Self::open_in(lock, &mut tx, branch, locator, parent, fallback).await
     }
 
@@ -523,7 +523,7 @@ impl Directory {
 
     async fn begin_remove_entry(
         &mut self,
-        tx: &mut db::WriteTransaction,
+        tx: &mut WriteTransaction,
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
@@ -574,7 +574,7 @@ impl Directory {
 
     async fn begin_insert_entry(
         &mut self,
-        tx: &mut db::WriteTransaction,
+        tx: &mut WriteTransaction,
         name: String,
         data: EntryData,
     ) -> Result<(Content, Option<UniqueLock>)> {
@@ -588,7 +588,7 @@ impl Directory {
         Ok((content, old_lock))
     }
 
-    async fn refresh_in(&mut self, tx: &mut db::ReadTransaction) -> Result<()> {
+    async fn refresh_in(&mut self, tx: &mut ReadTransaction) -> Result<()> {
         if self.blob.is_dirty() {
             Ok(())
         } else {
@@ -606,7 +606,7 @@ impl Directory {
         }
     }
 
-    async fn save(&mut self, tx: &mut db::WriteTransaction, content: &Content) -> Result<()> {
+    async fn save(&mut self, tx: &mut WriteTransaction, content: &Content) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
         self.blob.truncate(tx, 0).await?;
@@ -617,7 +617,7 @@ impl Directory {
     }
 
     /// Atomically commits the transaction and sends notification event.
-    async fn commit(&mut self, tx: db::WriteTransaction) -> Result<()> {
+    async fn commit(&mut self, tx: WriteTransaction) -> Result<()> {
         let event_tx = self.branch().notify();
         tx.commit_and_then(move || event_tx.send()).await?;
         Ok(())
@@ -627,7 +627,7 @@ impl Directory {
     #[async_recursion]
     async fn bump<'a: 'async_recursion>(
         &mut self,
-        tx: &mut db::WriteTransaction,
+        tx: &mut WriteTransaction,
         op: VersionVectorOp<'a>,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
@@ -643,10 +643,10 @@ impl Directory {
             let mut snapshot = self
                 .branch()
                 .data()
-                .load_or_create_snapshot(tx, write_keys)
+                .load_or_create_snapshot(tx.raw_mut(), write_keys)
                 .await?;
-            snapshot.bump(tx, op, write_keys).await?;
-            snapshot.remove_all_older(tx).await?;
+            snapshot.bump(tx.raw_mut(), op, write_keys).await?;
+            snapshot.remove_all_older(tx.raw_mut()).await?;
 
             Ok(())
         }
@@ -691,17 +691,17 @@ pub(crate) enum DirectoryLocking {
 
 // Load directory content. On missing block, fallback to previous snapshot (if any).
 async fn load(
-    tx: &mut db::ReadTransaction,
+    tx: &mut ReadTransaction,
     branch: Branch,
     locator: Locator,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
-    let mut snapshot = branch.data().load_snapshot(tx).await?;
+    let mut root_node = tx.load_latest_root_node(*branch.id()).await?;
 
     loop {
-        let error = match load_in(tx, branch.clone(), &snapshot, locator).await {
+        let error = match load_in(tx, &root_node, branch.clone(), locator).await {
             Ok((blob, content)) => return Ok((blob, content)),
-            Err(error @ Error::BlockNotFound(_)) => error,
+            Err(error @ Error::Store(store::Error::BlockNotFound)) => error,
             Err(error) => return Err(error),
         };
 
@@ -710,8 +710,8 @@ async fn load(
             DirectoryFallback::Disabled => return Err(error),
         }
 
-        if let Some(prev_snapshot) = snapshot.load_prev(tx).await? {
-            snapshot = prev_snapshot;
+        if let Some(prev) = tx.load_prev_root_node(&root_node).await? {
+            root_node = prev;
         } else {
             return Err(error);
         }
@@ -719,13 +719,13 @@ async fn load(
 }
 
 async fn load_in(
-    tx: &mut db::ReadTransaction,
+    tx: &mut ReadTransaction,
+    root_node: &RootNode,
     branch: Branch,
-    snapshot: &SnapshotData,
     locator: Locator,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open_in(tx, branch, snapshot, locator).await?;
-    let buffer = blob.read_to_end_in(tx, snapshot).await?;
+    let mut blob = Blob::open_in(tx, root_node, branch, locator).await?;
+    let buffer = blob.read_to_end_in(tx, root_node).await?;
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))

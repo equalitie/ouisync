@@ -4,22 +4,23 @@ use crate::{
     block::BlockId,
     branch::Branch,
     error::{Error, Result},
-    index::{SingleBlockPresence, SnapshotData},
+    index::SingleBlockPresence,
     locator::Locator,
+    store::{self, RootNode},
 };
 
 /// Stream-like object that yields the block ids of the given blob in their sequential order.
 pub(crate) struct BlockIds {
+    root_node: RootNode,
     branch: Branch,
-    snapshot: SnapshotData,
     locator: Locator,
     upper_bound: Option<u32>,
 }
 
 impl BlockIds {
     pub async fn open(branch: Branch, blob_id: BlobId) -> Result<Self> {
-        let mut tx = branch.db().begin_read().await?;
-        let snapshot = branch.data().load_snapshot(&mut tx).await?;
+        let mut tx = branch.store().begin_read().await?;
+        let root_node = tx.load_latest_root_node(*branch.id()).await?;
 
         // If the first block of the blob is available, we read the blob length from it and use it
         // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.
@@ -30,27 +31,18 @@ impl BlockIds {
         // stop iterating before we hit `EntryNotFound` and we would end up processing also the
         // blocks that are past the end of the blob. This means that e.g., the garbage collector
         // would consider those blocks still reachable and would never remove them.
-        let upper_bound = match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
+        let upper_bound = match read_len(&mut tx, &root_node, blob_id, branch.keys().read()).await {
             Ok(len) => Some(block_count(len)),
-            Err(Error::BlockNotFound(_)) => None,
+            Err(Error::Store(store::Error::BlockNotFound)) => None,
             Err(error) => return Err(error),
         };
 
-        Ok(Self::new(branch, blob_id, snapshot, upper_bound))
-    }
-
-    pub fn new(
-        branch: Branch,
-        blob_id: BlobId,
-        snapshot: SnapshotData,
-        upper_bound: Option<u32>,
-    ) -> Self {
-        Self {
+        Ok(Self {
+            root_node,
             branch,
-            snapshot,
             locator: Locator::head(blob_id),
             upper_bound,
-        }
+        })
     }
 
     pub async fn try_next(&mut self) -> Result<Option<(BlockId, SingleBlockPresence)>> {
@@ -61,15 +53,15 @@ impl BlockIds {
         }
 
         let encoded = self.locator.encode(self.branch.keys().read());
-        let mut tx = self.branch.db().begin_read().await?;
+        let mut tx = self.branch.store().begin_read().await?;
 
-        match self.snapshot.get_block(&mut tx, &encoded).await {
+        match tx.find_block_in(&self.root_node, encoded).await {
             Ok(block) => {
                 self.locator = self.locator.next();
                 Ok(Some(block))
             }
-            Err(error @ Error::EntryNotFound) => {
-                // There are two reasons why `EntryNotFound` can be returned here:
+            Err(error @ store::Error::LocatorNotFound) => {
+                // There are two reasons why this error can be returned here:
                 //
                 //     1. we reached  the end of the blob, or
                 //     2. the snapshot has been deleted in the meantime.
@@ -78,13 +70,13 @@ impl BlockIds {
                 // propagate the error otherwise we might end up incorrectly marking some blocks
                 // as unreachable when in reality they might still be reachable just through a
                 // different (newer) snapshot.
-                if self.upper_bound.is_none() && self.snapshot.exists(&mut tx).await? {
+                if self.upper_bound.is_none() && tx.root_node_exists(&self.root_node).await? {
                     Ok(None)
                 } else {
-                    Err(error)
+                    Err(error.into())
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         }
     }
 }

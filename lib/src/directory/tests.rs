@@ -5,6 +5,7 @@ use crate::{
     db,
     event::EventSender,
     index::BranchData,
+    store::Store,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
@@ -591,9 +592,10 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 }
 
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
-    let event_tx = EventSender::new(1);
-    let shared = BranchShared::new();
+    let store = Store::new(pool);
     let id = PublicKey::random();
     let branch_data = BranchData::new(id);
-    Branch::new(pool, branch_data, keys, shared, event_tx)
+    let shared = BranchShared::new();
+    let event_tx = EventSender::new(1);
+    Branch::new(store, branch_data, keys, shared, event_tx)
 }

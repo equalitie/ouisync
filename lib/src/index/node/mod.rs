@@ -1,19 +1,11 @@
 #[cfg(test)]
 pub mod test_utils;
 
-mod inner;
-mod leaf;
-mod root;
 mod summary;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    inner::{InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
-    leaf::{LeafNode, LeafNodeSet, ModifyStatus},
-    root::RootNode,
-    summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
-};
+pub(crate) use self::summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 
 use super::{receive_filter::ReceiveFilter, try_collect_into};
 use crate::{
@@ -22,13 +14,9 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
+    store::{InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
-
-/// Get the bucket for `locator` at the specified `inner_layer`.
-pub(super) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
-    locator.as_ref()[inner_layer]
-}
 
 /// Reason for updating the summary
 pub(crate) enum UpdateSummaryReason {

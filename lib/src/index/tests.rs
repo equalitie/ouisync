@@ -1,18 +1,19 @@
 use super::{
     branch_data::BranchData,
-    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, EMPTY_INNER_HASH},
+    node::{self, SingleBlockPresence},
     node_test_utils::{self, Snapshot},
     proof::Proof,
     Index, ReceiveError, ReceiveFilter,
 };
 use crate::{
-    block::{self, BlockId, BlockTracker, BLOCK_SIZE},
+    block::{BlockId, BlockTracker, BLOCK_SIZE},
     crypto::sign::{Keypair, PublicKey},
     db,
     event::EventSender,
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
     state_monitor::StateMonitor,
+    store::{InnerNode, LeafNode, ReadTransaction, RootNode, Store, EMPTY_INNER_HASH},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -27,7 +28,7 @@ use tokio::task;
 async fn receive_valid_root_node() {
     let (_base_dir, index, write_keys) = setup().await;
     let remote_id = PublicKey::random();
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
 
     // Initially the remote branch doesn't exist
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
@@ -79,7 +80,7 @@ async fn receive_root_node_with_invalid_proof() {
     assert_matches!(result, Err(ReceiveError::InvalidProof));
 
     // The invalid root was not written to the db.
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
@@ -105,7 +106,7 @@ async fn receive_root_node_with_empty_version_vector() {
         .await
         .unwrap();
 
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
     assert!(RootNode::load_latest_by_writer(&mut conn, remote_id)
         .await
         .unwrap()
@@ -138,7 +139,7 @@ async fn receive_duplicate_root_node() {
         .unwrap();
 
     assert_eq!(
-        RootNode::load_all_by_writer(&mut index.pool.acquire().await.unwrap(), remote_id)
+        RootNode::load_all_by_writer(&mut index.db().acquire().await.unwrap(), remote_id)
             .filter(|node| future::ready(node.is_ok()))
             .count()
             .await,
@@ -164,28 +165,22 @@ async fn receive_root_node_with_existing_hash() {
     let block_nonce = rng.gen();
     let locator = rng.gen();
 
-    let mut tx = index.pool.begin_write().await.unwrap();
-
-    block::write(&mut tx, &block_id, &content, &block_nonce)
+    let mut tx = index.store().begin_write().await.unwrap();
+    tx.link_block(
+        *local_branch.id(),
+        locator,
+        &block_id,
+        SingleBlockPresence::Present,
+        &write_keys,
+    )
+    .await
+    .unwrap();
+    tx.write_block(&block_id, &content, &block_nonce)
         .await
         .unwrap();
-    local_branch
-        .load_or_create_snapshot(&mut tx, &write_keys)
-        .await
-        .unwrap()
-        .insert_block(
-            &mut tx,
-            &locator,
-            &block_id,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
-
     tx.commit().await.unwrap();
 
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
     let root = local_branch
@@ -258,7 +253,7 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = index.pool.begin_write().await.unwrap();
+        let mut tx = index.db().begin_write().await.unwrap();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
@@ -276,7 +271,7 @@ mod receive_and_create_root_node {
 
         tx.commit().await.unwrap();
 
-        let mut conn = index.pool.acquire().await.unwrap();
+        let mut conn = index.db().acquire().await.unwrap();
         let root_node_0 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
             .await
             .unwrap()
@@ -285,7 +280,7 @@ mod receive_and_create_root_node {
 
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
-        let mut tx = index.pool.begin_write().await.unwrap();
+        let mut tx = index.db().begin_write().await.unwrap();
         node::receive_block(&mut tx, &block_id_1).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -305,7 +300,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = index.pool.begin_write().await.unwrap();
+            let mut tx = index.db().begin_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -344,7 +339,7 @@ mod receive_and_create_root_node {
             }
         }
 
-        let mut conn = index.pool.acquire().await.unwrap();
+        let mut conn = index.db().acquire().await.unwrap();
         let root_node_1 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
             .await
             .unwrap()
@@ -384,7 +379,7 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
-    let receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.db().clone());
 
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
@@ -394,7 +389,7 @@ async fn receive_valid_child_nodes() {
                 .unwrap();
 
             assert!(
-                !InnerNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+                !InnerNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
                     .await
                     .unwrap()
                     .is_empty()
@@ -409,7 +404,7 @@ async fn receive_valid_child_nodes() {
             .unwrap();
 
         assert!(
-            !LeafNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+            !LeafNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
                 .await
                 .unwrap()
                 .is_empty()
@@ -422,7 +417,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     let (_base_dir, index, _write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.db().clone());
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
@@ -432,7 +427,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
         // The orphaned inner nodes were not written to the db.
-        let inner_nodes = InnerNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+        let inner_nodes = InnerNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
             .await
             .unwrap();
         assert!(inner_nodes.is_empty());
@@ -445,7 +440,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
     // The orphaned leaf nodes were not written to the db.
-    let leaf_nodes = LeafNode::load_children(&mut index.pool.acquire().await.unwrap(), hash)
+    let leaf_nodes = LeafNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
         .await
         .unwrap();
     assert!(leaf_nodes.is_empty());
@@ -482,8 +477,8 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut repo.db().begin_read().await.unwrap(),
-        &remote_branch,
+        &mut repo.store().begin_read().await.unwrap(),
+        *remote_branch.id(),
         &snapshot0,
     )
     .await;
@@ -503,8 +498,8 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut repo.db().begin_read().await.unwrap(),
-        &remote_branch,
+        &mut repo.store().begin_read().await.unwrap(),
+        *remote_branch.id(),
         &snapshot0,
     )
     .await;
@@ -699,7 +694,7 @@ async fn receive_existing_snapshot() {
     let snapshot = Snapshot::generate(&mut rng, 32);
     let vv = VersionVector::first(remote_id);
 
-    let receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.db().clone());
 
     node_test_utils::receive_nodes(
         &index,
@@ -741,23 +736,24 @@ async fn setup() -> (TempDir, Index, Keypair) {
 
 async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
+    let store = Store::new(pool);
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
-    let index = Index::new(pool, repository_id, event_tx);
+    let index = Index::new(store, repository_id, event_tx);
 
     (base_dir, index, write_keys)
 }
 
 async fn check_all_blocks_exist(
-    tx: &mut db::ReadTransaction,
-    branch: &BranchData,
+    tx: &mut ReadTransaction,
+    branch_id: PublicKey,
     snapshot: &Snapshot,
 ) {
     for node in snapshot.leaf_sets().flat_map(|(_, nodes)| nodes) {
-        let (block_id, _) = branch.get(tx, &node.locator).await.unwrap();
-        assert!(block::exists(tx, &block_id).await.unwrap());
+        let (block_id, _) = tx.find_block(branch_id, node.locator).await.unwrap();
+        assert!(tx.block_exists(&block_id).await.unwrap());
     }
 }
 
@@ -768,7 +764,7 @@ async fn receive_snapshot(
     write_keys: &Keypair,
 ) {
     let vv = {
-        let mut conn = index.pool.acquire().await.unwrap();
+        let mut conn = index.db().acquire().await.unwrap();
         BranchData::new(writer_id)
             .load_version_vector(&mut conn)
             .await
@@ -776,20 +772,20 @@ async fn receive_snapshot(
             .incremented(writer_id)
     };
 
-    let receive_filter = ReceiveFilter::new(index.pool.clone());
+    let receive_filter = ReceiveFilter::new(index.db().clone());
 
     node_test_utils::receive_nodes(index, write_keys, writer_id, vv, &receive_filter, snapshot)
         .await
 }
 
 async fn receive_block(index: &Index, block_id: &BlockId) {
-    let mut tx = index.pool.begin_write().await.unwrap();
+    let mut tx = index.db().begin_write().await.unwrap();
     node::receive_block(&mut tx, block_id).await.unwrap();
     tx.commit().await.unwrap();
 }
 
 async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
     RootNode::load_all_by_writer(&mut conn, *writer_id)
         .try_fold(0, |sum, _node| future::ready(Ok(sum + 1)))
         .await
@@ -797,12 +793,12 @@ async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
 }
 
 async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
-    let mut conn = index.pool.acquire().await.unwrap();
+    let mut conn = index.db().acquire().await.unwrap();
     let snapshot = BranchData::new(*writer_id)
         .load_snapshot(&mut conn)
         .await
         .unwrap();
     drop(conn);
 
-    snapshot.prune(&index.pool).await.unwrap();
+    snapshot.prune(index.db()).await.unwrap();
 }

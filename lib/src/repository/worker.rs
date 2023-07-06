@@ -301,7 +301,7 @@ mod prune {
                 }
             };
 
-            let mut tx = shared.state.db().begin_write().await?;
+            let mut tx = shared.state.store().raw().begin_write().await?;
             snapshot.remove_all_older(&mut tx).await?;
             snapshot.remove(&mut tx).await?;
             tx.commit().await?;
@@ -316,7 +316,7 @@ mod prune {
 
         // Remove outdated snapshots.
         for snapshot in uptodate {
-            snapshot.prune(shared.state.db()).await?;
+            snapshot.prune(shared.state.store().raw()).await?;
         }
 
         Ok(())
@@ -327,10 +327,11 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        block::{self, BlockId},
+        block::BlockId,
         crypto::sign::Keypair,
         db,
-        index::{self, LeafNode, SnapshotData, UpdateSummaryReason},
+        index::{self, SnapshotData, UpdateSummaryReason},
+        store::{LeafNode, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -519,13 +520,13 @@ mod trash {
                 break;
             }
 
-            let mut tx = shared.state.db().begin_write().await?;
+            let mut tx = shared.state.store().begin_write().await?;
 
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                let mut snapshot = local_branch.data().load_snapshot(&mut tx).await?;
-                remove_local_nodes(&mut tx, &mut snapshot, write_keys, &batch).await?;
+                let mut snapshot = local_branch.data().load_snapshot(tx.raw_mut()).await?;
+                remove_local_nodes(tx.raw_mut(), &mut snapshot, write_keys, &batch).await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -577,19 +578,24 @@ mod trash {
         Ok(())
     }
 
-    async fn remove_blocks(tx: &mut db::WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
+    async fn remove_blocks(tx: &mut WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
             tracing::trace!(?block_id, "unreachable block removed");
 
-            block::remove(tx, block_id).await?;
+            tx.remove_block(block_id).await?;
 
-            LeafNode::set_missing(tx, block_id).await?;
+            LeafNode::set_missing(tx.raw_mut(), block_id).await?;
 
-            let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(tx, block_id)
+            let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(tx.raw_mut(), block_id)
                 .try_collect()
                 .await?;
 
-            index::update_summaries(tx, parent_hashes, UpdateSummaryReason::BlockRemoved).await?;
+            index::update_summaries(
+                tx.raw_mut(),
+                parent_hashes,
+                UpdateSummaryReason::BlockRemoved,
+            )
+            .await?;
         }
 
         Ok(())

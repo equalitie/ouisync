@@ -1,6 +1,5 @@
 mod branch_data;
 mod node;
-mod path;
 mod proof;
 mod quota;
 mod receive_filter;
@@ -8,12 +7,12 @@ mod receive_filter;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use self::node::{test_utils as node_test_utils, EMPTY_INNER_HASH};
+pub(crate) use self::node::test_utils as node_test_utils;
 pub(crate) use self::{
     branch_data::{BranchData, SnapshotData},
     node::{
-        receive_block, update_summaries, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
-        MultiBlockPresence, NodeState, RootNode, SingleBlockPresence, Summary, UpdateSummaryReason,
+        receive_block, update_summaries, MultiBlockPresence, NodeState, SingleBlockPresence,
+        Summary, UpdateSummaryReason,
     },
     proof::{Proof, UntrustedProof},
     receive_filter::ReceiveFilter,
@@ -29,6 +28,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     repository::RepositoryId,
     storage_size::StorageSize,
+    store::{self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store},
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -41,18 +41,28 @@ pub(crate) type SnapshotId = u32;
 
 #[derive(Clone)]
 pub(crate) struct Index {
-    pub pool: db::Pool,
+    store: Store,
     repository_id: RepositoryId,
     event_tx: EventSender,
 }
 
 impl Index {
-    pub fn new(pool: db::Pool, repository_id: RepositoryId, event_tx: EventSender) -> Self {
+    pub fn new(store: Store, repository_id: RepositoryId, event_tx: EventSender) -> Self {
         Self {
-            pool,
+            store,
             repository_id,
             event_tx,
         }
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    // TODO: deprecate this
+    // #[deprecated = "use store"]
+    pub fn db(&self) -> &db::Pool {
+        self.store.raw()
     }
 
     pub fn repository_id(&self) -> &RepositoryId {
@@ -60,13 +70,13 @@ impl Index {
     }
 
     pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.db().acquire().await?;
         BranchData::load_all(&mut conn).try_collect().await
     }
 
     /// Load latest snapshots of all branches.
     pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.db().acquire().await?;
         SnapshotData::load_all(&mut conn).try_collect().await
     }
 
@@ -80,7 +90,7 @@ impl Index {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        let mut conn = self.pool.acquire().await.unwrap();
+        let mut conn = self.db().acquire().await.unwrap();
         RootNode::debug_print(&mut conn, print).await;
     }
 
@@ -104,7 +114,7 @@ impl Index {
         // incoming node might become outdated. But because we already concluded it's up-to-date,
         // we end up inserting it anyway which breaks the invariant that a node inserted later must
         // be happens-after any node inserted earlier in the same branch.
-        let mut tx = self.pool.begin_write().await?;
+        let mut tx = self.db().begin_write().await?;
 
         // Determine further actions by comparing the incoming node against the existing nodes:
         let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
@@ -137,7 +147,7 @@ impl Index {
         receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
-        let mut tx = self.pool.begin_write().await?;
+        let mut tx = self.db().begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
@@ -163,7 +173,7 @@ impl Index {
         nodes: CacheHash<LeafNodeSet>,
         quota: Option<StorageSize>,
     ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
-        let mut tx = self.pool.begin_write().await?;
+        let mut tx = self.db().begin_write().await?;
         let parent_hash = nodes.hash();
 
         self.check_parent_node_exists(&mut tx, &parent_hash).await?;
@@ -377,6 +387,12 @@ impl From<ProofError> for ReceiveError {
 
 impl From<sqlx::Error> for ReceiveError {
     fn from(error: sqlx::Error) -> Self {
+        Self::from(Error::from(error))
+    }
+}
+
+impl From<store::Error> for ReceiveError {
+    fn from(error: store::Error) -> Self {
         Self::from(Error::from(error))
     }
 }

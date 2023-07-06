@@ -1,6 +1,6 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
-    db,
+    db, store,
 };
 use std::{array::TryFromSliceError, fmt, io};
 use thiserror::Error;
@@ -10,16 +10,20 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    // TODO: remove
     #[error("database error")]
     Db(#[from] db::Error),
+    #[error("store error")]
+    Store(#[from] store::Error),
     #[error("permission denied")]
     PermissionDenied,
+    // TODO: remove
     #[error("data is malformed")]
     MalformedData,
+    // TODO: remove
     #[error("block not found: {0}")]
     BlockNotFound(BlockId),
-    #[error("block is not referenced by the index")]
-    BlockNotReferenced,
+    // TODO: remove
     #[error("block has wrong length (expected: {}, actual: {0})", BLOCK_SIZE)]
     WrongBlockLength(usize),
     #[error("not a directory or directory malformed")]

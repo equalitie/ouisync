@@ -3,7 +3,6 @@ use crate::{
     blob::lock::{BranchLocker, Locker},
     block::BlockId,
     crypto::sign::PublicKey,
-    db,
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
     error::{Error, Result},
@@ -12,17 +11,14 @@ use crate::{
     index::BranchData,
     locator::Locator,
     path,
+    store::Store,
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
 
 #[derive(Clone)]
 pub struct Branch {
-    pool: db::Pool,
+    store: Store,
     branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
@@ -31,14 +27,14 @@ pub struct Branch {
 
 impl Branch {
     pub(crate) fn new(
-        pool: db::Pool,
+        store: Store,
         branch_data: BranchData,
         keys: AccessKeys,
         shared: BranchShared,
         event_tx: EventSender,
     ) -> Self {
         Self {
-            pool,
+            store,
             branch_data,
             keys,
             shared,
@@ -59,8 +55,8 @@ impl Branch {
         self.branch_data.id()
     }
 
-    pub(crate) fn db(&self) -> &db::Pool {
-        &self.pool
+    pub(crate) fn store(&self) -> &Store {
+        &self.store
     }
 
     pub(crate) fn data(&self) -> &BranchData {
@@ -68,7 +64,7 @@ impl Branch {
     }
 
     pub async fn version_vector(&self) -> Result<VersionVector> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.store.raw().acquire().await?;
         self.branch_data.load_version_vector(&mut conn).await
     }
 
@@ -133,20 +129,15 @@ impl Branch {
     }
 
     pub(crate) async fn root_block_id(&self) -> Result<BlockId> {
-        let mut tx = self.pool.begin_read().await?;
-        let (block_id, _) = self
-            .data()
-            .get(&mut tx, &Locator::ROOT.encode(self.keys().read()))
+        let mut tx = self.store.begin_read().await?;
+        let (block_id, _) = tx
+            .find_block(*self.id(), Locator::ROOT.encode(self.keys().read()))
             .await?;
         Ok(block_id)
     }
 
     pub(crate) fn locker(&self) -> BranchLocker {
         self.shared.locker.branch(*self.id())
-    }
-
-    pub(crate) fn uncommitted_block_counter(&self) -> &Arc<AtomicCounter> {
-        &self.shared.uncommitted_block_counter
     }
 
     pub(crate) fn file_progress_cache(&self) -> &FileProgressCache {
@@ -182,8 +173,6 @@ impl Branch {
 #[derive(Clone)]
 pub(crate) struct BranchShared {
     pub locker: Locker,
-    // Number of blocks written without committing the shared transaction.
-    pub uncommitted_block_counter: Arc<AtomicCounter>,
     pub file_progress_cache: FileProgressCache,
 }
 
@@ -191,30 +180,8 @@ impl BranchShared {
     pub fn new() -> Self {
         Self {
             locker: Locker::new(),
-            uncommitted_block_counter: Arc::new(AtomicCounter::new()),
             file_progress_cache: FileProgressCache::new(),
         }
-    }
-}
-
-pub(crate) struct AtomicCounter(AtomicU32);
-
-impl AtomicCounter {
-    pub fn new() -> Self {
-        Self(AtomicU32::new(0))
-    }
-
-    // Increments the counter by one and returns the new value.
-    pub fn increment(&self) -> u32 {
-        self.0
-            .fetch_add(1, Ordering::Relaxed)
-            .checked_add(1)
-            .expect("counter out of range")
-    }
-
-    // Resets the counter back to zero.
-    pub fn reset(&self) {
-        self.0.store(0, Ordering::Relaxed)
     }
 }
 
@@ -304,9 +271,10 @@ mod tests {
         let secrets = WriteSecrets::random();
         let event_tx = EventSender::new(1);
 
-        let shared = BranchShared::new();
+        let store = Store::new(pool);
         let data = BranchData::new(writer_id);
-        let branch = Branch::new(pool, data, secrets.into(), shared, event_tx);
+        let shared = BranchShared::new();
+        let branch = Branch::new(store, data, secrets.into(), shared, event_tx);
 
         (base_dir, branch)
     }

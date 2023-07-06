@@ -23,17 +23,12 @@ use std::{
     ops::{Deref, DerefMut},
     panic::Location,
     path::Path,
-    sync::Arc,
     time::Duration,
 };
 #[cfg(test)]
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{
-    fs,
-    sync::{Mutex as AsyncMutex, OwnedMutexGuard as AsyncOwnedMutexGuard},
-    task,
-};
+use tokio::{fs, sync::OwnedMutexGuard as AsyncOwnedMutexGuard, task};
 
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
@@ -46,7 +41,6 @@ pub(crate) struct Pool {
     reads: SqlitePool,
     // Pool with a single writable connection.
     write: SqlitePool,
-    shared_tx: Arc<AsyncMutex<Option<WriteTransaction>>>,
 }
 
 impl Pool {
@@ -71,11 +65,7 @@ impl Pool {
             .connect_with(read_options)
             .await?;
 
-        Ok(Self {
-            reads,
-            write,
-            shared_tx: Arc::new(AsyncMutex::new(None)),
-        })
+        Ok(Self { reads, write })
     }
 
     /// Acquire a read-only database connection.
@@ -126,49 +116,10 @@ impl Pool {
     #[track_caller]
     pub fn begin_write(&self) -> impl Future<Output = Result<WriteTransaction, sqlx::Error>> + '_ {
         let location = Location::caller();
-
-        async move {
-            let mut shared_tx = self.shared_tx.lock().await;
-
-            if let Some(tx) = shared_tx.take() {
-                tx.commit().await?;
-            }
-
-            WriteTransaction::begin(&self.write, location).await
-        }
-    }
-
-    /// Begin a shared write transaction. Unlike regular write transaction, a shared write
-    /// transaction is not automatically rolled back when dropped. Instead it's returned to the
-    /// pool where it can be reused by calling `begin_shared_write` again. An idle shared write
-    /// transaction is auto committed when a regular write transaction is created with
-    /// `begin_write`. Shared write transaction can also be manually committed or rolled back by
-    /// calling `commit` or `rollback` on it respectively.
-    ///
-    /// Use shared write transactions to group multiple writes that don't logically need to be in
-    /// the same transaction to improve performance by reducing the number of commits.
-    #[track_caller]
-    pub fn begin_shared_write(
-        &self,
-    ) -> impl Future<Output = Result<SharedWriteTransaction, sqlx::Error>> + '_ {
-        let location = Location::caller();
-
-        async move {
-            let mut guard = self.shared_tx.clone().lock_owned().await;
-
-            if guard.is_none() {
-                *guard = Some(WriteTransaction::begin(&self.write, location).await?);
-            }
-
-            Ok(SharedWriteTransaction(guard))
-        }
+        WriteTransaction::begin(&self.write, location)
     }
 
     pub(crate) async fn close(&self) -> Result<(), sqlx::Error> {
-        if let Some(tx) = self.shared_tx.lock().await.take() {
-            tx.commit().await?
-        }
-
         self.write.close().await;
         self.reads.close().await;
 
@@ -333,23 +284,6 @@ impl_executor_by_deref!(WriteTransaction);
 // NOTE: The `Option` is never `None` except after `commit` or `rollback` but those methods take
 // `self` by value so the `None` is never observable. So it's always OK to call `unwrap` on it.
 pub(crate) struct SharedWriteTransaction(AsyncOwnedMutexGuard<Option<WriteTransaction>>);
-
-impl SharedWriteTransaction {
-    pub async fn commit(mut self) -> Result<(), sqlx::Error> {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.take().unwrap().commit().await
-    }
-
-    /// See [WriteTransaction::commit_and_then]
-    pub async fn commit_and_then<F, R>(mut self, f: F) -> Result<R, sqlx::Error>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        // `unwrap` is ok, see the NOTE above.
-        self.0.take().unwrap().commit_and_then(f).await
-    }
-}
 
 impl Deref for SharedWriteTransaction {
     type Target = WriteTransaction;

@@ -8,10 +8,10 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
-    db,
     error::{Error, Result},
     file::File,
     locator::Locator,
+    store::ReadTransaction,
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
@@ -222,7 +222,7 @@ impl<'a> DirectoryRef<'a> {
 
     pub(super) async fn open_snapshot(
         &self,
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
         fallback: DirectoryFallback,
     ) -> Result<Content> {
         Directory::open_snapshot(tx, self.branch().clone(), self.locator(), fallback).await

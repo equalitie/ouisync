@@ -1,11 +1,11 @@
 use super::{
-    leaf::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-    summary::Summary,
+    error::Error,
+    leaf_node::{self, LeafNodeSet, EMPTY_LEAF_HASH},
 };
 use crate::{
     crypto::{Digest, Hash, Hashable},
     db,
-    error::Result,
+    index::Summary,
 };
 use futures_util::{future, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
@@ -26,6 +26,47 @@ pub(crate) struct InnerNode {
     pub summary: Summary,
 }
 
+/// Load all inner nodes with the specified parent hash.
+pub(super) async fn load_children(
+    conn: &mut db::Connection,
+    parent: &Hash,
+) -> Result<InnerNodeMap, Error> {
+    sqlx::query(
+        "SELECT
+                 bucket,
+                 hash,
+                 state,
+                 block_presence
+             FROM snapshot_inner_nodes
+             WHERE parent = ?",
+    )
+    .bind(parent)
+    .fetch(conn)
+    .map_ok(|row| {
+        let bucket: u32 = row.get(0);
+        let node = InnerNode {
+            hash: row.get(1),
+            summary: Summary {
+                state: row.get(2),
+                block_presence: row.get(3),
+            },
+        };
+
+        (bucket, node)
+    })
+    .try_filter_map(|(bucket, node)| {
+        if let Ok(bucket) = bucket.try_into() {
+            future::ready(Ok(Some((bucket, node))))
+        } else {
+            tracing::error!("bucket out of range: {:?}", bucket);
+            future::ready(Ok(None))
+        }
+    })
+    .try_collect()
+    .await
+    .map_err(From::from)
+}
+
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
     pub fn new(hash: Hash, summary: Summary) -> Self {
@@ -33,45 +74,16 @@ impl InnerNode {
     }
 
     /// Load all inner nodes with the specified parent hash.
-    pub async fn load_children(conn: &mut db::Connection, parent: &Hash) -> Result<InnerNodeMap> {
-        sqlx::query(
-            "SELECT
-                 bucket,
-                 hash,
-                 state,
-                 block_presence
-             FROM snapshot_inner_nodes
-             WHERE parent = ?",
-        )
-        .bind(parent)
-        .fetch(conn)
-        .map_ok(|row| {
-            let bucket: u32 = row.get(0);
-            let node = Self {
-                hash: row.get(1),
-                summary: Summary {
-                    state: row.get(2),
-                    block_presence: row.get(3),
-                },
-            };
-
-            (bucket, node)
-        })
-        .try_filter_map(|(bucket, node)| {
-            if let Ok(bucket) = bucket.try_into() {
-                future::ready(Ok(Some((bucket, node))))
-            } else {
-                tracing::error!("bucket out of range: {:?}", bucket);
-                future::ready(Ok(None))
-            }
-        })
-        .try_collect()
-        .await
-        .map_err(From::from)
+    #[deprecated = "don't use directly"]
+    pub async fn load_children(
+        conn: &mut db::Connection,
+        parent: &Hash,
+    ) -> Result<InnerNodeMap, Error> {
+        load_children(conn, parent).await
     }
 
     /// Load the inner node with the specified hash
-    pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>> {
+    pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>, Error> {
         let node = sqlx::query(
             "SELECT state, block_presence
              FROM snapshot_inner_nodes
@@ -95,7 +107,7 @@ impl InnerNode {
     pub fn load_parent_hashes<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,
-    ) -> impl Stream<Item = Result<Hash>> + 'a {
+    ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
         sqlx::query("SELECT DISTINCT parent FROM snapshot_inner_nodes WHERE hash = ?")
             .bind(hash)
             .fetch(conn)
@@ -109,7 +121,7 @@ impl InnerNode {
         tx: &mut db::WriteTransaction,
         parent: &Hash,
         bucket: u8,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         sqlx::query(
             "INSERT INTO snapshot_inner_nodes (
                  parent,
@@ -133,7 +145,7 @@ impl InnerNode {
     }
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
-    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
         let summary = Self::compute_summary(tx, hash).await?;
 
         sqlx::query(
@@ -151,7 +163,10 @@ impl InnerNode {
     }
 
     /// Compute summaries from the children nodes of the specified parent nodes.
-    pub async fn compute_summary(conn: &mut db::Connection, parent_hash: &Hash) -> Result<Summary> {
+    pub async fn compute_summary(
+        conn: &mut db::Connection,
+        parent_hash: &Hash,
+    ) -> Result<Summary, Error> {
         // 1st attempt: empty inner nodes
         if parent_hash == &*EMPTY_INNER_HASH {
             let children = InnerNodeMap::default();
@@ -165,7 +180,7 @@ impl InnerNode {
         }
 
         // 3rd attempt: non-empty inner nodes
-        let children = InnerNode::load_children(conn, parent_hash).await?;
+        let children = load_children(conn, parent_hash).await?;
         if !children.is_empty() {
             // We download all children nodes of a given parent together so when we know that
             // we have at least one we also know we have them all.
@@ -173,7 +188,7 @@ impl InnerNode {
         }
 
         // 4th attempt: non-empty leaf nodes
-        let children = LeafNode::load_children(conn, parent_hash).await?;
+        let children = leaf_node::load_children(conn, parent_hash).await?;
         if !children.is_empty() {
             // Similarly as in the inner nodes case, we only need to check that we have at
             // least one leaf node child and that already tells us that we have them all.
@@ -199,7 +214,7 @@ impl InnerNode {
     /// Ideally, we should change the db schema to be normalized, which in this case would mean
     /// to have only one record per node and to represent the parent-child relation using a
     /// separate db table (many-to-many relation).
-    async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<()> {
+    async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
         if self.summary != Summary::INCOMPLETE {
             return Ok(());
         }
@@ -261,7 +276,7 @@ impl InnerNodeMap {
     }
 
     /// Atomically saves all nodes in this map to the db.
-    pub async fn save(&self, tx: &mut db::WriteTransaction, parent: &Hash) -> Result<()> {
+    pub async fn save(&self, tx: &mut db::WriteTransaction, parent: &Hash) -> Result<(), Error> {
         for (bucket, node) in self {
             node.save(tx, parent, bucket).await?;
         }
@@ -279,7 +294,7 @@ impl InnerNodeMap {
         self
     }
 
-    pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<()> {
+    pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
         for node in self.0.values_mut() {
             node.inherit_summary(conn).await?;
         }
@@ -342,6 +357,11 @@ impl<'a> Iterator for InnerNodeMapIter<'a> {
     fn next(&mut self) -> Option<(u8, &'a InnerNode)> {
         self.0.next().map(|(bucket, node)| (*bucket, node))
     }
+}
+
+/// Get the bucket for `locator` at the specified `inner_layer`.
+pub(crate) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
+    locator.as_ref()[inner_layer]
 }
 
 #[cfg(test)]

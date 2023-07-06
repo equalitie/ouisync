@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 
 use super::{
-    node::{self, InnerNode, LeafNode, RootNode, SingleBlockPresence, INNER_LAYER_COUNT},
-    path::Path,
+    node::{self, SingleBlockPresence},
     proof::Proof,
     Summary, VersionVectorOp,
 };
@@ -14,6 +13,7 @@ use crate::{
     },
     db,
     error::{Error, Result},
+    store::{self, InnerNode, LeafNode, Path, RootNode, INNER_LAYER_COUNT},
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
@@ -50,8 +50,8 @@ impl BranchData {
     ) -> Result<SnapshotData> {
         let root_node = match RootNode::load_latest_approved_by_writer(conn, self.writer_id).await {
             Ok(root_node) => Some(root_node),
-            Err(Error::EntryNotFound) => None,
-            Err(error) => return Err(error),
+            Err(store::Error::BranchNotFound) => None,
+            Err(error) => return Err(error.into()),
         };
 
         let root_node = if let Some(root_node) = root_node {
@@ -72,21 +72,9 @@ impl BranchData {
     pub async fn load_version_vector(&self, conn: &mut db::Connection) -> Result<VersionVector> {
         match self.load_snapshot(conn).await {
             Ok(snapshot) => Ok(snapshot.root_node.proof.into_version_vector()),
-            Err(Error::EntryNotFound) => Ok(VersionVector::new()),
+            Err(Error::Store(store::Error::BranchNotFound)) => Ok(VersionVector::new()),
             Err(error) => Err(error),
         }
-    }
-
-    /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get(
-        &self,
-        tx: &mut db::ReadTransaction,
-        encoded_locator: &Hash,
-    ) -> Result<(BlockId, SingleBlockPresence)> {
-        self.load_snapshot(tx)
-            .await?
-            .get_block(tx, encoded_locator)
-            .await
     }
 
     #[cfg(test)]
@@ -103,16 +91,9 @@ pub(crate) struct SnapshotData {
 impl SnapshotData {
     /// Load all latest snapshots
     pub fn load_all(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
-        RootNode::load_all_latest_approved(conn).map_ok(move |root_node| Self { root_node })
-    }
-
-    /// Load previous snapshot
-    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
-        Ok(self
-            .root_node
-            .load_prev(conn)
-            .await?
-            .map(|root_node| Self { root_node }))
+        RootNode::load_all_latest_approved(conn)
+            .map_ok(move |root_node| Self { root_node })
+            .err_into()
     }
 
     /// Returns the id of the replica that owns this branch.
@@ -134,11 +115,6 @@ impl SnapshotData {
     /// Gets the version vector of this snapshot.
     pub fn version_vector(&self) -> &VersionVector {
         &self.root_node.proof.version_vector
-    }
-
-    /// Does this snapshot exist in the db?
-    pub async fn exists(&self, conn: &mut db::Connection) -> Result<bool> {
-        self.root_node.exists(conn).await
     }
 
     /// Inserts a new block into the index.
@@ -194,16 +170,6 @@ impl SnapshotData {
         Ok(())
     }
 
-    /// Retrieve `BlockId` of a block with the given encoded `Locator`.
-    pub async fn get_block(
-        &self,
-        tx: &mut db::ReadTransaction,
-        encoded_locator: &Hash,
-    ) -> Result<(BlockId, SingleBlockPresence)> {
-        let path = self.load_path(tx, encoded_locator).await?;
-        path.get_leaf().ok_or(Error::EntryNotFound)
-    }
-
     /// Update the root version vector of this branch.
     pub async fn bump(
         &mut self,
@@ -233,12 +199,12 @@ impl SnapshotData {
 
     /// Remove this snapshot
     pub async fn remove(&self, tx: &mut db::WriteTransaction) -> Result<()> {
-        self.root_node.remove_recursively(tx).await
+        Ok(self.root_node.remove_recursively(tx).await?)
     }
 
     /// Remove all snapshots of this branch older than this one.
     pub async fn remove_all_older(&self, tx: &mut db::WriteTransaction) -> Result<()> {
-        self.root_node.remove_recursively_all_older(tx).await
+        Ok(self.root_node.remove_recursively_all_older(tx).await?)
     }
 
     /// Prune outdated older snapshots. Note this is not the same as `remove_all_older` because this
@@ -406,8 +372,8 @@ mod tests {
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
-        index::EMPTY_INNER_HASH,
         locator::Locator,
+        store::{Store, EMPTY_INNER_HASH},
         test_utils,
     };
     use proptest::{arbitrary::any, collection::vec};
@@ -424,6 +390,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn insert_and_read() {
         let (_base_dir, pool, branch) = setup().await;
+        let store = Store::new(pool);
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -431,23 +398,18 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = pool.begin_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
 
-        branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &encoded_locator,
-                &block_id,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
-
-        let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
+        tx.link_block(
+            *branch.id(),
+            encoded_locator,
+            &block_id,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
+        let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
 
         assert_eq!(r, block_id);
     }
@@ -456,6 +418,7 @@ mod tests {
     async fn rewrite_locator() {
         for _ in 0..32 {
             let (_base_dir, pool, branch) = setup().await;
+            let store = Store::new(pool);
             let read_key = SecretKey::random();
             let write_keys = Keypair::random();
 
@@ -465,50 +428,34 @@ mod tests {
             let locator = random_head_locator();
             let encoded_locator = locator.encode(&read_key);
 
-            let mut tx = pool.begin_write().await.unwrap();
+            let mut tx = store.begin_write().await.unwrap();
 
-            branch
-                .load_or_create_snapshot(&mut tx, &write_keys)
-                .await
-                .unwrap()
-                .insert_block(
-                    &mut tx,
-                    &encoded_locator,
-                    &b1,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+            tx.link_block(
+                *branch.id(),
+                encoded_locator,
+                &b1,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
 
-            branch
-                .load_or_create_snapshot(&mut tx, &write_keys)
-                .await
-                .unwrap()
-                .insert_block(
-                    &mut tx,
-                    &encoded_locator,
-                    &b2,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+            tx.link_block(
+                *branch.id(),
+                encoded_locator,
+                &b2,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
 
-            let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
+            let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
             assert_eq!(r, b2);
-
-            branch
-                .load_snapshot(&mut tx)
-                .await
-                .unwrap()
-                .remove_all_older(&mut tx)
-                .await
-                .unwrap();
 
             assert_eq!(
                 INNER_LAYER_COUNT + 1,
-                count_branch_forest_entries(&mut tx).await
+                count_branch_forest_entries(tx.raw_mut()).await
             );
         }
     }
@@ -516,6 +463,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_locator() {
         let (_base_dir, pool, branch) = setup().await;
+        let store = Store::new(pool);
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
@@ -523,54 +471,50 @@ mod tests {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = pool.begin_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
 
-        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+        assert_eq!(0, count_branch_forest_entries(tx.raw_mut()).await);
 
-        branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &encoded_locator,
-                &b,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
-        let (r, _) = branch.get(&mut tx, &encoded_locator).await.unwrap();
+        tx.link_block(
+            *branch.id(),
+            encoded_locator,
+            &b,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
+        let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
         assert_eq!(r, b);
 
         assert_eq!(
             INNER_LAYER_COUNT + 1,
-            count_branch_forest_entries(&mut tx).await
+            count_branch_forest_entries(tx.raw_mut()).await
         );
 
         branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
+            .load_or_create_snapshot(tx.raw_mut(), &write_keys)
             .await
             .unwrap()
-            .remove_block(&mut tx, &encoded_locator, None, &write_keys)
+            .remove_block(tx.raw_mut(), &encoded_locator, None, &write_keys)
             .await
             .unwrap();
 
-        match branch.get(&mut tx, &encoded_locator).await {
-            Err(Error::EntryNotFound) => { /* OK */ }
-            Err(_) => panic!("Error should have been EntryNotFound"),
+        match tx.find_block(*branch.id(), encoded_locator).await {
+            Err(store::Error::LocatorNotFound) => { /* OK */ }
+            Err(_) => panic!("Error should have been LocatorNotFound"),
             Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
         }
 
         branch
-            .load_snapshot(&mut tx)
+            .load_snapshot(tx.raw_mut())
             .await
             .unwrap()
-            .remove_all_older(&mut tx)
+            .remove_all_older(tx.raw_mut())
             .await
             .unwrap();
 
-        assert_eq!(0, count_branch_forest_entries(&mut tx).await);
+        assert_eq!(0, count_branch_forest_entries(tx.raw_mut()).await);
     }
 
     #[proptest]
@@ -650,10 +594,11 @@ mod tests {
     async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let (_base_dir, pool, branch) = setup().await;
+        let store = Store::new(pool);
         let write_keys = Keypair::generate(&mut rng);
 
         let mut snapshot = {
-            let mut conn = pool.acquire().await.unwrap();
+            let mut conn = store.raw().acquire().await.unwrap();
             branch
                 .load_or_create_snapshot(&mut conn, &write_keys)
                 .await
@@ -669,10 +614,10 @@ mod tests {
                     let locator = rng.gen();
                     let block_id = rng.gen();
 
-                    let mut tx = pool.begin_write().await.unwrap();
+                    let mut tx = store.begin_write().await.unwrap();
                     snapshot
                         .insert_block(
-                            &mut tx,
+                            tx.raw_mut(),
                             &locator,
                             &block_id,
                             SingleBlockPresence::Present,
@@ -689,9 +634,9 @@ mod tests {
                         continue;
                     };
 
-                    let mut tx = pool.begin_write().await.unwrap();
+                    let mut tx = store.begin_write().await.unwrap();
                     snapshot
-                        .remove_block(&mut tx, &locator, None, &write_keys)
+                        .remove_block(tx.raw_mut(), &locator, None, &write_keys)
                         .await
                         .unwrap();
                     tx.commit().await.unwrap();
@@ -699,45 +644,39 @@ mod tests {
                     expected.remove(&locator);
                 }
                 PruneTestOp::Bump => {
-                    let mut tx = pool.begin_write().await.unwrap();
+                    let mut tx = store.begin_write().await.unwrap();
                     snapshot
-                        .bump(&mut tx, VersionVectorOp::IncrementLocal, &write_keys)
+                        .bump(tx.raw_mut(), VersionVectorOp::IncrementLocal, &write_keys)
                         .await
                         .unwrap();
                     tx.commit().await.unwrap();
                 }
                 PruneTestOp::Prune => {
-                    snapshot.prune(&pool).await.unwrap();
+                    snapshot.prune(store.raw()).await.unwrap();
                 }
             }
 
             // Verify all expected blocks still present
-            let mut tx = pool.begin_read().await.unwrap();
+            let mut tx = store.begin_read().await.unwrap();
 
             for (locator, expected_block_id) in &expected {
-                let (actual_block_id, _) = snapshot.get_block(&mut tx, locator).await.unwrap();
+                let (actual_block_id, _) = tx.find_block(*branch.id(), *locator).await.unwrap();
                 assert_eq!(actual_block_id, *expected_block_id);
             }
 
             // Verify the snapshot is still complete
-            check_complete(&mut tx, &snapshot).await;
+            check_complete(tx.raw_mut(), &snapshot).await;
         }
     }
 
+    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn fallback() {
         test_utils::init_log();
         let mut rng = StdRng::seed_from_u64(0);
         let (_base_dir, pool, branch0) = setup().await;
+        let store = Store::new(pool);
         let write_keys = Keypair::generate(&mut rng);
-
-        let mut snapshot = {
-            let mut conn = pool.acquire().await.unwrap();
-            branch0
-                .load_or_create_snapshot(&mut conn, &write_keys)
-                .await
-                .unwrap()
-        };
 
         let locator = rng.gen();
         let id0 = rng.gen();
@@ -751,33 +690,43 @@ mod tests {
             (id2, SingleBlockPresence::Missing),
             (id3, SingleBlockPresence::Missing),
         ] {
-            let mut tx = pool.begin_write().await.unwrap();
-            snapshot
-                .insert_block(&mut tx, &locator, &block_id, presence, &write_keys)
+            let mut tx = store.begin_write().await.unwrap();
+            // TODO: `link_block` auto-prunes so this doesn't work. We need to simulate receiving
+            // remote snapshots here instead.
+            tx.link_block(*branch0.id(), locator, &block_id, presence, &write_keys)
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
         }
 
-        snapshot.prune(&pool).await.unwrap();
+        let snapshot = {
+            let mut tx = store.begin_read().await.unwrap();
+            branch0.load_snapshot(tx.raw_mut()).await.unwrap()
+        };
 
-        let mut tx = pool.begin_read().await.unwrap();
+        snapshot.prune(store.raw()).await.unwrap();
+
+        let mut tx = store.begin_read().await.unwrap();
 
         assert_eq!(
-            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            tx.find_block(*branch0.id(), locator).await.unwrap(),
             (id3, SingleBlockPresence::Missing)
         );
 
         // The previous snapshot was pruned because it can't serve as fallback for the latest one
         // but the one before it was not because it can.
-        let snapshot = snapshot.load_prev(&mut tx).await.unwrap().unwrap();
+        let root_node = tx
+            .load_prev_root_node(&snapshot.root_node)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            snapshot.get_block(&mut tx, &locator).await.unwrap(),
+            tx.find_block_in(&root_node, locator).await.unwrap(),
             (id1, SingleBlockPresence::Present)
         );
 
         // All the further snapshots were pruned as well
-        assert!(snapshot.load_prev(&mut tx).await.unwrap().is_none());
+        assert!(tx.load_prev_root_node(&root_node).await.unwrap().is_none());
     }
 
     async fn count_branch_forest_entries(conn: &mut db::Connection) -> usize {

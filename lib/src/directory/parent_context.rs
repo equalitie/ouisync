@@ -6,11 +6,11 @@ use crate::{
     },
     blob_id::BlobId,
     branch::Branch,
-    db,
     directory::{content::EntryExists, Directory},
     error::Result,
     index::VersionVectorOp,
     locator::Locator,
+    store::{ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };
 use tracing::{field, instrument, Span};
@@ -47,7 +47,7 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors.
     pub async fn bump(
         &self,
-        tx: &mut db::WriteTransaction,
+        tx: &mut WriteTransaction,
         branch: Branch,
         op: VersionVectorOp<'_>,
     ) -> Result<()> {
@@ -152,7 +152,7 @@ impl ParentContext {
         // this whole function can be cancelled before the insertion is completed. In both of these
         // cases the newly forked blob will be unlocked and eventually garbage-collected. This
         // wastes work but is otherwise harmless. The fork can be retried at any time.
-        let mut tx = directory.branch().db().begin_write().await?;
+        let mut tx = directory.branch().store().begin_write().await?;
         directory.refresh_in(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 
@@ -198,12 +198,12 @@ impl ParentContext {
 
     /// Opens the parent directory of this entry.
     pub async fn open(&self, branch: Branch) -> Result<Directory> {
-        let mut tx = branch.db().begin_read().await?;
+        let mut tx = branch.store().begin_read().await?;
         self.open_in(&mut tx, branch).await
     }
 
     /// Opens the parent directory of this entry.
-    async fn open_in(&self, tx: &mut db::ReadTransaction, branch: Branch) -> Result<Directory> {
+    async fn open_in(&self, tx: &mut ReadTransaction, branch: Branch) -> Result<Directory> {
         Directory::open_in(
             self.directory_lock.as_ref().cloned(),
             tx,

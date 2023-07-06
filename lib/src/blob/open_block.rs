@@ -1,10 +1,9 @@
 use crate::{
     block::{BlockId, BLOCK_SIZE},
     crypto::cipher,
-    db,
     error::Result,
-    index::SnapshotData,
     locator::Locator,
+    store::{ReadTransaction, RootNode},
 };
 use std::{
     convert::TryInto,
@@ -39,12 +38,12 @@ impl OpenBlock {
     }
 
     pub async fn open_head(
-        tx: &mut db::ReadTransaction,
-        snapshot: &SnapshotData,
-        read_key: &cipher::SecretKey,
+        tx: &mut ReadTransaction,
+        root_node: &RootNode,
         locator: Locator,
+        read_key: &cipher::SecretKey,
     ) -> Result<Self> {
-        let (id, buffer) = super::read_block(tx, snapshot, read_key, &locator).await?;
+        let (id, buffer) = super::read_block(tx, root_node, &locator, read_key).await?;
         let content = Cursor::new(buffer);
 
         Ok(Self {

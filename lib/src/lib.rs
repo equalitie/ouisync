@@ -37,6 +37,7 @@ mod progress;
 mod repository;
 mod state_monitor;
 mod storage_size;
+mod store;
 mod sync;
 #[cfg(test)]
 mod test_utils;
@@ -65,5 +66,6 @@ pub use self::{
     },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
+    store::Error as StoreError,
     version_vector::VersionVector,
 };

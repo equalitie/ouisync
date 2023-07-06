@@ -7,6 +7,7 @@ use crate::{
     directory::{DirectoryFallback, DirectoryLocking},
     event::EventSender,
     index::BranchData,
+    store::Store,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -1000,12 +1001,13 @@ async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N
     let shared = BranchShared::new();
 
     let branches = [(); N].map(|_| {
+        let store = Store::new(pool.clone());
         let id = PublicKey::generate(&mut rng);
-        let event_tx = event_tx.clone();
+        let data = BranchData::new(id);
         let secrets = secrets.clone();
         let shared = shared.clone();
-        let data = BranchData::new(id);
-        Branch::new(pool.clone(), data, secrets.into(), shared, event_tx)
+        let event_tx = event_tx.clone();
+        Branch::new(store, data, secrets.into(), shared, event_tx)
     });
 
     (base_dir, branches)

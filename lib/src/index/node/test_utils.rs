@@ -1,7 +1,6 @@
 use super::{
     super::{proof::Proof, Index},
-    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, MultiBlockPresence, NodeState,
-    SingleBlockPresence, Summary, INNER_LAYER_COUNT,
+    MultiBlockPresence, NodeState, SingleBlockPresence, Summary,
 };
 use crate::{
     block::{tracker::OfferState, BlockData, BlockId, BlockNonce, BLOCK_SIZE},
@@ -12,6 +11,7 @@ use crate::{
     },
     index::ReceiveFilter,
     repository::RepositoryState,
+    store::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT},
     version_vector::VersionVector,
 };
 use rand::{

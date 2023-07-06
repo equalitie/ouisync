@@ -2,7 +2,7 @@
 
 use super::{quota, LocalId, Metadata, RepositoryMonitor};
 use crate::{
-    block::{self, tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
+    block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
     crypto::sign::PublicKey,
     db,
     error::{Error, Result},
@@ -10,6 +10,7 @@ use crate::{
     index::{self, Index, NodeState, SingleBlockPresence},
     progress::Progress,
     storage_size::StorageSize,
+    store::{self, Store},
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
@@ -25,18 +26,18 @@ pub(crate) struct RepositoryState {
 }
 
 impl RepositoryState {
-    pub(crate) fn db(&self) -> &db::Pool {
-        &self.index.pool
+    pub(crate) fn store(&self) -> &Store {
+        self.index.store()
     }
 
     pub(crate) async fn count_blocks(&self) -> Result<usize> {
-        block::count(&mut *self.db().acquire().await?).await
+        Ok(self.store().acquire_read().await?.count_blocks().await?)
     }
 
     /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub(crate) async fn sync_progress(&self) -> Result<Progress> {
-        let mut conn = self.db().acquire().await?;
+        let mut conn = self.store().raw().acquire().await?;
 
         let total = db::decode_u64(
             sqlx::query("SELECT COUNT(*) FROM snapshot_leaf_nodes")
@@ -66,12 +67,12 @@ impl RepositoryState {
         nonce: &BlockNonce,
         promise: Option<BlockPromise>,
     ) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
+        let mut tx = self.store().begin_write().await?;
 
-        let writer_ids = match index::receive_block(&mut tx, &data.id).await {
+        let writer_ids = match index::receive_block(tx.raw_mut(), &data.id).await {
             Ok(writer_ids) => writer_ids,
             Err(error) => {
-                if matches!(error, Error::BlockNotReferenced) {
+                if matches!(error, Error::Store(store::Error::BlockNotReferenced)) {
                     // We no longer need this block but we still need to un-track it.
                     if let Some(promise) = promise {
                         promise.complete();
@@ -82,7 +83,7 @@ impl RepositoryState {
             }
         };
 
-        block::write(&mut tx, &data.id, &data.content, nonce).await?;
+        tx.write_block(&data.id, &data.content, nonce).await?;
 
         let data_id = data.id;
         let event_tx = self.index.notify().clone();
@@ -109,19 +110,19 @@ impl RepositoryState {
     /// `page_size` entries per page) to avoid loading too many items into memory.
     pub(crate) fn block_ids(&self, page_size: u32) -> BlockIdsPage {
         BlockIdsPage {
-            pool: self.db().clone(),
+            pool: self.store().raw().clone(),
             lower_bound: None,
             page_size,
         }
     }
 
     pub(crate) fn metadata(&self) -> Metadata {
-        Metadata::new(self.db().clone())
+        Metadata::new(self.store().raw().clone())
     }
 
     /// Total size of the stored data
     pub(crate) async fn size(&self) -> Result<StorageSize> {
-        let mut conn = self.db().acquire().await?;
+        let mut conn = self.store().raw().acquire().await?;
 
         // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
         let count = db::decode_u64(
@@ -135,7 +136,7 @@ impl RepositoryState {
     }
 
     pub(crate) async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
-        let mut tx = self.db().begin_write().await?;
+        let mut tx = self.store().raw().begin_write().await?;
 
         if let Some(quota) = quota {
             quota::set(&mut tx, quota.to_bytes()).await?
@@ -149,7 +150,7 @@ impl RepositoryState {
     }
 
     pub(crate) async fn quota(&self) -> Result<Option<StorageSize>> {
-        let mut conn = self.db().acquire().await?;
+        let mut conn = self.store().raw().acquire().await?;
         match quota::get(&mut conn).await {
             Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
             Err(Error::EntryNotFound) => Ok(None),
@@ -158,7 +159,7 @@ impl RepositoryState {
     }
 
     pub(crate) async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
-        let mut tx = self.db().begin_read().await?;
+        let mut tx = self.store().raw().begin_read().await?;
         let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
 
         while let Some(block_id) = block_ids.try_next().await? {
@@ -263,7 +264,7 @@ fn branch_missing_block_ids<'a>(
 mod tests {
     use super::*;
     use crate::{
-        block::{self, tracker::OfferState, BlockId, BlockNonce, BLOCK_SIZE},
+        block::{tracker::OfferState, BlockId, BlockNonce, BLOCK_SIZE},
         collections::HashSet,
         crypto::{
             cipher::SecretKey,
@@ -281,6 +282,7 @@ mod tests {
         metrics::Metrics,
         repository::RepositoryId,
         state_monitor::StateMonitor,
+        store::{self, Store},
         test_utils,
         version_vector::VersionVector,
     };
@@ -292,6 +294,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn remove_block() {
         let (_base_dir, pool) = setup().await;
+        let store = Store::new(pool);
 
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
@@ -302,66 +305,59 @@ mod tests {
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
 
-        let mut tx = pool.begin_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
 
-        block::write(&mut tx, &block_id, &buffer, &BlockNonce::default())
+        tx.write_block(&block_id, &buffer, &BlockNonce::default())
             .await
             .unwrap();
 
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
-        branch0
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &locator0,
-                &block_id,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+        tx.link_block(
+            *branch0.id(),
+            locator0,
+            &block_id,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
 
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
-        branch1
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &locator1,
-                &block_id,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+        tx.link_block(
+            *branch1.id(),
+            locator1,
+            &block_id,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
 
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
+        assert!(tx.block_exists(&block_id).await.unwrap());
 
-        let mut snapshot0 = branch0.load_snapshot(&mut tx).await.unwrap();
+        let mut snapshot0 = branch0.load_snapshot(tx.raw_mut()).await.unwrap();
         snapshot0
-            .remove_block(&mut tx, &locator0, None, &write_keys)
+            .remove_block(tx.raw_mut(), &locator0, None, &write_keys)
             .await
             .unwrap();
-        snapshot0.remove_all_older(&mut tx).await.unwrap();
-        assert!(block::exists(&mut tx, &block_id).await.unwrap());
+        snapshot0.remove_all_older(tx.raw_mut()).await.unwrap();
+        assert!(tx.block_exists(&block_id).await.unwrap());
 
-        let mut snapshot1 = branch1.load_snapshot(&mut tx).await.unwrap();
+        let mut snapshot1 = branch1.load_snapshot(tx.raw_mut()).await.unwrap();
         snapshot1
-            .remove_block(&mut tx, &locator1, None, &write_keys)
+            .remove_block(tx.raw_mut(), &locator1, None, &write_keys)
             .await
             .unwrap();
-        snapshot1.remove_all_older(&mut tx).await.unwrap();
-        assert!(!block::exists(&mut tx, &block_id).await.unwrap(),);
+        snapshot1.remove_all_older(tx.raw_mut()).await.unwrap();
+        assert!(!tx.block_exists(&block_id).await.unwrap(),);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn overwrite_block() {
         let (_base_dir, pool) = setup().await;
+        let store = Store::new(pool);
         let mut rng = rand::thread_rng();
 
         let read_key = SecretKey::random();
@@ -377,54 +373,40 @@ mod tests {
         rng.fill(&mut buffer[..]);
         let id0 = BlockId::from_content(&buffer);
 
-        let mut tx = pool.begin_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
 
-        block::write(&mut tx, &id0, &buffer, &rng.gen())
-            .await
-            .unwrap();
-        branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &locator,
-                &id0,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+        tx.link_block(
+            *branch.id(),
+            locator,
+            &id0,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
+        tx.write_block(&id0, &buffer, &rng.gen()).await.unwrap();
 
-        assert!(block::exists(&mut tx, &id0).await.unwrap());
-        assert_eq!(block::count(&mut tx).await.unwrap(), 1);
+        assert!(tx.block_exists(&id0).await.unwrap());
+        assert_eq!(tx.count_blocks().await.unwrap(), 1);
 
         rng.fill(&mut buffer[..]);
         let id1 = BlockId::from_content(&buffer);
 
-        block::write(&mut tx, &id1, &buffer, &rng.gen())
-            .await
-            .unwrap();
+        tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
 
-        let mut snapshot = branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap();
-        snapshot
-            .insert_block(
-                &mut tx,
-                &locator,
-                &id1,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
-        snapshot.remove_all_older(&mut tx).await.unwrap();
+        tx.link_block(
+            *branch.id(),
+            locator,
+            &id1,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
 
-        assert!(!block::exists(&mut tx, &id0).await.unwrap());
-        assert!(block::exists(&mut tx, &id1).await.unwrap());
-        assert_eq!(block::count(&mut tx).await.unwrap(), 1);
+        assert!(!tx.block_exists(&id0).await.unwrap());
+        assert!(tx.block_exists(&id1).await.unwrap());
+        assert_eq!(tx.count_blocks().await.unwrap(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -434,13 +416,13 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let store = create_state(pool, repository_id);
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let state = create_state(pool, repository_id);
+        let receive_filter = ReceiveFilter::new(state.store().raw().clone());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
         receive_nodes(
-            &store.index,
+            &state.index,
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
@@ -448,13 +430,13 @@ mod tests {
             &snapshot,
         )
         .await;
-        receive_blocks(&store, &snapshot).await;
+        receive_blocks(&state, &snapshot).await;
 
-        let mut conn = store.db().acquire().await.unwrap();
+        let mut reader = state.store().acquire_read().await.unwrap();
 
         for (id, block) in snapshot.blocks() {
             let mut content = vec![0; BLOCK_SIZE];
-            let nonce = block::read(&mut conn, id, &mut content).await.unwrap();
+            let nonce = reader.read_block(id, &mut content).await.unwrap();
 
             assert_eq!(&content[..], &block.data.content[..]);
             assert_eq!(nonce, block.nonce);
@@ -479,13 +461,13 @@ mod tests {
                 store
                     .write_received_block(&block.data, &block.nonce, Some(promise))
                     .await,
-                Err(Error::BlockNotReferenced)
+                Err(Error::Store(store::Error::BlockNotReferenced))
             );
         }
 
-        let mut conn = store.db().acquire().await.unwrap();
+        let mut reader = store.store().acquire_read().await.unwrap();
         for id in snapshot.blocks().keys() {
-            assert!(!block::exists(&mut conn, id).await.unwrap());
+            assert!(!reader.block_exists(id).await.unwrap());
         }
     }
 
@@ -505,7 +487,7 @@ mod tests {
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
         let store = create_state(pool, repository_id);
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -564,7 +546,7 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        store.db().close().await.unwrap();
+        store.store().raw().close().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -580,7 +562,7 @@ mod tests {
         let locator = locator.encode(&read_key);
         let block_id = rand::random();
 
-        let mut tx = store.db().begin_write().await.unwrap();
+        let mut tx = store.store().raw().begin_write().await.unwrap();
         branch
             .load_or_create_snapshot(&mut tx, &write_keys)
             .await
@@ -607,7 +589,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -644,7 +626,7 @@ mod tests {
             }
         };
 
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
         let version_vector = VersionVector::first(branch_id);
         let proof = Proof::new(
             branch_id,
@@ -686,7 +668,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
 
         let branch_id_0 = PublicKey::random();
         let branch_id_1 = PublicKey::random();
@@ -734,7 +716,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.db().clone());
+        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
@@ -772,7 +754,8 @@ mod tests {
 
     fn create_state(pool: db::Pool, repo_id: RepositoryId) -> RepositoryState {
         let event_tx = EventSender::new(1);
-        let index = Index::new(pool, repo_id, event_tx);
+        let store = Store::new(pool);
+        let index = Index::new(store, repo_id, event_tx);
         RepositoryState {
             index,
             block_tracker: BlockTracker::new(),

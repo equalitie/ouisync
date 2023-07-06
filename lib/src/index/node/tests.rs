@@ -1,14 +1,12 @@
-use super::{
-    super::proof::Proof, leaf::EMPTY_LEAF_HASH, summary::Summary, test_utils::Snapshot, *,
-};
+use super::{super::proof::Proof, summary::Summary, test_utils::Snapshot, *};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
         Hashable,
     },
     db,
-    error::Error,
     index::node::summary::{MultiBlockPresence, NodeState},
+    store::{self, InnerNodeMap, LeafNodeSet, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
     test_utils,
     version_vector::VersionVector,
 };
@@ -86,7 +84,7 @@ async fn attempt_to_create_outdated_root_node() {
             Summary::INCOMPLETE,
         )
         .await,
-        Err(Error::EntryExists)
+        Err(store::Error::OutdatedRootNode)
     );
 
     // Old vv
@@ -97,7 +95,7 @@ async fn attempt_to_create_outdated_root_node() {
             Summary::INCOMPLETE,
         )
         .await,
-        Err(Error::EntryExists)
+        Err(store::Error::OutdatedRootNode)
     );
 }
 
@@ -526,7 +524,7 @@ async fn set_present_on_leaf_node_that_does_not_exist() {
 
     assert_matches!(
         LeafNode::set_present(&mut tx, &block_id).await,
-        Err(Error::BlockNotReferenced)
+        Err(store::Error::BlockNotReferenced)
     )
 }
 

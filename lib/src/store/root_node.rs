@@ -1,7 +1,6 @@
 use super::{
-    super::{proof::Proof, SnapshotId},
-    inner::{InnerNode, EMPTY_INNER_HASH},
-    summary::{MultiBlockPresence, NodeState, Summary},
+    error::Error,
+    inner_node::{InnerNode, EMPTY_INNER_HASH},
 };
 use crate::{
     crypto::{
@@ -10,7 +9,7 @@ use crate::{
     },
     db,
     debug::DebugPrinter,
-    error::{Error, Result},
+    index::{MultiBlockPresence, NodeState, Proof, SnapshotId, Summary},
     version_vector::VersionVector,
     versioned::Versioned,
 };
@@ -25,6 +24,189 @@ pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
     pub proof: Proof,
     pub summary: Summary,
+}
+
+/// Creates a root node with the specified proof.
+///
+/// The version vector must be greater than the version vector of any currently existing root
+/// node in the same branch, otherwise no node is created and an error is returned.
+pub(super) async fn create(
+    tx: &mut db::WriteTransaction,
+    proof: Proof,
+    summary: Summary,
+) -> Result<RootNode, Error> {
+    // Check that the root node to be created is newer than the latest existing root node in
+    // the same branch.
+    let old_vv: VersionVector = sqlx::query(
+        "SELECT versions
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 WHERE writer_id = ?
+             )",
+    )
+    .bind(&proof.writer_id)
+    .map(|row| row.get(0))
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or_else(VersionVector::new);
+
+    match proof.version_vector.partial_cmp(&old_vv) {
+        Some(Ordering::Greater) => (),
+        Some(Ordering::Equal | Ordering::Less) => {
+            return Err(Error::OutdatedRootNode);
+        }
+        None => {
+            return Err(Error::ConcurrentRootNode);
+        }
+    }
+
+    let snapshot_id = sqlx::query(
+        "INSERT INTO snapshot_root_nodes (
+                 writer_id,
+                 versions,
+                 hash,
+                 signature,
+                 state,
+                 block_presence
+             )
+             VALUES (?, ?, ?, ?, ?, ?)
+             RETURNING snapshot_id",
+    )
+    .bind(&proof.writer_id)
+    .bind(&proof.version_vector)
+    .bind(&proof.hash)
+    .bind(&proof.signature)
+    .bind(summary.state)
+    .bind(&summary.block_presence)
+    .map(|row| row.get(0))
+    .fetch_one(tx)
+    .await?;
+
+    Ok(RootNode {
+        snapshot_id,
+        proof,
+        summary,
+    })
+}
+
+pub(super) async fn load_or_create(
+    conn: &mut db::Connection,
+    branch_id: PublicKey,
+    write_keys: &Keypair,
+) -> Result<RootNode, Error> {
+    match load_latest(conn, branch_id).await {
+        Ok(root_node) => Ok(root_node),
+        Err(Error::BranchNotFound) => Ok(RootNode::empty(branch_id, write_keys)),
+        Err(error) => Err(error),
+    }
+}
+
+/// Returns the latest approved root node of the specified branch.
+pub(super) async fn load_latest(
+    conn: &mut db::Connection,
+    branch_id: PublicKey,
+) -> Result<RootNode, Error> {
+    sqlx::query(
+        "SELECT
+                 snapshot_id,
+                 versions,
+                 hash,
+                 signature,
+                 block_presence
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id = (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     WHERE writer_id = ? AND state = ?
+                 )
+            ",
+    )
+    .bind(&branch_id)
+    .bind(NodeState::Approved)
+    .fetch_optional(conn)
+    .await?
+    .map(|row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(branch_id, row.get(1), row.get(2), row.get(3)),
+        summary: Summary {
+            state: NodeState::Approved,
+            block_presence: row.get(4),
+        },
+    })
+    .ok_or(Error::BranchNotFound)
+}
+
+/// Load the previous approved root node of the same writer.
+pub(super) async fn load_prev(
+    conn: &mut db::Connection,
+    node: &RootNode,
+) -> Result<Option<RootNode>, Error> {
+    sqlx::query(
+        "SELECT
+                snapshot_id,
+                versions,
+                hash,
+                signature,
+                block_presence
+             FROM snapshot_root_nodes
+             WHERE writer_id = ? AND state = ? AND snapshot_id < ?
+             ORDER BY snapshot_id DESC
+             LIMIT 1",
+    )
+    .bind(&node.proof.writer_id)
+    .bind(NodeState::Approved)
+    .bind(node.snapshot_id)
+    .fetch(conn)
+    .map_ok(|row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(node.proof.writer_id, row.get(1), row.get(2), row.get(3)),
+        summary: Summary {
+            state: NodeState::Approved,
+            block_presence: row.get(4),
+        },
+    })
+    .err_into()
+    .try_next()
+    .await
+}
+
+/// Removes all root nodes, including their snapshots, that are older than the given snapshot and
+/// are on the same branch.
+pub(super) async fn remove_older_snapshots(
+    tx: &mut db::WriteTransaction,
+    snapshot_id: SnapshotId,
+) -> Result<(), Error> {
+    // This uses db triggers to delete the whole snapshot.
+    sqlx::query(
+        "DELETE FROM snapshot_root_nodes
+         WHERE snapshot_id < ? AND writer_id = (
+             SELECT writer_id
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = ?
+             LIMIT 1
+         )",
+    )
+    .bind(snapshot_id)
+    .bind(snapshot_id)
+    .execute(tx)
+    .await?;
+
+    Ok(())
+}
+
+/// Does this node exist in the db?
+pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result<bool, Error> {
+    Ok(
+        sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE snapshot_id = ?")
+            .bind(node.snapshot_id)
+            .fetch_optional(conn)
+            .await?
+            .is_some(),
+    )
 }
 
 impl RootNode {
@@ -51,114 +233,27 @@ impl RootNode {
     ///
     /// The version vector must be greater than the version vector of any currently existing root
     /// node in the same branch, otherwise no node is created and an error is returned.
+    #[deprecated = "don't use directly"]
     pub async fn create(
         tx: &mut db::WriteTransaction,
         proof: Proof,
         summary: Summary,
-    ) -> Result<Self> {
-        // Check that the root node to be created is newer than the latest existing root node in
-        // the same branch.
-        let old_vv: VersionVector = sqlx::query(
-            "SELECT versions
-             FROM snapshot_root_nodes
-             WHERE snapshot_id = (
-                 SELECT MAX(snapshot_id)
-                 FROM snapshot_root_nodes
-                 WHERE writer_id = ?
-             )",
-        )
-        .bind(&proof.writer_id)
-        .map(|row| row.get(0))
-        .fetch_optional(&mut *tx)
-        .await?
-        .unwrap_or_else(VersionVector::new);
-
-        match proof.version_vector.partial_cmp(&old_vv) {
-            Some(Ordering::Greater) => (),
-            Some(Ordering::Equal | Ordering::Less) => {
-                tracing::warn!(
-                    ?old_vv,
-                    new_vv = ?proof.version_vector,
-                    "attempt to create outdated root node"
-                );
-                return Err(Error::EntryExists);
-            }
-            None => {
-                tracing::warn!("attempt to create concurrent root node in the same branch");
-                return Err(Error::OperationNotSupported);
-            }
-        }
-
-        let snapshot_id = sqlx::query(
-            "INSERT INTO snapshot_root_nodes (
-                 writer_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence
-             )
-             VALUES (?, ?, ?, ?, ?, ?)
-             RETURNING snapshot_id",
-        )
-        .bind(&proof.writer_id)
-        .bind(&proof.version_vector)
-        .bind(&proof.hash)
-        .bind(&proof.signature)
-        .bind(summary.state)
-        .bind(&summary.block_presence)
-        .map(|row| row.get(0))
-        .fetch_one(tx)
-        .await?;
-
-        Ok(Self {
-            snapshot_id,
-            proof,
-            summary,
-        })
+    ) -> Result<Self, Error> {
+        create(tx, proof, summary).await
     }
 
-    /// Returns the latest approved root node of the specified writer.
+    #[deprecated = "use store::Reader::load_latest_root_node"]
     pub async fn load_latest_approved_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
-    ) -> Result<Self> {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 signature,
-                 block_presence
-             FROM
-                 snapshot_root_nodes
-             WHERE
-                 snapshot_id = (
-                     SELECT MAX(snapshot_id)
-                     FROM snapshot_root_nodes
-                     WHERE writer_id = ? AND state = ?
-                 )
-            ",
-        )
-        .bind(&writer_id)
-        .bind(NodeState::Approved)
-        .fetch_optional(conn)
-        .await?
-        .map(|row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: Summary {
-                state: NodeState::Approved,
-                block_presence: row.get(4),
-            },
-        })
-        .ok_or(Error::EntryNotFound)
+    ) -> Result<Self, Error> {
+        load_latest(conn, writer_id).await
     }
 
     /// Return the latest approved root nodes of all known writers.
     pub fn load_all_latest_approved(
         conn: &mut db::Connection,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
+    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
         sqlx::query(
             "SELECT
                  snapshot_id,
@@ -191,7 +286,9 @@ impl RootNode {
     }
 
     /// Return the latest root nodes of all known writers.
-    pub fn load_all_latest(conn: &mut db::Connection) -> impl Stream<Item = Result<Self>> + '_ {
+    pub fn load_all_latest(
+        conn: &mut db::Connection,
+    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
         sqlx::query(
             "SELECT
                  snapshot_id,
@@ -228,7 +325,7 @@ impl RootNode {
     pub fn load_all_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
-    ) -> impl Stream<Item = Result<Self>> + '_ {
+    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
         sqlx::query(
             "SELECT
                  snapshot_id,
@@ -260,7 +357,7 @@ impl RootNode {
     pub async fn load_latest_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
-    ) -> Result<Option<Self>> {
+    ) -> Result<Option<Self>, Error> {
         Self::load_all_by_writer(conn, writer_id).try_next().await
     }
 
@@ -268,7 +365,7 @@ impl RootNode {
     pub fn load_all_by_hash<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,
-    ) -> impl Stream<Item = Result<Self>> + 'a {
+    ) -> impl Stream<Item = Result<Self, Error>> + 'a {
         sqlx::query(
             "SELECT
                  snapshot_id,
@@ -297,7 +394,7 @@ impl RootNode {
     pub fn load_writer_ids<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,
-    ) -> impl Stream<Item = Result<PublicKey>> + 'a {
+    ) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
         sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes WHERE hash = ?")
             .bind(hash)
             .fetch(conn)
@@ -306,39 +403,14 @@ impl RootNode {
     }
 
     /// Load the previous approved root node of the same writer.
-    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>> {
-        sqlx::query(
-            "SELECT
-                snapshot_id,
-                versions,
-                hash,
-                signature,
-                block_presence
-             FROM snapshot_root_nodes
-             WHERE writer_id = ? AND state = ? AND snapshot_id < ?
-             ORDER BY snapshot_id DESC
-             LIMIT 1",
-        )
-        .bind(&self.proof.writer_id)
-        .bind(NodeState::Approved)
-        .bind(self.snapshot_id)
-        .fetch(conn)
-        .map_ok(|row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(self.proof.writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: Summary {
-                state: NodeState::Approved,
-                block_presence: row.get(4),
-            },
-        })
-        .err_into()
-        .try_next()
-        .await
+    #[deprecated = "use store::Reader::load_prev_root_node"]
+    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>, Error> {
+        load_prev(conn, self).await
     }
 
     /// Reload this root node from the db.
     #[cfg(test)]
-    pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<()> {
+    pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
         let row = sqlx::query(
             "SELECT state, block_presence
              FROM snapshot_root_nodes
@@ -355,7 +427,10 @@ impl RootNode {
     }
 
     /// Update the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<NodeState> {
+    pub async fn update_summaries(
+        tx: &mut db::WriteTransaction,
+        hash: &Hash,
+    ) -> Result<NodeState, Error> {
         let summary = InnerNode::compute_summary(tx, hash).await?;
 
         let state = sqlx::query(
@@ -379,16 +454,20 @@ impl RootNode {
     }
 
     /// Approve the nodes with the specified hash.
-    pub async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+    pub async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
         Self::set_state(tx, hash, NodeState::Approved).await
     }
 
     /// Reject the nodes with the specified hash.
-    pub async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+    pub async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
         Self::set_state(tx, hash, NodeState::Rejected).await
     }
 
-    async fn set_state(tx: &mut db::WriteTransaction, hash: &Hash, state: NodeState) -> Result<()> {
+    async fn set_state(
+        tx: &mut db::WriteTransaction,
+        hash: &Hash,
+        state: NodeState,
+    ) -> Result<(), Error> {
         sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
             .bind(state)
             .bind(hash)
@@ -398,7 +477,7 @@ impl RootNode {
     }
 
     /// Removes this node including its snapshot.
-    pub async fn remove_recursively(&self, tx: &mut db::WriteTransaction) -> Result<()> {
+    pub async fn remove_recursively(&self, tx: &mut db::WriteTransaction) -> Result<(), Error> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
             .bind(self.snapshot_id)
@@ -410,7 +489,11 @@ impl RootNode {
 
     /// Removes all root nodes, including their snapshots, that are older than this node and are
     /// on the same branch.
-    pub async fn remove_recursively_all_older(&self, tx: &mut db::WriteTransaction) -> Result<()> {
+    #[deprecated = "don't use directly"]
+    pub async fn remove_recursively_all_older(
+        &self,
+        tx: &mut db::WriteTransaction,
+    ) -> Result<(), Error> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
             .bind(self.snapshot_id)
@@ -426,7 +509,7 @@ impl RootNode {
     pub async fn remove_recursively_all_older_incomplete(
         &self,
         tx: &mut db::WriteTransaction,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query(
             "DELETE FROM snapshot_root_nodes
@@ -440,17 +523,6 @@ impl RootNode {
         .await?;
 
         Ok(())
-    }
-
-    /// Does this node exist in the db?
-    pub async fn exists(&self, conn: &mut db::Connection) -> Result<bool> {
-        Ok(
-            sqlx::query("SELECT 0 FROM snapshot_root_nodes WHERE snapshot_id = ?")
-                .bind(self.snapshot_id)
-                .fetch_optional(conn)
-                .await?
-                .is_some(),
-        )
     }
 
     pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {

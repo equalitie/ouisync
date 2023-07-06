@@ -2,15 +2,9 @@ use crate::crypto::{Digest, Hash, Hashable};
 use serde::{Deserialize, Serialize};
 use std::{array::TryFromSliceError, fmt};
 
-mod store;
 pub(crate) mod tracker;
 
-#[cfg(test)]
-pub(crate) use self::store::exists;
-pub(crate) use self::{
-    store::{count, read, remove, write, BlockNonce, BLOCK_NONCE_SIZE},
-    tracker::{BlockTracker, BlockTrackerClient},
-};
+pub(crate) use self::tracker::{BlockTracker, BlockTrackerClient};
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;
@@ -18,6 +12,9 @@ pub const BLOCK_SIZE: usize = 32 * 1024;
 /// Size of the block db record in bytes.
 pub(crate) const BLOCK_RECORD_SIZE: u64 =
     BLOCK_SIZE as u64 + BlockId::SIZE as u64 + BLOCK_NONCE_SIZE as u64;
+
+pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
+pub(crate) type BlockNonce = [u8; BLOCK_NONCE_SIZE];
 
 /// Unique id of a block.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Debug)]

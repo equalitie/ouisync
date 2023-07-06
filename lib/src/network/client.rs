@@ -11,10 +11,9 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{
-        InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof,
-    },
+    index::{MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof},
     repository::{BlockRequestMode, RepositoryMonitor, RepositoryState},
+    store::{self, InnerNodeMap, LeafNodeSet},
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -39,7 +38,7 @@ impl Client {
         tx: mpsc::Sender<Content>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let db = repo.db().clone();
+        let db = repo.store().raw().clone();
         let block_tracker = repo.block_tracker.client();
 
         let pending_requests = Arc::new(PendingRequests::new(repo.monitor.clone()));
@@ -348,7 +347,7 @@ impl Client {
         {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
-            Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),
+            Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),
             Err(error) => Err(error.into()),
         }
     }

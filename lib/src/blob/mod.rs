@@ -9,16 +9,16 @@ pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
     blob_id::BlobId,
-    block::{self, BlockId, BlockNonce, BLOCK_SIZE},
+    block::{BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher::{self, Nonce, SecretKey},
-        sign,
+        sign::{self, PublicKey},
     },
-    db,
     error::{Error, Result},
-    index::{SingleBlockPresence, SnapshotData},
+    index::SingleBlockPresence,
     locator::Locator,
+    store::{self, ReadTransaction, RootNode, WriteTransaction},
 };
 use std::{io::SeekFrom, mem};
 use tracing::{field, instrument, Instrument, Span};
@@ -40,25 +40,24 @@ pub(crate) struct Blob {
 impl Blob {
     /// Opens an existing blob.
     pub async fn open(
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
         branch: Branch,
         head_locator: Locator,
     ) -> Result<Self> {
-        let snapshot = branch.data().load_snapshot(tx).await?;
-        Self::open_in(tx, branch, &snapshot, head_locator).await
+        let root_node = tx.load_latest_root_node(*branch.id()).await?;
+        Self::open_in(tx, &root_node, branch, head_locator).await
     }
 
-    /// Opens an existing blob in the given snapshot
     pub async fn open_in(
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
+        root_node: &RootNode,
         branch: Branch,
-        snapshot: &SnapshotData,
         head_locator: Locator,
     ) -> Result<Self> {
-        assert_eq!(branch.id(), snapshot.branch_id());
+        assert_eq!(root_node.proof.writer_id, *branch.id());
 
         let mut current_block =
-            OpenBlock::open_head(tx, snapshot, branch.keys().read(), head_locator).await?;
+            OpenBlock::open_head(tx, root_node, head_locator, branch.keys().read()).await?;
         let len = current_block.content.read_u64();
 
         Ok(Self {
@@ -99,19 +98,18 @@ impl Blob {
     /// Reads data from this blob into `buffer`, advancing the internal cursor. Returns the
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
-    pub async fn read(&mut self, tx: &mut db::ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
-        let snapshot = self.branch.data().load_snapshot(tx).await?;
-        self.read_in(tx, &snapshot, buffer).await
+    pub async fn read(&mut self, tx: &mut ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
+        let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+        self.read_in(tx, &root_node, buffer).await
     }
 
-    /// Reads data from this blob in the given snapshot.
     pub async fn read_in(
         &mut self,
-        tx: &mut db::ReadTransaction,
-        snapshot: &SnapshotData,
+        tx: &mut ReadTransaction,
+        root_node: &RootNode,
         mut buffer: &mut [u8],
     ) -> Result<usize> {
-        assert_eq!(self.branch.id(), snapshot.branch_id());
+        assert_eq!(root_node.proof.writer_id, *self.branch.id());
 
         let mut total_len = 0;
 
@@ -138,7 +136,7 @@ impl Blob {
             // truncated this blob and we are trying to read pass its end. In that case we should
             // update `self.len` and try the loop again.
             let (id, content) =
-                read_block(tx, snapshot, self.branch.keys().read(), &locator).await?;
+                read_block(tx, root_node, &locator, self.branch.keys().read()).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -148,18 +146,17 @@ impl Blob {
 
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
-    pub async fn read_to_end(&mut self, tx: &mut db::ReadTransaction) -> Result<Vec<u8>> {
-        let snapshot = self.branch.data().load_snapshot(tx).await?;
-        self.read_to_end_in(tx, &snapshot).await
+    pub async fn read_to_end(&mut self, tx: &mut ReadTransaction) -> Result<Vec<u8>> {
+        let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+        self.read_to_end_in(tx, &root_node).await
     }
 
-    /// Read all data from this blob in the given snapshot.
     pub async fn read_to_end_in(
         &mut self,
-        tx: &mut db::ReadTransaction,
-        snapshot: &SnapshotData,
+        tx: &mut ReadTransaction,
+        root_node: &RootNode,
     ) -> Result<Vec<u8>> {
-        assert_eq!(self.branch.id(), snapshot.branch_id());
+        assert_eq!(root_node.proof.writer_id, *self.branch.id());
 
         let mut buffer = vec![
             0;
@@ -168,7 +165,7 @@ impl Blob {
                 .unwrap_or(usize::MAX)
         ];
 
-        let len = self.read_in(tx, snapshot, &mut buffer).await?;
+        let len = self.read_in(tx, root_node, &mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -177,13 +174,9 @@ impl Blob {
     /// Writes `buffer` into this blob, advancing the blob's internal cursor.
     /// Returns whether at least one new block was written into the block store dring this
     /// operation.
-    pub async fn write(
-        &mut self,
-        tx: &mut db::WriteTransaction,
-        mut buffer: &[u8],
-    ) -> Result<bool> {
-        let mut snapshot = None;
+    pub async fn write(&mut self, tx: &mut WriteTransaction, mut buffer: &[u8]) -> Result<bool> {
         let mut block_written = false;
+        let mut root_node = None;
 
         loop {
             let len = self.current_block.content.write(buffer);
@@ -208,26 +201,20 @@ impl Blob {
 
             let locator = self.current_block.locator.next();
 
-            let snapshot = if let Some(snapshot) = &mut snapshot {
-                snapshot
-            } else {
-                let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
-                snapshot.get_or_insert(
-                    self.branch
-                        .data()
-                        .load_or_create_snapshot(tx, write_keys)
-                        .await?,
-                )
-            };
-
             let (id, content) = if locator.number() < self.block_count() {
-                read_block(tx, snapshot, self.branch.keys().read(), &locator).await?
+                let root_node = if let Some(root_node) = &root_node {
+                    root_node
+                } else {
+                    root_node.get_or_insert(tx.load_latest_root_node(*self.branch.id()).await?)
+                };
+
+                read_block(tx, root_node, &locator, self.branch.keys().read()).await?
             } else {
                 (BlockId::from_content(&[]), Buffer::new())
             };
 
-            self.write_len(tx, snapshot).await?;
-            self.write_current_block(tx, snapshot).await?;
+            self.write_len(tx).await?;
+            self.write_current_block(tx).await?;
             self.replace_current_block(locator, id, content)?;
 
             block_written = true;
@@ -242,7 +229,7 @@ impl Blob {
     /// will be clamped to be within the range.
     ///
     /// Returns the new seek position from the start of the blob.
-    pub async fn seek(&mut self, tx: &mut db::ReadTransaction, pos: SeekFrom) -> Result<u64> {
+    pub async fn seek(&mut self, tx: &mut ReadTransaction, pos: SeekFrom) -> Result<u64> {
         let offset = match pos {
             SeekFrom::Start(n) => n.min(self.len),
             SeekFrom::End(n) => {
@@ -267,13 +254,13 @@ impl Blob {
 
         if block_number != self.current_block.locator.number() {
             let locator = self.head_locator.nth(block_number);
-            let snapshot = self.branch.data().load_snapshot(tx).await?;
+            let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
 
-            // TODO: if this returns `EntryNotFound` it might be that some other task concurrently
+            // TODO: if this returns `LocatorNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
             // update `self.len` and try again.
             let (id, content) =
-                read_block(tx, &snapshot, self.branch.keys().read(), &locator).await?;
+                read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
 
             self.replace_current_block(locator, id, content)?;
         }
@@ -284,7 +271,7 @@ impl Blob {
     }
 
     /// Truncate the blob to the given length.
-    pub async fn truncate(&mut self, tx: &mut db::ReadTransaction, len: u64) -> Result<()> {
+    pub async fn truncate(&mut self, tx: &mut ReadTransaction, len: u64) -> Result<()> {
         if len == self.len {
             return Ok(());
         }
@@ -306,20 +293,13 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub async fn flush(&mut self, tx: &mut db::WriteTransaction) -> Result<bool> {
+    pub async fn flush(&mut self, tx: &mut WriteTransaction) -> Result<bool> {
         if !self.is_dirty() {
             return Ok(false);
         }
 
-        let write_keys = self.branch.keys().write().ok_or(Error::PermissionDenied)?;
-        let mut snapshot = self
-            .branch
-            .data()
-            .load_or_create_snapshot(tx, write_keys)
-            .await?;
-
-        self.write_len(tx, &mut snapshot).await?;
-        self.write_current_block(tx, &mut snapshot).await?;
+        self.write_len(tx).await?;
+        self.write_current_block(tx).await?;
 
         Ok(true)
     }
@@ -371,11 +351,7 @@ impl Blob {
     }
 
     // Write the current blob length into the blob header in the head block.
-    async fn write_len(
-        &mut self,
-        tx: &mut db::WriteTransaction,
-        snapshot: &mut SnapshotData,
-    ) -> Result<()> {
+    async fn write_len(&mut self, tx: &mut WriteTransaction) -> Result<()> {
         if !self.len_dirty {
             return Ok(());
         }
@@ -390,8 +366,14 @@ impl Blob {
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
         } else {
-            let (_, buffer) =
-                read_block(tx, snapshot, self.branch.keys().read(), &self.head_locator).await?;
+            let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+            let (_, buffer) = read_block(
+                tx,
+                &root_node,
+                &self.head_locator,
+                self.branch.keys().read(),
+            )
+            .await?;
 
             let mut cursor = Cursor::new(buffer);
             cursor.pos = 0;
@@ -399,11 +381,11 @@ impl Blob {
 
             write_block(
                 tx,
-                snapshot,
-                read_key,
-                write_keys,
+                *self.branch.id(),
                 &self.head_locator,
                 cursor.buffer,
+                read_key,
+                write_keys,
             )
             .await?;
         }
@@ -414,11 +396,7 @@ impl Blob {
     }
 
     // Write the current block into the store.
-    async fn write_current_block(
-        &mut self,
-        tx: &mut db::WriteTransaction,
-        snapshot: &mut SnapshotData,
-    ) -> Result<()> {
+    async fn write_current_block(&mut self, tx: &mut WriteTransaction) -> Result<()> {
         if !self.current_block.dirty {
             return Ok(());
         }
@@ -428,11 +406,11 @@ impl Blob {
 
         let block_id = write_block(
             tx,
-            snapshot,
-            read_key,
-            write_keys,
+            *self.branch.id(),
             &self.current_block.locator,
             self.current_block.content.buffer.clone(),
+            read_key,
+            write_keys,
         )
         .await?;
 
@@ -466,18 +444,16 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     // and that caused the incoming response messages to queue up.
     const BATCH_SIZE: u32 = 1;
 
-    let end = load_block_count_hint(src_branch, blob_id).await?;
+    let mut rtx = src_branch.store().begin_read().await?;
+    let src_root_node = rtx.load_latest_root_node(*src_branch.id()).await?;
+
+    let end =
+        load_block_count_hint(&mut rtx, &src_root_node, blob_id, src_branch.keys().read()).await?;
     let mut locators = Locator::head(blob_id).sequence().take(end as usize);
     let mut running = true;
 
     while running {
-        let mut tx = src_branch.db().begin_write().await?;
-
-        let src_snapshot = src_branch.data().load_snapshot(&mut tx).await?;
-        let mut dst_snapshot = dst_branch
-            .data()
-            .load_or_create_snapshot(&mut tx, write_keys)
-            .await?;
+        let mut wtx = src_branch.store().begin_write().await?;
 
         for _ in 0..BATCH_SIZE {
             let Some(locator) = locators.next() else {
@@ -488,38 +464,35 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             let encoded_locator = locator.encode(read_key);
 
             let (block_id, block_presence) =
-                match src_snapshot.get_block(&mut tx, &encoded_locator).await {
+                match rtx.find_block_in(&src_root_node, encoded_locator).await {
                     Ok(block) => block,
-                    Err(Error::EntryNotFound) => {
+                    Err(store::Error::LocatorNotFound) => {
                         // end of the blob
                         running = false;
                         break;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(error.into()),
                 };
 
             // It can happen that the current and dst branches are different, but the blob has
             // already been forked by some other task in the meantime. In that case this
             // `insert` is a no-op. We still proceed normally to maintain idempotency.
-            dst_snapshot
-                .insert_block(
-                    &mut tx,
-                    &encoded_locator,
-                    &block_id,
-                    block_presence,
-                    write_keys,
-                )
-                .instrument(tracing::info_span!(
-                    "fork_block",
-                    num = locator.number(),
-                    id = ?block_id
-                ))
-                .await?;
+            wtx.link_block(
+                *dst_branch.id(),
+                encoded_locator,
+                &block_id,
+                block_presence,
+                write_keys,
+            )
+            .instrument(tracing::info_span!(
+                "fork_block",
+                num = locator.number(),
+                id = ?block_id
+            ))
+            .await?;
         }
 
-        dst_snapshot.remove_all_older(&mut tx).await?;
-
-        tx.commit().await?;
+        wtx.commit().await?;
     }
 
     Ok(())
@@ -533,29 +506,31 @@ fn block_count(len: u64) -> u32 {
 }
 
 async fn read_block(
-    tx: &mut db::ReadTransaction,
-    snapshot: &SnapshotData,
-    read_key: &cipher::SecretKey,
+    tx: &mut ReadTransaction,
+    root_node: &RootNode,
     locator: &Locator,
+    read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, _) = snapshot.get_block(tx, &locator.encode(read_key)).await?;
+    let (id, _) = tx
+        .find_block_in(root_node, locator.encode(read_key))
+        .await?;
 
     let mut buffer = Buffer::new();
-    let nonce = block::read(tx, &id, &mut buffer).await?;
+    let nonce = tx.read_block(&id, &mut buffer).await?;
 
     decrypt_block(read_key, &nonce, &mut buffer);
 
     Ok((id, buffer))
 }
 
-#[instrument(skip(tx, snapshot, read_key, write_keys, buffer), fields(id))]
+#[instrument(skip(tx, buffer, read_key, write_keys), fields(id))]
 async fn write_block(
-    tx: &mut db::WriteTransaction,
-    snapshot: &mut SnapshotData,
-    read_key: &cipher::SecretKey,
-    write_keys: &sign::Keypair,
+    tx: &mut WriteTransaction,
+    branch_id: PublicKey,
     locator: &Locator,
     mut buffer: Buffer,
+    read_key: &cipher::SecretKey,
+    write_keys: &sign::Keypair,
 ) -> Result<BlockId> {
     let nonce = rand::random();
     encrypt_block(read_key, &nonce, &mut buffer);
@@ -563,46 +538,44 @@ async fn write_block(
 
     Span::current().record("id", field::debug(&id));
 
-    // NOTE: make sure the index and block store operations run in the same order as in
-    // `load_block` to prevent potential deadlocks when `load_block` and `write_block` run
-    // concurrently and `load_block` runs inside a transaction.
-    let inserted = snapshot
-        .insert_block(
-            tx,
-            &locator.encode(read_key),
+    let inserted = tx
+        .link_block(
+            branch_id,
+            locator.encode(read_key),
             &id,
             SingleBlockPresence::Present,
             write_keys,
         )
         .await?;
-    snapshot.remove_all_older(tx).await?;
 
     // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
     // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
     assert!(inserted);
 
-    block::write(tx, &id, &buffer, &nonce).await?;
+    tx.write_block(&id, &buffer, &nonce).await?;
 
     Ok(id)
 }
 
 async fn read_len(
-    tx: &mut db::ReadTransaction,
-    snapshot: &SnapshotData,
-    read_key: &cipher::SecretKey,
+    tx: &mut ReadTransaction,
+    root_node: &RootNode,
     blob_id: BlobId,
+    read_key: &cipher::SecretKey,
 ) -> Result<u64> {
-    let (_, buffer) = read_block(tx, snapshot, read_key, &Locator::head(blob_id)).await?;
+    let (_, buffer) = read_block(tx, root_node, &Locator::head(blob_id), read_key).await?;
     Ok(Cursor::new(buffer).read_u64())
 }
 
 // Returns the max number of blocks the specified blob has. This either returns the actual number
 // or `u32::MAX` in case the first blob is not available and so the blob length can't be obtained.
-async fn load_block_count_hint(branch: &Branch, blob_id: BlobId) -> Result<u32> {
-    let mut tx = branch.db().begin_read().await?;
-    let snapshot = branch.data().load_snapshot(&mut tx).await?;
-
-    match read_len(&mut tx, &snapshot, branch.keys().read(), blob_id).await {
+async fn load_block_count_hint(
+    tx: &mut ReadTransaction,
+    root_node: &RootNode,
+    blob_id: BlobId,
+    read_key: &cipher::SecretKey,
+) -> Result<u32> {
+    match read_len(tx, root_node, blob_id, read_key).await {
         Ok(len) => Ok(block_count(len)),
         Err(Error::BlockNotFound(_)) => Ok(u32::MAX),
         Err(error) => Err(error),

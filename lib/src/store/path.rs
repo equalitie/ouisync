@@ -1,10 +1,9 @@
-use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, NodeState, SingleBlockPresence,
-    Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
-};
+use super::inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT};
+use super::leaf_node::{LeafNodeSet, ModifyStatus};
 use crate::{
     block::BlockId,
     crypto::{Hash, Hashable},
+    index::{NodeState, SingleBlockPresence, Summary},
 };
 
 ///
@@ -24,7 +23,7 @@ use crate::{
 /// and/or remove the leaf) and then recalculate all hashes.
 ///
 #[derive(Debug)]
-pub(super) struct Path {
+pub(crate) struct Path {
     locator: Hash,
     pub root_hash: Hash,
     pub root_summary: Summary,
@@ -96,7 +95,7 @@ impl Path {
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> u8 {
-        node::get_bucket(&self.locator, inner_layer)
+        inner_node::get_bucket(&self.locator, inner_layer)
     }
 
     /// Recalculate layers from start_layer all the way to the root.

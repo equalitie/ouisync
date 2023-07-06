@@ -3,12 +3,12 @@ use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
+    block::{BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{InnerNode, LeafNode, RootNode},
     repository::RepositoryState,
+    store::{self, InnerNode, LeafNode, RootNode},
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -111,8 +111,13 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.repository.db().acquire().await?;
-        let root_node = RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await;
+        let root_node = self
+            .repository
+            .store()
+            .acquire_read()
+            .await?
+            .load_latest_root_node(branch_id)
+            .await;
 
         match root_node {
             Ok(node) => {
@@ -127,7 +132,7 @@ impl<'a> Responder<'a> {
                 self.tx.send(response).await;
                 Ok(())
             }
-            Err(Error::EntryNotFound) => {
+            Err(store::Error::BranchNotFound) => {
                 tracing::warn!("root node not found");
                 self.tx
                     .send(Response::RootNodeError(branch_id, debug.send()))
@@ -138,7 +143,7 @@ impl<'a> Responder<'a> {
                 self.tx
                     .send(Response::RootNodeError(branch_id, debug.send()))
                     .await;
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -152,7 +157,7 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.repository.db().acquire().await?;
+        let mut conn = self.repository.store().raw().acquire().await?;
 
         // At most one of these will be non-empty.
         let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
@@ -196,9 +201,9 @@ impl<'a> Responder<'a> {
     async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let mut conn = self.repository.db().acquire().await?;
-        let result = block::read(&mut conn, &id, &mut content).await;
-        drop(conn); // don't hold the connection while sending is in progress
+        let mut reader = self.repository.store().acquire_read().await?;
+        let result = reader.read_block(&id, &mut content).await;
+        drop(reader); // don't hold the store Reader while sending is in progress
 
         match result {
             Ok(nonce) => {
@@ -212,14 +217,14 @@ impl<'a> Responder<'a> {
                     .await;
                 Ok(())
             }
-            Err(Error::BlockNotFound(_)) => {
+            Err(store::Error::BlockNotFound) => {
                 tracing::warn!("block not found");
                 self.tx.send(Response::BlockError(id, debug.send())).await;
                 Ok(())
             }
             Err(error) => {
                 self.tx.send(Response::BlockError(id, debug.send())).await;
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -313,15 +318,21 @@ impl<'a> Monitor<'a> {
     }
 
     async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
-        let mut conn = self.repository.db().acquire().await?;
+        let mut conn = self.repository.store().raw().acquire().await?;
         RootNode::load_all_latest_approved(&mut conn)
+            .err_into()
             .try_collect()
             .await
     }
 
     async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
-        let mut conn = self.repository.db().acquire().await?;
-        RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await
+        Ok(self
+            .repository
+            .store()
+            .acquire_read()
+            .await?
+            .load_latest_root_node(branch_id)
+            .await?)
     }
 }
 
