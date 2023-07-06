@@ -12,7 +12,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 const MAX_CONCURRENT_QUERIES: usize = 2;
 
 // Cache entries expire after this time.
-const EXPIRE: Duration = Duration::from_secs(10);
+const EXPIRY: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub(crate) struct FileProgressCache {
@@ -60,7 +60,7 @@ impl<'a> Permit<'a> {
     pub fn get(self, blob_id: BlobId) -> Entry<'a> {
         let mut block_counts = self.shared.block_counts.lock().unwrap();
 
-        block_counts.retain(|_, (_, timestamp)| timestamp.elapsed() < EXPIRE);
+        block_counts.retain(|_, (_, timestamp)| timestamp.elapsed() < EXPIRY);
 
         let value = block_counts
             .get(&blob_id)
