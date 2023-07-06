@@ -9,7 +9,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 // Maximum number of `File::progress` calls that can be executed concurrently. We limit this because
 // the operation is currently slow and we don't want to exhaust all db connections when multiple
 // files are queried for progress.
-const MAX_CONCURRENT_QUERIES: usize = 3;
+const MAX_CONCURRENT_QUERIES: usize = 2;
 
 // Cache entries expire after this time.
 const EXPIRE: Duration = Duration::from_secs(10);
