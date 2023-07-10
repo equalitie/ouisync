@@ -1,4 +1,4 @@
-use btdht::MainlineDht;
+use btdht::{InfoHash, MainlineDht};
 use futures_util::StreamExt;
 use ouisync_lib::{
     network::{self, dht_discovery::DHT_ROUTERS},
@@ -12,12 +12,24 @@ use std::{
 use structopt::StructOpt;
 use tokio::{net::UdpSocket, task};
 
+#[derive(StructOpt, Debug)]
+enum Action {
+    Lookup,
+    Announce,
+}
+
 /// Command line options.
 #[derive(StructOpt, Debug)]
 struct Options {
     /// Accept a share token.
     #[structopt(long, value_name = "TOKEN")]
     pub token: Option<ShareToken>,
+    /// Unhashed swarm name, we hash it to get the info-hash.
+    #[structopt(long)]
+    pub swarm_name: Option<String>,
+    /// Action to perform.
+    #[structopt(subcommand)]
+    pub action: Action,
 }
 
 #[tokio::main]
@@ -62,16 +74,36 @@ async fn main() -> io::Result<()> {
             .unwrap()
     });
 
-    if let Some(token) = options.token {
+    if options.token.is_some() && options.swarm_name.is_some() {
+        println!("Only one of the token, swarm_name options may be set");
+        return Ok(());
+    }
+
+    let info_hash = if let Some(token) = options.token {
+        Some(network::repository_info_hash(token.id()))
+    } else if let Some(swarm_name) = options.swarm_name {
+        Some(InfoHash::sha1(swarm_name.as_bytes()))
+    } else {
+        None
+    };
+
+    if let Some(info_hash) = info_hash {
+        println!("InfoHash: {info_hash:?}");
+
         let task = task::spawn(async move {
+            let announce = match options.action {
+                Action::Lookup => false,
+                Action::Announce => true,
+            };
+
             if let Some(dht) = dht_v4 {
                 println!();
-                lookup("IPv4", &dht, &token).await;
+                lookup("IPv4", &dht, info_hash, announce).await;
             }
 
             if let Some(dht) = dht_v6 {
                 println!();
-                lookup("IPv6", &dht, &token).await;
+                lookup("IPv6", &dht, info_hash, announce).await;
             }
         });
 
@@ -84,14 +116,18 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn lookup(prefix: &str, dht: &MainlineDht, token: &ShareToken) {
+async fn lookup(prefix: &str, dht: &MainlineDht, info_hash: InfoHash, announce: bool) {
     println!("{prefix} Bootstrapping...");
     if dht.bootstrapped(None).await {
         let mut seen_peers = HashSet::new();
-        let info_hash = network::repository_info_hash(token.id());
 
-        println!("{prefix} Searching for peers...");
-        let mut peers = dht.search(info_hash, false);
+        if !announce {
+            println!("{prefix} Searching for peers...");
+        } else {
+            println!("{prefix} Searching and announcing for peers...");
+        }
+
+        let mut peers = dht.search(info_hash, announce);
 
         while let Some(peer) = peers.next().await {
             if seen_peers.insert(peer) {
