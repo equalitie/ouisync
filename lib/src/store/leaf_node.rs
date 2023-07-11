@@ -11,6 +11,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::{iter::FromIterator, slice, vec};
 
+#[cfg(test)]
+use {
+    super::inner_node::{self, INNER_LAYER_COUNT},
+    async_recursion::async_recursion,
+};
+
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct LeafNode {
     pub locator: Hash,
@@ -24,8 +30,8 @@ pub(super) async fn load_children(
 ) -> Result<LeafNodeSet, Error> {
     Ok(sqlx::query(
         "SELECT locator, block_id, block_presence
-             FROM snapshot_leaf_nodes
-             WHERE parent = ?",
+         FROM snapshot_leaf_nodes
+         WHERE parent = ?",
     )
     .bind(parent)
     .fetch(conn)
@@ -38,6 +44,30 @@ pub(super) async fn load_children(
     .await?
     .into_iter()
     .collect())
+}
+
+#[cfg(test)]
+#[async_recursion]
+pub(super) async fn count(
+    conn: &mut db::Connection,
+    current_layer: usize,
+    node: &Hash,
+) -> Result<usize, Error> {
+    // TODO: this can be rewritten as a single query using CTE
+
+    if current_layer < INNER_LAYER_COUNT {
+        let children = inner_node::load_children(conn, node).await?;
+
+        let mut sum = 0;
+
+        for (_bucket, child) in children {
+            sum += count(conn, current_layer + 1, &child.hash).await?;
+        }
+
+        Ok(sum)
+    } else {
+        Ok(load_children(conn, node).await?.len())
+    }
 }
 
 impl LeafNode {

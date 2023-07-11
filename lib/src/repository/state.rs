@@ -337,20 +337,14 @@ mod tests {
 
         assert!(tx.block_exists(&block_id).await.unwrap());
 
-        let mut snapshot0 = branch0.load_snapshot(tx.raw_mut()).await.unwrap();
-        snapshot0
-            .remove_block(tx.raw_mut(), &locator0, None, &write_keys)
+        tx.unlink_block(branch0.id(), &locator0, None, &write_keys)
             .await
             .unwrap();
-        snapshot0.remove_all_older(tx.raw_mut()).await.unwrap();
         assert!(tx.block_exists(&block_id).await.unwrap());
 
-        let mut snapshot1 = branch1.load_snapshot(tx.raw_mut()).await.unwrap();
-        snapshot1
-            .remove_block(tx.raw_mut(), &locator1, None, &write_keys)
+        tx.unlink_block(branch1.id(), &locator1, None, &write_keys)
             .await
             .unwrap();
-        snapshot1.remove_all_older(tx.raw_mut()).await.unwrap();
         assert!(!tx.block_exists(&block_id).await.unwrap(),);
     }
 

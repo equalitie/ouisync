@@ -133,7 +133,7 @@ impl Reader {
 
     /// Checks whether the block exists in the store.
     #[cfg(test)]
-    pub(crate) async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
+    pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
         Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
             .bind(id)
             .fetch_optional(self.raw_mut())
@@ -142,13 +142,19 @@ impl Reader {
     }
 
     /// Returns the total number of blocks in the store.
-    pub(crate) async fn count_blocks(&mut self) -> Result<usize, Error> {
+    pub async fn count_blocks(&mut self) -> Result<usize, Error> {
         Ok(db::decode_u64(
             sqlx::query("SELECT COUNT(*) FROM blocks")
                 .fetch_one(self.raw_mut())
                 .await?
                 .get(0),
         ) as usize)
+    }
+
+    #[cfg(test)]
+    pub async fn count_leaf_nodes(&mut self, branch_id: &PublicKey) -> Result<usize, Error> {
+        let root_hash = self.load_latest_root_node(branch_id).await?.proof.hash;
+        leaf_node::count(self.raw_mut(), 0, &root_hash).await
     }
 
     pub async fn load_latest_root_node(
@@ -279,6 +285,34 @@ impl WriteTransaction {
         self.save_path(&path, &root_node, write_keys).await?;
 
         Ok(true)
+    }
+
+    /// Unlinks (removes) the given block id from the given branch and locator. If
+    /// `expected_block_id` is `Some`, then the block is unlinked only if its id matches it,
+    /// otherwise it's removed unconditionally.
+    pub async fn unlink_block(
+        &mut self,
+        branch_id: &PublicKey,
+        encoded_locator: &Hash,
+        expected_block_id: Option<&BlockId>,
+        write_keys: &Keypair,
+    ) -> Result<(), Error> {
+        let root_node = root_node::load_latest(self.raw_mut(), branch_id).await?;
+        let mut path = self.load_path(&root_node, encoded_locator).await?;
+
+        let block_id = path
+            .remove_leaf(encoded_locator)
+            .ok_or(Error::LocatorNotFound)?;
+
+        if let Some(expected_block_id) = expected_block_id {
+            if &block_id != expected_block_id {
+                return Ok(());
+            }
+        }
+
+        self.save_path(&path, &root_node, write_keys).await?;
+
+        Ok(())
     }
 
     /// Writes a block into the store.

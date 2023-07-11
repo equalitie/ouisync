@@ -329,10 +329,9 @@ mod trash {
     use super::*;
     use crate::{
         block::BlockId,
-        crypto::sign::Keypair,
-        db,
-        index::{self, SnapshotData, UpdateSummaryReason},
-        store::{LeafNode, WriteTransaction},
+        crypto::sign::{Keypair, PublicKey},
+        index::{self, UpdateSummaryReason},
+        store::{self, LeafNode, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -526,8 +525,7 @@ mod trash {
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                let mut snapshot = local_branch.data().load_snapshot(tx.raw_mut()).await?;
-                remove_local_nodes(tx.raw_mut(), &mut snapshot, write_keys, &batch).await?;
+                remove_local_nodes(&mut tx, local_branch.id(), write_keys, &batch).await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -553,28 +551,28 @@ mod trash {
     }
 
     async fn remove_local_nodes(
-        tx: &mut db::WriteTransaction,
-        snapshot: &mut SnapshotData,
+        tx: &mut WriteTransaction,
+        branch_id: &PublicKey,
         write_keys: &Keypair,
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
-            let locators: Vec<_> = LeafNode::load_locators(tx, block_id).try_collect().await?;
+            let locators: Vec<_> = LeafNode::load_locators(tx.raw_mut(), block_id)
+                .try_collect()
+                .await?;
             let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {
-                match snapshot
-                    .remove_block(tx, &locator, Some(block_id), write_keys)
+                match tx
+                    .unlink_block(branch_id, &locator, Some(block_id), write_keys)
                     .instrument(span.clone())
                     .await
                 {
-                    Ok(()) | Err(Error::EntryNotFound) => (),
-                    Err(error) => return Err(error),
+                    Ok(()) | Err(store::Error::LocatorNotFound) => (),
+                    Err(error) => return Err(error.into()),
                 }
             }
         }
-
-        snapshot.remove_all_older(tx).await?;
 
         Ok(())
     }

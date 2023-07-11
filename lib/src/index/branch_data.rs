@@ -19,8 +19,6 @@ use crate::{
 };
 use futures_util::{Stream, TryStreamExt};
 
-type LocatorHash = Hash;
-
 #[derive(Clone)]
 pub(crate) struct BranchData {
     writer_id: PublicKey,
@@ -76,12 +74,6 @@ impl BranchData {
             Err(error) => Err(error),
         }
     }
-
-    #[cfg(test)]
-    pub async fn count_leaf_nodes(&self, conn: &mut db::Connection) -> Result<usize> {
-        let root_hash = self.load_snapshot(conn).await?.root_node.proof.hash;
-        count_leaf_nodes(conn, 0, &root_hash).await
-    }
 }
 
 pub(crate) struct SnapshotData {
@@ -126,7 +118,7 @@ impl SnapshotData {
     pub async fn insert_block(
         &mut self,
         tx: &mut db::WriteTransaction,
-        encoded_locator: &LocatorHash,
+        encoded_locator: &Hash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
         write_keys: &Keypair,
@@ -142,32 +134,6 @@ impl SnapshotData {
         self.save_path(tx, &path, write_keys).await?;
 
         Ok(true)
-    }
-
-    /// Removes the block identified by `encoded_locator`. If `expected_block_id` is `Some`, then
-    /// the block is removed only if its id matches it, otherwise it's removed unconditionally.
-    pub async fn remove_block(
-        &mut self,
-        tx: &mut db::WriteTransaction,
-        encoded_locator: &Hash,
-        expected_block_id: Option<&BlockId>,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut path = self.load_path(tx, encoded_locator).await?;
-
-        let block_id = path
-            .remove_leaf(encoded_locator)
-            .ok_or(Error::EntryNotFound)?;
-
-        if let Some(expected_block_id) = expected_block_id {
-            if &block_id != expected_block_id {
-                return Ok(());
-            }
-        }
-
-        self.save_path(tx, &path, write_keys).await?;
-
-        Ok(())
     }
 
     /// Remove this snapshot
@@ -229,7 +195,7 @@ impl SnapshotData {
     async fn load_path(
         &self,
         tx: &mut db::ReadTransaction,
-        encoded_locator: &LocatorHash,
+        encoded_locator: &Hash,
     ) -> Result<Path> {
         let mut path = Path::new(
             self.root_node.proof.hash,
@@ -311,31 +277,6 @@ impl Versioned for SnapshotData {
 impl BranchItem for SnapshotData {
     fn branch_id(&self) -> &PublicKey {
         SnapshotData::branch_id(self)
-    }
-}
-
-#[cfg(test)]
-use async_recursion::async_recursion;
-
-#[async_recursion]
-#[cfg(test)]
-async fn count_leaf_nodes(
-    conn: &mut db::Connection,
-    current_layer: usize,
-    node: &Hash,
-) -> Result<usize> {
-    if current_layer < INNER_LAYER_COUNT {
-        let children = InnerNode::load_children(conn, node).await?;
-
-        let mut sum = 0;
-
-        for (_bucket, child) in children {
-            sum += count_leaf_nodes(conn, current_layer + 1, &child.hash).await?;
-        }
-
-        Ok(sum)
-    } else {
-        Ok(LeafNode::load_children(conn, node).await?.len())
     }
 }
 
@@ -465,11 +406,7 @@ mod tests {
             count_branch_forest_entries(tx.raw_mut()).await
         );
 
-        branch
-            .load_or_create_snapshot(tx.raw_mut(), &write_keys)
-            .await
-            .unwrap()
-            .remove_block(tx.raw_mut(), &encoded_locator, None, &write_keys)
+        tx.unlink_block(branch.id(), &encoded_locator, None, &write_keys)
             .await
             .unwrap();
 
@@ -478,14 +415,6 @@ mod tests {
             Err(_) => panic!("Error should have been LocatorNotFound"),
             Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
         }
-
-        branch
-            .load_snapshot(tx.raw_mut())
-            .await
-            .unwrap()
-            .remove_all_older(tx.raw_mut())
-            .await
-            .unwrap();
 
         assert_eq!(0, count_branch_forest_entries(tx.raw_mut()).await);
     }
@@ -501,50 +430,41 @@ mod tests {
     async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let (_base_dir, pool, branch) = setup().await;
+        let store = Store::new(pool);
         let write_keys = Keypair::generate(&mut rng);
 
         let mut locators = Vec::new();
-        let mut tx = pool.begin_write().await.unwrap();
-
-        let mut snapshot = branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap();
+        let mut tx = store.begin_write().await.unwrap();
 
         // Add blocks
         for _ in 0..leaf_count {
             let locator = rng.gen();
             let block_id = rng.gen();
 
-            snapshot
-                .insert_block(
-                    &mut tx,
-                    &locator,
-                    &block_id,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+            tx.link_block(
+                branch.id(),
+                &locator,
+                &block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
 
             locators.push(locator);
 
-            assert!(!has_empty_inner_node(&mut tx).await);
+            assert!(!has_empty_inner_node(tx.raw_mut()).await);
         }
-
-        snapshot.remove_all_older(&mut tx).await.unwrap();
 
         // Remove blocks
         locators.shuffle(&mut rng);
 
         for locator in locators {
-            snapshot
-                .remove_block(&mut tx, &locator, None, &write_keys)
+            tx.unlink_block(branch.id(), &locator, None, &write_keys)
                 .await
                 .unwrap();
-            snapshot.remove_all_older(&mut tx).await.unwrap();
 
-            assert!(!has_empty_inner_node(&mut tx).await);
+            assert!(!has_empty_inner_node(tx.raw_mut()).await);
         }
     }
 
@@ -599,12 +519,7 @@ mod tests {
                     };
 
                     let mut tx = store.begin_write().await.unwrap();
-                    let mut snapshot = branch
-                        .load_or_create_snapshot(tx.raw_mut(), &write_keys)
-                        .await
-                        .unwrap();
-                    snapshot
-                        .remove_block(tx.raw_mut(), &locator, None, &write_keys)
+                    tx.unlink_block(branch.id(), &locator, None, &write_keys)
                         .await
                         .unwrap();
                     tx.commit().await.unwrap();
