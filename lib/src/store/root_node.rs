@@ -363,14 +363,6 @@ impl RootNode {
         create(tx, proof, summary).await
     }
 
-    #[deprecated = "use store::Reader::load_latest_root_node"]
-    pub async fn load_latest_approved_by_writer(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<Self, Error> {
-        load_latest(conn, &writer_id).await
-    }
-
     /// Return the latest approved root nodes of all known writers.
     #[deprecated = "use store::Reader::load_all_root_nodes"]
     pub fn load_all_latest_approved(
@@ -496,12 +488,6 @@ impl RootNode {
             .err_into()
     }
 
-    /// Load the previous approved root node of the same writer.
-    #[deprecated = "use store::Reader::load_prev_root_node"]
-    pub async fn load_prev(&self, conn: &mut db::Connection) -> Result<Option<Self>, Error> {
-        load_prev(conn, self).await
-    }
-
     /// Reload this root node from the db.
     #[cfg(test)]
     pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
@@ -567,40 +553,6 @@ impl RootNode {
             .bind(hash)
             .execute(tx)
             .await?;
-        Ok(())
-    }
-
-    /// Removes this node including its snapshot.
-    #[deprecated]
-    pub async fn remove_recursively(&self, tx: &mut db::WriteTransaction) -> Result<(), Error> {
-        // This uses db triggers to delete the whole snapshot.
-        sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
-            .bind(self.snapshot_id)
-            .execute(tx)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Removes all root nodes, including their snapshots, that are older than this node and are
-    /// on the same branch and are not complete.
-    #[deprecated]
-    pub async fn remove_recursively_all_older_incomplete(
-        &self,
-        tx: &mut db::WriteTransaction,
-    ) -> Result<(), Error> {
-        // This uses db triggers to delete the whole snapshot.
-        sqlx::query(
-            "DELETE FROM snapshot_root_nodes
-             WHERE snapshot_id < ? AND writer_id = ? AND state IN (?, ?)",
-        )
-        .bind(self.snapshot_id)
-        .bind(&self.proof.writer_id)
-        .bind(NodeState::Incomplete)
-        .bind(NodeState::Rejected)
-        .execute(tx)
-        .await?;
-
         Ok(())
     }
 

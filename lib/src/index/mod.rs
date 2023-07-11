@@ -1,4 +1,3 @@
-mod branch_data;
 mod node;
 mod proof;
 mod quota;
