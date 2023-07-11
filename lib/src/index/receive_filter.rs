@@ -1,5 +1,5 @@
 use super::node::MultiBlockPresence;
-use crate::{crypto::Hash, db, error::Result};
+use crate::{crypto::Hash, db, error::Result, store};
 use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;
@@ -44,7 +44,7 @@ impl ReceiveFilter {
         Ok(true)
     }
 
-    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<()> {
+    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), store::Error> {
         sqlx::query("DELETE FROM received_nodes WHERE hash = ?")
             .bind(hash)
             .execute(tx)

@@ -14,7 +14,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
-    store::{InnerNode, LeafNode, RootNode},
+    store::{self, InnerNode, LeafNode, RootNode},
 };
 use futures_util::TryStreamExt;
 
@@ -32,7 +32,7 @@ pub(crate) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     mut nodes: Vec<Hash>,
     reason: UpdateSummaryReason,
-) -> Result<HashMap<Hash, NodeState>> {
+) -> Result<HashMap<Hash, NodeState>, store::Error> {
     let mut states = HashMap::default();
 
     while let Some(hash) = nodes.pop() {

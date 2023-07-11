@@ -27,8 +27,7 @@ use crate::{
     repository::RepositoryId,
     storage_size::StorageSize,
     store::{
-        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, QuotaError, RootNode, Store,
-        WriteTransaction,
+        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store, WriteTransaction,
     },
     version_vector::VersionVector,
 };
@@ -107,7 +106,7 @@ impl Index {
         let mut tx = self.store().begin_write().await?;
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = decide_root_node_action(tx.raw_mut(), &proof, &block_presence).await?;
+        let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
 
         if action.insert {
             let node = RootNode::create(tx.raw_mut(), proof, Summary::INCOMPLETE).await?;
@@ -251,62 +250,13 @@ impl Index {
         hash: Hash,
         quota: Option<StorageSize>,
     ) -> Result<ReceiveStatus> {
-        // TODO: Don't hold write transaction through this whole function. Use it only for
-        // `update_summaries` then commit it, then do the quota check with a read-only transaction
-        // and then grab another write transaction to do the `approve` / `reject`.
-        // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
-        // concurrent checks to succeed where they would otherwise fail if ran sequentially.
-
-        let states =
-            node::update_summaries(tx.raw_mut(), vec![hash], UpdateSummaryReason::Other).await?;
-
-        let mut old_approved = false;
-        let mut new_approved = Vec::new();
-
-        for (hash, state) in states {
-            match state {
-                NodeState::Complete => (),
-                NodeState::Approved => {
-                    old_approved = true;
-                    continue;
-                }
-                NodeState::Incomplete | NodeState::Rejected => continue,
-            }
-
-            let approve = if let Some(quota) = quota {
-                match tx.check_quota(&hash, quota).await {
-                    Ok(()) => true,
-                    Err(QuotaError::Exceeded(size)) => {
-                        tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
-                        false
-                    }
-                    Err(QuotaError::Outdated) => {
-                        tracing::debug!(?hash, "snapshot outdated");
-                        false
-                    }
-                    Err(QuotaError::Store(error)) => return Err(error.into()),
-                }
-            } else {
-                true
-            };
-
-            if approve {
-                RootNode::approve(tx.raw_mut(), &hash).await?;
-                try_collect_into(
-                    RootNode::load_writer_ids(tx.raw_mut(), &hash),
-                    &mut new_approved,
-                )
-                .await?;
-            } else {
-                RootNode::reject(tx.raw_mut(), &hash).await?;
-            }
-        }
+        let status = tx.finalize_receive(hash, quota).await?;
 
         // For logging completed snapshots
         let root_nodes = if tracing::enabled!(Level::DEBUG) {
-            let mut root_nodes = Vec::with_capacity(new_approved.len());
+            let mut root_nodes = Vec::with_capacity(status.new_approved.len());
 
-            for branch_id in &new_approved {
+            for branch_id in &status.new_approved {
                 root_nodes.push(tx.load_root_node(branch_id).await?);
             }
 
@@ -316,7 +266,7 @@ impl Index {
         };
 
         tx.commit_and_then({
-            let new_approved = new_approved.clone();
+            let new_approved = status.new_approved.clone();
             let event_tx = self.notify().clone();
 
             move || {
@@ -336,10 +286,7 @@ impl Index {
         })
         .await?;
 
-        Ok(ReceiveStatus {
-            old_approved,
-            new_approved,
-        })
+        Ok(status)
     }
 
     async fn check_parent_node_exists(
@@ -421,7 +368,7 @@ struct RootNodeAction {
 }
 
 async fn decide_root_node_action(
-    tx: &mut db::WriteTransaction,
+    tx: &mut WriteTransaction,
     new_proof: &Proof,
     new_block_presence: &MultiBlockPresence,
 ) -> Result<RootNodeAction> {
@@ -430,7 +377,7 @@ async fn decide_root_node_action(
         request_children: true,
     };
 
-    let mut old_nodes = RootNode::load_all_latest(tx);
+    let mut old_nodes = tx.load_root_nodes_in_any_state();
     while let Some(old_node) = old_nodes.try_next().await? {
         match new_proof
             .version_vector

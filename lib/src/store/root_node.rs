@@ -221,6 +221,40 @@ pub(super) fn load_all(
     .err_into()
 }
 
+/// Return the latest root nodes of all known writers in any state.
+pub(super) fn load_all_in_any_state(
+    conn: &mut db::Connection,
+) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    sqlx::query(
+        "SELECT
+                 snapshot_id,
+                 writer_id,
+                 versions,
+                 hash,
+                 signature,
+                 state,
+                 block_presence
+             FROM
+                 snapshot_root_nodes
+             WHERE
+                 snapshot_id IN (
+                     SELECT MAX(snapshot_id)
+                     FROM snapshot_root_nodes
+                     GROUP BY writer_id
+                 )",
+    )
+    .fetch(conn)
+    .map_ok(|row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
+        summary: Summary {
+            state: row.get(5),
+            block_presence: row.get(6),
+        },
+    })
+    .err_into()
+}
+
 /// Does this node exist in the db?
 pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result<bool, Error> {
     Ok(
@@ -330,6 +364,41 @@ pub(super) async fn check_fallback(
     .is_some())
 }
 
+/// Approve the nodes with the specified hash.
+pub(super) async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
+    set_state(tx, hash, NodeState::Approved).await
+}
+
+/// Reject the nodes with the specified hash.
+pub(super) async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
+    set_state(tx, hash, NodeState::Rejected).await
+}
+
+async fn set_state(
+    tx: &mut db::WriteTransaction,
+    hash: &Hash,
+    state: NodeState,
+) -> Result<(), Error> {
+    sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
+        .bind(state)
+        .bind(hash)
+        .execute(tx)
+        .await?;
+    Ok(())
+}
+
+/// Returns the writer ids of the nodes with the specified hash.
+pub(super) fn load_writer_ids<'a>(
+    conn: &'a mut db::Connection,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
+    sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes WHERE hash = ?")
+        .bind(hash)
+        .fetch(conn)
+        .map_ok(|row| row.get(0))
+        .err_into()
+}
+
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
 /// most recent to the least recent.
 #[cfg(test)]
@@ -393,40 +462,6 @@ impl RootNode {
         summary: Summary,
     ) -> Result<Self, Error> {
         create(tx, proof, summary).await
-    }
-
-    /// Return the latest root nodes of all known writers.
-    pub fn load_all_latest(
-        conn: &mut db::Connection,
-    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 writer_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence
-             FROM
-                 snapshot_root_nodes
-             WHERE
-                 snapshot_id IN (
-                     SELECT MAX(snapshot_id)
-                     FROM snapshot_root_nodes
-                     GROUP BY writer_id
-                 )",
-        )
-        .fetch(conn)
-        .map_ok(|row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-            summary: Summary {
-                state: row.get(5),
-                block_presence: row.get(6),
-            },
-        })
-        .err_into()
     }
 
     /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
@@ -503,15 +538,12 @@ impl RootNode {
     }
 
     /// Returns the writer ids of the nodes with the specified hash.
+    #[deprecated]
     pub fn load_writer_ids<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,
     ) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
-        sqlx::query("SELECT DISTINCT writer_id FROM snapshot_root_nodes WHERE hash = ?")
-            .bind(hash)
-            .fetch(conn)
-            .map_ok(|row| row.get(0))
-            .err_into()
+        load_writer_ids(conn, hash)
     }
 
     /// Reload this root node from the db.
@@ -559,27 +591,9 @@ impl RootNode {
         Ok(state)
     }
 
-    /// Approve the nodes with the specified hash.
+    #[deprecated]
     pub async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        Self::set_state(tx, hash, NodeState::Approved).await
-    }
-
-    /// Reject the nodes with the specified hash.
-    pub async fn reject(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        Self::set_state(tx, hash, NodeState::Rejected).await
-    }
-
-    async fn set_state(
-        tx: &mut db::WriteTransaction,
-        hash: &Hash,
-        state: NodeState,
-    ) -> Result<(), Error> {
-        sqlx::query("UPDATE snapshot_root_nodes SET state = ? WHERE hash = ?")
-            .bind(state)
-            .bind(hash)
-            .execute(tx)
-            .await?;
-        Ok(())
+        approve(tx, hash).await
     }
 
     pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {

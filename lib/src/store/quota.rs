@@ -33,7 +33,7 @@ pub(super) async fn check(
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum QuotaError {
+pub(super) enum QuotaError {
     #[error("quota exceeded")]
     Exceeded(StorageSize),
     #[error("snapshot outdated")]

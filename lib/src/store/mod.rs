@@ -3,6 +3,7 @@ mod inner_node;
 mod leaf_node;
 mod path;
 mod quota;
+mod receive;
 mod root_node;
 
 #[cfg(test)]
@@ -15,7 +16,7 @@ use crate::{
         Hash,
     },
     db,
-    index::{Proof, SingleBlockPresence, Summary, VersionVectorOp},
+    index::{Proof, ReceiveStatus, SingleBlockPresence, Summary, VersionVectorOp},
     storage_size::StorageSize,
 };
 use futures_util::Stream;
@@ -27,7 +28,6 @@ use std::{
 use tracing::Instrument;
 
 pub use error::Error;
-pub(crate) use quota::QuotaError;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
@@ -222,6 +222,12 @@ impl Reader {
         root_node::load_all(self.raw_mut())
     }
 
+    pub fn load_root_nodes_in_any_state(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_in_any_state(self.raw_mut())
+    }
+
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
         inner_node::load_children(self.raw_mut(), parent_hash).await
     }
@@ -232,14 +238,6 @@ impl Reader {
 
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
         root_node::exists(self.raw_mut(), node).await
-    }
-
-    pub async fn check_quota(
-        &mut self,
-        candidate_root_hash: &Hash,
-        quota: StorageSize,
-    ) -> Result<(), QuotaError> {
-        quota::check(self.raw_mut(), candidate_root_hash, quota).await
     }
 
     // TODO: remove pub
@@ -456,6 +454,16 @@ impl WriteTransaction {
         root_node::remove(self.raw_mut(), root_node).await?;
 
         Ok(())
+    }
+
+    /// Finalizes receiving nodes from a remote replica.
+    // TODO: remove pub
+    pub async fn finalize_receive(
+        &mut self,
+        hash: Hash,
+        quota: Option<StorageSize>,
+    ) -> Result<ReceiveStatus, Error> {
+        receive::finalize(self.raw_mut(), hash, quota).await
     }
 
     pub async fn commit(self) -> Result<(), Error> {
