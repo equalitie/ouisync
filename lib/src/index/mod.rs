@@ -1,6 +1,5 @@
 mod node;
 mod proof;
-mod quota;
 mod receive_filter;
 #[cfg(test)]
 mod tests;
@@ -16,7 +15,7 @@ pub(crate) use self::{
     receive_filter::ReceiveFilter,
 };
 
-use self::{proof::ProofError, quota::QuotaError};
+use self::proof::ProofError;
 use crate::{
     block::BlockId,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
@@ -24,15 +23,17 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     event::{Event, EventSender, Payload},
+    future::try_collect_into,
     repository::RepositoryId,
     storage_size::StorageSize,
     store::{
-        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store, WriteTransaction,
+        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, QuotaError, RootNode, Store,
+        WriteTransaction,
     },
     version_vector::VersionVector,
 };
-use futures_util::{Stream, TryStreamExt};
-use std::{cmp::Ordering, future, iter};
+use futures_util::TryStreamExt;
+use std::cmp::Ordering;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tracing::Level;
@@ -273,7 +274,7 @@ impl Index {
             }
 
             let approve = if let Some(quota) = quota {
-                match quota::check(tx.raw_mut(), &hash, quota).await {
+                match tx.check_quota(&hash, quota).await {
                     Ok(()) => true,
                     Err(QuotaError::Exceeded(size)) => {
                         tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
@@ -283,7 +284,7 @@ impl Index {
                         tracing::debug!(?hash, "snapshot outdated");
                         false
                     }
-                    Err(QuotaError::Fatal(error)) => return Err(error),
+                    Err(QuotaError::Store(error)) => return Err(error.into()),
                 }
             } else {
                 true
@@ -306,7 +307,7 @@ impl Index {
             let mut root_nodes = Vec::with_capacity(new_approved.len());
 
             for branch_id in &new_approved {
-                root_nodes.push(tx.load_latest_root_node(branch_id).await?);
+                root_nodes.push(tx.load_root_node(branch_id).await?);
             }
 
             root_nodes
@@ -493,17 +494,4 @@ async fn decide_root_node_action(
     }
 
     Ok(action)
-}
-
-// TODO: move this to some generic utils module.
-async fn try_collect_into<S, D, T, E>(src: S, dst: &mut D) -> Result<(), E>
-where
-    S: Stream<Item = Result<T, E>>,
-    D: Extend<T>,
-{
-    src.try_for_each(|item| {
-        dst.extend(iter::once(item));
-        future::ready(Ok(()))
-    })
-    .await
 }

@@ -276,7 +276,7 @@ mod prune {
             .store()
             .acquire_read()
             .await?
-            .load_all_root_nodes()
+            .load_root_nodes()
             .try_collect()
             .await?;
 

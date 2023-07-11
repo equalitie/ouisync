@@ -108,7 +108,7 @@ pub(super) async fn load_or_create(
     branch_id: &PublicKey,
     write_keys: &Keypair,
 ) -> Result<RootNode, Error> {
-    match load_latest(conn, branch_id).await {
+    match load(conn, branch_id).await {
         Ok(root_node) => Ok(root_node),
         Err(Error::BranchNotFound) => Ok(RootNode::empty(*branch_id, write_keys)),
         Err(error) => Err(error),
@@ -116,7 +116,7 @@ pub(super) async fn load_or_create(
 }
 
 /// Returns the latest approved root node of the specified branch.
-pub(super) async fn load_latest(
+pub(super) async fn load(
     conn: &mut db::Connection,
     branch_id: &PublicKey,
 ) -> Result<RootNode, Error> {

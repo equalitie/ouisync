@@ -116,7 +116,7 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_latest_root_node(&branch_id)
+            .load_root_node(&branch_id)
             .await;
 
         match root_node {
@@ -331,7 +331,7 @@ impl<'a> Monitor<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_latest_root_node(branch_id)
+            .load_root_node(branch_id)
             .await?)
     }
 }

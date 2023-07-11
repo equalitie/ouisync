@@ -690,7 +690,7 @@ async fn load(
     locator: Locator,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
-    let mut root_node = tx.load_latest_root_node(branch.id()).await?;
+    let mut root_node = tx.load_root_node(branch.id()).await?;
 
     loop {
         let error = match load_in(tx, &root_node, branch.clone(), locator).await {

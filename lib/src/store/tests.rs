@@ -211,7 +211,7 @@ async fn fallback() {
         .acquire_read()
         .await
         .unwrap()
-        .load_latest_root_node(&branch_0_id)
+        .load_root_node(&branch_0_id)
         .await
         .unwrap();
     store.remove_outdated_snapshots(&root_node).await.unwrap();
@@ -355,7 +355,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                     .acquire_read()
                     .await
                     .unwrap()
-                    .load_latest_root_node(&branch_id)
+                    .load_root_node(&branch_id)
                     .await
                 {
                     Ok(root_node) => root_node,
@@ -376,12 +376,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
         }
 
         // Verify the snapshot is still complete
-        let root_hash = tx
-            .load_latest_root_node(&branch_id)
-            .await
-            .unwrap()
-            .proof
-            .hash;
+        let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
         check_complete(&mut tx, &root_hash).await;
     }
 }
@@ -406,8 +401,8 @@ fn random_head_locator() -> Locator {
 async fn count_child_nodes(reader: &mut Reader) -> Result<usize, Error> {
     let row = sqlx::query(
         "SELECT
-                (SELECT COUNT(*) FROM snapshot_inner_nodes) +
-                (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
+            (SELECT COUNT(*) FROM snapshot_inner_nodes) +
+            (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
     )
     .fetch_one(reader.raw_mut())
     .await?;

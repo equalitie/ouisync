@@ -1,11 +1,9 @@
-use super::{try_collect_into, RootNode};
+use super::{
+    error::Error as StoreError,
+    root_node::{self, RootNode},
+};
 use crate::{
-    crypto::Hash,
-    db,
-    error::{Error, Result},
-    iterator,
-    storage_size::StorageSize,
-    versioned,
+    crypto::Hash, db, future::try_collect_into, iterator, storage_size::StorageSize, versioned,
 };
 use sqlx::Row;
 use thiserror::Error;
@@ -35,20 +33,20 @@ pub(super) async fn check(
 }
 
 #[derive(Debug, Error)]
-pub(super) enum QuotaError {
+pub(crate) enum QuotaError {
     #[error("quota exceeded")]
     Exceeded(StorageSize),
     #[error("snapshot outdated")]
     Outdated,
-    #[error("fatal error")]
-    Fatal(#[from] Error),
+    #[error("store error")]
+    Store(#[from] StoreError),
 }
 
 /// Load the most up-to-date root node hashes considering also the unapproved candidate.
 async fn load_candidate_latest_root_hashes(
     conn: &mut db::Connection,
     candidate_root_hash: &Hash,
-) -> Result<Vec<Hash>> {
+) -> Result<Vec<Hash>, StoreError> {
     let mut nodes = Vec::new();
 
     try_collect_into(
@@ -56,7 +54,7 @@ async fn load_candidate_latest_root_hashes(
         &mut nodes,
     )
     .await?;
-    try_collect_into(RootNode::load_all_latest_approved(conn), &mut nodes).await?;
+    try_collect_into(root_node::load_all(conn), &mut nodes).await?;
 
     let nodes = versioned::keep_maximal(nodes, ());
 
@@ -69,7 +67,10 @@ async fn load_candidate_latest_root_hashes(
 
 /// Count blocks referenced from the given root nodes. Blocks referenced from more than one
 /// node are counted only once.
-async fn count_referenced_blocks(conn: &mut db::Connection, root_hashes: &[Hash]) -> Result<u64> {
+async fn count_referenced_blocks(
+    conn: &mut db::Connection,
+    root_hashes: &[Hash],
+) -> Result<u64, StoreError> {
     // NOTE: sqlx currently doesn't support bindings collections to queries (but they are working
     // on it: https://github.com/launchbadge/sqlx/issues/875) so we need to build the sql
     // programatically.
@@ -149,12 +150,7 @@ mod tests {
         .await
         .unwrap();
 
-        let root_hash = tx
-            .load_latest_root_node(&branch_id)
-            .await
-            .unwrap()
-            .proof
-            .hash;
+        let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
 
         assert_eq!(
             count_referenced_blocks(tx.raw_mut(), &[root_hash])
@@ -203,18 +199,8 @@ mod tests {
             .unwrap();
         }
 
-        let root_hash_a = tx
-            .load_latest_root_node(&branch_a_id)
-            .await
-            .unwrap()
-            .proof
-            .hash;
-        let root_hash_b = tx
-            .load_latest_root_node(&branch_b_id)
-            .await
-            .unwrap()
-            .proof
-            .hash;
+        let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;
+        let root_hash_b = tx.load_root_node(&branch_b_id).await.unwrap().proof.hash;
 
         assert_eq!(count_referenced_blocks(tx.raw_mut(), &[]).await.unwrap(), 0);
         assert_eq!(

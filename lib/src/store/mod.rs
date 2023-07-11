@@ -2,6 +2,7 @@ mod error;
 mod inner_node;
 mod leaf_node;
 mod path;
+mod quota;
 mod root_node;
 
 #[cfg(test)]
@@ -15,6 +16,7 @@ use crate::{
     },
     db,
     index::{Proof, SingleBlockPresence, Summary, VersionVectorOp},
+    storage_size::StorageSize,
 };
 use futures_util::Stream;
 use sqlx::Row;
@@ -25,6 +27,7 @@ use std::{
 use tracing::Instrument;
 
 pub use error::Error;
+pub(crate) use quota::QuotaError;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
@@ -199,15 +202,13 @@ impl Reader {
 
     #[cfg(test)]
     pub async fn count_leaf_nodes(&mut self, branch_id: &PublicKey) -> Result<usize, Error> {
-        let root_hash = self.load_latest_root_node(branch_id).await?.proof.hash;
+        let root_hash = self.load_root_node(branch_id).await?.proof.hash;
         leaf_node::count(self.raw_mut(), 0, &root_hash).await
     }
 
-    pub async fn load_latest_root_node(
-        &mut self,
-        branch_id: &PublicKey,
-    ) -> Result<RootNode, Error> {
-        root_node::load_latest(self.raw_mut(), branch_id).await
+    /// Load the latest approved root node of the given branch.
+    pub async fn load_root_node(&mut self, branch_id: &PublicKey) -> Result<RootNode, Error> {
+        root_node::load(self.raw_mut(), branch_id).await
     }
 
     pub async fn load_prev_root_node(
@@ -217,12 +218,20 @@ impl Reader {
         root_node::load_prev(self.raw_mut(), node).await
     }
 
-    pub fn load_all_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
         root_node::load_all(self.raw_mut())
     }
 
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
         root_node::exists(self.raw_mut(), node).await
+    }
+
+    pub async fn check_quota(
+        &mut self,
+        candidate_root_hash: &Hash,
+        quota: StorageSize,
+    ) -> Result<(), QuotaError> {
+        quota::check(self.raw_mut(), candidate_root_hash, quota).await
     }
 
     // TODO: remove pub
@@ -244,7 +253,7 @@ impl ReadTransaction {
         branch_id: &PublicKey,
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence), Error> {
-        let root_node = self.load_latest_root_node(branch_id).await?;
+        let root_node = self.load_root_node(branch_id).await?;
         self.find_block_in(&root_node, encoded_locator).await
     }
 
@@ -342,7 +351,7 @@ impl WriteTransaction {
         expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load_latest(self.raw_mut(), branch_id).await?;
+        let root_node = root_node::load(self.raw_mut(), branch_id).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         let block_id = path

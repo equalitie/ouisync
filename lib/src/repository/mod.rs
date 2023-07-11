@@ -807,7 +807,7 @@ impl Shared {
             .store()
             .acquire_read()
             .await?
-            .load_all_root_nodes()
+            .load_root_nodes()
             .err_into()
             .and_then(|root_node| future::ready(self.get_branch(root_node.proof.writer_id)))
             .try_collect()

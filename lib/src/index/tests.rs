@@ -183,7 +183,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_latest_root_node(&local_id)
+        .load_root_node(&local_id)
         .await
         .unwrap();
 
@@ -204,7 +204,7 @@ async fn receive_root_node_with_existing_hash() {
         .acquire_read()
         .await
         .unwrap()
-        .load_latest_root_node(&local_id)
+        .load_root_node(&local_id)
         .await
         .unwrap()
         .summary
@@ -758,7 +758,7 @@ async fn receive_snapshot(
         .acquire_read()
         .await
         .unwrap()
-        .load_latest_root_node(&writer_id)
+        .load_root_node(&writer_id)
         .await
     {
         Ok(node) => node.proof.into_version_vector(),
@@ -793,7 +793,7 @@ async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
         .acquire_read()
         .await
         .unwrap()
-        .load_latest_root_node(writer_id)
+        .load_root_node(writer_id)
         .await
         .unwrap();
     index

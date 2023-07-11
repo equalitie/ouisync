@@ -63,7 +63,7 @@ impl Branch {
             .store
             .acquire_read()
             .await?
-            .load_latest_root_node(self.id())
+            .load_root_node(self.id())
             .await
         {
             Ok(root_node) => Ok(root_node.proof.into_version_vector()),

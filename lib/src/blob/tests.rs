@@ -556,7 +556,7 @@ async fn fork_then_remove_src_branch() {
     let mut tx = store.begin_write().await.unwrap();
 
     // Remove the src branch
-    let root_node = tx.load_latest_root_node(src_branch.id()).await.unwrap();
+    let root_node = tx.load_root_node(src_branch.id()).await.unwrap();
     tx.remove_branch(&root_node).await.unwrap();
 
     // The forked blob still exists
