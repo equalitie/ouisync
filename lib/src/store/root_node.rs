@@ -9,9 +9,9 @@ use crate::{
     },
     db,
     debug::DebugPrinter,
-    index::{MultiBlockPresence, NodeState, Proof, SnapshotId, Summary},
+    index::{MultiBlockPresence, NodeState, Proof, SingleBlockPresence, SnapshotId, Summary},
     version_vector::VersionVector,
-    versioned::Versioned,
+    versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
@@ -24,6 +24,18 @@ pub(crate) struct RootNode {
     pub snapshot_id: SnapshotId,
     pub proof: Proof,
     pub summary: Summary,
+}
+
+impl Versioned for RootNode {
+    fn version_vector(&self) -> &VersionVector {
+        &self.proof.version_vector
+    }
+}
+
+impl BranchItem for RootNode {
+    fn branch_id(&self) -> &PublicKey {
+        &self.proof.writer_id
+    }
 }
 
 /// Creates a root node with the specified proof.
@@ -209,30 +221,6 @@ pub(super) fn load_all(
     .err_into()
 }
 
-/// Removes all root nodes, including their snapshots, that are older than the given snapshot and
-/// are on the same branch.
-pub(super) async fn remove_older_snapshots(
-    tx: &mut db::WriteTransaction,
-    snapshot_id: SnapshotId,
-) -> Result<(), Error> {
-    // This uses db triggers to delete the whole snapshot.
-    sqlx::query(
-        "DELETE FROM snapshot_root_nodes
-         WHERE snapshot_id < ? AND writer_id = (
-             SELECT writer_id
-             FROM snapshot_root_nodes
-             WHERE snapshot_id = ?
-             LIMIT 1
-         )",
-    )
-    .bind(snapshot_id)
-    .bind(snapshot_id)
-    .execute(tx)
-    .await?;
-
-    Ok(())
-}
-
 /// Does this node exist in the db?
 pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result<bool, Error> {
     Ok(
@@ -242,6 +230,104 @@ pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result
             .await?
             .is_some(),
     )
+}
+
+/// Removes the given root node including all its descendants that are not referenced from any
+/// other root nodes.
+pub(super) async fn remove(tx: &mut db::WriteTransaction, node: &RootNode) -> Result<(), Error> {
+    // This uses db triggers to delete the whole snapshot.
+    sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
+        .bind(node.snapshot_id)
+        .execute(tx)
+        .await?;
+
+    Ok(())
+}
+
+/// Removes all root nodes that are older than the given node and are on the same branch.
+pub(super) async fn remove_older(
+    tx: &mut db::WriteTransaction,
+    node: &RootNode,
+) -> Result<(), Error> {
+    // This uses db triggers to delete the whole snapshot.
+    sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
+        .bind(node.snapshot_id)
+        .bind(&node.proof.writer_id)
+        .execute(tx)
+        .await?;
+
+    Ok(())
+}
+
+/// Removes all root nodes that are older than the given node and are on the same branch and are
+/// not complete.
+pub(super) async fn remove_older_incomplete(
+    tx: &mut db::WriteTransaction,
+    node: &RootNode,
+) -> Result<(), Error> {
+    // This uses db triggers to delete the whole snapshot.
+    sqlx::query(
+        "DELETE FROM snapshot_root_nodes
+         WHERE snapshot_id < ? AND writer_id = ? AND state IN (?, ?)",
+    )
+    .bind(node.snapshot_id)
+    .bind(&node.proof.writer_id)
+    .bind(NodeState::Incomplete)
+    .bind(NodeState::Rejected)
+    .execute(tx)
+    .await?;
+
+    Ok(())
+}
+
+/// Check whether the `old` snapshot can serve as a fallback for the `new` snapshot.
+/// A snapshot can serve as a fallback if there is at least one locator that points to a missing
+/// block in `new` but present block in `old`.
+pub(super) async fn check_fallback(
+    conn: &mut db::Connection,
+    old: &RootNode,
+    new: &RootNode,
+) -> Result<bool, Error> {
+    // TODO: verify this query is efficient, especially on large repositories
+
+    Ok(sqlx::query(
+        "WITH RECURSIVE
+             inner_nodes_old(hash) AS (
+                 SELECT i.hash
+                     FROM snapshot_inner_nodes AS i
+                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                     WHERE r.snapshot_id = ?
+                 UNION ALL
+                 SELECT c.hash
+                     FROM snapshot_inner_nodes AS c
+                     INNER JOIN inner_nodes_old AS p ON p.hash = c.parent
+             ),
+             inner_nodes_new(hash) AS (
+                 SELECT i.hash
+                     FROM snapshot_inner_nodes AS i
+                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
+                     WHERE r.snapshot_id = ?
+                 UNION ALL
+                 SELECT c.hash
+                     FROM snapshot_inner_nodes AS c
+                     INNER JOIN inner_nodes_new AS p ON p.hash = c.parent
+             )
+         SELECT locator
+             FROM snapshot_leaf_nodes
+             WHERE block_presence = ? AND parent IN inner_nodes_old
+         INTERSECT
+         SELECT locator
+             FROM snapshot_leaf_nodes
+             WHERE block_presence = ? AND parent IN inner_nodes_new
+         LIMIT 1",
+    )
+    .bind(old.snapshot_id)
+    .bind(new.snapshot_id)
+    .bind(SingleBlockPresence::Present)
+    .bind(SingleBlockPresence::Missing)
+    .fetch_optional(conn)
+    .await?
+    .is_some())
 }
 
 impl RootNode {
@@ -485,6 +571,7 @@ impl RootNode {
     }
 
     /// Removes this node including its snapshot.
+    #[deprecated]
     pub async fn remove_recursively(&self, tx: &mut db::WriteTransaction) -> Result<(), Error> {
         // This uses db triggers to delete the whole snapshot.
         sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id = ?")
@@ -496,24 +583,8 @@ impl RootNode {
     }
 
     /// Removes all root nodes, including their snapshots, that are older than this node and are
-    /// on the same branch.
-    #[deprecated = "don't use directly"]
-    pub async fn remove_recursively_all_older(
-        &self,
-        tx: &mut db::WriteTransaction,
-    ) -> Result<(), Error> {
-        // This uses db triggers to delete the whole snapshot.
-        sqlx::query("DELETE FROM snapshot_root_nodes WHERE snapshot_id < ? AND writer_id = ?")
-            .bind(self.snapshot_id)
-            .bind(&self.proof.writer_id)
-            .execute(tx)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Removes all root nodes, including their snapshots, that are older than this node and are
     /// on the same branch and are not complete.
+    #[deprecated]
     pub async fn remove_recursively_all_older_incomplete(
         &self,
         tx: &mut db::WriteTransaction,
@@ -572,11 +643,5 @@ impl RootNode {
                 }
             }
         }
-    }
-}
-
-impl Versioned for RootNode {
-    fn version_vector(&self) -> &VersionVector {
-        &self.proof.version_vector
     }
 }

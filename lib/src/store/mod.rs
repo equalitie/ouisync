@@ -18,7 +18,10 @@ use crate::{
 };
 use futures_util::Stream;
 use sqlx::Row;
-use std::ops::{Deref, DerefMut};
+use std::{
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+};
 use tracing::Instrument;
 
 pub use error::Error;
@@ -72,6 +75,49 @@ impl Store {
                 },
             },
         })
+    }
+
+    /// Remove outdated older snapshots. Note this preserves older snapshots that can be used as
+    /// fallback for the latest snapshot and only removes those that can't.
+    pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<(), Error> {
+        // First remove all incomplete snapshots as they can never serve as fallback.
+        let mut tx = self.begin_write().await?;
+        root_node::remove_older_incomplete(tx.raw_mut(), root_node).await?;
+        tx.commit().await?;
+
+        let mut reader = self.acquire_read().await?;
+
+        // Then remove those snapshots that can't serve as fallback for the current one.
+        let mut new = Cow::Borrowed(root_node);
+
+        while let Some(old) = reader.load_prev_root_node(&new).await? {
+            if root_node::check_fallback(reader.raw_mut(), &old, &new).await? {
+                // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
+                // previous snapshot.
+                tracing::trace!(
+                    branch_id = ?old.proof.writer_id,
+                    hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
+                    "outdated snapshot not removed - possible fallback"
+                );
+
+                new = Cow::Owned(old);
+            } else {
+                // `old` can't serve as fallback for `self` and so we can safely remove it
+                let mut tx = self.begin_write().await?;
+                root_node::remove(tx.raw_mut(), &old).await?;
+                tx.commit().await?;
+
+                tracing::trace!(
+                    branch_id = ?old.proof.writer_id,
+                    hash = ?old.proof.hash,
+                    vv = ?old.proof.version_vector,
+                    "outdated snapshot removed"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Closes the store. Waits until all `Reader`s and `{Read|Write}Transactions` obtained from
@@ -171,9 +217,7 @@ impl Reader {
         root_node::load_prev(self.raw_mut(), node).await
     }
 
-    pub async fn load_all_root_nodes(
-        &mut self,
-    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    pub fn load_all_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
         root_node::load_all(self.raw_mut())
     }
 
@@ -389,6 +433,13 @@ impl WriteTransaction {
             .await
     }
 
+    pub async fn remove_branch(&mut self, root_node: &RootNode) -> Result<(), Error> {
+        root_node::remove_older(self.raw_mut(), root_node).await?;
+        root_node::remove(self.raw_mut(), root_node).await?;
+
+        Ok(())
+    }
+
     pub async fn commit(self) -> Result<(), Error> {
         match self.inner.inner.inner {
             Handle::WriteTransaction(tx) => Ok(tx.commit().await?),
@@ -445,7 +496,7 @@ impl WriteTransaction {
         new_summary: Summary,
     ) -> Result<(), Error> {
         let root_node = root_node::create(self.raw_mut(), new_proof, new_summary).await?;
-        root_node::remove_older_snapshots(self.raw_mut(), root_node.snapshot_id).await?;
+        root_node::remove_older(self.raw_mut(), &root_node).await?;
 
         tracing::trace!(
             vv = ?root_node.proof.version_vector,

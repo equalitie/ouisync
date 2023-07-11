@@ -268,9 +268,17 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
+    use futures_util::TryStreamExt;
 
     pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
-        let all = shared.state.index.load_snapshots().await?;
+        let all: Vec<_> = shared
+            .state
+            .store()
+            .acquire_read()
+            .await?
+            .load_all_root_nodes()
+            .try_collect()
+            .await?;
 
         // Currently it's possible that multiple branches have the same vv but different hash.
         // There is no good and simple way to pick one over the other so we currently keep all.
@@ -279,9 +287,9 @@ mod prune {
         let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
 
         // Remove outdated branches
-        for snapshot in outdated {
+        for node in outdated {
             // Never remove local branch
-            if snapshot.branch_id() == &shared.this_writer_id {
+            if node.proof.writer_id == shared.this_writer_id {
                 continue;
             }
 
@@ -291,33 +299,36 @@ mod prune {
             let _lock = match shared
                 .branch_shared
                 .locker
-                .branch(*snapshot.branch_id())
+                .branch(node.proof.writer_id)
                 .try_unique(BlobId::ROOT)
             {
                 Ok(lock) => lock,
                 Err((notify, _)) => {
-                    tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
+                    tracing::trace!(id = ?node.proof.writer_id, "outdated branch not removed - in use");
                     unlock_tx.send(notify).await;
                     continue;
                 }
             };
 
-            let mut tx = shared.state.store().raw().begin_write().await?;
-            snapshot.remove_all_older(&mut tx).await?;
-            snapshot.remove(&mut tx).await?;
+            let mut tx = shared.state.store().begin_write().await?;
+            tx.remove_branch(&node).await?;
             tx.commit().await?;
 
             tracing::trace!(
-                branch_id = ?snapshot.branch_id(),
-                vv = ?snapshot.version_vector(),
-                hash = ?snapshot.root_hash(),
+                branch_id = ?node.proof.writer_id,
+                vv = ?node.proof.version_vector,
+                hash = ?node.proof.hash,
                 "outdated branch removed"
             );
         }
 
         // Remove outdated snapshots.
-        for snapshot in uptodate {
-            snapshot.prune(shared.state.store().raw()).await?;
+        for node in uptodate {
+            shared
+                .state
+                .store()
+                .remove_outdated_snapshots(&node)
+                .await?;
         }
 
         Ok(())
