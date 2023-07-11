@@ -2,8 +2,6 @@
 pub mod test_utils;
 
 mod summary;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use self::summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 

@@ -1,3 +1,4 @@
+mod block;
 mod error;
 mod inner_node;
 mod leaf_node;
@@ -16,10 +17,13 @@ use crate::{
         Hash,
     },
     db,
-    index::{Proof, ReceiveStatus, SingleBlockPresence, Summary, VersionVectorOp},
+    index::{
+        update_summaries, Proof, ReceiveStatus, SingleBlockPresence, Summary, UpdateSummaryReason,
+        VersionVectorOp,
+    },
     storage_size::StorageSize,
 };
-use futures_util::Stream;
+use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{
     borrow::Cow,
@@ -31,10 +35,7 @@ pub use error::Error;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
-pub(crate) use self::{
-    inner_node::{get_bucket, EMPTY_INNER_HASH},
-    leaf_node::EMPTY_LEAF_HASH,
-};
+pub(crate) use self::inner_node::{get_bucket, EMPTY_INNER_HASH};
 pub(crate) use self::{
     inner_node::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
     leaf_node::{LeafNode, LeafNodeSet},
@@ -409,13 +410,21 @@ impl WriteTransaction {
         Ok(())
     }
 
-    /// Removes the specified block from the store.
-    // TODO: also mark the block as missing in the index
+    /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
-        sqlx::query("DELETE FROM blocks WHERE id = ?")
-            .bind(id)
-            .execute(self.raw_mut())
+        block::remove(self.raw_mut(), id).await?;
+        leaf_node::set_missing(self.raw_mut(), id).await?;
+
+        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(self.raw_mut(), id)
+            .try_collect()
             .await?;
+
+        update_summaries(
+            self.raw_mut(),
+            parent_hashes,
+            UpdateSummaryReason::BlockRemoved,
+        )
+        .await?;
 
         Ok(())
     }

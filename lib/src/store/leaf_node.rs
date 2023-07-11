@@ -46,6 +46,31 @@ pub(super) async fn load_children(
     .collect())
 }
 
+pub(super) fn load_parent_hashes<'a>(
+    conn: &'a mut db::Connection,
+    block_id: &'a BlockId,
+) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+    sqlx::query("SELECT DISTINCT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
+        .bind(block_id)
+        .fetch(conn)
+        .map_ok(|row| row.get(0))
+        .err_into()
+}
+
+/// Marks all leaf nodes that point to the specified block as missing.
+pub(super) async fn set_missing(
+    tx: &mut db::WriteTransaction,
+    block_id: &BlockId,
+) -> Result<(), Error> {
+    sqlx::query("UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ?")
+        .bind(SingleBlockPresence::Missing)
+        .bind(block_id)
+        .execute(tx)
+        .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 #[async_recursion]
 pub(super) async fn count(
@@ -111,15 +136,12 @@ impl LeafNode {
     }
 
     /// Loads all parent hashes of nodes with the specified block id.
+    #[deprecated]
     pub fn load_parent_hashes<'a>(
         conn: &'a mut db::Connection,
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-        sqlx::query("SELECT DISTINCT parent FROM snapshot_leaf_nodes WHERE block_id = ?")
-            .bind(block_id)
-            .fetch(conn)
-            .map_ok(|row| row.get(0))
-            .err_into()
+        load_parent_hashes(conn, block_id)
     }
 
     /// Loads all locators (most of the time (always?) there will be at most one) pointing to the
@@ -162,20 +184,6 @@ impl LeafNode {
         .await?;
 
         Ok(result.rows_affected() > 0)
-    }
-
-    /// Marks all leaf nodes that point to the specified block as missing.
-    pub async fn set_missing(
-        tx: &mut db::WriteTransaction,
-        block_id: &BlockId,
-    ) -> Result<(), Error> {
-        sqlx::query("UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ?")
-            .bind(SingleBlockPresence::Missing)
-            .bind(block_id)
-            .execute(tx)
-            .await?;
-
-        Ok(())
     }
 
     /// Checks whether the block with the specified id is present.

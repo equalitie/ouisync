@@ -67,6 +67,43 @@ pub(super) async fn load_children(
     .map_err(From::from)
 }
 
+/// Compute summaries from the children nodes of the specified parent nodes.
+pub(super) async fn compute_summary(
+    conn: &mut db::Connection,
+    parent_hash: &Hash,
+) -> Result<Summary, Error> {
+    // 1st attempt: empty inner nodes
+    if parent_hash == &*EMPTY_INNER_HASH {
+        let children = InnerNodeMap::default();
+        return Ok(Summary::from_inners(&children));
+    }
+
+    // 2nd attempt: empty leaf nodes
+    if parent_hash == &*EMPTY_LEAF_HASH {
+        let children = LeafNodeSet::default();
+        return Ok(Summary::from_leaves(&children));
+    }
+
+    // 3rd attempt: non-empty inner nodes
+    let children = load_children(conn, parent_hash).await?;
+    if !children.is_empty() {
+        // We download all children nodes of a given parent together so when we know that
+        // we have at least one we also know we have them all.
+        return Ok(Summary::from_inners(&children));
+    }
+
+    // 4th attempt: non-empty leaf nodes
+    let children = leaf_node::load_children(conn, parent_hash).await?;
+    if !children.is_empty() {
+        // Similarly as in the inner nodes case, we only need to check that we have at
+        // least one leaf node child and that already tells us that we have them all.
+        return Ok(Summary::from_leaves(&children));
+    }
+
+    // The parent hash doesn't correspond to any known node
+    Ok(Summary::INCOMPLETE)
+}
+
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
     pub fn new(hash: Hash, summary: Summary) -> Self {
@@ -137,7 +174,7 @@ impl InnerNode {
 
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
     pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        let summary = Self::compute_summary(tx, hash).await?;
+        let summary = compute_summary(tx, hash).await?;
 
         sqlx::query(
             "UPDATE snapshot_inner_nodes
@@ -151,43 +188,6 @@ impl InnerNode {
         .await?;
 
         Ok(())
-    }
-
-    /// Compute summaries from the children nodes of the specified parent nodes.
-    pub async fn compute_summary(
-        conn: &mut db::Connection,
-        parent_hash: &Hash,
-    ) -> Result<Summary, Error> {
-        // 1st attempt: empty inner nodes
-        if parent_hash == &*EMPTY_INNER_HASH {
-            let children = InnerNodeMap::default();
-            return Ok(Summary::from_inners(&children));
-        }
-
-        // 2nd attempt: empty leaf nodes
-        if parent_hash == &*EMPTY_LEAF_HASH {
-            let children = LeafNodeSet::default();
-            return Ok(Summary::from_leaves(&children));
-        }
-
-        // 3rd attempt: non-empty inner nodes
-        let children = load_children(conn, parent_hash).await?;
-        if !children.is_empty() {
-            // We download all children nodes of a given parent together so when we know that
-            // we have at least one we also know we have them all.
-            return Ok(Summary::from_inners(&children));
-        }
-
-        // 4th attempt: non-empty leaf nodes
-        let children = leaf_node::load_children(conn, parent_hash).await?;
-        if !children.is_empty() {
-            // Similarly as in the inner nodes case, we only need to check that we have at
-            // least one leaf node child and that already tells us that we have them all.
-            return Ok(Summary::from_leaves(&children));
-        }
-
-        // The parent hash doesn't correspond to any known node
-        Ok(Summary::INCOMPLETE)
     }
 
     pub fn is_empty(&self) -> bool {

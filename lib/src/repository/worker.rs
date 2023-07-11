@@ -341,7 +341,6 @@ mod trash {
     use crate::{
         block::BlockId,
         crypto::sign::{Keypair, PublicKey},
-        index::{self, UpdateSummaryReason},
         store::{self, LeafNode, WriteTransaction},
     };
     use futures_util::TryStreamExt;
@@ -590,22 +589,8 @@ mod trash {
 
     async fn remove_blocks(tx: &mut WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
-            tracing::trace!(?block_id, "unreachable block removed");
-
             tx.remove_block(block_id).await?;
-
-            LeafNode::set_missing(tx.raw_mut(), block_id).await?;
-
-            let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(tx.raw_mut(), block_id)
-                .try_collect()
-                .await?;
-
-            index::update_summaries(
-                tx.raw_mut(),
-                parent_hashes,
-                UpdateSummaryReason::BlockRemoved,
-            )
-            .await?;
+            tracing::trace!(?block_id, "unreachable block removed");
         }
 
         Ok(())

@@ -1,6 +1,6 @@
 use super::{
     error::Error,
-    inner_node::{InnerNode, EMPTY_INNER_HASH},
+    inner_node::{self, EMPTY_INNER_HASH},
 };
 use crate::{
     crypto::{
@@ -569,7 +569,7 @@ impl RootNode {
         tx: &mut db::WriteTransaction,
         hash: &Hash,
     ) -> Result<NodeState, Error> {
-        let summary = InnerNode::compute_summary(tx, hash).await?;
+        let summary = inner_node::compute_summary(tx, hash).await?;
 
         let state = sqlx::query(
             "UPDATE snapshot_root_nodes
@@ -589,11 +589,6 @@ impl RootNode {
         .unwrap_or(NodeState::Incomplete);
 
         Ok(state)
-    }
-
-    #[deprecated]
-    pub async fn approve(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        approve(tx, hash).await
     }
 
     pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
