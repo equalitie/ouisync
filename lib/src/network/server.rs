@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result},
     event::{Event, Payload},
     repository::RepositoryState,
-    store::{self, InnerNode, LeafNode, RootNode},
+    store::{self, RootNode},
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -157,13 +157,13 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.repository.store().raw().acquire().await?;
+        let mut reader = self.repository.store().acquire_read().await?;
 
         // At most one of these will be non-empty.
-        let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
-        let leaf_nodes = LeafNode::load_children(&mut conn, &parent_hash).await?;
+        let inner_nodes = reader.load_inner_nodes(&parent_hash).await?;
+        let leaf_nodes = reader.load_leaf_nodes(&parent_hash).await?;
 
-        drop(conn);
+        drop(reader);
 
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
@@ -266,7 +266,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_all_branches_changed(&self) -> Result<()> {
-        let root_nodes = self.load_all_root_nodes().await?;
+        let root_nodes = self.load_root_nodes().await?;
         for root_node in root_nodes {
             self.handle_root_node_changed(root_node).await?;
         }
@@ -317,9 +317,12 @@ impl<'a> Monitor<'a> {
         Ok(())
     }
 
-    async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
-        let mut conn = self.repository.store().raw().acquire().await?;
-        RootNode::load_all_latest_approved(&mut conn)
+    async fn load_root_nodes(&self) -> Result<Vec<RootNode>> {
+        self.repository
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_nodes()
             .err_into()
             .try_collect()
             .await

@@ -222,6 +222,14 @@ impl Reader {
         root_node::load_all(self.raw_mut())
     }
 
+    pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
+        inner_node::load_children(self.raw_mut(), parent_hash).await
+    }
+
+    pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodeSet, Error> {
+        leaf_node::load_children(self.raw_mut(), parent_hash).await
+    }
+
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
         root_node::exists(self.raw_mut(), node).await
     }

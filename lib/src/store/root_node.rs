@@ -395,14 +395,6 @@ impl RootNode {
         create(tx, proof, summary).await
     }
 
-    /// Return the latest approved root nodes of all known writers.
-    #[deprecated = "use store::Reader::load_all_root_nodes"]
-    pub fn load_all_latest_approved(
-        conn: &mut db::Connection,
-    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
-        load_all(conn)
-    }
-
     /// Return the latest root nodes of all known writers.
     pub fn load_all_latest(
         conn: &mut db::Connection,

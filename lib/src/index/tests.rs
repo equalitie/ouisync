@@ -12,7 +12,7 @@ use crate::{
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
     state_monitor::StateMonitor,
-    store::{self, InnerNode, LeafNode, ReadTransaction, RootNode, Store, EMPTY_INNER_HASH},
+    store::{self, ReadTransaction, RootNode, Store, EMPTY_INNER_HASH},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -380,12 +380,15 @@ async fn receive_valid_child_nodes() {
                 .await
                 .unwrap();
 
-            assert!(
-                !InnerNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(!index
+                .store()
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_inner_nodes(hash)
+                .await
+                .unwrap()
+                .is_empty());
         }
     }
 
@@ -395,12 +398,15 @@ async fn receive_valid_child_nodes() {
             .await
             .unwrap();
 
-        assert!(
-            !LeafNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(!index
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_leaf_nodes(hash)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
 
@@ -419,7 +425,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
         assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
         // The orphaned inner nodes were not written to the db.
-        let inner_nodes = InnerNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
+        let inner_nodes = index
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_inner_nodes(hash)
             .await
             .unwrap();
         assert!(inner_nodes.is_empty());
@@ -432,7 +443,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
     assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
 
     // The orphaned leaf nodes were not written to the db.
-    let leaf_nodes = LeafNode::load_children(&mut index.db().acquire().await.unwrap(), hash)
+    let leaf_nodes = index
+        .store()
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_leaf_nodes(hash)
         .await
         .unwrap();
     assert!(leaf_nodes.is_empty());

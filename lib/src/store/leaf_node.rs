@@ -110,14 +110,6 @@ impl LeafNode {
         Ok(())
     }
 
-    #[deprecated = "don't use directly"]
-    pub async fn load_children(
-        conn: &mut db::Connection,
-        parent: &Hash,
-    ) -> Result<LeafNodeSet, Error> {
-        load_children(conn, parent).await
-    }
-
     /// Loads all parent hashes of nodes with the specified block id.
     pub fn load_parent_hashes<'a>(
         conn: &'a mut db::Connection,
@@ -342,4 +334,130 @@ pub(crate) enum ModifyStatus {
     Updated(BlockId),
     Inserted,
     Unchanged,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn save_new_present() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::present(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        let node = nodes.get(&encoded_locator).unwrap();
+        assert_eq!(node.locator, encoded_locator);
+        assert_eq!(node.block_id, block_id);
+        assert_eq!(node.block_presence, SingleBlockPresence::Present);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn save_new_missing() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::missing(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        let node = nodes.get(&encoded_locator).unwrap();
+        assert_eq!(node.locator, encoded_locator);
+        assert_eq!(node.block_id, block_id);
+        assert_eq!(node.block_presence, SingleBlockPresence::Missing);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn save_missing_node_over_existing_missing_one() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::missing(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let node = LeafNode::missing(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        let node = nodes.get(&encoded_locator).unwrap();
+        assert_eq!(node.locator, encoded_locator);
+        assert_eq!(node.block_id, block_id);
+        assert_eq!(node.block_presence, SingleBlockPresence::Missing);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn save_missing_node_over_existing_present_one() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::present(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let node = LeafNode::missing(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        let node = nodes.get(&encoded_locator).unwrap();
+        assert_eq!(node.locator, encoded_locator);
+        assert_eq!(node.block_id, block_id);
+        assert_eq!(node.block_presence, SingleBlockPresence::Present);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_present_on_node_with_missing_block() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::missing(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        assert_eq!(
+            nodes.get(&encoded_locator).unwrap().block_presence,
+            SingleBlockPresence::Present
+        );
+    }
+
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
+    }
 }

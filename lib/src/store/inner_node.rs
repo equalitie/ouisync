@@ -33,12 +33,12 @@ pub(super) async fn load_children(
 ) -> Result<InnerNodeMap, Error> {
     sqlx::query(
         "SELECT
-                 bucket,
-                 hash,
-                 state,
-                 block_presence
-             FROM snapshot_inner_nodes
-             WHERE parent = ?",
+             bucket,
+             hash,
+             state,
+             block_presence
+         FROM snapshot_inner_nodes
+         WHERE parent = ?",
     )
     .bind(parent)
     .fetch(conn)
@@ -71,15 +71,6 @@ impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
     pub fn new(hash: Hash, summary: Summary) -> Self {
         Self { hash, summary }
-    }
-
-    /// Load all inner nodes with the specified parent hash.
-    #[deprecated = "don't use directly"]
-    pub async fn load_children(
-        conn: &mut db::Connection,
-        parent: &Hash,
-    ) -> Result<InnerNodeMap, Error> {
-        load_children(conn, parent).await
     }
 
     /// Load the inner node with the specified hash
@@ -367,9 +358,64 @@ pub(crate) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn empty_map_hash() {
         assert_eq!(*EMPTY_INNER_HASH, InnerNodeMap::default().hash())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_new_inner_node() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let hash = rand::random();
+        let bucket = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = InnerNode::new(hash, Summary::INCOMPLETE);
+        node.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+
+        assert_eq!(nodes.get(bucket), Some(&node));
+
+        assert!((0..bucket).all(|b| nodes.get(b).is_none()));
+
+        if bucket < u8::MAX {
+            assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_existing_inner_node() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let hash = rand::random();
+        let bucket = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
+        node0.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
+        node1.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let nodes = load_children(&mut tx, &parent).await.unwrap();
+
+        assert_eq!(nodes.get(bucket), Some(&node0));
+        assert!((0..bucket).all(|b| nodes.get(b).is_none()));
+
+        if bucket < u8::MAX {
+            assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
+        }
+    }
+
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 }
