@@ -75,7 +75,7 @@ mod tests {
     use super::super::{
         inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH},
         leaf_node::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-        root_node::{self, RootNode},
+        root_node,
     };
     use super::*;
     use crate::{
@@ -415,7 +415,7 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
         // Save the snapshot initially with all nodes missing.
-        let mut root_node = RootNode::create(
+        let mut root_node = root_node::create(
             &mut tx,
             Proof::new(
                 writer_id,

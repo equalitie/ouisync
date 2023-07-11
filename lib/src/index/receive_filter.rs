@@ -1,5 +1,4 @@
-use super::node::MultiBlockPresence;
-use crate::{crypto::Hash, db, error::Result, store};
+use crate::{crypto::Hash, db, error::Result, index::MultiBlockPresence, store};
 use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;

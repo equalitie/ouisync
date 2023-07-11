@@ -59,8 +59,7 @@ impl Index {
         &self.store
     }
 
-    // TODO: deprecate this
-    // #[deprecated = "use store"]
+    #[deprecated = "use store"]
     pub fn db(&self) -> &db::Pool {
         self.store.raw()
     }
@@ -79,8 +78,8 @@ impl Index {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        let mut conn = self.db().acquire().await.unwrap();
-        RootNode::debug_print(&mut conn, print).await;
+        let mut reader = self.store().acquire_read().await.unwrap();
+        RootNode::debug_print(reader.raw_mut(), print).await;
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -109,7 +108,7 @@ impl Index {
         let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
 
         if action.insert {
-            let node = RootNode::create(tx.raw_mut(), proof, Summary::INCOMPLETE).await?;
+            let (node, status) = tx.receive_root_node(proof).await?;
 
             tracing::debug!(
                 branch_id = ?node.proof.writer_id,
@@ -118,10 +117,7 @@ impl Index {
                 "snapshot started"
             );
 
-            // Ignoring quota here because if the snapshot became complete by receiving this root
-            // node it means that we already have all the other nodes and so the quota validation
-            // already took place.
-            self.finalize_receive(tx, node.proof.hash, None).await?;
+            self.finalize_receive(tx, &status).await?;
         }
 
         Ok(action.request_children)
@@ -150,7 +146,8 @@ impl Index {
         nodes.inherit_summaries(tx.raw_mut()).await?;
         nodes.save(tx.raw_mut(), &parent_hash).await?;
 
-        let status = self.finalize_receive(tx, parent_hash, quota).await?;
+        let status = tx.finalize_receive(parent_hash, quota).await?;
+        self.finalize_receive(tx, &status).await?;
 
         Ok((updated_nodes, status))
     }
@@ -179,7 +176,8 @@ impl Index {
             .save(tx.raw_mut(), &parent_hash)
             .await?;
 
-        let status = self.finalize_receive(tx, parent_hash, quota).await?;
+        let status = tx.finalize_receive(parent_hash, quota).await?;
+        self.finalize_receive(tx, &status).await?;
 
         Ok((updated_blocks, status))
     }
@@ -247,11 +245,8 @@ impl Index {
     async fn finalize_receive(
         &self,
         mut tx: WriteTransaction,
-        hash: Hash,
-        quota: Option<StorageSize>,
-    ) -> Result<ReceiveStatus> {
-        let status = tx.finalize_receive(hash, quota).await?;
-
+        status: &ReceiveStatus,
+    ) -> Result<()> {
         // For logging completed snapshots
         let root_nodes = if tracing::enabled!(Level::DEBUG) {
             let mut root_nodes = Vec::with_capacity(status.new_approved.len());
@@ -286,7 +281,7 @@ impl Index {
         })
         .await?;
 
-        Ok(status)
+        Ok(())
     }
 
     async fn check_parent_node_exists(

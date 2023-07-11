@@ -76,15 +76,15 @@ pub(super) async fn create(
 
     let snapshot_id = sqlx::query(
         "INSERT INTO snapshot_root_nodes (
-                 writer_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence
-             )
-             VALUES (?, ?, ?, ?, ?, ?)
-             RETURNING snapshot_id",
+             writer_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence
+         )
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING snapshot_id",
     )
     .bind(&proof.writer_id)
     .bind(&proof.version_vector)
@@ -122,20 +122,20 @@ pub(super) async fn load(
 ) -> Result<RootNode, Error> {
     sqlx::query(
         "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 signature,
-                 block_presence
-             FROM
-                 snapshot_root_nodes
-             WHERE
-                 snapshot_id = (
-                     SELECT MAX(snapshot_id)
-                     FROM snapshot_root_nodes
-                     WHERE writer_id = ? AND state = ?
-                 )
-            ",
+             snapshot_id,
+             versions,
+             hash,
+             signature,
+             block_presence
+         FROM
+             snapshot_root_nodes
+         WHERE
+             snapshot_id = (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 WHERE writer_id = ? AND state = ?
+             )
+        ",
     )
     .bind(branch_id)
     .bind(NodeState::Approved)
@@ -159,15 +159,15 @@ pub(super) async fn load_prev(
 ) -> Result<Option<RootNode>, Error> {
     sqlx::query(
         "SELECT
-                snapshot_id,
-                versions,
-                hash,
-                signature,
-                block_presence
-             FROM snapshot_root_nodes
-             WHERE writer_id = ? AND state = ? AND snapshot_id < ?
-             ORDER BY snapshot_id DESC
-             LIMIT 1",
+            snapshot_id,
+            versions,
+            hash,
+            signature,
+            block_presence
+         FROM snapshot_root_nodes
+         WHERE writer_id = ? AND state = ? AND snapshot_id < ?
+         ORDER BY snapshot_id DESC
+         LIMIT 1",
     )
     .bind(&node.proof.writer_id)
     .bind(NodeState::Approved)
@@ -227,21 +227,21 @@ pub(super) fn load_all_in_any_state(
 ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
     sqlx::query(
         "SELECT
-                 snapshot_id,
-                 writer_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence
-             FROM
-                 snapshot_root_nodes
-             WHERE
-                 snapshot_id IN (
-                     SELECT MAX(snapshot_id)
-                     FROM snapshot_root_nodes
-                     GROUP BY writer_id
-                 )",
+             snapshot_id,
+             writer_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence
+         FROM
+             snapshot_root_nodes
+         WHERE
+             snapshot_id IN (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 GROUP BY writer_id
+             )",
     )
     .fetch(conn)
     .map_ok(|row| RootNode {
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attempt_to_create_outdated() {
+    async fn attempt_to_create_outdated_node() {
         let (_base_dir, pool) = setup().await;
 
         let writer_id = PublicKey::random();

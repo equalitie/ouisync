@@ -465,6 +465,22 @@ impl WriteTransaction {
         Ok(())
     }
 
+    /// Write a root node received from a remote replica.
+    pub async fn receive_root_node(
+        &mut self,
+        proof: Proof,
+    ) -> Result<(RootNode, ReceiveStatus), Error> {
+        let hash = proof.hash;
+        let node = root_node::create(self.raw_mut(), proof, Summary::INCOMPLETE).await?;
+
+        // Ignoring quota here because if the snapshot became complete by receiving this root
+        // node it means that we already have all the other nodes and so the quota validation
+        // already took place.
+        let status = receive::finalize(self.raw_mut(), hash, None).await?;
+
+        Ok((node, status))
+    }
+
     /// Finalizes receiving nodes from a remote replica.
     // TODO: remove pub
     pub async fn finalize_receive(
