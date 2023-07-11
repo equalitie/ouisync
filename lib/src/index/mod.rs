@@ -9,7 +9,6 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
 pub(crate) use self::{
-    branch_data::BranchData,
     node::{
         receive_block, update_summaries, MultiBlockPresence, NodeState, SingleBlockPresence,
         Summary, UpdateSummaryReason,
@@ -28,7 +27,9 @@ use crate::{
     event::{Event, EventSender, Payload},
     repository::RepositoryId,
     storage_size::StorageSize,
-    store::{self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store},
+    store::{
+        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store, WriteTransaction,
+    },
     version_vector::VersionVector,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -69,11 +70,6 @@ impl Index {
         &self.repository_id
     }
 
-    pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
-        let mut conn = self.db().acquire().await?;
-        BranchData::load_all(&mut conn).try_collect().await
-    }
-
     /// Subscribe to change notification from all current and future branches.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.event_tx.subscribe()
@@ -108,13 +104,13 @@ impl Index {
         // incoming node might become outdated. But because we already concluded it's up-to-date,
         // we end up inserting it anyway which breaks the invariant that a node inserted later must
         // be happens-after any node inserted earlier in the same branch.
-        let mut tx = self.db().begin_write().await?;
+        let mut tx = self.store().begin_write().await?;
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = decide_root_node_action(&mut tx, &proof, &block_presence).await?;
+        let action = decide_root_node_action(tx.raw_mut(), &proof, &block_presence).await?;
 
         if action.insert {
-            let node = RootNode::create(&mut tx, proof, Summary::INCOMPLETE).await?;
+            let node = RootNode::create(tx.raw_mut(), proof, Summary::INCOMPLETE).await?;
 
             tracing::debug!(
                 branch_id = ?node.proof.writer_id,
@@ -141,18 +137,19 @@ impl Index {
         receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<(Vec<InnerNode>, ReceiveStatus), ReceiveError> {
-        let mut tx = self.db().begin_write().await?;
+        let mut tx = self.store().begin_write().await?;
         let parent_hash = nodes.hash();
 
-        self.check_parent_node_exists(&mut tx, &parent_hash).await?;
+        self.check_parent_node_exists(tx.raw_mut(), &parent_hash)
+            .await?;
 
         let updated_nodes = self
-            .find_inner_nodes_with_new_blocks(&mut tx, &nodes, receive_filter)
+            .find_inner_nodes_with_new_blocks(tx.raw_mut(), &nodes, receive_filter)
             .await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
-        nodes.inherit_summaries(&mut tx).await?;
-        nodes.save(&mut tx, &parent_hash).await?;
+        nodes.inherit_summaries(tx.raw_mut()).await?;
+        nodes.save(tx.raw_mut(), &parent_hash).await?;
 
         let status = self.finalize_receive(tx, parent_hash, quota).await?;
 
@@ -167,19 +164,20 @@ impl Index {
         nodes: CacheHash<LeafNodeSet>,
         quota: Option<StorageSize>,
     ) -> Result<(Vec<BlockId>, ReceiveStatus), ReceiveError> {
-        let mut tx = self.db().begin_write().await?;
+        let mut tx = self.store().begin_write().await?;
         let parent_hash = nodes.hash();
 
-        self.check_parent_node_exists(&mut tx, &parent_hash).await?;
+        self.check_parent_node_exists(tx.raw_mut(), &parent_hash)
+            .await?;
 
         let updated_blocks = self
-            .find_leaf_nodes_with_new_blocks(&mut tx, &nodes)
+            .find_leaf_nodes_with_new_blocks(tx.raw_mut(), &nodes)
             .await?;
 
         nodes
             .into_inner()
             .into_missing()
-            .save(&mut tx, &parent_hash)
+            .save(tx.raw_mut(), &parent_hash)
             .await?;
 
         let status = self.finalize_receive(tx, parent_hash, quota).await?;
@@ -249,7 +247,7 @@ impl Index {
     // affected branches.
     async fn finalize_receive(
         &self,
-        mut tx: db::WriteTransaction,
+        mut tx: WriteTransaction,
         hash: Hash,
         quota: Option<StorageSize>,
     ) -> Result<ReceiveStatus> {
@@ -260,7 +258,7 @@ impl Index {
         // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
         let states =
-            node::update_summaries(&mut tx, vec![hash], UpdateSummaryReason::Other).await?;
+            node::update_summaries(tx.raw_mut(), vec![hash], UpdateSummaryReason::Other).await?;
 
         let mut old_approved = false;
         let mut new_approved = Vec::new();
@@ -276,7 +274,7 @@ impl Index {
             }
 
             let approve = if let Some(quota) = quota {
-                match quota::check(&mut tx, &hash, quota).await {
+                match quota::check(tx.raw_mut(), &hash, quota).await {
                     Ok(()) => true,
                     Err(QuotaError::Exceeded(size)) => {
                         tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
@@ -293,23 +291,26 @@ impl Index {
             };
 
             if approve {
-                RootNode::approve(&mut tx, &hash).await?;
-                try_collect_into(RootNode::load_writer_ids(&mut tx, &hash), &mut new_approved)
-                    .await?;
+                RootNode::approve(tx.raw_mut(), &hash).await?;
+                try_collect_into(
+                    RootNode::load_writer_ids(tx.raw_mut(), &hash),
+                    &mut new_approved,
+                )
+                .await?;
             } else {
-                RootNode::reject(&mut tx, &hash).await?;
+                RootNode::reject(tx.raw_mut(), &hash).await?;
             }
         }
 
         // For logging completed snapshots
-        let snapshots = if tracing::enabled!(Level::DEBUG) {
-            let mut snapshots = Vec::with_capacity(new_approved.len());
+        let root_nodes = if tracing::enabled!(Level::DEBUG) {
+            let mut root_nodes = Vec::with_capacity(new_approved.len());
 
             for branch_id in &new_approved {
-                snapshots.push(BranchData::new(*branch_id).load_snapshot(&mut tx).await?);
+                root_nodes.push(tx.load_latest_root_node(branch_id).await?);
             }
 
-            snapshots
+            root_nodes
         } else {
             Vec::new()
         };
@@ -319,11 +320,11 @@ impl Index {
             let event_tx = self.notify().clone();
 
             move || {
-                for snapshot in snapshots {
+                for root_node in root_nodes {
                     tracing::debug!(
-                        branch_id = ?snapshot.branch_id(),
-                        hash = ?snapshot.root_hash(),
-                        vv = ?snapshot.version_vector(),
+                        branch_id = ?root_node.proof.writer_id,
+                        hash = ?root_node.proof.hash,
+                        vv = ?root_node.proof.version_vector,
                         "snapshot complete"
                     );
                 }

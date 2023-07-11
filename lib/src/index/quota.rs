@@ -112,49 +112,52 @@ mod tests {
     use super::*;
     use crate::{
         crypto::sign::{Keypair, PublicKey},
-        index::{BranchData, SingleBlockPresence},
+        index::SingleBlockPresence,
+        store::Store,
     };
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn count_referenced_blocks_empty() {
-        let (_base_dir, pool) = setup().await;
-        let mut conn = pool.acquire().await.unwrap();
-        assert_eq!(count_referenced_blocks(&mut conn, &[]).await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn count_referenced_blocks_one_branch() {
-        let (_base_dir, pool) = setup().await;
-        let write_keys = Keypair::random();
-
-        let mut tx = pool.begin_write().await.unwrap();
-
-        let mut snapshot = BranchData::new(PublicKey::random())
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap();
-
+        let (_base_dir, store) = setup().await;
+        let mut reader = store.acquire_read().await.unwrap();
         assert_eq!(
-            count_referenced_blocks(&mut tx, &[*snapshot.root_hash()])
+            count_referenced_blocks(reader.raw_mut(), &[])
                 .await
                 .unwrap(),
             0
         );
+    }
 
-        snapshot
-            .insert_block(
-                &mut tx,
-                &rand::random(),
-                &rand::random(),
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
+    #[tokio::test]
+    async fn count_referenced_blocks_one_branch() {
+        let (_base_dir, store) = setup().await;
+        let write_keys = Keypair::random();
+        let branch_id = PublicKey::random();
+
+        let mut tx = store.begin_write().await.unwrap();
+
+        assert_eq!(count_referenced_blocks(tx.raw_mut(), &[]).await.unwrap(), 0);
+
+        tx.link_block(
+            &branch_id,
+            &rand::random(),
+            &rand::random(),
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
+
+        let root_hash = tx
+            .load_latest_root_node(&branch_id)
             .await
-            .unwrap();
+            .unwrap()
+            .proof
+            .hash;
 
         assert_eq!(
-            count_referenced_blocks(&mut tx, &[*snapshot.root_hash()])
+            count_referenced_blocks(tx.raw_mut(), &[root_hash])
                 .await
                 .unwrap(),
             1
@@ -166,71 +169,76 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
 
+        let branch_a_id = PublicKey::random();
+        let branch_b_id = PublicKey::random();
+
         let mut tx = pool.begin_write().await.unwrap();
 
-        let mut snapshot_a = BranchData::new(PublicKey::random())
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap();
-
-        let mut snapshot_b = BranchData::new(PublicKey::random())
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap();
-
         // unique blocks
-        for snapshot in [&mut snapshot_a, &mut snapshot_b] {
-            snapshot
-                .insert_block(
-                    &mut tx,
-                    &rand::random(),
-                    &rand::random(),
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+        for branch_id in [&branch_a_id, &branch_b_id] {
+            tx.link_block(
+                branch_id,
+                &rand::random(),
+                &rand::random(),
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
         }
 
         // shared blocks
         let shared_locator = rand::random();
         let shared_block_id = rand::random();
 
-        for snapshot in [&mut snapshot_a, &mut snapshot_b] {
-            snapshot
-                .insert_block(
-                    &mut tx,
-                    &shared_locator,
-                    &shared_block_id,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+        for branch_id in [&branch_a_id, &branch_b_id] {
+            tx.link_block(
+                branch_id,
+                &shared_locator,
+                &shared_block_id,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
         }
 
-        assert_eq!(count_referenced_blocks(&mut tx, &[]).await.unwrap(), 0);
+        let root_hash_a = tx
+            .load_latest_root_node(&branch_a_id)
+            .await
+            .unwrap()
+            .proof
+            .hash;
+        let root_hash_b = tx
+            .load_latest_root_node(&branch_b_id)
+            .await
+            .unwrap()
+            .proof
+            .hash;
+
+        assert_eq!(count_referenced_blocks(tx.raw_mut(), &[]).await.unwrap(), 0);
         assert_eq!(
-            count_referenced_blocks(&mut tx, &[*snapshot_a.root_hash()])
+            count_referenced_blocks(tx.raw_mut(), &[root_hash_a])
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            count_referenced_blocks(&mut tx, &[*snapshot_b.root_hash()])
+            count_referenced_blocks(tx.raw_mut(), &[root_hash_b])
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            count_referenced_blocks(&mut tx, &[*snapshot_a.root_hash(), *snapshot_b.root_hash()])
+            count_referenced_blocks(tx.raw_mut(), &[root_hash_a, root_hash_b])
                 .await
                 .unwrap(),
             3
         );
     }
 
-    async fn setup() -> (TempDir, db::Pool) {
-        db::create_temp().await.unwrap()
+    async fn setup() -> (TempDir, Store) {
+        let (temp_dir, pool) = db::create_temp().await.unwrap();
+        (temp_dir, Store::new(pool))
     }
 }

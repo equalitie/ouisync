@@ -225,7 +225,8 @@ impl Reader {
         root_node::exists(self.raw_mut(), node).await
     }
 
-    fn raw_mut(&mut self) -> &mut db::Connection {
+    // TODO: remove pub
+    pub fn raw_mut(&mut self) -> &mut db::Connection {
         &mut self.inner
     }
 }

@@ -276,7 +276,7 @@ mod tests {
         event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            BranchData, MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
+            MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
         },
         locator::Locator,
         metrics::Metrics,
@@ -299,8 +299,8 @@ mod tests {
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
-        let branch0 = BranchData::new(PublicKey::random());
-        let branch1 = BranchData::new(PublicKey::random());
+        let branch_id_0 = PublicKey::random();
+        let branch_id_1 = PublicKey::random();
 
         let block_id = rand::random();
         let buffer = vec![0; BLOCK_SIZE];
@@ -314,7 +314,7 @@ mod tests {
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
         tx.link_block(
-            branch0.id(),
+            &branch_id_0,
             &locator0,
             &block_id,
             SingleBlockPresence::Present,
@@ -326,7 +326,7 @@ mod tests {
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
         tx.link_block(
-            branch1.id(),
+            &branch_id_1,
             &locator1,
             &block_id,
             SingleBlockPresence::Present,
@@ -337,12 +337,12 @@ mod tests {
 
         assert!(tx.block_exists(&block_id).await.unwrap());
 
-        tx.unlink_block(branch0.id(), &locator0, None, &write_keys)
+        tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
             .await
             .unwrap();
         assert!(tx.block_exists(&block_id).await.unwrap());
 
-        tx.unlink_block(branch1.id(), &locator1, None, &write_keys)
+        tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
             .await
             .unwrap();
         assert!(!tx.block_exists(&block_id).await.unwrap(),);
@@ -357,7 +357,7 @@ mod tests {
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
 
-        let branch = BranchData::new(PublicKey::random());
+        let branch_id = PublicKey::random();
 
         let locator = Locator::head(rng.gen());
         let locator = locator.encode(&read_key);
@@ -370,7 +370,7 @@ mod tests {
         let mut tx = store.begin_write().await.unwrap();
 
         tx.link_block(
-            branch.id(),
+            &branch_id,
             &locator,
             &id0,
             SingleBlockPresence::Present,
@@ -389,7 +389,7 @@ mod tests {
         tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
 
         tx.link_block(
-            branch.id(),
+            &branch_id,
             &locator,
             &id1,
             SingleBlockPresence::Present,
@@ -548,31 +548,27 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let store = create_state(pool, RepositoryId::from(write_keys.public));
+        let state = create_state(pool, RepositoryId::from(write_keys.public));
 
-        let branch = BranchData::new(PublicKey::random());
+        let branch_id = PublicKey::random();
 
         let locator = Locator::head(rand::random());
         let locator = locator.encode(&read_key);
         let block_id = rand::random();
 
-        let mut tx = store.store().raw().begin_write().await.unwrap();
-        branch
-            .load_or_create_snapshot(&mut tx, &write_keys)
-            .await
-            .unwrap()
-            .insert_block(
-                &mut tx,
-                &locator,
-                &block_id,
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+        let mut tx = state.store().begin_write().await.unwrap();
+        tx.link_block(
+            &branch_id,
+            &locator,
+            &block_id,
+            SingleBlockPresence::Present,
+            &write_keys,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
 
-        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let actual = state.block_ids(u32::MAX).next().await.unwrap();
         let expected = [block_id].into_iter().collect();
 
         assert_eq!(actual, expected);

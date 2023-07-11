@@ -11,7 +11,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BranchData, Index, ReceiveFilter, SingleBlockPresence, VersionVectorOp,
+        Index, ReceiveFilter, SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
@@ -494,22 +494,25 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
-    let branch = BranchData::new(*writer_id);
-
     for _ in 0..size {
-        create_block(rng, index, &branch, write_keys).await;
+        create_block(rng, index, writer_id, write_keys).await;
     }
 
     let mut tx = index.store().begin_write().await.unwrap();
-    tx.bump(branch.id(), VersionVectorOp::IncrementLocal, write_keys)
+    tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
     tx.commit().await.unwrap();
 
-    index.notify().send(Payload::BranchChanged(*branch.id()));
+    index.notify().send(Payload::BranchChanged(*writer_id));
 }
 
-async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, write_keys: &Keypair) {
+async fn create_block(
+    rng: &mut StdRng,
+    index: &Index,
+    branch_id: &PublicKey,
+    write_keys: &Keypair,
+) {
     let encoded_locator = rng.gen();
 
     let mut content = vec![0; BLOCK_SIZE];
@@ -520,7 +523,7 @@ async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, writ
 
     let mut tx = index.store().begin_write().await.unwrap();
     tx.link_block(
-        branch.id(),
+        branch_id,
         &encoded_locator,
         &block_id,
         SingleBlockPresence::Present,

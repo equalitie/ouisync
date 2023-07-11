@@ -45,7 +45,7 @@ use crate::{
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use futures_util::future;
+use futures_util::{future, TryStreamExt};
 use scoped_task::ScopedJoinHandle;
 use std::{io, path::Path, sync::Arc};
 use tokio::{
@@ -804,12 +804,14 @@ impl Shared {
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
         self.state
-            .index
-            .load_branches()
+            .store()
+            .acquire_read()
             .await?
-            .into_iter()
-            .map(|data| self.get_branch(*data.id()))
-            .collect()
+            .load_all_root_nodes()
+            .err_into()
+            .and_then(|root_node| future::ready(self.get_branch(root_node.proof.writer_id)))
+            .try_collect()
+            .await
     }
 }
 

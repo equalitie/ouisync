@@ -1,5 +1,4 @@
 use super::{
-    branch_data::BranchData,
     node::{self, SingleBlockPresence},
     node_test_utils::{self, Snapshot},
     proof::Proof,
@@ -155,8 +154,6 @@ async fn receive_root_node_with_existing_hash() {
     let local_id = PublicKey::generate(&mut rng);
     let remote_id = PublicKey::generate(&mut rng);
 
-    let local_branch = BranchData::new(local_id);
-
     // Create one block locally
     let mut content = vec![0; BLOCK_SIZE];
     rng.fill(&mut content[..]);
@@ -167,7 +164,7 @@ async fn receive_root_node_with_existing_hash() {
 
     let mut tx = index.store().begin_write().await.unwrap();
     tx.link_block(
-        local_branch.id(),
+        &local_id,
         &locator,
         &block_id,
         SingleBlockPresence::Present,
@@ -180,14 +177,15 @@ async fn receive_root_node_with_existing_hash() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    let mut conn = index.db().acquire().await.unwrap();
-
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = local_branch
-        .load_snapshot(&mut conn)
+    let root = index
+        .store()
+        .acquire_read()
         .await
         .unwrap()
-        .root_node;
+        .load_latest_root_node(&local_id)
+        .await
+        .unwrap();
 
     assert!(root.summary.state.is_approved());
     let root_hash = root.proof.hash;
@@ -201,11 +199,14 @@ async fn receive_root_node_with_existing_hash() {
         .await
         .unwrap();
 
-    assert!(local_branch
-        .load_snapshot(&mut conn)
+    assert!(index
+        .store()
+        .acquire_read()
         .await
         .unwrap()
-        .root_node
+        .load_latest_root_node(&local_id)
+        .await
+        .unwrap()
         .summary
         .state
         .is_approved());
@@ -240,7 +241,6 @@ mod receive_and_create_root_node {
         let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
 
         let local_id = PublicKey::generate(&mut rng);
-        let local_branch = BranchData::new(local_id);
 
         let locator_0 = rng.gen();
         let block_id_0_0 = rng.gen();
@@ -253,18 +253,14 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = index.db().begin_write().await.unwrap();
+        let mut tx = index.store().begin_write().await.unwrap();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
             (locator_1, block_id_1, SingleBlockPresence::Missing),
             (locator_2, block_id_2, SingleBlockPresence::Missing),
         ] {
-            local_branch
-                .load_or_create_snapshot(&mut tx, &write_keys)
-                .await
-                .unwrap()
-                .insert_block(&mut tx, &locator, &block_id, presence, &write_keys)
+            tx.link_block(&local_id, &locator, &block_id, presence, &write_keys)
                 .await
                 .unwrap();
         }
@@ -272,7 +268,7 @@ mod receive_and_create_root_node {
         tx.commit().await.unwrap();
 
         let mut conn = index.db().acquire().await.unwrap();
-        let root_node_0 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
+        let root_node_0 = RootNode::load_latest_by_writer(&mut conn, local_id)
             .await
             .unwrap()
             .unwrap();
@@ -300,7 +296,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = index.db().begin_write().await.unwrap();
+            let mut tx = index.store().begin_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -308,19 +304,15 @@ mod receive_and_create_root_node {
                 task::yield_now().await;
             }
 
-            local_branch
-                .load_or_create_snapshot(&mut tx, &write_keys)
-                .await
-                .unwrap()
-                .insert_block(
-                    &mut tx,
-                    &locator_0,
-                    &block_id_0_1,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+            tx.link_block(
+                &local_id,
+                &locator_0,
+                &block_id_0_1,
+                SingleBlockPresence::Present,
+                &write_keys,
+            )
+            .await
+            .unwrap();
 
             tx.commit().await.unwrap();
         };
@@ -340,7 +332,7 @@ mod receive_and_create_root_node {
         }
 
         let mut conn = index.db().acquire().await.unwrap();
-        let root_node_1 = RootNode::load_latest_by_writer(&mut conn, *local_branch.id())
+        let root_node_1 = RootNode::load_latest_by_writer(&mut conn, local_id)
             .await
             .unwrap()
             .unwrap();
@@ -473,12 +465,10 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     receive_snapshot(&repo.index, remote_id, &snapshot0, &write_keys).await;
     node_test_utils::receive_blocks(&repo, &snapshot0).await;
 
-    let remote_branch = BranchData::new(remote_id);
-
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
         &mut repo.store().begin_read().await.unwrap(),
-        remote_branch.id(),
+        &remote_id,
         &snapshot0,
     )
     .await;
@@ -499,7 +489,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     // All the original blocks are still retrievable
     check_all_blocks_exist(
         &mut repo.store().begin_read().await.unwrap(),
-        remote_branch.id(),
+        &remote_id,
         &snapshot0,
     )
     .await;
@@ -763,14 +753,17 @@ async fn receive_snapshot(
     snapshot: &Snapshot,
     write_keys: &Keypair,
 ) {
-    let vv = {
-        let mut conn = index.db().acquire().await.unwrap();
-        BranchData::new(writer_id)
-            .load_version_vector(&mut conn)
-            .await
-            .unwrap()
-            .incremented(writer_id)
-    };
+    let vv = index
+        .store()
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_latest_root_node(&writer_id)
+        .await
+        .unwrap()
+        .proof
+        .into_version_vector()
+        .incremented(writer_id);
 
     let receive_filter = ReceiveFilter::new(index.db().clone());
 
@@ -793,12 +786,17 @@ async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
 }
 
 async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
-    let mut conn = index.db().acquire().await.unwrap();
-    let snapshot = BranchData::new(*writer_id)
-        .load_snapshot(&mut conn)
+    let root_node = index
+        .store()
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_latest_root_node(writer_id)
         .await
         .unwrap();
-    drop(conn);
-
-    snapshot.prune(index.db()).await.unwrap();
+    index
+        .store()
+        .remove_outdated_snapshots(&root_node)
+        .await
+        .unwrap();
 }
