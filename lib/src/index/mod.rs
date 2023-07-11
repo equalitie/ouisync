@@ -9,7 +9,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
 pub(crate) use self::{
-    branch_data::{BranchData, SnapshotData},
+    branch_data::BranchData,
     node::{
         receive_block, update_summaries, MultiBlockPresence, NodeState, SingleBlockPresence,
         Summary, UpdateSummaryReason,
@@ -72,12 +72,6 @@ impl Index {
     pub async fn load_branches(&self) -> Result<Vec<BranchData>> {
         let mut conn = self.db().acquire().await?;
         BranchData::load_all(&mut conn).try_collect().await
-    }
-
-    /// Load latest snapshots of all branches.
-    pub async fn load_snapshots(&self) -> Result<Vec<SnapshotData>> {
-        let mut conn = self.db().acquire().await?;
-        SnapshotData::load_all(&mut conn).try_collect().await
     }
 
     /// Subscribe to change notification from all current and future branches.

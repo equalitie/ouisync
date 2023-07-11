@@ -4,7 +4,6 @@ use crate::{
     branch::BranchShared,
     db,
     event::EventSender,
-    index::BranchData,
     store::Store,
 };
 use assert_matches::assert_matches;
@@ -594,8 +593,7 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
     let store = Store::new(pool);
     let id = PublicKey::random();
-    let branch_data = BranchData::new(id);
     let shared = BranchShared::new();
     let event_tx = EventSender::new(1);
-    Branch::new(store, branch_data, keys, shared, event_tx)
+    Branch::new(id, store, keys, shared, event_tx)
 }

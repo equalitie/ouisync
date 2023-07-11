@@ -35,7 +35,7 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventSender},
     file::File,
-    index::{BranchData, Index},
+    index::Index,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -784,7 +784,22 @@ impl Shared {
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        self.inflate(BranchData::new(id))
+        let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
+
+        // Only the local branch is writable.
+        let keys = if id == self.this_writer_id {
+            keys
+        } else {
+            keys.read_only()
+        };
+
+        Ok(Branch::new(
+            id,
+            self.state.store().clone(),
+            keys,
+            self.branch_shared.clone(),
+            self.state.index.notify().clone(),
+        ))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
@@ -793,28 +808,8 @@ impl Shared {
             .load_branches()
             .await?
             .into_iter()
-            .map(|data| self.inflate(data))
+            .map(|data| self.get_branch(*data.id()))
             .collect()
-    }
-
-    // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: BranchData) -> Result<Branch> {
-        let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
-
-        // Only the local branch is writable.
-        let keys = if *data.id() == self.this_writer_id {
-            keys
-        } else {
-            keys.read_only()
-        };
-
-        Ok(Branch::new(
-            Store::new(self.state.store().raw().clone()),
-            data,
-            keys,
-            self.branch_shared.clone(),
-            self.state.index.notify().clone(),
-        ))
     }
 }
 

@@ -8,18 +8,17 @@ use crate::{
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
     file::{File, FileProgressCache},
-    index::BranchData,
     locator::Locator,
     path,
-    store::Store,
+    store::{self, Store},
     version_vector::VersionVector,
 };
 use camino::{Utf8Component, Utf8Path};
 
 #[derive(Clone)]
 pub struct Branch {
+    id: PublicKey,
     store: Store,
-    branch_data: BranchData,
     keys: AccessKeys,
     shared: BranchShared,
     event_tx: EventSender,
@@ -27,15 +26,15 @@ pub struct Branch {
 
 impl Branch {
     pub(crate) fn new(
+        id: PublicKey,
         store: Store,
-        branch_data: BranchData,
         keys: AccessKeys,
         shared: BranchShared,
         event_tx: EventSender,
     ) -> Self {
         Self {
+            id,
             store,
-            branch_data,
             keys,
             shared,
             event_tx,
@@ -52,20 +51,25 @@ impl Branch {
     }
 
     pub fn id(&self) -> &PublicKey {
-        self.branch_data.id()
+        &self.id
     }
 
     pub(crate) fn store(&self) -> &Store {
         &self.store
     }
 
-    pub(crate) fn data(&self) -> &BranchData {
-        &self.branch_data
-    }
-
     pub async fn version_vector(&self) -> Result<VersionVector> {
-        let mut conn = self.store.raw().acquire().await?;
-        self.branch_data.load_version_vector(&mut conn).await
+        match self
+            .store
+            .acquire_read()
+            .await?
+            .load_latest_root_node(self.id())
+            .await
+        {
+            Ok(root_node) => Ok(root_node.proof.into_version_vector()),
+            Err(store::Error::BranchNotFound) => Ok(VersionVector::new()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(crate) fn keys(&self) -> &AccessKeys {
@@ -272,9 +276,8 @@ mod tests {
         let event_tx = EventSender::new(1);
 
         let store = Store::new(pool);
-        let data = BranchData::new(writer_id);
         let shared = BranchShared::new();
-        let branch = Branch::new(store, data, secrets.into(), shared, event_tx);
+        let branch = Branch::new(writer_id, store, secrets.into(), shared, event_tx);
 
         (base_dir, branch)
     }

@@ -6,7 +6,6 @@ use crate::{
     db,
     directory::{DirectoryFallback, DirectoryLocking},
     event::EventSender,
-    index::BranchData,
     store::Store,
     version_vector::VersionVector,
 };
@@ -1003,11 +1002,10 @@ async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N
     let branches = [(); N].map(|_| {
         let store = Store::new(pool.clone());
         let id = PublicKey::generate(&mut rng);
-        let data = BranchData::new(id);
         let secrets = secrets.clone();
         let shared = shared.clone();
         let event_tx = event_tx.clone();
-        Branch::new(store, data, secrets.into(), shared, event_tx)
+        Branch::new(id, store, secrets.into(), shared, event_tx)
     });
 
     (base_dir, branches)

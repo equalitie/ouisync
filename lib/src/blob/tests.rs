@@ -7,7 +7,6 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    index::BranchData,
     store::Store,
     test_utils,
 };
@@ -611,10 +610,9 @@ async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, Store, [Branc
 
     let branches = [(); N].map(|_| {
         let id = PublicKey::random();
-        let data = BranchData::new(id);
         Branch::new(
+            id,
             store.clone(),
-            data,
             keys.clone(),
             shared.clone(),
             event_tx.clone(),
