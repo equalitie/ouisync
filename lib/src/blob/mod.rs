@@ -577,7 +577,7 @@ async fn load_block_count_hint(
 ) -> Result<u32> {
     match read_len(tx, root_node, blob_id, read_key).await {
         Ok(len) => Ok(block_count(len)),
-        Err(Error::BlockNotFound(_)) => Ok(u32::MAX),
+        Err(Error::Store(store::Error::BlockNotFound)) => Ok(u32::MAX),
         Err(error) => Err(error),
     }
 }

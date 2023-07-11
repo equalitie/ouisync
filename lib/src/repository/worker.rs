@@ -238,6 +238,7 @@ mod scan {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
+    use crate::store;
 
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches: Vec<_> = shared.load_branches().await?;
@@ -249,7 +250,7 @@ mod merge {
                 .await
             {
                 Ok(dir) => roots.push(dir),
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+                Err(Error::Store(store::Error::BlockNotFound)) => continue,
                 Err(error) => return Err(error),
             }
         }

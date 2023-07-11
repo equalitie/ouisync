@@ -941,10 +941,8 @@ fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::Db(_)
         | Error::Store(_)
-        | Error::BlockNotFound(_)
         | Error::MalformedData
         | Error::MalformedDirectory
-        | Error::WrongBlockLength(_)
         | Error::Writer(_)
         | Error::StorageVersionMismatch => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,

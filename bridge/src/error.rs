@@ -52,8 +52,7 @@ impl ToErrorCode for Error {
                     OperationNotSupported => ErrorCode::OperationNotSupported,
                     NonUtf8FileName | OffsetOutOfRange => ErrorCode::InvalidArgument,
                     StorageVersionMismatch => ErrorCode::StorageVersionMismatch,
-                    BlockNotFound(_) | WrongBlockLength(_) | EntryIsFile | EntryIsDirectory
-                    | Writer(_) | Locked => ErrorCode::Other,
+                    EntryIsFile | EntryIsDirectory | Writer(_) | Locked => ErrorCode::Other,
                 }
             }
             Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Io(_) => {

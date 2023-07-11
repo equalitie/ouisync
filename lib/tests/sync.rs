@@ -10,8 +10,8 @@ use self::{
 };
 use assert_matches::assert_matches;
 use ouisync::{
-    Access, AccessMode, EntryType, Error, Repository, StorageSize, VersionVector, BLOB_HEADER_SIZE,
-    BLOCK_SIZE,
+    Access, AccessMode, EntryType, Error, Repository, StorageSize, StoreError, VersionVector,
+    BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
 use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
@@ -1114,7 +1114,7 @@ async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {
         match repo.open_directory(path).await {
             Ok(dir) => dir.has_local_version(),
-            Err(Error::EntryNotFound | Error::BlockNotFound(_)) => false,
+            Err(Error::EntryNotFound | Error::Store(StoreError::BlockNotFound)) => false,
             Err(error) => panic!("unexpected error: {error:?}"),
         }
     })

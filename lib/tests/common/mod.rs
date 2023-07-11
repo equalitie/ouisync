@@ -8,7 +8,7 @@ use ouisync::{
     metrics::{self, Metrics},
     network::{Network, Registration},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
-    Result,
+    Result, StoreError,
 };
 use rand::Rng;
 use std::{
@@ -446,7 +446,7 @@ pub(crate) async fn check_file_version_content(
         // and so the file entry is not in it yet.
         //
         // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+        Err(error @ (Error::EntryNotFound | Error::Store(StoreError::BlockNotFound))) => {
             tracing::warn!(path, ?error, "open failed");
             return false;
         }
@@ -461,7 +461,7 @@ pub(crate) async fn check_file_version_content(
     let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-        Err(error @ Error::BlockNotFound(_)) => {
+        Err(error @ Error::Store(StoreError::BlockNotFound)) => {
             tracing::warn!(path, ?error, "read failed");
             return false;
         }
@@ -503,7 +503,7 @@ pub(crate) async fn check_entry_exists(
             tracing::debug!(path, "opened");
             true
         }
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+        Err(error @ (Error::EntryNotFound | Error::Store(StoreError::BlockNotFound))) => {
             tracing::warn!(path, ?error, "open failed");
             false
         }
