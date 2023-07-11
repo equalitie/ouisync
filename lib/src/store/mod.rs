@@ -412,7 +412,7 @@ impl WriteTransaction {
         op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = self.load_latest_root_node(branch_id).await?;
+        let root_node = root_node::load_or_create(self.raw_mut(), branch_id, write_keys).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
         op.apply(branch_id, &mut new_vv);

@@ -332,8 +332,8 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
             }
             PruneTestOp::Remove => {
                 let Some(locator) = expected.keys().choose(&mut rng).copied() else {
-                        continue;
-                    };
+                    continue;
+                };
 
                 let mut tx = store.begin_write().await.unwrap();
                 tx.unlink_block(&branch_id, &locator, None, &write_keys)
@@ -351,13 +351,18 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.commit().await.unwrap();
             }
             PruneTestOp::Prune => {
-                let root_node = store
+                let root_node = match store
                     .acquire_read()
                     .await
                     .unwrap()
                     .load_latest_root_node(&branch_id)
                     .await
-                    .unwrap();
+                {
+                    Ok(root_node) => root_node,
+                    Err(Error::BranchNotFound) => continue,
+                    Err(error) => panic!("unexpected error: {:?}", error),
+                };
+
                 store.remove_outdated_snapshots(&root_node).await.unwrap();
             }
         }

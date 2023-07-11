@@ -12,7 +12,7 @@ use crate::{
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
     state_monitor::StateMonitor,
-    store::{InnerNode, LeafNode, ReadTransaction, RootNode, Store, EMPTY_INNER_HASH},
+    store::{self, InnerNode, LeafNode, ReadTransaction, RootNode, Store, EMPTY_INNER_HASH},
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -753,17 +753,19 @@ async fn receive_snapshot(
     snapshot: &Snapshot,
     write_keys: &Keypair,
 ) {
-    let vv = index
+    let vv = match index
         .store()
         .acquire_read()
         .await
         .unwrap()
         .load_latest_root_node(&writer_id)
         .await
-        .unwrap()
-        .proof
-        .into_version_vector()
-        .incremented(writer_id);
+    {
+        Ok(node) => node.proof.into_version_vector(),
+        Err(store::Error::BranchNotFound) => VersionVector::new(),
+        Err(error) => panic!("unexpected error: {:?}", error),
+    };
+    let vv = vv.incremented(writer_id);
 
     let receive_filter = ReceiveFilter::new(index.db().clone());
 
