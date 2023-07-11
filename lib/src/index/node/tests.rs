@@ -6,7 +6,7 @@ use crate::{
     },
     db,
     index::node::summary::{MultiBlockPresence, NodeState},
-    store::{self, InnerNodeMap, LeafNodeSet, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
+    store::{InnerNodeMap, LeafNodeSet, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
     test_utils,
     version_vector::VersionVector,
 };
@@ -15,30 +15,6 @@ use rand::prelude::*;
 use std::iter;
 use tempfile::TempDir;
 use test_strategy::proptest;
-
-#[tokio::test(flavor = "multi_thread")]
-async fn attempt_to_create_conflicting_inner_node() {
-    let (_base_dir, pool) = setup().await;
-
-    let parent = rand::random();
-    let bucket = rand::random();
-
-    let hash0 = rand::random();
-    let hash1 = loop {
-        let hash = rand::random();
-        if hash != hash0 {
-            break hash;
-        }
-    };
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
-    node0.save(&mut tx, &parent, bucket).await.unwrap();
-
-    let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
-    assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn compute_summary_from_empty_leaf_nodes() {
@@ -247,36 +223,6 @@ async fn compute_summary_from_complete_inner_nodes_with_all_present_blocks() {
 
     assert_eq!(summary.state, NodeState::Complete);
     assert_eq!(summary.block_presence, MultiBlockPresence::Full);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn set_present_on_leaf_node_with_present_block() {
-    let (_base_dir, pool) = setup().await;
-
-    let parent = rand::random();
-    let encoded_locator = rand::random();
-    let block_id = rand::random();
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    let node = LeafNode::present(encoded_locator, block_id);
-    node.save(&mut tx, &parent).await.unwrap();
-
-    assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn set_present_on_leaf_node_that_does_not_exist() {
-    let (_base_dir, pool) = setup().await;
-
-    let block_id = rand::random();
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    assert_matches!(
-        LeafNode::set_present(&mut tx, &block_id).await,
-        Err(store::Error::BlockNotReferenced)
-    )
 }
 
 #[proptest]

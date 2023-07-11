@@ -339,6 +339,7 @@ pub(crate) enum ModifyStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use tempfile::TempDir;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -455,6 +456,36 @@ mod tests {
             nodes.get(&encoded_locator).unwrap().block_presence,
             SingleBlockPresence::Present
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_present_on_node_with_present_block() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let encoded_locator = rand::random();
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node = LeafNode::present(encoded_locator, block_id);
+        node.save(&mut tx, &parent).await.unwrap();
+
+        assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_present_on_node_that_does_not_exist() {
+        let (_base_dir, pool) = setup().await;
+
+        let block_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        assert_matches!(
+            LeafNode::set_present(&mut tx, &block_id).await,
+            Err(Error::BlockNotReferenced)
+        )
     }
 
     async fn setup() -> (TempDir, db::Pool) {

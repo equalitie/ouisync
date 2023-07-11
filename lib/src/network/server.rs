@@ -201,9 +201,13 @@ impl<'a> Responder<'a> {
     async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let mut reader = self.repository.store().acquire_read().await?;
-        let result = reader.read_block(&id, &mut content).await;
-        drop(reader); // don't hold the store Reader while sending is in progress
+        let result = self
+            .repository
+            .store()
+            .acquire_read()
+            .await?
+            .read_block(&id, &mut content)
+            .await;
 
         match result {
             Ok(nonce) => {

@@ -358,6 +358,7 @@ pub(crate) fn get_bucket(locator: &Hash, inner_layer: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use tempfile::TempDir;
 
     #[test]
@@ -413,6 +414,30 @@ mod tests {
         if bucket < u8::MAX {
             assert!((bucket + 1..=u8::MAX).all(|b| nodes.get(b).is_none()));
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn attempt_to_create_conflicting_node() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let bucket = rand::random();
+
+        let hash0 = rand::random();
+        let hash1 = loop {
+            let hash = rand::random();
+            if hash != hash0 {
+                break hash;
+            }
+        };
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
+        node0.save(&mut tx, &parent, bucket).await.unwrap();
+
+        let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
+        assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
     }
 
     async fn setup() -> (TempDir, db::Pool) {
