@@ -330,6 +330,38 @@ pub(super) async fn check_fallback(
     .is_some())
 }
 
+/// Returns a stream of all root nodes corresponding to the specified writer ordered from the
+/// most recent to the least recent.
+#[cfg(test)]
+pub(super) fn load_all_by_writer_in_any_state(
+    conn: &mut db::Connection,
+    writer_id: PublicKey,
+) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    sqlx::query(
+        "SELECT
+             snapshot_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence
+         FROM snapshot_root_nodes
+         WHERE writer_id = ?
+         ORDER BY snapshot_id DESC",
+    )
+    .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
+    .fetch(conn)
+    .map_ok(move |row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
+        summary: Summary {
+            state: row.get(4),
+            block_presence: row.get(5),
+        },
+    })
+    .err_into()
+}
+
 impl RootNode {
     /// Creates a root node with no children without storing it in the database.
     pub fn empty(writer_id: PublicKey, write_keys: &Keypair) -> Self {
@@ -408,6 +440,7 @@ impl RootNode {
     /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
     /// most recent to the least recent.
     #[cfg(test)]
+    #[deprecated]
     pub fn load_all_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
@@ -440,6 +473,7 @@ impl RootNode {
     /// Returns the latest root node of the specified writer or `None` if no snapshot of that
     /// writer exists.
     #[cfg(test)]
+    #[deprecated]
     pub async fn load_latest_by_writer(
         conn: &mut db::Connection,
         writer_id: PublicKey,
@@ -595,5 +629,92 @@ impl RootNode {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn create_new() {
+        let (_base_dir, pool) = setup().await;
+
+        let writer_id = PublicKey::random();
+        let write_keys = Keypair::random();
+        let hash = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let node0 = create(
+            &mut tx,
+            Proof::new(
+                writer_id,
+                VersionVector::first(writer_id),
+                hash,
+                &write_keys,
+            ),
+            Summary::INCOMPLETE,
+        )
+        .await
+        .unwrap();
+        assert_eq!(node0.proof.hash, hash);
+
+        let nodes: Vec<_> = load_all_by_writer_in_any_state(&mut tx, writer_id)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0], node0);
+    }
+
+    #[tokio::test]
+    async fn attempt_to_create_outdated() {
+        let (_base_dir, pool) = setup().await;
+
+        let writer_id = PublicKey::random();
+        let write_keys = Keypair::random();
+        let hash = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        let vv0 = VersionVector::first(writer_id);
+        let vv1 = vv0.clone().incremented(writer_id);
+
+        create(
+            &mut tx,
+            Proof::new(writer_id, vv1.clone(), hash, &write_keys),
+            Summary::INCOMPLETE,
+        )
+        .await
+        .unwrap();
+
+        // Same vv
+        assert_matches!(
+            create(
+                &mut tx,
+                Proof::new(writer_id, vv1, hash, &write_keys),
+                Summary::INCOMPLETE,
+            )
+            .await,
+            Err(Error::OutdatedRootNode)
+        );
+
+        // Old vv
+        assert_matches!(
+            create(
+                &mut tx,
+                Proof::new(writer_id, vv0, hash, &write_keys),
+                Summary::INCOMPLETE,
+            )
+            .await,
+            Err(Error::OutdatedRootNode)
+        );
+    }
+
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
     }
 }

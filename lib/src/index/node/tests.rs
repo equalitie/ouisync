@@ -11,93 +11,10 @@ use crate::{
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
-use futures_util::TryStreamExt;
 use rand::prelude::*;
 use std::iter;
 use tempfile::TempDir;
 use test_strategy::proptest;
-
-#[tokio::test]
-async fn create_new_root_node() {
-    let (_base_dir, pool) = setup().await;
-
-    let writer_id = PublicKey::random();
-    let write_keys = Keypair::random();
-    let hash = rand::random();
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    let node0 = RootNode::create(
-        &mut tx,
-        Proof::new(
-            writer_id,
-            VersionVector::first(writer_id),
-            hash,
-            &write_keys,
-        ),
-        Summary::INCOMPLETE,
-    )
-    .await
-    .unwrap();
-    assert_eq!(node0.proof.hash, hash);
-
-    let node1 = RootNode::load_latest_by_writer(&mut tx, writer_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(node1, node0);
-
-    let nodes: Vec<_> = RootNode::load_all_by_writer(&mut tx, writer_id)
-        .try_collect()
-        .await
-        .unwrap();
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0], node0);
-}
-
-#[tokio::test]
-async fn attempt_to_create_outdated_root_node() {
-    let (_base_dir, pool) = setup().await;
-
-    let writer_id = PublicKey::random();
-    let write_keys = Keypair::random();
-    let hash = rand::random();
-
-    let mut tx = pool.begin_write().await.unwrap();
-
-    let vv0 = VersionVector::first(writer_id);
-    let vv1 = vv0.clone().incremented(writer_id);
-
-    RootNode::create(
-        &mut tx,
-        Proof::new(writer_id, vv1.clone(), hash, &write_keys),
-        Summary::INCOMPLETE,
-    )
-    .await
-    .unwrap();
-
-    // Same vv
-    assert_matches!(
-        RootNode::create(
-            &mut tx,
-            Proof::new(writer_id, vv1, hash, &write_keys),
-            Summary::INCOMPLETE,
-        )
-        .await,
-        Err(store::Error::OutdatedRootNode)
-    );
-
-    // Old vv
-    assert_matches!(
-        RootNode::create(
-            &mut tx,
-            Proof::new(writer_id, vv0, hash, &write_keys),
-            Summary::INCOMPLETE,
-        )
-        .await,
-        Err(store::Error::OutdatedRootNode)
-    );
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_new_inner_node() {
