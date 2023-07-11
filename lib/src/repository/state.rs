@@ -314,8 +314,8 @@ mod tests {
         let locator0 = Locator::head(rand::random());
         let locator0 = locator0.encode(&read_key);
         tx.link_block(
-            *branch0.id(),
-            locator0,
+            branch0.id(),
+            &locator0,
             &block_id,
             SingleBlockPresence::Present,
             &write_keys,
@@ -326,8 +326,8 @@ mod tests {
         let locator1 = Locator::head(rand::random());
         let locator1 = locator1.encode(&read_key);
         tx.link_block(
-            *branch1.id(),
-            locator1,
+            branch1.id(),
+            &locator1,
             &block_id,
             SingleBlockPresence::Present,
             &write_keys,
@@ -376,8 +376,8 @@ mod tests {
         let mut tx = store.begin_write().await.unwrap();
 
         tx.link_block(
-            *branch.id(),
-            locator,
+            branch.id(),
+            &locator,
             &id0,
             SingleBlockPresence::Present,
             &write_keys,
@@ -395,8 +395,8 @@ mod tests {
         tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
 
         tx.link_block(
-            *branch.id(),
-            locator,
+            branch.id(),
+            &locator,
             &id1,
             SingleBlockPresence::Present,
             &write_keys,

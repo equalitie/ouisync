@@ -116,7 +116,7 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .load_latest_root_node(branch_id)
+            .load_latest_root_node(&branch_id)
             .await;
 
         match root_node {
@@ -275,7 +275,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
-        let root_node = match self.load_root_node(branch_id).await {
+        let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
             Err(Error::EntryNotFound) => {
                 // branch was removed after the notification was fired.
@@ -325,7 +325,7 @@ impl<'a> Monitor<'a> {
             .await
     }
 
-    async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
+    async fn load_root_node(&self, branch_id: &PublicKey) -> Result<RootNode> {
         Ok(self
             .repository
             .store()

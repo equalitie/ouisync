@@ -167,8 +167,8 @@ async fn receive_root_node_with_existing_hash() {
 
     let mut tx = index.store().begin_write().await.unwrap();
     tx.link_block(
-        *local_branch.id(),
-        locator,
+        local_branch.id(),
+        &locator,
         &block_id,
         SingleBlockPresence::Present,
         &write_keys,
@@ -478,7 +478,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
         &mut repo.store().begin_read().await.unwrap(),
-        *remote_branch.id(),
+        remote_branch.id(),
         &snapshot0,
     )
     .await;
@@ -499,7 +499,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     // All the original blocks are still retrievable
     check_all_blocks_exist(
         &mut repo.store().begin_read().await.unwrap(),
-        *remote_branch.id(),
+        remote_branch.id(),
         &snapshot0,
     )
     .await;
@@ -748,11 +748,11 @@ async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
 
 async fn check_all_blocks_exist(
     tx: &mut ReadTransaction,
-    branch_id: PublicKey,
+    branch_id: &PublicKey,
     snapshot: &Snapshot,
 ) {
     for node in snapshot.leaf_sets().flat_map(|(_, nodes)| nodes) {
-        let (block_id, _) = tx.find_block(branch_id, node.locator).await.unwrap();
+        let (block_id, _) = tx.find_block(branch_id, &node.locator).await.unwrap();
         assert!(tx.block_exists(&block_id).await.unwrap());
     }
 }

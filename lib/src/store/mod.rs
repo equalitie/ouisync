@@ -14,10 +14,12 @@ use crate::{
         Hash,
     },
     db,
-    index::{Proof, SingleBlockPresence, Summary},
+    index::{Proof, SingleBlockPresence, Summary, VersionVectorOp},
 };
+use futures_util::Stream;
 use sqlx::Row;
 use std::ops::{Deref, DerefMut};
+use tracing::Instrument;
 
 pub use error::Error;
 
@@ -149,7 +151,10 @@ impl Reader {
         ) as usize)
     }
 
-    pub async fn load_latest_root_node(&mut self, branch_id: PublicKey) -> Result<RootNode, Error> {
+    pub async fn load_latest_root_node(
+        &mut self,
+        branch_id: &PublicKey,
+    ) -> Result<RootNode, Error> {
         root_node::load_latest(self.raw_mut(), branch_id).await
     }
 
@@ -158,6 +163,12 @@ impl Reader {
         node: &RootNode,
     ) -> Result<Option<RootNode>, Error> {
         root_node::load_prev(self.raw_mut(), node).await
+    }
+
+    pub async fn load_all_root_nodes(
+        &mut self,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all(self.raw_mut())
     }
 
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
@@ -179,8 +190,8 @@ impl ReadTransaction {
     /// Finds the block id corresponding to the given locator in the given branch.
     pub async fn find_block(
         &mut self,
-        branch_id: PublicKey,
-        encoded_locator: Hash,
+        branch_id: &PublicKey,
+        encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence), Error> {
         let root_node = self.load_latest_root_node(branch_id).await?;
         self.find_block_in(&root_node, encoded_locator).await
@@ -189,7 +200,7 @@ impl ReadTransaction {
     pub async fn find_block_in(
         &mut self,
         root_node: &RootNode,
-        encoded_locator: Hash,
+        encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence), Error> {
         let path = self.load_path(root_node, encoded_locator).await?;
         path.get_leaf().ok_or(Error::LocatorNotFound)
@@ -198,9 +209,9 @@ impl ReadTransaction {
     async fn load_path(
         &mut self,
         root_node: &RootNode,
-        encoded_locator: Hash,
+        encoded_locator: &Hash,
     ) -> Result<Path, Error> {
-        let mut path = Path::new(root_node.proof.hash, root_node.summary, encoded_locator);
+        let mut path = Path::new(root_node.proof.hash, root_node.summary, *encoded_locator);
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
@@ -250,8 +261,8 @@ impl WriteTransaction {
     /// Links the given block id into the given branch under the given locator.
     pub async fn link_block(
         &mut self,
-        branch_id: PublicKey,
-        encoded_locator: Hash,
+        branch_id: &PublicKey,
+        encoded_locator: &Hash,
         block_id: &BlockId,
         block_presence: SingleBlockPresence,
         write_keys: &Keypair,
@@ -306,13 +317,42 @@ impl WriteTransaction {
 
     /// Removes the specified block from the store.
     // TODO: also mark the block as missing in the index
-    pub(crate) async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
+    pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
         sqlx::query("DELETE FROM blocks WHERE id = ?")
             .bind(id)
             .execute(self.raw_mut())
             .await?;
 
         Ok(())
+    }
+
+    /// Update the root version vector of the given branch.
+    pub async fn bump(
+        &mut self,
+        branch_id: &PublicKey,
+        op: VersionVectorOp<'_>,
+        write_keys: &Keypair,
+    ) -> Result<(), Error> {
+        let root_node = self.load_latest_root_node(branch_id).await?;
+
+        let mut new_vv = root_node.proof.version_vector.clone();
+        op.apply(branch_id, &mut new_vv);
+
+        // Sometimes `op` is a no-op. This is not an error.
+        if new_vv == root_node.proof.version_vector {
+            return Ok(());
+        }
+
+        let new_proof = Proof::new(
+            root_node.proof.writer_id,
+            new_vv,
+            root_node.proof.hash,
+            write_keys,
+        );
+
+        self.create_root_node(new_proof, root_node.summary)
+            .instrument(tracing::info_span!("bump"))
+            .await
     }
 
     pub async fn commit(self) -> Result<(), Error> {

@@ -102,7 +102,7 @@ impl File {
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let (_, presence) = tx.find_block(*branch.id(), encoded_locator).await?;
+                let (_, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
 
                 if presence.is_present() {
                     count = count.saturating_add(1);

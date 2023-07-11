@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use super::{
     node::{self, SingleBlockPresence},
     proof::Proof,
-    Summary, VersionVectorOp,
+    Summary,
 };
 use crate::{
     block::BlockId,
@@ -170,33 +170,6 @@ impl SnapshotData {
         Ok(())
     }
 
-    /// Update the root version vector of this branch.
-    pub async fn bump(
-        &mut self,
-        tx: &mut db::WriteTransaction,
-        op: VersionVectorOp<'_>,
-        write_keys: &Keypair,
-    ) -> Result<()> {
-        let mut new_vv = self.root_node.proof.version_vector.clone();
-        op.apply(self.branch_id(), &mut new_vv);
-
-        // Sometimes `op` is a no-op. This is not an error.
-        if new_vv == self.root_node.proof.version_vector {
-            return Ok(());
-        }
-
-        let new_proof = Proof::new(
-            self.root_node.proof.writer_id,
-            new_vv,
-            self.root_node.proof.hash,
-            write_keys,
-        );
-
-        self.create_root_node(tx, new_proof, self.root_node.summary)
-            .instrument(tracing::info_span!("bump"))
-            .await
-    }
-
     /// Remove this snapshot
     pub async fn remove(&self, tx: &mut db::WriteTransaction) -> Result<()> {
         Ok(self.root_node.remove_recursively(tx).await?)
@@ -343,7 +316,6 @@ impl BranchItem for SnapshotData {
 
 #[cfg(test)]
 use async_recursion::async_recursion;
-use tracing::Instrument;
 
 #[async_recursion]
 #[cfg(test)]
@@ -372,6 +344,7 @@ mod tests {
     use super::*;
     use crate::{
         crypto::{cipher::SecretKey, sign::Keypair},
+        index::VersionVectorOp,
         locator::Locator,
         store::{Store, EMPTY_INNER_HASH},
         test_utils,
@@ -401,15 +374,15 @@ mod tests {
         let mut tx = store.begin_write().await.unwrap();
 
         tx.link_block(
-            *branch.id(),
-            encoded_locator,
+            branch.id(),
+            &encoded_locator,
             &block_id,
             SingleBlockPresence::Present,
             &write_keys,
         )
         .await
         .unwrap();
-        let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
+        let (r, _) = tx.find_block(branch.id(), &encoded_locator).await.unwrap();
 
         assert_eq!(r, block_id);
     }
@@ -431,8 +404,8 @@ mod tests {
             let mut tx = store.begin_write().await.unwrap();
 
             tx.link_block(
-                *branch.id(),
-                encoded_locator,
+                branch.id(),
+                &encoded_locator,
                 &b1,
                 SingleBlockPresence::Present,
                 &write_keys,
@@ -441,8 +414,8 @@ mod tests {
             .unwrap();
 
             tx.link_block(
-                *branch.id(),
-                encoded_locator,
+                branch.id(),
+                &encoded_locator,
                 &b2,
                 SingleBlockPresence::Present,
                 &write_keys,
@@ -450,7 +423,7 @@ mod tests {
             .await
             .unwrap();
 
-            let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
+            let (r, _) = tx.find_block(branch.id(), &encoded_locator).await.unwrap();
             assert_eq!(r, b2);
 
             assert_eq!(
@@ -476,15 +449,15 @@ mod tests {
         assert_eq!(0, count_branch_forest_entries(tx.raw_mut()).await);
 
         tx.link_block(
-            *branch.id(),
-            encoded_locator,
+            branch.id(),
+            &encoded_locator,
             &b,
             SingleBlockPresence::Present,
             &write_keys,
         )
         .await
         .unwrap();
-        let (r, _) = tx.find_block(*branch.id(), encoded_locator).await.unwrap();
+        let (r, _) = tx.find_block(branch.id(), &encoded_locator).await.unwrap();
         assert_eq!(r, b);
 
         assert_eq!(
@@ -500,7 +473,7 @@ mod tests {
             .await
             .unwrap();
 
-        match tx.find_block(*branch.id(), encoded_locator).await {
+        match tx.find_block(branch.id(), &encoded_locator).await {
             Err(store::Error::LocatorNotFound) => { /* OK */ }
             Err(_) => panic!("Error should have been LocatorNotFound"),
             Ok(_) => panic!("BranchData shouldn't have contained the block ID"),
@@ -597,14 +570,6 @@ mod tests {
         let store = Store::new(pool);
         let write_keys = Keypair::generate(&mut rng);
 
-        let mut snapshot = {
-            let mut conn = store.raw().acquire().await.unwrap();
-            branch
-                .load_or_create_snapshot(&mut conn, &write_keys)
-                .await
-                .unwrap()
-        };
-
         let mut expected = BTreeMap::new();
 
         for op in ops {
@@ -615,16 +580,15 @@ mod tests {
                     let block_id = rng.gen();
 
                     let mut tx = store.begin_write().await.unwrap();
-                    snapshot
-                        .insert_block(
-                            tx.raw_mut(),
-                            &locator,
-                            &block_id,
-                            SingleBlockPresence::Present,
-                            &write_keys,
-                        )
-                        .await
-                        .unwrap();
+                    tx.link_block(
+                        branch.id(),
+                        &locator,
+                        &block_id,
+                        SingleBlockPresence::Present,
+                        &write_keys,
+                    )
+                    .await
+                    .unwrap();
                     tx.commit().await.unwrap();
 
                     expected.insert(locator, block_id);
@@ -635,6 +599,10 @@ mod tests {
                     };
 
                     let mut tx = store.begin_write().await.unwrap();
+                    let mut snapshot = branch
+                        .load_or_create_snapshot(tx.raw_mut(), &write_keys)
+                        .await
+                        .unwrap();
                     snapshot
                         .remove_block(tx.raw_mut(), &locator, None, &write_keys)
                         .await
@@ -645,13 +613,18 @@ mod tests {
                 }
                 PruneTestOp::Bump => {
                     let mut tx = store.begin_write().await.unwrap();
-                    snapshot
-                        .bump(tx.raw_mut(), VersionVectorOp::IncrementLocal, &write_keys)
+                    tx.bump(branch.id(), VersionVectorOp::IncrementLocal, &write_keys)
                         .await
                         .unwrap();
                     tx.commit().await.unwrap();
                 }
                 PruneTestOp::Prune => {
+                    let mut tx = store.begin_read().await.unwrap();
+                    let snapshot = branch
+                        .load_or_create_snapshot(tx.raw_mut(), &write_keys)
+                        .await
+                        .unwrap();
+                    drop(tx);
                     snapshot.prune(store.raw()).await.unwrap();
                 }
             }
@@ -660,12 +633,18 @@ mod tests {
             let mut tx = store.begin_read().await.unwrap();
 
             for (locator, expected_block_id) in &expected {
-                let (actual_block_id, _) = tx.find_block(*branch.id(), *locator).await.unwrap();
+                let (actual_block_id, _) = tx.find_block(branch.id(), locator).await.unwrap();
                 assert_eq!(actual_block_id, *expected_block_id);
             }
 
             // Verify the snapshot is still complete
-            check_complete(tx.raw_mut(), &snapshot).await;
+            let root_hash = tx
+                .load_latest_root_node(branch.id())
+                .await
+                .unwrap()
+                .proof
+                .hash;
+            check_complete(tx.raw_mut(), &root_hash).await;
         }
     }
 
@@ -693,7 +672,7 @@ mod tests {
             let mut tx = store.begin_write().await.unwrap();
             // TODO: `link_block` auto-prunes so this doesn't work. We need to simulate receiving
             // remote snapshots here instead.
-            tx.link_block(*branch0.id(), locator, &block_id, presence, &write_keys)
+            tx.link_block(branch0.id(), &locator, &block_id, presence, &write_keys)
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -709,7 +688,7 @@ mod tests {
         let mut tx = store.begin_read().await.unwrap();
 
         assert_eq!(
-            tx.find_block(*branch0.id(), locator).await.unwrap(),
+            tx.find_block(branch0.id(), &locator).await.unwrap(),
             (id3, SingleBlockPresence::Missing)
         );
 
@@ -721,7 +700,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            tx.find_block_in(&root_node, locator).await.unwrap(),
+            tx.find_block_in(&root_node, &locator).await.unwrap(),
             (id1, SingleBlockPresence::Present)
         );
 
@@ -750,14 +729,12 @@ mod tests {
             .is_some()
     }
 
-    async fn check_complete(conn: &mut db::Connection, snapshot: &SnapshotData) {
-        if snapshot.root_node.proof.hash == *EMPTY_INNER_HASH {
+    async fn check_complete(conn: &mut db::Connection, root_hash: &Hash) {
+        if *root_hash == *EMPTY_INNER_HASH {
             return;
         }
 
-        let nodes = InnerNode::load_children(conn, &snapshot.root_node.proof.hash)
-            .await
-            .unwrap();
+        let nodes = InnerNode::load_children(conn, root_hash).await.unwrap();
         assert!(!nodes.is_empty());
 
         let mut stack: Vec<_> = nodes.into_iter().map(|(_, node)| node).collect();

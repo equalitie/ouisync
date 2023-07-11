@@ -640,13 +640,7 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            let mut snapshot = self
-                .branch()
-                .data()
-                .load_or_create_snapshot(tx.raw_mut(), write_keys)
-                .await?;
-            snapshot.bump(tx.raw_mut(), op, write_keys).await?;
-            snapshot.remove_all_older(tx.raw_mut()).await?;
+            tx.bump(self.branch().id(), op, write_keys).await?;
 
             Ok(())
         }
@@ -696,7 +690,7 @@ async fn load(
     locator: Locator,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
-    let mut root_node = tx.load_latest_root_node(*branch.id()).await?;
+    let mut root_node = tx.load_latest_root_node(branch.id()).await?;
 
     loop {
         let error = match load_in(tx, &root_node, branch.clone(), locator).await {

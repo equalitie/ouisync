@@ -39,12 +39,12 @@ pub(super) async fn create(
     // the same branch.
     let old_vv: VersionVector = sqlx::query(
         "SELECT versions
+         FROM snapshot_root_nodes
+         WHERE snapshot_id = (
+             SELECT MAX(snapshot_id)
              FROM snapshot_root_nodes
-             WHERE snapshot_id = (
-                 SELECT MAX(snapshot_id)
-                 FROM snapshot_root_nodes
-                 WHERE writer_id = ?
-             )",
+             WHERE writer_id = ?
+         )",
     )
     .bind(&proof.writer_id)
     .map(|row| row.get(0))
@@ -93,12 +93,12 @@ pub(super) async fn create(
 
 pub(super) async fn load_or_create(
     conn: &mut db::Connection,
-    branch_id: PublicKey,
+    branch_id: &PublicKey,
     write_keys: &Keypair,
 ) -> Result<RootNode, Error> {
     match load_latest(conn, branch_id).await {
         Ok(root_node) => Ok(root_node),
-        Err(Error::BranchNotFound) => Ok(RootNode::empty(branch_id, write_keys)),
+        Err(Error::BranchNotFound) => Ok(RootNode::empty(*branch_id, write_keys)),
         Err(error) => Err(error),
     }
 }
@@ -106,7 +106,7 @@ pub(super) async fn load_or_create(
 /// Returns the latest approved root node of the specified branch.
 pub(super) async fn load_latest(
     conn: &mut db::Connection,
-    branch_id: PublicKey,
+    branch_id: &PublicKey,
 ) -> Result<RootNode, Error> {
     sqlx::query(
         "SELECT
@@ -125,13 +125,13 @@ pub(super) async fn load_latest(
                  )
             ",
     )
-    .bind(&branch_id)
+    .bind(branch_id)
     .bind(NodeState::Approved)
     .fetch_optional(conn)
     .await?
     .map(|row| RootNode {
         snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(branch_id, row.get(1), row.get(2), row.get(3)),
+        proof: Proof::new_unchecked(*branch_id, row.get(1), row.get(2), row.get(3)),
         summary: Summary {
             state: NodeState::Approved,
             block_presence: row.get(4),
@@ -172,6 +172,41 @@ pub(super) async fn load_prev(
     .err_into()
     .try_next()
     .await
+}
+
+/// Return the latest approved root nodes of all known writers.
+pub(super) fn load_all(
+    conn: &mut db::Connection,
+) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+    sqlx::query(
+        "SELECT
+             snapshot_id,
+             writer_id,
+             versions,
+             hash,
+             signature,
+             block_presence
+         FROM
+             snapshot_root_nodes
+         WHERE
+             snapshot_id IN (
+                 SELECT MAX(snapshot_id)
+                 FROM snapshot_root_nodes
+                 WHERE state = ?
+                 GROUP BY writer_id
+             )",
+    )
+    .bind(NodeState::Approved)
+    .fetch(conn)
+    .map_ok(|row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
+        summary: Summary {
+            state: NodeState::Approved,
+            block_presence: row.get(5),
+        },
+    })
+    .err_into()
 }
 
 /// Removes all root nodes, including their snapshots, that are older than the given snapshot and
@@ -247,42 +282,15 @@ impl RootNode {
         conn: &mut db::Connection,
         writer_id: PublicKey,
     ) -> Result<Self, Error> {
-        load_latest(conn, writer_id).await
+        load_latest(conn, &writer_id).await
     }
 
     /// Return the latest approved root nodes of all known writers.
+    #[deprecated = "use store::Reader::load_all_root_nodes"]
     pub fn load_all_latest_approved(
         conn: &mut db::Connection,
     ) -> impl Stream<Item = Result<Self, Error>> + '_ {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 writer_id,
-                 versions,
-                 hash,
-                 signature,
-                 block_presence
-             FROM
-                 snapshot_root_nodes
-             WHERE
-                 snapshot_id IN (
-                     SELECT MAX(snapshot_id)
-                     FROM snapshot_root_nodes
-                     WHERE state = ?
-                     GROUP BY writer_id
-                 )",
-        )
-        .bind(NodeState::Approved)
-        .fetch(conn)
-        .map_ok(|row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(row.get(1), row.get(2), row.get(3), row.get(4)),
-            summary: Summary {
-                state: NodeState::Approved,
-                block_presence: row.get(5),
-            },
-        })
-        .err_into()
+        load_all(conn)
     }
 
     /// Return the latest root nodes of all known writers.

@@ -44,7 +44,7 @@ impl Blob {
         branch: Branch,
         head_locator: Locator,
     ) -> Result<Self> {
-        let root_node = tx.load_latest_root_node(*branch.id()).await?;
+        let root_node = tx.load_latest_root_node(branch.id()).await?;
         Self::open_in(tx, &root_node, branch, head_locator).await
     }
 
@@ -99,7 +99,7 @@ impl Blob {
     /// number of bytes actually read which might be less than `buffer.len()` if the portion of the
     /// blob past the internal cursor is smaller than `buffer.len()`.
     pub async fn read(&mut self, tx: &mut ReadTransaction, buffer: &mut [u8]) -> Result<usize> {
-        let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+        let root_node = tx.load_latest_root_node(self.branch.id()).await?;
         self.read_in(tx, &root_node, buffer).await
     }
 
@@ -147,7 +147,7 @@ impl Blob {
     /// Read all data from this blob from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self, tx: &mut ReadTransaction) -> Result<Vec<u8>> {
-        let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+        let root_node = tx.load_latest_root_node(self.branch.id()).await?;
         self.read_to_end_in(tx, &root_node).await
     }
 
@@ -205,7 +205,7 @@ impl Blob {
                 let root_node = if let Some(root_node) = &root_node {
                     root_node
                 } else {
-                    root_node.get_or_insert(tx.load_latest_root_node(*self.branch.id()).await?)
+                    root_node.get_or_insert(tx.load_latest_root_node(self.branch.id()).await?)
                 };
 
                 read_block(tx, root_node, &locator, self.branch.keys().read()).await?
@@ -254,7 +254,7 @@ impl Blob {
 
         if block_number != self.current_block.locator.number() {
             let locator = self.head_locator.nth(block_number);
-            let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+            let root_node = tx.load_latest_root_node(self.branch.id()).await?;
 
             // TODO: if this returns `LocatorNotFound` it might be that some other task concurrently
             // truncated this blob and we are trying to seek pass its end. In that case we should
@@ -366,7 +366,7 @@ impl Blob {
             self.current_block.content.pos = old_pos;
             self.current_block.dirty = true;
         } else {
-            let root_node = tx.load_latest_root_node(*self.branch.id()).await?;
+            let root_node = tx.load_latest_root_node(self.branch.id()).await?;
             let (_, buffer) = read_block(
                 tx,
                 &root_node,
@@ -381,7 +381,7 @@ impl Blob {
 
             write_block(
                 tx,
-                *self.branch.id(),
+                self.branch.id(),
                 &self.head_locator,
                 cursor.buffer,
                 read_key,
@@ -406,7 +406,7 @@ impl Blob {
 
         let block_id = write_block(
             tx,
-            *self.branch.id(),
+            self.branch.id(),
             &self.current_block.locator,
             self.current_block.content.buffer.clone(),
             read_key,
@@ -445,7 +445,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     const BATCH_SIZE: u32 = 1;
 
     let mut rtx = src_branch.store().begin_read().await?;
-    let src_root_node = rtx.load_latest_root_node(*src_branch.id()).await?;
+    let src_root_node = rtx.load_latest_root_node(src_branch.id()).await?;
 
     let end =
         load_block_count_hint(&mut rtx, &src_root_node, blob_id, src_branch.keys().read()).await?;
@@ -464,7 +464,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             let encoded_locator = locator.encode(read_key);
 
             let (block_id, block_presence) =
-                match rtx.find_block_in(&src_root_node, encoded_locator).await {
+                match rtx.find_block_in(&src_root_node, &encoded_locator).await {
                     Ok(block) => block,
                     Err(store::Error::LocatorNotFound) => {
                         // end of the blob
@@ -478,8 +478,8 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             // already been forked by some other task in the meantime. In that case this
             // `insert` is a no-op. We still proceed normally to maintain idempotency.
             wtx.link_block(
-                *dst_branch.id(),
-                encoded_locator,
+                dst_branch.id(),
+                &encoded_locator,
                 &block_id,
                 block_presence,
                 write_keys,
@@ -512,7 +512,7 @@ async fn read_block(
     read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, Buffer)> {
     let (id, _) = tx
-        .find_block_in(root_node, locator.encode(read_key))
+        .find_block_in(root_node, &locator.encode(read_key))
         .await?;
 
     let mut buffer = Buffer::new();
@@ -526,7 +526,7 @@ async fn read_block(
 #[instrument(skip(tx, buffer, read_key, write_keys), fields(id))]
 async fn write_block(
     tx: &mut WriteTransaction,
-    branch_id: PublicKey,
+    branch_id: &PublicKey,
     locator: &Locator,
     mut buffer: Buffer,
     read_key: &cipher::SecretKey,
@@ -541,7 +541,7 @@ async fn write_block(
     let inserted = tx
         .link_block(
             branch_id,
-            locator.encode(read_key),
+            &locator.encode(read_key),
             &id,
             SingleBlockPresence::Present,
             write_keys,

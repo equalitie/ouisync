@@ -20,7 +20,7 @@ pub(crate) struct BlockIds {
 impl BlockIds {
     pub async fn open(branch: Branch, blob_id: BlobId) -> Result<Self> {
         let mut tx = branch.store().begin_read().await?;
-        let root_node = tx.load_latest_root_node(*branch.id()).await?;
+        let root_node = tx.load_latest_root_node(branch.id()).await?;
 
         // If the first block of the blob is available, we read the blob length from it and use it
         // to know how far to iterate. If it's not, we iterate until we hit `EntryNotFound`.
@@ -55,7 +55,7 @@ impl BlockIds {
         let encoded = self.locator.encode(self.branch.keys().read());
         let mut tx = self.branch.store().begin_read().await?;
 
-        match tx.find_block_in(&self.root_node, encoded).await {
+        match tx.find_block_in(&self.root_node, &encoded).await {
             Ok(block) => {
                 self.locator = self.locator.next();
                 Ok(Some(block))

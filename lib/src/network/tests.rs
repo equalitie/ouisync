@@ -500,12 +500,8 @@ async fn create_changeset(
         create_block(rng, index, &branch, write_keys).await;
     }
 
-    let mut tx = index.db().begin_write().await.unwrap();
-    branch
-        .load_or_create_snapshot(&mut tx, write_keys)
-        .await
-        .unwrap()
-        .bump(&mut tx, VersionVectorOp::IncrementLocal, write_keys)
+    let mut tx = index.store().begin_write().await.unwrap();
+    tx.bump(branch.id(), VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -524,8 +520,8 @@ async fn create_block(rng: &mut StdRng, index: &Index, branch: &BranchData, writ
 
     let mut tx = index.store().begin_write().await.unwrap();
     tx.link_block(
-        *branch.id(),
-        encoded_locator,
+        branch.id(),
+        &encoded_locator,
         &block_id,
         SingleBlockPresence::Present,
         write_keys,
