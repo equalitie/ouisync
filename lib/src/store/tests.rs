@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
-
 use super::*;
-use crate::{crypto::cipher::SecretKey, locator::Locator, test_utils};
+use crate::{block::BLOCK_SIZE, crypto::cipher::SecretKey, locator::Locator, test_utils};
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
     rngs::StdRng,
     seq::{IteratorRandom, SliceRandom},
     Rng, SeedableRng,
 };
+use sqlx::Row;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 use test_strategy::{proptest, Arbitrary};
 

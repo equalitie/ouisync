@@ -272,6 +272,35 @@ pub(super) fn load_all_in_any_state(
     .err_into()
 }
 
+/// Returns all nodes with the specified hash
+pub(super) fn load_all_by_hash<'a>(
+    conn: &'a mut db::Connection,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
+    sqlx::query(
+        "SELECT
+             snapshot_id,
+             writer_id,
+             versions,
+             signature,
+             state,
+             block_presence
+         FROM snapshot_root_nodes
+         WHERE hash = ?",
+    )
+    .bind(hash)
+    .fetch(conn)
+    .map_ok(move |row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
+        summary: Summary {
+            state: row.get(4),
+            block_presence: row.get(5),
+        },
+    })
+    .err_into()
+}
+
 /// Does this node exist in the db?
 pub(super) async fn exists(conn: &mut db::Connection, node: &RootNode) -> Result<bool, Error> {
     Ok(
@@ -329,6 +358,33 @@ pub(super) async fn remove_older_incomplete(
     .await?;
 
     Ok(())
+}
+
+/// Update the summaries of all nodes with the specified hash.
+pub(super) async fn update_summaries(
+    tx: &mut db::WriteTransaction,
+    hash: &Hash,
+) -> Result<NodeState, Error> {
+    let summary = inner_node::compute_summary(tx, hash).await?;
+
+    let state = sqlx::query(
+        "UPDATE snapshot_root_nodes
+         SET block_presence = ?,
+             state = CASE state WHEN ? THEN ? ELSE state END
+         WHERE hash = ?
+         RETURNING state
+         ",
+    )
+    .bind(&summary.block_presence)
+    .bind(NodeState::Incomplete)
+    .bind(summary.state)
+    .bind(hash)
+    .fetch_optional(tx)
+    .await?
+    .map(|row| row.get(0))
+    .unwrap_or(NodeState::Incomplete);
+
+    Ok(state)
 }
 
 /// Check whether the `old` snapshot can serve as a fallback for the `new` snapshot.
@@ -492,6 +548,47 @@ pub(super) async fn decide_action(
     Ok(action)
 }
 
+pub(super) async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
+    let mut roots = sqlx::query(
+        "SELECT
+             snapshot_id,
+             versions,
+             hash,
+             signature,
+             state,
+             block_presence,
+             writer_id
+         FROM snapshot_root_nodes
+         ORDER BY snapshot_id DESC",
+    )
+    .fetch(conn)
+    .map_ok(move |row| RootNode {
+        snapshot_id: row.get(0),
+        proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
+        summary: Summary {
+            state: row.get(4),
+            block_presence: row.get(5),
+        },
+    });
+
+    while let Some(root_node) = roots.next().await {
+        match root_node {
+            Ok(root_node) => {
+                printer.debug(&format_args!(
+                    "RootNode: snapshot_id:{:?}, writer_id:{:?}, vv:{:?}, state:{:?}",
+                    root_node.snapshot_id,
+                    root_node.proof.writer_id,
+                    root_node.proof.version_vector,
+                    root_node.summary.state
+                ));
+            }
+            Err(err) => {
+                printer.debug(&format_args!("RootNode: error: {:?}", err));
+            }
+        }
+    }
+}
+
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
 /// most recent to the least recent.
 #[cfg(test)]
@@ -541,130 +638,6 @@ impl RootNode {
                 state: NodeState::Approved,
                 block_presence: MultiBlockPresence::Full,
             },
-        }
-    }
-
-    /// Returns all nodes with the specified hash
-    pub fn load_all_by_hash<'a>(
-        conn: &'a mut db::Connection,
-        hash: &'a Hash,
-    ) -> impl Stream<Item = Result<Self, Error>> + 'a {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 writer_id,
-                 versions,
-                 signature,
-                 state,
-                 block_presence
-             FROM snapshot_root_nodes
-             WHERE hash = ?",
-        )
-        .bind(hash)
-        .fetch(conn)
-        .map_ok(move |row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(row.get(1), row.get(2), *hash, row.get(3)),
-            summary: Summary {
-                state: row.get(4),
-                block_presence: row.get(5),
-            },
-        })
-        .err_into()
-    }
-
-    /// Returns the writer ids of the nodes with the specified hash.
-    #[deprecated]
-    pub fn load_writer_ids<'a>(
-        conn: &'a mut db::Connection,
-        hash: &'a Hash,
-    ) -> impl Stream<Item = Result<PublicKey, Error>> + 'a {
-        load_writer_ids(conn, hash)
-    }
-
-    /// Reload this root node from the db.
-    #[cfg(test)]
-    pub async fn reload(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
-        let row = sqlx::query(
-            "SELECT state, block_presence
-             FROM snapshot_root_nodes
-             WHERE snapshot_id = ?",
-        )
-        .bind(self.snapshot_id)
-        .fetch_one(conn)
-        .await?;
-
-        self.summary.state = row.get(0);
-        self.summary.block_presence = row.get(1);
-
-        Ok(())
-    }
-
-    /// Update the summaries of all nodes with the specified hash.
-    pub async fn update_summaries(
-        tx: &mut db::WriteTransaction,
-        hash: &Hash,
-    ) -> Result<NodeState, Error> {
-        let summary = inner_node::compute_summary(tx, hash).await?;
-
-        let state = sqlx::query(
-            "UPDATE snapshot_root_nodes
-             SET block_presence = ?,
-                 state = CASE state WHEN ? THEN ? ELSE state END
-             WHERE hash = ?
-             RETURNING state
-             ",
-        )
-        .bind(&summary.block_presence)
-        .bind(NodeState::Incomplete)
-        .bind(summary.state)
-        .bind(hash)
-        .fetch_optional(tx)
-        .await?
-        .map(|row| row.get(0))
-        .unwrap_or(NodeState::Incomplete);
-
-        Ok(state)
-    }
-
-    pub async fn debug_print(conn: &mut db::Connection, printer: DebugPrinter) {
-        let mut roots = sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence,
-                 writer_id
-             FROM snapshot_root_nodes
-             ORDER BY snapshot_id DESC",
-        )
-        .fetch(conn)
-        .map_ok(move |row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(row.get(6), row.get(1), row.get(2), row.get(3)),
-            summary: Summary {
-                state: row.get(4),
-                block_presence: row.get(5),
-            },
-        });
-
-        while let Some(root_node) = roots.next().await {
-            match root_node {
-                Ok(root_node) => {
-                    printer.debug(&format_args!(
-                        "RootNode: snapshot_id:{:?}, writer_id:{:?}, vv:{:?}, state:{:?}",
-                        root_node.snapshot_id,
-                        root_node.proof.writer_id,
-                        root_node.proof.version_vector,
-                        root_node.summary.state
-                    ));
-                }
-                Err(err) => {
-                    printer.debug(&format_args!("RootNode: error: {:?}", err));
-                }
-            }
         }
     }
 }

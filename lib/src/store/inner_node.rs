@@ -99,6 +99,18 @@ pub(super) async fn load(
     Ok(node)
 }
 
+/// Loads parent hashes of all inner nodes with the specifed hash.
+pub(super) fn load_parent_hashes<'a>(
+    conn: &'a mut db::Connection,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+    sqlx::query("SELECT DISTINCT parent FROM snapshot_inner_nodes WHERE hash = ?")
+        .bind(hash)
+        .fetch(conn)
+        .map_ok(|row| row.get(0))
+        .err_into()
+}
+
 /// Saves this inner node into the db unless it already exists.
 pub(super) async fn save(
     tx: &mut db::WriteTransaction,
@@ -284,25 +296,6 @@ impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
     pub fn new(hash: Hash, summary: Summary) -> Self {
         Self { hash, summary }
-    }
-
-    /// Loads parent hashes of all inner nodes with the specifed hash.
-    #[deprecated]
-    pub fn load_parent_hashes<'a>(
-        conn: &'a mut db::Connection,
-        hash: &'a Hash,
-    ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-        sqlx::query("SELECT DISTINCT parent FROM snapshot_inner_nodes WHERE hash = ?")
-            .bind(hash)
-            .fetch(conn)
-            .map_ok(|row| row.get(0))
-            .err_into()
-    }
-
-    /// Updates summaries of all nodes with the specified hash at the specified inner layer.
-    #[deprecated]
-    pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        update_summaries(tx, hash).await
     }
 
     pub fn is_empty(&self) -> bool {

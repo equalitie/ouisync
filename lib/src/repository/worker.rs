@@ -341,7 +341,7 @@ mod trash {
     use crate::{
         block::BlockId,
         crypto::sign::{Keypair, PublicKey},
-        store::{self, LeafNode, WriteTransaction},
+        store::{self, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -567,9 +567,7 @@ mod trash {
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
-            let locators: Vec<_> = LeafNode::load_locators(tx.raw_mut(), block_id)
-                .try_collect()
-                .await?;
+            let locators: Vec<_> = tx.load_locators(block_id).try_collect().await?;
             let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {

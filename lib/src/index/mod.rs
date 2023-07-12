@@ -20,7 +20,7 @@ use crate::{
     storage_size::StorageSize,
     store::{
         InnerNodeMap, InnerNodeReceiveStatus, LeafNodeReceiveStatus, LeafNodeSet, ReceiveFilter,
-        RootNode, RootNodeReceiveStatus, Store, WriteTransaction,
+        RootNodeReceiveStatus, Store, WriteTransaction,
     },
     version_vector::VersionVector,
 };
@@ -63,8 +63,7 @@ impl Index {
     }
 
     pub async fn debug_print(&self, print: DebugPrinter) {
-        let mut reader = self.store().acquire_read().await.unwrap();
-        RootNode::debug_print(reader.raw_mut(), print).await;
+        self.store().debug_print_root_node(print).await
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the

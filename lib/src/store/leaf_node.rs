@@ -67,6 +67,19 @@ pub(super) fn load_parent_hashes<'a>(
         .err_into()
 }
 
+/// Loads all locators (most of the time (always?) there will be at most one) pointing to the
+/// block id.
+pub(super) fn load_locators<'a>(
+    conn: &'a mut db::Connection,
+    block_id: &'a BlockId,
+) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+    sqlx::query("SELECT locator FROM snapshot_leaf_nodes WHERE block_id = ?")
+        .bind(block_id)
+        .fetch(conn)
+        .map_ok(|row| row.get(0))
+        .err_into()
+}
+
 /// Saves the node to the db unless it already exists.
 pub(super) async fn save(
     tx: &mut db::WriteTransaction,
@@ -100,6 +113,50 @@ pub(super) async fn save_all(
     Ok(())
 }
 
+/// Checks whether the block with the specified id is present.
+pub(super) async fn is_present(
+    conn: &mut db::Connection,
+    block_id: &BlockId,
+) -> Result<bool, Error> {
+    Ok(
+        sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? AND block_presence = ?")
+            .bind(block_id)
+            .bind(SingleBlockPresence::Present)
+            .fetch_optional(conn)
+            .await?
+            .is_some(),
+    )
+}
+
+/// Marks all leaf nodes that point to the specified block as present (not missing). Returns
+/// whether at least one node was modified.
+pub(super) async fn set_present(
+    tx: &mut db::WriteTransaction,
+    block_id: &BlockId,
+) -> Result<bool, Error> {
+    // Check whether there is at least one node that references the given block.
+    if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
+        .bind(block_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_none()
+    {
+        return Err(Error::BlockNotReferenced);
+    }
+
+    // Update only those nodes that have block_presence set to `Missing`.
+    let result = sqlx::query(
+        "UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ? AND block_presence = ?",
+        )
+        .bind(SingleBlockPresence::Present)
+        .bind(block_id)
+        .bind(SingleBlockPresence::Missing)
+        .execute(tx)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Marks all leaf nodes that point to the specified block as missing.
 pub(super) async fn set_missing(
     tx: &mut db::WriteTransaction,
@@ -122,7 +179,7 @@ pub(super) async fn filter_nodes_with_new_blocks(
     let mut output = Vec::new();
 
     for remote_node in remote_nodes.present() {
-        if !LeafNode::is_present(conn, &remote_node.block_id).await? {
+        if !is_present(conn, &remote_node.block_id).await? {
             output.push(*remote_node);
         }
     }
@@ -175,72 +232,6 @@ impl LeafNode {
             block_id,
             block_presence: SingleBlockPresence::Missing,
         }
-    }
-
-    /// Loads all parent hashes of nodes with the specified block id.
-    #[deprecated]
-    pub fn load_parent_hashes<'a>(
-        conn: &'a mut db::Connection,
-        block_id: &'a BlockId,
-    ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-        load_parent_hashes(conn, block_id)
-    }
-
-    /// Loads all locators (most of the time (always?) there will be at most one) pointing to the
-    /// block id.
-    #[deprecated]
-    pub fn load_locators<'a>(
-        conn: &'a mut db::Connection,
-        block_id: &'a BlockId,
-    ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-        sqlx::query("SELECT locator FROM snapshot_leaf_nodes WHERE block_id = ?")
-            .bind(block_id)
-            .fetch(conn)
-            .map_ok(|row| row.get(0))
-            .err_into()
-    }
-
-    /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
-    /// whether at least one node was modified.
-    #[deprecated]
-    pub async fn set_present(
-        tx: &mut db::WriteTransaction,
-        block_id: &BlockId,
-    ) -> Result<bool, Error> {
-        // Check whether there is at least one node that references the given block.
-        if sqlx::query("SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? LIMIT 1")
-            .bind(block_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .is_none()
-        {
-            return Err(Error::BlockNotReferenced);
-        }
-
-        // Update only those nodes that have block_presence set to `Missing`.
-        let result = sqlx::query(
-            "UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ? AND block_presence = ?",
-        )
-        .bind(SingleBlockPresence::Present)
-        .bind(block_id)
-        .bind(SingleBlockPresence::Missing)
-        .execute(tx)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// Checks whether the block with the specified id is present.
-    #[deprecated]
-    pub async fn is_present(conn: &mut db::Connection, block_id: &BlockId) -> Result<bool, Error> {
-        Ok(sqlx::query(
-            "SELECT 1 FROM snapshot_leaf_nodes WHERE block_id = ? AND block_presence = ?",
-        )
-        .bind(block_id)
-        .bind(SingleBlockPresence::Present)
-        .fetch_optional(conn)
-        .await?
-        .is_some())
     }
 }
 
@@ -494,7 +485,7 @@ mod tests {
         let node = LeafNode::missing(encoded_locator, block_id);
         save(&mut tx, &node, &parent).await.unwrap();
 
-        assert!(LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+        assert!(set_present(&mut tx, &block_id).await.unwrap());
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(
@@ -516,7 +507,7 @@ mod tests {
         let node = LeafNode::present(encoded_locator, block_id);
         save(&mut tx, &node, &parent).await.unwrap();
 
-        assert!(!LeafNode::set_present(&mut tx, &block_id).await.unwrap());
+        assert!(!set_present(&mut tx, &block_id).await.unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -528,7 +519,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         assert_matches!(
-            LeafNode::set_present(&mut tx, &block_id).await,
+            set_present(&mut tx, &block_id).await,
             Err(Error::BlockNotReferenced)
         )
     }

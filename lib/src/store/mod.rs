@@ -20,18 +20,18 @@ pub(crate) use receive_filter::ReceiveFilter;
 pub(crate) use root_node::ReceiveStatus as RootNodeReceiveStatus;
 
 use crate::{
-    block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    block::{BlockData, BlockId, BlockNonce},
     crypto::{
         sign::{Keypair, PublicKey},
         CacheHash, Hash, Hashable,
     },
     db,
+    debug::DebugPrinter,
     index::{MultiBlockPresence, Proof, SingleBlockPresence, Summary, VersionVectorOp},
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
 use receive::UpdateSummaryReason;
-use sqlx::Row;
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
@@ -40,10 +40,13 @@ use tracing::Instrument;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
-pub(crate) use self::inner_node::{get_bucket, InnerNode, EMPTY_INNER_HASH};
+pub(crate) use self::{
+    inner_node::{get_bucket, InnerNode, EMPTY_INNER_HASH},
+    leaf_node::LeafNode,
+};
 pub(crate) use self::{
     inner_node::{InnerNodeMap, INNER_LAYER_COUNT},
-    leaf_node::{LeafNode, LeafNodeSet},
+    leaf_node::LeafNodeSet,
     path::Path,
     root_node::RootNode,
 };
@@ -133,6 +136,13 @@ impl Store {
         ReceiveFilter::new(self.raw().clone())
     }
 
+    pub async fn debug_print_root_node(&self, printer: DebugPrinter) {
+        match self.acquire_read().await {
+            Ok(mut reader) => root_node::debug_print(reader.raw_mut(), printer).await,
+            Err(error) => printer.display(&format!("Failed to acquire reader {:?}", error)),
+        }
+    }
+
     /// Closes the store. Waits until all `Reader`s and `{Read|Write}Transactions` obtained from
     /// this store are dropped.
     pub async fn close(&self) -> Result<(), Error> {
@@ -161,53 +171,18 @@ impl Reader {
         id: &BlockId,
         buffer: &mut [u8],
     ) -> Result<BlockNonce, Error> {
-        assert!(
-            buffer.len() >= BLOCK_SIZE,
-            "insufficient buffer length for block read"
-        );
-
-        let row = sqlx::query("SELECT nonce, content FROM blocks WHERE id = ?")
-            .bind(id)
-            .fetch_optional(self.raw_mut())
-            .await?
-            .ok_or(Error::BlockNotFound)?;
-
-        let nonce: &[u8] = row.get(0);
-        let nonce = BlockNonce::try_from(nonce).map_err(|_| Error::MalformedData)?;
-
-        let content: &[u8] = row.get(1);
-        if content.len() != BLOCK_SIZE {
-            tracing::error!(
-                expected = BLOCK_SIZE,
-                actual = content.len(),
-                "wrong block length"
-            );
-            return Err(Error::MalformedData);
-        }
-
-        buffer.copy_from_slice(content);
-
-        Ok(nonce)
+        block::read(self.raw_mut(), id, buffer).await
     }
 
     /// Checks whether the block exists in the store.
     #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
-        Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
-            .bind(id)
-            .fetch_optional(self.raw_mut())
-            .await?
-            .is_some())
+        block::exists(self.raw_mut(), id).await
     }
 
     /// Returns the total number of blocks in the store.
     pub async fn count_blocks(&mut self) -> Result<usize, Error> {
-        Ok(db::decode_u64(
-            sqlx::query("SELECT COUNT(*) FROM blocks")
-                .fetch_one(self.raw_mut())
-                .await?
-                .get(0),
-        ) as usize)
+        block::count(self.raw_mut()).await
     }
 
     #[cfg(test)]
@@ -240,6 +215,10 @@ impl Reader {
         root_node::load_all_by_writer_in_any_state(self.raw_mut(), writer_id)
     }
 
+    pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
+        root_node::exists(self.raw_mut(), node).await
+    }
+
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
         inner_node::load_children(self.raw_mut(), parent_hash).await
     }
@@ -248,8 +227,11 @@ impl Reader {
         leaf_node::load_children(self.raw_mut(), parent_hash).await
     }
 
-    pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
-        root_node::exists(self.raw_mut(), node).await
+    pub fn load_locators<'a>(
+        &'a mut self,
+        block_id: &'a BlockId,
+    ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+        leaf_node::load_locators(self.raw_mut(), block_id)
     }
 
     // TODO: remove pub
@@ -566,8 +548,9 @@ impl WriteTransaction {
         })
     }
 
-    /// Write a block received from a remote replica. The block must already be referenced by the
-    /// index, otherwise an `BlockNotReferenced` error is returned.
+    /// Write a block received from a remote replica and marks it as present in the index.
+    /// The block must already be referenced by the index, otherwise an `BlockNotReferenced` error
+    /// is returned.
     pub(crate) async fn receive_block(
         &mut self,
         data: &BlockData,

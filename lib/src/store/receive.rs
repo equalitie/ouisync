@@ -2,10 +2,9 @@
 
 use super::{
     error::Error,
-    inner_node::InnerNode,
+    inner_node,
     quota::{self, QuotaError},
-    receive_filter,
-    root_node::{self, RootNode},
+    receive_filter, root_node,
 };
 use crate::{
     collections::HashMap,
@@ -65,7 +64,7 @@ pub(super) async fn update_summaries(
         // only mean that the node is a root.
 
         try_collect_into(
-            InnerNode::load_parent_hashes(tx, &hash).map_ok(|hash| {
+            inner_node::load_parent_hashes(tx, &hash).map_ok(|hash| {
                 has_parent = true;
                 hash
             }),
@@ -74,7 +73,7 @@ pub(super) async fn update_summaries(
         .await?;
 
         if has_parent {
-            InnerNode::update_summaries(tx, &hash).await?;
+            inner_node::update_summaries(tx, &hash).await?;
 
             match reason {
                 // If block was removed we need to remove the corresponding receive filter entries
@@ -83,7 +82,7 @@ pub(super) async fn update_summaries(
                 UpdateSummaryReason::Other => (),
             }
         } else {
-            let state = RootNode::update_summaries(tx, &hash).await?;
+            let state = root_node::update_summaries(tx, &hash).await?;
             states.entry(hash).or_insert(state).update(state);
         }
     }
@@ -154,7 +153,7 @@ mod tests {
         block,
         inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH},
         leaf_node::{self, LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-        root_node,
+        root_node::{self, RootNode},
     };
     use super::*;
     use crate::{
@@ -162,7 +161,7 @@ mod tests {
             sign::{Keypair, PublicKey},
             Hashable,
         },
-        index::{self, node_test_utils::Snapshot, MultiBlockPresence, Proof, Summary},
+        index::{node_test_utils::Snapshot, MultiBlockPresence, Proof, Summary},
         test_utils,
         version_vector::VersionVector,
     };
@@ -413,7 +412,7 @@ mod tests {
         .unwrap();
 
         update_summaries_and_approve(&mut tx, root_node.proof.hash).await;
-        root_node.reload(&mut tx).await.unwrap();
+        reload_root_node(&mut tx, &mut root_node).await.unwrap();
         assert_eq!(root_node.summary.state.is_approved(), leaf_count == 0);
 
         // TODO: consider randomizing the order the nodes are saved so it's not always
@@ -427,7 +426,7 @@ mod tests {
 
                 update_summaries_and_approve(&mut tx, *parent_hash).await;
 
-                root_node.reload(&mut tx).await.unwrap();
+                reload_root_node(&mut tx, &mut root_node).await.unwrap();
                 assert!(!root_node.summary.state.is_approved());
             }
         }
@@ -441,7 +440,7 @@ mod tests {
             unsaved_leaves -= nodes.len();
 
             update_summaries_and_approve(&mut tx, *parent_hash).await;
-            root_node.reload(&mut tx).await.unwrap();
+            reload_root_node(&mut tx, &mut root_node).await.unwrap();
 
             if unsaved_leaves > 0 {
                 assert!(!root_node.summary.state.is_approved());
@@ -529,7 +528,7 @@ mod tests {
         }
 
         // Check that initially all blocks are missing
-        root_node.reload(&mut tx).await.unwrap();
+        reload_root_node(&mut tx, &mut root_node).await.unwrap();
 
         assert_eq!(root_node.summary.block_presence, MultiBlockPresence::None);
 
@@ -541,7 +540,7 @@ mod tests {
                 .unwrap();
             received_blocks += 1;
 
-            root_node.reload(&mut tx).await.unwrap();
+            reload_root_node(&mut tx, &mut root_node).await.unwrap();
 
             if received_blocks < snapshot.blocks().len() {
                 assert_matches!(
@@ -562,5 +561,23 @@ mod tests {
 
     async fn setup() -> (TempDir, db::Pool) {
         db::create_temp().await.unwrap()
+    }
+
+    // Reload this root node from the db.
+    #[cfg(test)]
+    async fn reload_root_node(conn: &mut db::Connection, node: &mut RootNode) -> Result<(), Error> {
+        let row = sqlx::query(
+            "SELECT state, block_presence
+             FROM snapshot_root_nodes
+             WHERE snapshot_id = ?",
+        )
+        .bind(node.snapshot_id)
+        .fetch_one(conn)
+        .await?;
+
+        node.summary.state = row.get(0);
+        node.summary.block_presence = row.get(1);
+
+        Ok(())
     }
 }

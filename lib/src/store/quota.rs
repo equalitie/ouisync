@@ -1,7 +1,4 @@
-use super::{
-    error::Error as StoreError,
-    root_node::{self, RootNode},
-};
+use super::{error::Error as StoreError, root_node};
 use crate::{
     crypto::Hash, db, future::try_collect_into, iterator, storage_size::StorageSize, versioned,
 };
@@ -50,7 +47,7 @@ async fn load_candidate_latest_root_hashes(
     let mut nodes = Vec::new();
 
     try_collect_into(
-        RootNode::load_all_by_hash(conn, candidate_root_hash),
+        root_node::load_all_by_hash(conn, candidate_root_hash),
         &mut nodes,
     )
     .await?;
