@@ -10,7 +10,7 @@ use crate::{
         Hash, Hashable,
     },
     index::ReceiveFilter,
-    repository::RepositoryState,
+    repository::Vault,
     store::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT},
     version_vector::VersionVector,
 };
@@ -186,7 +186,7 @@ pub(crate) async fn receive_nodes(
     }
 }
 
-pub(crate) async fn receive_blocks(repo: &RepositoryState, snapshot: &Snapshot) {
+pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
     let client = repo.block_tracker.client();
     let acceptor = client.acceptor();
 

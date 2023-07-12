@@ -1,4 +1,4 @@
-//! Internal state of the repository which allows only operations that don't require read or write access.
+//! Repository state and operations that don't require read or write access.
 
 use super::{quota, LocalId, Metadata, RepositoryMonitor};
 use crate::{
@@ -17,7 +17,7 @@ use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Clone)]
-pub(crate) struct RepositoryState {
+pub(crate) struct Vault {
     pub index: Index,
     pub block_tracker: BlockTracker,
     pub block_request_mode: BlockRequestMode,
@@ -25,7 +25,7 @@ pub(crate) struct RepositoryState {
     pub monitor: Arc<RepositoryMonitor>,
 }
 
-impl RepositoryState {
+impl Vault {
     pub(crate) fn store(&self) -> &Store {
         self.index.store()
     }
@@ -166,6 +166,7 @@ impl RepositoryState {
     }
 }
 
+// TODO: move this to Store
 pub(crate) struct BlockIdsPage {
     pool: db::Pool,
     lower_bound: Option<BlockId>,
@@ -223,6 +224,7 @@ pub(crate) enum BlockRequestMode {
 }
 
 /// Yields all missing block ids referenced from the latest complete snapshot of the given branch.
+// TODO: move this to Store
 fn branch_missing_block_ids<'a>(
     conn: &'a mut db::Connection,
     branch_id: &'a PublicKey,
@@ -738,11 +740,11 @@ mod tests {
         db::create_temp().await.unwrap()
     }
 
-    fn create_state(pool: db::Pool, repo_id: RepositoryId) -> RepositoryState {
+    fn create_state(pool: db::Pool, repo_id: RepositoryId) -> Vault {
         let event_tx = EventSender::new(1);
         let store = Store::new(pool);
         let index = Index::new(store, repo_id, event_tx);
-        RepositoryState {
+        Vault {
             index,
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,

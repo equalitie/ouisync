@@ -10,7 +10,7 @@ use crate::{
     db,
     event::EventSender,
     metrics::Metrics,
-    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
+    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
     store::{self, ReadTransaction, Store, EMPTY_INNER_HASH},
     version_vector::VersionVector,
@@ -500,7 +500,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let (_base_dir, index, write_keys) = setup().await;
-    let repo = RepositoryState {
+    let repo = Vault {
         index,
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Lazy,

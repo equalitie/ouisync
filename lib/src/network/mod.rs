@@ -48,7 +48,7 @@ pub use self::{
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
     deadlock::BlockingMutex,
-    repository::{RepositoryHandle, RepositoryId, RepositoryState},
+    repository::{RepositoryHandle, RepositoryId, Vault},
     state_monitor::StateMonitor,
     sync::uninitialized_watch,
 };
@@ -249,17 +249,17 @@ impl Network {
     /// the future. The repository is automatically deregistered when the returned handle is
     /// dropped.
     pub async fn register(&self, handle: RepositoryHandle) -> Registration {
-        *handle.state.monitor.info_hash.get() =
-            Some(repository_info_hash(handle.state.index.repository_id()));
+        *handle.vault.monitor.info_hash.get() =
+            Some(repository_info_hash(handle.vault.index.repository_id()));
 
-        let metadata = handle.state.metadata();
+        let metadata = handle.vault.metadata();
         let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
         let pex_enabled = metadata.get(PEX_ENABLED).await.unwrap_or(false);
 
         let dht = if dht_enabled {
             Some(
                 self.inner
-                    .start_dht_lookup(repository_info_hash(handle.state.index.repository_id())),
+                    .start_dht_lookup(repository_info_hash(handle.vault.index.repository_id())),
             )
         } else {
             None
@@ -273,10 +273,10 @@ impl Network {
 
         let mut network_state = self.inner.state.lock().unwrap();
 
-        network_state.create_link(handle.state.clone(), &pex);
+        network_state.create_link(handle.vault.clone(), &pex);
 
         let key = network_state.registry.insert(RegistrationHolder {
-            repository: handle.state,
+            vault: handle.vault,
             dht,
             pex,
         });
@@ -323,9 +323,10 @@ impl Registration {
         let holder = &mut state.registry[self.key];
 
         if enabled {
-            holder.dht = Some(self.inner.start_dht_lookup(repository_info_hash(
-                holder.repository.index.repository_id(),
-            )));
+            holder.dht = Some(
+                self.inner
+                    .start_dht_lookup(repository_info_hash(holder.vault.index.repository_id())),
+            );
         } else {
             holder.dht = None;
         }
@@ -354,7 +355,7 @@ impl Registration {
 
     async fn set_metadata_bool(&self, name: &str, value: bool) {
         let metadata = self.inner.state.lock().unwrap().registry[self.key]
-            .repository
+            .vault
             .metadata();
         metadata.set(name, value).await.ok();
     }
@@ -367,7 +368,7 @@ impl Drop for Registration {
         if let Some(holder) = state.registry.try_remove(self.key) {
             if let Some(brokers) = &mut state.message_brokers {
                 for broker in brokers.values_mut() {
-                    broker.destroy_link(holder.repository.local_id);
+                    broker.destroy_link(holder.vault.local_id);
                 }
             }
         }
@@ -375,7 +376,7 @@ impl Drop for Registration {
 }
 
 struct RegistrationHolder {
-    repository: RepositoryState,
+    vault: Vault,
     dht: Option<dht_discovery::LookupRequest>,
     pex: PexController,
 }
@@ -412,7 +413,7 @@ struct State {
 }
 
 impl State {
-    fn create_link(&mut self, repo: RepositoryState, pex: &PexController) {
+    fn create_link(&mut self, repo: Vault, pex: &PexController) {
         if let Some(brokers) = &mut self.message_brokers {
             for broker in brokers.values_mut() {
                 broker.create_link(repo.clone(), pex)
@@ -790,7 +791,7 @@ impl Inner {
                     // lookup but make sure we correctly handle edge cases, for example, when we have
                     // more than one repository shared with the peer.
                     for (_, holder) in &state.registry {
-                        broker.create_link(holder.repository.clone(), &holder.pex);
+                        broker.create_link(holder.vault.clone(), &holder.pex);
                     }
 
                     entry.insert(broker);

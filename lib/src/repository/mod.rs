@@ -3,9 +3,9 @@ mod metadata;
 mod monitor;
 mod params;
 mod reopen_token;
-mod state;
 #[cfg(test)]
 mod tests;
+mod vault;
 mod worker;
 
 pub use self::{
@@ -16,7 +16,7 @@ pub(crate) use self::{
     id::LocalId,
     metadata::quota,
     monitor::RepositoryMonitor,
-    state::{BlockRequestMode, RepositoryState},
+    vault::{BlockRequestMode, Vault},
 };
 
 use crate::{
@@ -174,7 +174,7 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        let state = RepositoryState {
+        let vault = Vault {
             index,
             block_tracker: BlockTracker::new(),
             block_request_mode,
@@ -183,13 +183,13 @@ impl Repository {
         };
 
         tracing::debug!(
-            parent: state.monitor.span(),
+            parent: vault.monitor.span(),
             access = ?secrets.access_mode(),
             writer_id = ?this_writer_id
         );
 
         let shared = Arc::new(Shared {
-            state,
+            vault,
             this_writer_id,
             secrets,
             branch_shared: BranchShared::new(),
@@ -203,13 +203,13 @@ impl Repository {
 
         let worker_handle = scoped_task::spawn(
             worker::run(shared.clone(), local_branch)
-                .instrument(shared.state.monitor.span().clone()),
+                .instrument(shared.vault.monitor.span().clone()),
         );
         let worker_handle = BlockingMutex::new(Some(worker_handle));
 
         let progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.state.clone())
-                .instrument(shared.state.monitor.span().clone()),
+            report_sync_progress(shared.vault.clone())
+                .instrument(shared.vault.monitor.span().clone()),
         );
         let progress_reporter_handle = BlockingMutex::new(Some(progress_reporter_handle));
 
@@ -415,33 +415,33 @@ impl Repository {
     /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are
     /// stored inside the repository but not synced to other replicas.
     pub fn metadata(&self) -> Metadata {
-        self.shared.state.metadata()
+        self.shared.vault.metadata()
     }
 
     /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
     pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
-        self.shared.state.set_quota(quota).await
+        self.shared.vault.set_quota(quota).await
     }
 
     /// Get the storage quota in bytes or `None` if no quota is set.
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
-        self.shared.state.quota().await
+        self.shared.vault.quota().await
     }
 
     /// Get the total size of the data stored in this repository.
     pub async fn size(&self) -> Result<StorageSize> {
-        self.shared.state.size().await
+        self.shared.vault.size().await
     }
 
     pub fn handle(&self) -> RepositoryHandle {
         RepositoryHandle {
-            state: self.shared.state.clone(),
+            vault: self.shared.vault.clone(),
         }
     }
 
     /// Get the state monitor node of this repository.
     pub fn monitor(&self) -> &StateMonitor {
-        self.shared.state.monitor.node()
+        self.shared.vault.monitor.node()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -613,7 +613,7 @@ impl Repository {
 
     /// Subscribe to event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.state.index.subscribe()
+        self.shared.vault.index.subscribe()
     }
 
     /// Gets the access mode this repository is opened in.
@@ -624,7 +624,7 @@ impl Repository {
     /// Gets the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
-        self.shared.state.sync_progress().await
+        self.shared.vault.sync_progress().await
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -710,7 +710,7 @@ impl Repository {
             }
         }
 
-        self.shared.state.store().close().await?;
+        self.shared.vault.store().close().await?;
 
         Ok(())
     }
@@ -753,26 +753,26 @@ impl Repository {
 
         print.display(&"Index");
         let print = print.indent();
-        self.shared.state.index.debug_print(print).await;
+        self.shared.vault.index.debug_print(print).await;
     }
 
     /// Returns the total number of blocks in this repository. This is useful for diagnostics and
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
-        self.shared.state.count_blocks().await
+        self.shared.vault.count_blocks().await
     }
 
     fn db(&self) -> &db::Pool {
-        self.shared.state.store().raw()
+        self.shared.vault.store().raw()
     }
 }
 
 pub struct RepositoryHandle {
-    pub(crate) state: RepositoryState,
+    pub(crate) vault: Vault,
 }
 
 struct Shared {
-    state: RepositoryState,
+    vault: Vault,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
     branch_shared: BranchShared,
@@ -795,15 +795,15 @@ impl Shared {
 
         Ok(Branch::new(
             id,
-            self.state.store().clone(),
+            self.vault.store().clone(),
             keys,
             self.branch_shared.clone(),
-            self.state.index.notify().clone(),
+            self.vault.index.notify().clone(),
         ))
     }
 
     pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.state
+        self.vault
             .store()
             .acquire_read()
             .await?
@@ -833,7 +833,7 @@ async fn generate_and_store_writer_id(
     Ok(writer_id)
 }
 
-async fn report_sync_progress(state: RepositoryState) {
+async fn report_sync_progress(state: Vault) {
     let mut prev_progress = Progress { value: 0, total: 0 };
     let mut event_rx = ThrottleReceiver::new(state.index.subscribe(), Duration::from_secs(1));
 

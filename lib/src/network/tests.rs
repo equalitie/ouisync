@@ -14,7 +14,7 @@ use crate::{
         Index, SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
-    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
+    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
     store::{RootNode, Store},
     test_utils,
@@ -370,7 +370,7 @@ async fn failed_block_other_peer() {
 async fn create_repository<R: Rng + CryptoRng>(
     rng: &mut R,
     write_keys: &Keypair,
-) -> (TempDir, RepositoryState, PublicKey) {
+) -> (TempDir, Vault, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
     let store = Store::new(db);
     let writer_id = PublicKey::generate(rng);
@@ -380,7 +380,7 @@ async fn create_repository<R: Rng + CryptoRng>(
     let index = Index::new(store, repository_id, event_tx);
     // index.create_branch(writer_id, write_keys).await.unwrap();
 
-    let state = RepositoryState {
+    let state = Vault {
         index,
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Greedy,
@@ -608,7 +608,7 @@ type ClientData = (
     mpsc::Sender<Response>,
 );
 
-fn create_server(repo: RepositoryState) -> ServerData {
+fn create_server(repo: Vault) -> ServerData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let server = Server::new(repo, send_tx, recv_rx);
@@ -616,7 +616,7 @@ fn create_server(repo: RepositoryState) -> ServerData {
     (server, send_rx, recv_tx)
 }
 
-fn create_client(repo: RepositoryState) -> ClientData {
+fn create_client(repo: Vault) -> ClientData {
     let (send_tx, send_rx) = mpsc::channel(1);
     let (recv_tx, recv_rx) = mpsc::channel(CAPACITY);
     let client = Client::new(

@@ -27,7 +27,7 @@ async fn root_directory_always_exists() {
 async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
     let branch = repo.local_branch().unwrap();
     repo.shared
-        .state
+        .vault
         .store()
         .acquire_read()
         .await
