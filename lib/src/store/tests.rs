@@ -1,5 +1,5 @@
 use super::*;
-use crate::{block::BLOCK_SIZE, crypto::cipher::SecretKey, locator::Locator, test_utils};
+use crate::{crypto::cipher::SecretKey, locator::Locator, test_utils, BLOCK_SIZE};
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
     rngs::StdRng,
@@ -130,51 +130,113 @@ async fn remove_locator() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn write_and_read_block() {
+async fn remove_block() {
     let (_base_dir, store) = setup().await;
 
-    let content = random_block_content();
-    let id = BlockId::from_content(&content);
-    let nonce = BlockNonce::default();
+    let read_key = SecretKey::random();
+    let write_keys = Keypair::random();
+
+    let branch_id_0 = PublicKey::random();
+    let branch_id_1 = PublicKey::random();
+
+    let block_id = rand::random();
+    let buffer = vec![0; BLOCK_SIZE];
 
     let mut tx = store.begin_write().await.unwrap();
 
-    tx.write_block(&id, &content, &nonce).await.unwrap();
+    tx.write_block(&block_id, &buffer, &BlockNonce::default())
+        .await
+        .unwrap();
 
-    let mut buffer = vec![0; BLOCK_SIZE];
-    tx.read_block(&id, &mut buffer).await.unwrap();
+    let locator0 = Locator::head(rand::random());
+    let locator0 = locator0.encode(&read_key);
+    tx.link_block(
+        &branch_id_0,
+        &locator0,
+        &block_id,
+        SingleBlockPresence::Present,
+        &write_keys,
+    )
+    .await
+    .unwrap();
 
-    assert_eq!(buffer, content);
+    let locator1 = Locator::head(rand::random());
+    let locator1 = locator1.encode(&read_key);
+    tx.link_block(
+        &branch_id_1,
+        &locator1,
+        &block_id,
+        SingleBlockPresence::Present,
+        &write_keys,
+    )
+    .await
+    .unwrap();
+
+    assert!(tx.block_exists(&block_id).await.unwrap());
+
+    tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
+        .await
+        .unwrap();
+    assert!(tx.block_exists(&block_id).await.unwrap());
+
+    tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
+        .await
+        .unwrap();
+    assert!(!tx.block_exists(&block_id).await.unwrap(),);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn try_read_missing_block() {
+async fn overwrite_block() {
     let (_base_dir, store) = setup().await;
+    let mut rng = rand::thread_rng();
+
+    let read_key = SecretKey::random();
+    let write_keys = Keypair::random();
+
+    let branch_id = PublicKey::random();
+
+    let locator = Locator::head(rng.gen());
+    let locator = locator.encode(&read_key);
 
     let mut buffer = vec![0; BLOCK_SIZE];
-    let id = BlockId::from_content(&buffer);
 
-    let mut reader = store.acquire_read().await.unwrap();
-
-    match reader.read_block(&id, &mut buffer).await {
-        Err(Error::BlockNotFound) => (),
-        Err(error) => panic!("unexpected error: {:?}", error),
-        Ok(_) => panic!("unexpected success"),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn try_write_existing_block() {
-    let (_base_dir, store) = setup().await;
-
-    let content0 = random_block_content();
-    let id = BlockId::from_content(&content0);
-    let nonce = BlockNonce::default();
+    rng.fill(&mut buffer[..]);
+    let id0 = BlockId::from_content(&buffer);
 
     let mut tx = store.begin_write().await.unwrap();
 
-    tx.write_block(&id, &content0, &nonce).await.unwrap();
-    tx.write_block(&id, &content0, &nonce).await.unwrap();
+    tx.link_block(
+        &branch_id,
+        &locator,
+        &id0,
+        SingleBlockPresence::Present,
+        &write_keys,
+    )
+    .await
+    .unwrap();
+    tx.write_block(&id0, &buffer, &rng.gen()).await.unwrap();
+
+    assert!(tx.block_exists(&id0).await.unwrap());
+    assert_eq!(tx.count_blocks().await.unwrap(), 1);
+
+    rng.fill(&mut buffer[..]);
+    let id1 = BlockId::from_content(&buffer);
+
+    tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
+
+    tx.link_block(
+        &branch_id,
+        &locator,
+        &id1,
+        SingleBlockPresence::Present,
+        &write_keys,
+    )
+    .await
+    .unwrap();
+
+    assert!(!tx.block_exists(&id0).await.unwrap());
+    assert!(tx.block_exists(&id1).await.unwrap());
+    assert_eq!(tx.count_blocks().await.unwrap(), 1);
 }
 
 #[ignore]
@@ -385,12 +447,6 @@ async fn setup() -> (TempDir, Store) {
     let (temp_dir, pool) = db::create_temp().await.unwrap();
     let store = Store::new(pool);
     (temp_dir, store)
-}
-
-fn random_block_content() -> Vec<u8> {
-    let mut content = vec![0; BLOCK_SIZE];
-    rand::thread_rng().fill(&mut content[..]);
-    content
 }
 
 fn random_head_locator() -> Locator {

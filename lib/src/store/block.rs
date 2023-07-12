@@ -149,3 +149,68 @@ pub(super) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bo
         .await?
         .is_some())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_and_read_block() {
+        let (_base_dir, pool) = setup().await;
+
+        let content = random_block_content();
+        let id = BlockId::from_content(&content);
+        let nonce = BlockNonce::default();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        write(&mut tx, &id, &content, &nonce).await.unwrap();
+
+        let mut buffer = vec![0; BLOCK_SIZE];
+        read(&mut tx, &id, &mut buffer).await.unwrap();
+
+        assert_eq!(buffer, content);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn try_read_missing_block() {
+        let (_base_dir, pool) = setup().await;
+
+        let mut buffer = vec![0; BLOCK_SIZE];
+        let id = BlockId::from_content(&buffer);
+
+        let mut conn = pool.acquire().await.unwrap();
+
+        match read(&mut conn, &id, &mut buffer).await {
+            Err(Error::BlockNotFound) => (),
+            Err(error) => panic!("unexpected error: {:?}", error),
+            Ok(_) => panic!("unexpected success"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn try_write_existing_block() {
+        let (_base_dir, pool) = setup().await;
+
+        let content0 = random_block_content();
+        let id = BlockId::from_content(&content0);
+        let nonce = BlockNonce::default();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        write(&mut tx, &id, &content0, &nonce).await.unwrap();
+        write(&mut tx, &id, &content0, &nonce).await.unwrap();
+    }
+
+    async fn setup() -> (TempDir, db::Pool) {
+        db::create_temp().await.unwrap()
+    }
+
+    fn random_block_content() -> Vec<u8> {
+        let mut content = vec![0; BLOCK_SIZE];
+        rand::thread_rng().fill(&mut content[..]);
+        content
+    }
+}

@@ -68,12 +68,12 @@ async fn receive_valid_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_invalid_proof() {
-    let (_base_dir, index, _) = setup().await;
+    let (_base_dir, vault, _) = setup().await;
     let remote_id = PublicKey::random();
 
     // Receive invalid root node from the remote replica.
     let invalid_write_keys = Keypair::random();
-    let status = index
+    let status = vault
         .receive_root_node(
             Proof::new(
                 remote_id,
@@ -90,7 +90,7 @@ async fn receive_root_node_with_invalid_proof() {
     assert!(!status.request_children);
 
     // The invalid root was not written to the db.
-    assert!(index
+    assert!(vault
         .store()
         .acquire_read()
         .await
@@ -104,10 +104,10 @@ async fn receive_root_node_with_invalid_proof() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_empty_version_vector() {
-    let (_base_dir, index, write_keys) = setup().await;
+    let (_base_dir, vault, write_keys) = setup().await;
     let remote_id = PublicKey::random();
 
-    index
+    vault
         .receive_root_node(
             Proof::new(
                 remote_id,
@@ -121,7 +121,7 @@ async fn receive_root_node_with_empty_version_vector() {
         .await
         .unwrap();
 
-    assert!(index
+    assert!(vault
         .store()
         .acquire_read()
         .await
@@ -135,7 +135,7 @@ async fn receive_root_node_with_empty_version_vector() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_duplicate_root_node() {
-    let (_base_dir, index, write_keys) = setup().await;
+    let (_base_dir, vault, write_keys) = setup().await;
     let remote_id = PublicKey::random();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -147,19 +147,19 @@ async fn receive_duplicate_root_node() {
     );
 
     // Receive root node for the first time.
-    index
+    vault
         .receive_root_node(proof.clone().into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
     // Receiving it again is a no-op.
-    index
+    vault
         .receive_root_node(proof.into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
     assert_eq!(
-        index
+        vault
             .store()
             .acquire_read()
             .await
@@ -174,7 +174,7 @@ async fn receive_duplicate_root_node() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_root_node_with_existing_hash() {
-    let (_base_dir, index, write_keys) = setup().await;
+    let (_base_dir, vault, write_keys) = setup().await;
     let mut rng = rand::thread_rng();
 
     let local_id = PublicKey::generate(&mut rng);
@@ -188,7 +188,7 @@ async fn receive_root_node_with_existing_hash() {
     let block_nonce = rng.gen();
     let locator = rng.gen();
 
-    let mut tx = index.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_write().await.unwrap();
     tx.link_block(
         &local_id,
         &locator,
@@ -204,7 +204,7 @@ async fn receive_root_node_with_existing_hash() {
     tx.commit().await.unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
-    let root = index
+    let root = vault
         .store()
         .acquire_read()
         .await
@@ -220,12 +220,12 @@ async fn receive_root_node_with_existing_hash() {
     let proof = Proof::new(remote_id, root_vv, root_hash, &write_keys);
 
     // TODO: assert this returns false as we shouldn't need to download further nodes
-    index
+    vault
         .receive_root_node(proof.into(), MultiBlockPresence::None)
         .await
         .unwrap();
 
-    assert!(index
+    assert!(vault
         .store()
         .acquire_read()
         .await
@@ -264,7 +264,7 @@ mod receive_and_create_root_node {
 
     async fn case(order: TaskOrder) {
         let mut rng = StdRng::seed_from_u64(0);
-        let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+        let (_base_dir, vault, write_keys) = setup_with_rng(&mut rng).await;
 
         let local_id = PublicKey::generate(&mut rng);
 
@@ -279,7 +279,7 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = index.store().begin_write().await.unwrap();
+        let mut tx = vault.store().begin_write().await.unwrap();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
@@ -293,7 +293,7 @@ mod receive_and_create_root_node {
 
         tx.commit().await.unwrap();
 
-        let root_node_0 = index
+        let root_node_0 = vault
             .store()
             .acquire_read()
             .await
@@ -306,7 +306,7 @@ mod receive_and_create_root_node {
 
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
-        let mut tx = index.store().begin_write().await.unwrap();
+        let mut tx = vault.store().begin_write().await.unwrap();
         tx.receive_block(&block_1.data, &block_1.nonce)
             .await
             .unwrap();
@@ -316,7 +316,7 @@ mod receive_and_create_root_node {
         // block presences are different (and both are `Some`) so the received node is considered
         // up-to-date.
         let remote_task = async {
-            index
+            vault
                 .receive_root_node(
                     root_node_0.proof.clone().into(),
                     root_node_0.summary.block_presence,
@@ -328,7 +328,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = index.store().begin_write().await.unwrap();
+            let mut tx = vault.store().begin_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -363,7 +363,7 @@ mod receive_and_create_root_node {
             }
         }
 
-        let root_node_1 = index
+        let root_node_1 = vault
             .store()
             .acquire_read()
             .await
