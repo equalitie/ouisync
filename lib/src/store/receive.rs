@@ -6,12 +6,36 @@ use super::{
     root_node,
 };
 use crate::{
-    crypto::Hash,
+    crypto::{sign::PublicKey, Hash},
     db,
     future::try_collect_into,
-    index::{update_summaries, NodeState, ReceiveStatus, UpdateSummaryReason},
+    index::{update_summaries, NodeState, UpdateSummaryReason},
     storage_size::StorageSize,
 };
+use sqlx::Row;
+
+/// Status of receiving nodes from remote replica.
+#[derive(Debug)]
+pub(super) struct ReceiveStatus {
+    /// Whether any of the snapshots were already approved.
+    pub old_approved: bool,
+    /// List of branches whose snapshots have been approved.
+    pub new_approved: Vec<PublicKey>,
+}
+
+/// Does a parent node (root or inner) with the given hash exist?
+pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool, Error> {
+    Ok(sqlx::query(
+        "SELECT
+             EXISTS(SELECT 0 FROM snapshot_root_nodes  WHERE hash = ?) OR
+             EXISTS(SELECT 0 FROM snapshot_inner_nodes WHERE hash = ?)",
+    )
+    .bind(hash)
+    .bind(hash)
+    .fetch_one(conn)
+    .await?
+    .get(0))
+}
 
 pub(super) async fn finalize(
     tx: &mut db::WriteTransaction,
@@ -74,7 +98,7 @@ pub(super) async fn finalize(
 mod tests {
     use super::super::{
         inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH},
-        leaf_node::{LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
+        leaf_node::{self, LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
         root_node,
     };
     use super::*;
@@ -128,7 +152,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        nodes.save(&mut tx, &hash).await.unwrap();
+        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -147,7 +171,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        nodes.save(&mut tx, &hash).await.unwrap();
+        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -165,7 +189,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        nodes.save(&mut tx, &hash).await.unwrap();
+        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -356,10 +380,7 @@ mod tests {
         let mut unsaved_leaves = snapshot.leaf_count();
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            nodes
-                .clone()
-                .into_missing()
-                .save(&mut tx, parent_hash)
+            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
             unsaved_leaves -= nodes.len();
@@ -444,13 +465,9 @@ mod tests {
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            nodes
-                .clone()
-                .into_missing()
-                .save(&mut tx, parent_hash)
+            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
-
             index::update_summaries(&mut tx, vec![*parent_hash], UpdateSummaryReason::Other)
                 .await
                 .unwrap();

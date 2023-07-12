@@ -38,6 +38,23 @@ impl BranchItem for RootNode {
     }
 }
 
+/// Status of receiving a root node
+#[derive(Default)]
+pub(crate) struct ReceiveStatus {
+    /// List of branches whose snapshots became approved.
+    pub new_approved: Vec<PublicKey>,
+    /// Should we request the children of the incoming node?
+    pub request_children: bool,
+}
+
+/// Decide what to do with an incoming root node.
+pub(super) struct ReceiveAction {
+    /// Should we insert the incoming node to the db?
+    pub insert: bool,
+    /// Should we request the children of the incoming node?
+    pub request_children: bool,
+}
+
 /// Creates a root node with the specified proof.
 ///
 /// The version vector must be greater than the version vector of any currently existing root
@@ -397,6 +414,82 @@ pub(super) fn load_writer_ids<'a>(
         .fetch(conn)
         .map_ok(|row| row.get(0))
         .err_into()
+}
+
+pub(super) async fn decide_action(
+    tx: &mut db::WriteTransaction,
+    new_proof: &Proof,
+    new_block_presence: &MultiBlockPresence,
+) -> Result<ReceiveAction, Error> {
+    let mut action = ReceiveAction {
+        insert: true,
+        request_children: true,
+    };
+
+    let mut old_nodes = load_all_in_any_state(tx);
+    while let Some(old_node) = old_nodes.try_next().await? {
+        match new_proof
+            .version_vector
+            .partial_cmp(&old_node.proof.version_vector)
+        {
+            Some(Ordering::Less) => {
+                // The incoming node is outdated compared to at least one existing node - discard
+                // it.
+                action.insert = false;
+                action.request_children = false;
+            }
+            Some(Ordering::Equal) => {
+                // The incoming node has the same version vector as one of the existing nodes.
+                // If the hashes are also equal, there is no point inserting it but if the incoming
+                // summary is potentially more up-to-date than the exising one, we still want to
+                // request the children. Otherwise we discard it.
+                if new_proof.hash == old_node.proof.hash {
+                    action.insert = false;
+
+                    // NOTE: `is_outdated` is not antisymmetric, so we can't replace this condition
+                    // with `new_summary.is_outdated(&old_node.summary)`.
+                    if !old_node
+                        .summary
+                        .block_presence
+                        .is_outdated(new_block_presence)
+                    {
+                        action.request_children = false;
+                    }
+                } else {
+                    // NOTE: Currently it's possible for two branches to have the same vv but
+                    // different hash so we need to accept them.
+                    // TODO: When https://github.com/equalitie/ouisync/issues/113 is fixed we can
+                    // reject them.
+                    tracing::trace!(
+                        vv = ?old_node.proof.version_vector,
+                        old_hash = ?old_node.proof.hash,
+                        new_hash = ?new_proof.hash,
+                        "received root node with same vv but different hash"
+                    );
+                }
+            }
+            Some(Ordering::Greater) => (),
+            None => {
+                if new_proof.writer_id == old_node.proof.writer_id {
+                    tracing::warn!(
+                        old_vv = ?old_node.proof.version_vector,
+                        new_vv = ?new_proof.version_vector,
+                        writer_id = ?new_proof.writer_id,
+                        "received root node invalid: broken invariant - concurrency within branch is not allowed"
+                    );
+
+                    action.insert = false;
+                    action.request_children = false;
+                }
+            }
+        }
+
+        if !action.insert && !action.request_children {
+            break;
+        }
+    }
+
+    Ok(action)
 }
 
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the

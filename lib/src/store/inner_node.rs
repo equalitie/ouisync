@@ -1,9 +1,10 @@
 use super::{
     error::Error,
     leaf_node::{self, LeafNodeSet, EMPTY_LEAF_HASH},
+    ReceiveFilter,
 };
 use crate::{
-    crypto::{Digest, Hash, Hashable},
+    crypto::{sign::PublicKey, Digest, Hash, Hashable},
     db,
     index::Summary,
 };
@@ -24,6 +25,14 @@ pub(crate) const INNER_LAYER_COUNT: usize = 3;
 pub(crate) struct InnerNode {
     pub hash: Hash,
     pub summary: Summary,
+}
+
+#[derive(Default)]
+pub(crate) struct ReceiveStatus {
+    /// List of branches whose snapshots have been approved.
+    pub new_approved: Vec<PublicKey>,
+    /// Which of the received nodes should we request the children of.
+    pub request_children: Vec<InnerNode>,
 }
 
 /// Load all inner nodes with the specified parent hash.
@@ -65,6 +74,29 @@ pub(super) async fn load_children(
     .try_collect()
     .await
     .map_err(From::from)
+}
+
+pub(super) async fn load(
+    conn: &mut db::Connection,
+    hash: &Hash,
+) -> Result<Option<InnerNode>, Error> {
+    let node = sqlx::query(
+        "SELECT state, block_presence
+         FROM snapshot_inner_nodes
+         WHERE hash = ?",
+    )
+    .bind(hash)
+    .fetch_optional(conn)
+    .await?
+    .map(|row| InnerNode {
+        hash: *hash,
+        summary: Summary {
+            state: row.get(0),
+            block_presence: row.get(1),
+        },
+    });
+
+    Ok(node)
 }
 
 /// Saves this inner node into the db unless it already exists.
@@ -167,34 +199,95 @@ pub(super) async fn update_summaries(
     Ok(())
 }
 
+pub(super) async fn inherit_summaries(
+    conn: &mut db::Connection,
+    nodes: &mut InnerNodeMap,
+) -> Result<(), Error> {
+    for (_, node) in nodes {
+        inherit_summary(conn, node).await?;
+    }
+
+    Ok(())
+}
+
+/// If the summary of this node is `INCOMPLETE` and there exists another node with the same
+/// hash as this one, copy the summary of that node into this node.
+///
+/// Note this is hack/workaround due to the database schema currently not being fully
+/// normalized. That is, when there is a node that has more than one parent, we actually
+/// represent it as multiple records, each with distinct parent_hash. The summaries of those
+/// records need to be identical (because they conceptually represent a single node) so we need
+/// this function to copy them manually.
+/// Ideally, we should change the db schema to be normalized, which in this case would mean
+/// to have only one record per node and to represent the parent-child relation using a
+/// separate db table (many-to-many relation).
+async fn inherit_summary(conn: &mut db::Connection, node: &mut InnerNode) -> Result<(), Error> {
+    if node.summary != Summary::INCOMPLETE {
+        return Ok(());
+    }
+
+    let summary = sqlx::query(
+        "SELECT state, block_presence
+             FROM snapshot_inner_nodes
+             WHERE hash = ?",
+    )
+    .bind(&node.hash)
+    .fetch_optional(conn)
+    .await?
+    .map(|row| Summary {
+        state: row.get(0),
+        block_presence: row.get(1),
+    });
+
+    if let Some(summary) = summary {
+        node.summary = summary;
+    }
+
+    Ok(())
+}
+
+/// Filter nodes that the remote replica has some blocks in that the local one is missing.
+pub(super) async fn filter_nodes_with_new_blocks(
+    tx: &mut db::WriteTransaction,
+    remote_nodes: &InnerNodeMap,
+    receive_filter: &ReceiveFilter,
+) -> Result<Vec<InnerNode>, Error> {
+    let mut output = Vec::with_capacity(remote_nodes.len());
+
+    for (_, remote_node) in remote_nodes {
+        if !receive_filter
+            .check(tx, &remote_node.hash, &remote_node.summary.block_presence)
+            .await?
+        {
+            continue;
+        }
+
+        let local_node = load(tx, &remote_node.hash).await?;
+        let insert = if let Some(local_node) = local_node {
+            local_node.summary.is_outdated(&remote_node.summary)
+        } else {
+            // node not present locally - we implicitly treat this as if the local replica
+            // had zero blocks under this node unless the remote node is empty, in that
+            // case we ignore it.
+            !remote_node.is_empty()
+        };
+
+        if insert {
+            output.push(*remote_node);
+        }
+    }
+
+    Ok(output)
+}
+
 impl InnerNode {
     /// Creates new unsaved inner node with the specified hash.
     pub fn new(hash: Hash, summary: Summary) -> Self {
         Self { hash, summary }
     }
 
-    /// Load the inner node with the specified hash
-    pub async fn load(conn: &mut db::Connection, hash: &Hash) -> Result<Option<Self>, Error> {
-        let node = sqlx::query(
-            "SELECT state, block_presence
-             FROM snapshot_inner_nodes
-             WHERE hash = ?",
-        )
-        .bind(hash)
-        .fetch_optional(conn)
-        .await?
-        .map(|row| Self {
-            hash: *hash,
-            summary: Summary {
-                state: row.get(0),
-                block_presence: row.get(1),
-            },
-        });
-
-        Ok(node)
-    }
-
     /// Loads parent hashes of all inner nodes with the specifed hash.
+    #[deprecated]
     pub fn load_parent_hashes<'a>(
         conn: &'a mut db::Connection,
         hash: &'a Hash,
@@ -214,42 +307,6 @@ impl InnerNode {
 
     pub fn is_empty(&self) -> bool {
         self.hash == *EMPTY_INNER_HASH || self.hash == *EMPTY_LEAF_HASH
-    }
-
-    /// If the summary of this node is `INCOMPLETE` and there exists another node with the same
-    /// hash as this one, copy the summary of that node into this node.
-    ///
-    /// Note this is hack/workaround due to the database schema currently not being fully
-    /// normalized. That is, when there is a node that has more than one parent, we actually
-    /// represent it as multiple records, each with distinct parent_hash. The summaries of those
-    /// records need to be identical (because they conceptually represent a single node) so we need
-    /// this function to copy them manually.
-    /// Ideally, we should change the db schema to be normalized, which in this case would mean
-    /// to have only one record per node and to represent the parent-child relation using a
-    /// separate db table (many-to-many relation).
-    async fn inherit_summary(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
-        if self.summary != Summary::INCOMPLETE {
-            return Ok(());
-        }
-
-        let summary = sqlx::query(
-            "SELECT state, block_presence
-             FROM snapshot_inner_nodes
-             WHERE hash = ?",
-        )
-        .bind(&self.hash)
-        .fetch_optional(conn)
-        .await?
-        .map(|row| Summary {
-            state: row.get(0),
-            block_presence: row.get(1),
-        });
-
-        if let Some(summary) = summary {
-            self.summary = summary;
-        }
-
-        Ok(())
     }
 }
 
@@ -280,18 +337,16 @@ impl InnerNodeMap {
         InnerNodeMapIter(self.0.iter())
     }
 
+    pub fn iter_mut(&mut self) -> InnerNodeMapIterMut {
+        InnerNodeMapIterMut(self.0.iter_mut())
+    }
+
     pub fn insert(&mut self, bucket: u8, node: InnerNode) -> Option<InnerNode> {
         self.0.insert(bucket, node)
     }
 
     pub fn remove(&mut self, bucket: u8) -> Option<InnerNode> {
         self.0.remove(&bucket)
-    }
-
-    /// Atomically saves all nodes in this map to the db.
-    #[deprecated]
-    pub async fn save(&self, tx: &mut db::WriteTransaction, parent: &Hash) -> Result<(), Error> {
-        save_all(tx, self, parent).await
     }
 
     /// Returns the same nodes but with the `state` and `block_presence` fields changed to
@@ -302,14 +357,6 @@ impl InnerNodeMap {
         }
 
         self
-    }
-
-    pub async fn inherit_summaries(&mut self, conn: &mut db::Connection) -> Result<(), Error> {
-        for node in self.0.values_mut() {
-            node.inherit_summary(conn).await?;
-        }
-
-        Ok(())
     }
 }
 
@@ -349,6 +396,15 @@ impl<'a> IntoIterator for &'a InnerNodeMap {
     }
 }
 
+impl<'a> IntoIterator for &'a mut InnerNodeMap {
+    type Item = (u8, &'a mut InnerNode);
+    type IntoIter = InnerNodeMapIterMut<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 impl Hashable for InnerNodeMap {
     fn update_hash<S: Digest>(&self, state: &mut S) {
         b"inner".update_hash(state); // to disambiguate it from hash of leaf nodes
@@ -365,6 +421,16 @@ impl<'a> Iterator for InnerNodeMapIter<'a> {
     type Item = (u8, &'a InnerNode);
 
     fn next(&mut self) -> Option<(u8, &'a InnerNode)> {
+        self.0.next().map(|(bucket, node)| (*bucket, node))
+    }
+}
+
+pub(crate) struct InnerNodeMapIterMut<'a>(btree_map::IterMut<'a, u8, InnerNode>);
+
+impl<'a> Iterator for InnerNodeMapIterMut<'a> {
+    type Item = (u8, &'a mut InnerNode);
+
+    fn next(&mut self) -> Option<(u8, &'a mut InnerNode)> {
         self.0.next().map(|(bucket, node)| (*bucket, node))
     }
 }

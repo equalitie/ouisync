@@ -15,12 +15,12 @@ use crate::{
     block::{BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{
         sign::{Keypair, PublicKey},
-        Hash,
+        CacheHash, Hash, Hashable,
     },
     db,
     index::{
-        update_summaries, Proof, ReceiveStatus, SingleBlockPresence, Summary, UpdateSummaryReason,
-        VersionVectorOp,
+        update_summaries, MultiBlockPresence, Proof, SingleBlockPresence, Summary,
+        UpdateSummaryReason, VersionVectorOp,
     },
     storage_size::StorageSize,
 };
@@ -33,7 +33,10 @@ use std::{
 use tracing::Instrument;
 
 pub use error::Error;
+pub(crate) use inner_node::ReceiveStatus as InnerNodeReceiveStatus;
+pub(crate) use leaf_node::ReceiveStatus as LeafNodeReceiveStatus;
 pub(crate) use receive_filter::ReceiveFilter;
+pub(crate) use root_node::ReceiveStatus as RootNodeReceiveStatus;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
@@ -227,12 +230,6 @@ impl Reader {
 
     pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
         root_node::load_all(self.raw_mut())
-    }
-
-    pub fn load_root_nodes_in_any_state(
-        &mut self,
-    ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-        root_node::load_all_in_any_state(self.raw_mut())
     }
 
     #[cfg(test)]
@@ -483,26 +480,107 @@ impl WriteTransaction {
     pub async fn receive_root_node(
         &mut self,
         proof: Proof,
-    ) -> Result<(RootNode, ReceiveStatus), Error> {
+        block_presence: MultiBlockPresence,
+    ) -> Result<RootNodeReceiveStatus, Error> {
         let hash = proof.hash;
-        let node = root_node::create(self.raw_mut(), proof, Summary::INCOMPLETE).await?;
 
-        // Ignoring quota here because if the snapshot became complete by receiving this root
-        // node it means that we already have all the other nodes and so the quota validation
-        // already took place.
-        let status = receive::finalize(self.raw_mut(), hash, None).await?;
+        // Make sure the loading of the existing nodes and the potential creation of the new node
+        // happens atomically. Otherwise we could conclude the incoming node is up-to-date but
+        // just before we start inserting it another snapshot might get created locally and the
+        // incoming node might become outdated. But because we already concluded it's up-to-date,
+        // we end up inserting it anyway which breaks the invariant that a node inserted later must
+        // be happens-after any node inserted earlier in the same branch.
 
-        Ok((node, status))
+        // Determine further actions by comparing the incoming node against the existing nodes:
+        let action = root_node::decide_action(self.raw_mut(), &proof, &block_presence).await?;
+
+        if action.insert {
+            let node = root_node::create(self.raw_mut(), proof, Summary::INCOMPLETE).await?;
+
+            // Ignoring quota here because if the snapshot became complete by receiving this root
+            // node it means that we already have all the other nodes and so the quota validation
+            // already took place.
+            let status = receive::finalize(self.raw_mut(), hash, None).await?;
+
+            tracing::debug!(
+                branch_id = ?node.proof.writer_id,
+                hash = ?node.proof.hash,
+                vv = ?node.proof.version_vector,
+                "snapshot started"
+            );
+
+            Ok(RootNodeReceiveStatus {
+                new_approved: status.new_approved,
+                request_children: action.request_children,
+            })
+        } else {
+            Ok(RootNodeReceiveStatus {
+                new_approved: Vec::new(),
+                request_children: action.request_children,
+            })
+        }
     }
 
-    /// Finalizes receiving nodes from a remote replica.
-    // TODO: remove pub
-    pub async fn finalize_receive(
+    /// Write inner nodes received from a remote replica.
+    pub async fn receive_inner_nodes(
         &mut self,
-        hash: Hash,
+        nodes: CacheHash<InnerNodeMap>,
+        receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
-    ) -> Result<ReceiveStatus, Error> {
-        receive::finalize(self.raw_mut(), hash, quota).await
+    ) -> Result<InnerNodeReceiveStatus, Error> {
+        let parent_hash = nodes.hash();
+
+        if !receive::parent_exists(self.raw_mut(), &parent_hash).await? {
+            return Ok(InnerNodeReceiveStatus::default());
+        }
+
+        let request_children =
+            inner_node::filter_nodes_with_new_blocks(self.raw_mut(), &nodes, receive_filter)
+                .await?;
+
+        let mut nodes = nodes.into_inner().into_incomplete();
+        inner_node::inherit_summaries(self.raw_mut(), &mut nodes).await?;
+        inner_node::save_all(self.raw_mut(), &nodes, &parent_hash).await?;
+
+        let status = receive::finalize(self.raw_mut(), parent_hash, quota).await?;
+
+        Ok(InnerNodeReceiveStatus {
+            new_approved: status.new_approved,
+            request_children,
+        })
+    }
+
+    /// Receive leaf nodes from other replica and store them into the db.
+    /// Returns the ids of the blocks that the remote replica has but the local one has not.
+    /// Also returns the receive status.
+    pub async fn receive_leaf_nodes(
+        &mut self,
+        nodes: CacheHash<LeafNodeSet>,
+        quota: Option<StorageSize>,
+    ) -> Result<LeafNodeReceiveStatus, Error> {
+        let parent_hash = nodes.hash();
+
+        if !receive::parent_exists(self.raw_mut(), &parent_hash).await? {
+            return Ok(LeafNodeReceiveStatus::default());
+        }
+
+        let request_blocks =
+            leaf_node::filter_nodes_with_new_blocks(self.raw_mut(), &nodes).await?;
+
+        leaf_node::save_all(
+            self.raw_mut(),
+            &nodes.into_inner().into_missing(),
+            &parent_hash,
+        )
+        .await?;
+
+        let status = receive::finalize(self.raw_mut(), parent_hash, quota).await?;
+
+        Ok(LeafNodeReceiveStatus {
+            old_approved: status.old_approved,
+            new_approved: status.new_approved,
+            request_blocks,
+        })
     }
 
     pub async fn commit(self) -> Result<(), Error> {
@@ -541,7 +619,7 @@ impl WriteTransaction {
 
         let layer = Path::total_layer_count() - 1;
         if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
-            path.leaves.save(self.raw_mut(), &parent_hash).await?;
+            leaf_node::save_all(self.raw_mut(), &path.leaves, &parent_hash).await?;
         }
 
         let writer_id = old_root_node.proof.writer_id;

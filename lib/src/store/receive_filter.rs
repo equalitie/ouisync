@@ -1,4 +1,5 @@
-use crate::{crypto::Hash, db, error::Result, index::MultiBlockPresence, store};
+use super::error::Error;
+use crate::{crypto::Hash, db, index::MultiBlockPresence};
 use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;
@@ -20,7 +21,7 @@ impl ReceiveFilter {
         }
     }
 
-    pub async fn reset(&self) -> Result<()> {
+    pub async fn reset(&self) -> Result<(), Error> {
         try_remove_all(&self.db, self.id).await
     }
 
@@ -29,7 +30,7 @@ impl ReceiveFilter {
         tx: &mut db::WriteTransaction,
         hash: &Hash,
         new_presence: &MultiBlockPresence,
-    ) -> Result<bool> {
+    ) -> Result<bool, Error> {
         if let Some((row_id, old_presence)) = load(tx, self.id, hash).await? {
             if !old_presence.is_outdated(new_presence) {
                 return Ok(false);
@@ -43,7 +44,7 @@ impl ReceiveFilter {
         Ok(true)
     }
 
-    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), store::Error> {
+    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
         sqlx::query("DELETE FROM received_nodes WHERE hash = ?")
             .bind(hash)
             .execute(tx)
@@ -62,7 +63,7 @@ async fn load(
     conn: &mut db::Connection,
     client_id: u64,
     hash: &Hash,
-) -> Result<Option<(u64, MultiBlockPresence)>> {
+) -> Result<Option<(u64, MultiBlockPresence)>, Error> {
     let row = sqlx::query(
         "SELECT rowid, block_presence
          FROM received_nodes
@@ -90,7 +91,7 @@ async fn insert(
     client_id: u64,
     hash: &Hash,
     presence: &MultiBlockPresence,
-) -> Result<()> {
+) -> Result<(), Error> {
     sqlx::query(
         "INSERT INTO received_nodes
          (client_id, hash, block_presence)
@@ -109,7 +110,7 @@ async fn update(
     conn: &mut db::Connection,
     row_id: u64,
     presence: &MultiBlockPresence,
-) -> Result<()> {
+) -> Result<(), Error> {
     sqlx::query(
         "UPDATE received_nodes
          SET block_presence = ?
@@ -133,7 +134,7 @@ async fn remove_all(pool: db::Pool, client_id: u64) {
     }
 }
 
-async fn try_remove_all(pool: &db::Pool, client_id: u64) -> Result<()> {
+async fn try_remove_all(pool: &db::Pool, client_id: u64) -> Result<(), Error> {
     let mut tx = pool.begin_write().await?;
     sqlx::query("DELETE FROM received_nodes WHERE client_id = ?")
         .bind(db::encode_u64(client_id))

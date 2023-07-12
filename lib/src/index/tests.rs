@@ -2,7 +2,7 @@ use super::{
     node::{self, SingleBlockPresence},
     node_test_utils::{self, Snapshot},
     proof::Proof,
-    Index, ReceiveError,
+    Index,
 };
 use crate::{
     block::{BlockId, BlockTracker, BLOCK_SIZE},
@@ -15,7 +15,6 @@ use crate::{
     store::{self, ReadTransaction, Store, EMPTY_INNER_HASH},
     version_vector::VersionVector,
 };
-use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use node::MultiBlockPresence;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -75,7 +74,7 @@ async fn receive_root_node_with_invalid_proof() {
 
     // Receive invalid root node from the remote replica.
     let invalid_write_keys = Keypair::random();
-    let result = index
+    let status = index
         .receive_root_node(
             Proof::new(
                 remote_id,
@@ -86,8 +85,10 @@ async fn receive_root_node_with_invalid_proof() {
             .into(),
             MultiBlockPresence::None,
         )
-        .await;
-    assert_matches!(result, Err(ReceiveError::InvalidProof));
+        .await
+        .unwrap();
+    assert!(status.new_approved.is_empty());
+    assert!(!status.request_children);
 
     // The invalid root was not written to the db.
     assert!(index
@@ -456,10 +457,12 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-        let result = index
+        let status = index
             .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
-            .await;
-        assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
+            .await
+            .unwrap();
+        assert!(status.new_approved.is_empty());
+        assert!(status.request_children.is_empty());
 
         // The orphaned inner nodes were not written to the db.
         let inner_nodes = index
@@ -474,10 +477,13 @@ async fn receive_child_nodes_with_missing_root_parent() {
     }
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
-    let result = index
+    let status = index
         .receive_leaf_nodes(leaf_nodes.clone().into(), None)
-        .await;
-    assert_matches!(result, Err(ReceiveError::ParentNodeNotFound));
+        .await
+        .unwrap();
+    assert!(!status.old_approved);
+    assert!(status.new_approved.is_empty());
+    assert!(status.request_blocks.is_empty());
 
     // The orphaned leaf nodes were not written to the db.
     let leaf_nodes = index
@@ -751,23 +757,22 @@ async fn receive_existing_snapshot() {
 
     // Same root node that we already received
     let proof = Proof::new(remote_id, vv, *snapshot.root_hash(), &write_keys);
-    let updated = index
+    let status = index
         .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
 
     // TODO: eventually we want this to also return false
-    assert!(updated);
+    assert!(status.request_children);
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            let (updated, status) = index
+            let status = index
                 .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
 
-            assert!(updated.is_empty());
-            assert!(status.old_approved);
+            assert!(status.request_children.is_empty());
             assert!(status.new_approved.is_empty());
         }
     }
