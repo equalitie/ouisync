@@ -5,6 +5,7 @@ mod leaf_node;
 mod path;
 mod quota;
 mod receive;
+mod receive_filter;
 mod root_node;
 
 #[cfg(test)]
@@ -32,6 +33,7 @@ use std::{
 use tracing::Instrument;
 
 pub use error::Error;
+pub(crate) use receive_filter::ReceiveFilter;
 
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
@@ -122,6 +124,10 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    pub fn receive_filter(&self) -> ReceiveFilter {
+        ReceiveFilter::new(self.raw().clone())
     }
 
     /// Closes the store. Waits until all `Reader`s and `{Read|Write}Transactions` obtained from
@@ -227,6 +233,14 @@ impl Reader {
         &mut self,
     ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
         root_node::load_all_in_any_state(self.raw_mut())
+    }
+
+    #[cfg(test)]
+    pub fn load_root_nodes_by_writer_in_any_state<'a>(
+        &'a mut self,
+        writer_id: &'a PublicKey,
+    ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
+        root_node::load_all_by_writer_in_any_state(self.raw_mut(), writer_id)
     }
 
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
@@ -521,7 +535,7 @@ impl WriteTransaction {
     ) -> Result<(), Error> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
-                inner_layer.save(self.raw_mut(), &parent_hash).await?;
+                inner_node::save_all(self.raw_mut(), inner_layer, &parent_hash).await?;
             }
         }
 

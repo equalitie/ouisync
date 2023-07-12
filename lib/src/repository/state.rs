@@ -276,7 +276,7 @@ mod tests {
         event::EventSender,
         index::{
             node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-            MultiBlockPresence, Proof, ReceiveFilter, SingleBlockPresence,
+            MultiBlockPresence, Proof, SingleBlockPresence,
         },
         locator::Locator,
         metrics::Metrics,
@@ -411,7 +411,7 @@ mod tests {
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
         let state = create_state(pool, repository_id);
-        let receive_filter = ReceiveFilter::new(state.store().raw().clone());
+        let receive_filter = state.store().receive_filter();
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
@@ -480,8 +480,8 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let store = create_state(pool, repository_id);
-        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
+        let state = create_state(pool, repository_id);
+        let receive_filter = state.store().receive_filter();
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -500,7 +500,7 @@ mod tests {
         let mut expected_received_blocks = HashSet::new();
 
         assert_eq!(
-            store.sync_progress().await.unwrap(),
+            state.sync_progress().await.unwrap(),
             Progress {
                 value: expected_received_blocks.len() as u64,
                 total: expected_total_blocks.len() as u64
@@ -509,7 +509,7 @@ mod tests {
 
         for (branch_id, snapshot) in branches {
             receive_nodes(
-                &store.index,
+                &state.index,
                 &write_keys,
                 branch_id,
                 VersionVector::first(branch_id),
@@ -520,18 +520,18 @@ mod tests {
             expected_total_blocks.extend(snapshot.blocks().keys().copied());
 
             assert_eq!(
-                store.sync_progress().await.unwrap(),
+                state.sync_progress().await.unwrap(),
                 Progress {
                     value: expected_received_blocks.len() as u64,
                     total: expected_total_blocks.len() as u64,
                 }
             );
 
-            receive_blocks(&store, &snapshot).await;
+            receive_blocks(&state, &snapshot).await;
             expected_received_blocks.extend(snapshot.blocks().keys().copied());
 
             assert_eq!(
-                store.sync_progress().await.unwrap(),
+                state.sync_progress().await.unwrap(),
                 Progress {
                     value: expected_received_blocks.len() as u64,
                     total: expected_total_blocks.len() as u64,
@@ -540,7 +540,7 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        store.store().raw().close().await.unwrap();
+        state.store().close().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -579,7 +579,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
+        let receive_filter = store.store().receive_filter();
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
@@ -616,7 +616,7 @@ mod tests {
             }
         };
 
-        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
+        let receive_filter = store.store().receive_filter();
         let version_vector = VersionVector::first(branch_id);
         let proof = Proof::new(
             branch_id,
@@ -658,7 +658,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
+        let receive_filter = store.store().receive_filter();
 
         let branch_id_0 = PublicKey::random();
         let branch_id_1 = PublicKey::random();
@@ -706,7 +706,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
         let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = ReceiveFilter::new(store.store().raw().clone());
+        let receive_filter = store.store().receive_filter();
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);

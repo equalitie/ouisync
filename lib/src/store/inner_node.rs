@@ -67,6 +67,48 @@ pub(super) async fn load_children(
     .map_err(From::from)
 }
 
+/// Saves this inner node into the db unless it already exists.
+pub(super) async fn save(
+    tx: &mut db::WriteTransaction,
+    node: &InnerNode,
+    parent: &Hash,
+    bucket: u8,
+) -> Result<(), Error> {
+    sqlx::query(
+        "INSERT INTO snapshot_inner_nodes (
+             parent,
+             bucket,
+             hash,
+             state,
+             block_presence
+         )
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (parent, bucket) DO NOTHING",
+    )
+    .bind(parent)
+    .bind(bucket)
+    .bind(&node.hash)
+    .bind(node.summary.state)
+    .bind(&node.summary.block_presence)
+    .execute(tx)
+    .await?;
+
+    Ok(())
+}
+
+/// Atomically saves all nodes in this map to the db.
+pub(super) async fn save_all(
+    tx: &mut db::WriteTransaction,
+    nodes: &InnerNodeMap,
+    parent: &Hash,
+) -> Result<(), Error> {
+    for (bucket, node) in nodes {
+        save(tx, node, parent, bucket).await?;
+    }
+
+    Ok(())
+}
+
 /// Compute summaries from the children nodes of the specified parent nodes.
 pub(super) async fn compute_summary(
     conn: &mut db::Connection,
@@ -102,6 +144,27 @@ pub(super) async fn compute_summary(
 
     // The parent hash doesn't correspond to any known node
     Ok(Summary::INCOMPLETE)
+}
+
+/// Updates summaries of all nodes with the specified hash at the specified inner layer.
+pub(super) async fn update_summaries(
+    tx: &mut db::WriteTransaction,
+    hash: &Hash,
+) -> Result<(), Error> {
+    let summary = compute_summary(tx, hash).await?;
+
+    sqlx::query(
+        "UPDATE snapshot_inner_nodes
+         SET state = ?, block_presence = ?
+         WHERE hash = ?",
+    )
+    .bind(summary.state)
+    .bind(&summary.block_presence)
+    .bind(hash)
+    .execute(tx)
+    .await?;
+
+    Ok(())
 }
 
 impl InnerNode {
@@ -143,51 +206,10 @@ impl InnerNode {
             .err_into()
     }
 
-    /// Saves this inner node into the db unless it already exists.
-    pub async fn save(
-        &self,
-        tx: &mut db::WriteTransaction,
-        parent: &Hash,
-        bucket: u8,
-    ) -> Result<(), Error> {
-        sqlx::query(
-            "INSERT INTO snapshot_inner_nodes (
-                 parent,
-                 bucket,
-                 hash,
-                 state,
-                 block_presence
-             )
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (parent, bucket) DO NOTHING",
-        )
-        .bind(parent)
-        .bind(bucket)
-        .bind(&self.hash)
-        .bind(self.summary.state)
-        .bind(&self.summary.block_presence)
-        .execute(tx)
-        .await?;
-
-        Ok(())
-    }
-
     /// Updates summaries of all nodes with the specified hash at the specified inner layer.
+    #[deprecated]
     pub async fn update_summaries(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        let summary = compute_summary(tx, hash).await?;
-
-        sqlx::query(
-            "UPDATE snapshot_inner_nodes
-             SET state = ?, block_presence = ?
-             WHERE hash = ?",
-        )
-        .bind(summary.state)
-        .bind(&summary.block_presence)
-        .bind(hash)
-        .execute(tx)
-        .await?;
-
-        Ok(())
+        update_summaries(tx, hash).await
     }
 
     pub fn is_empty(&self) -> bool {
@@ -267,12 +289,9 @@ impl InnerNodeMap {
     }
 
     /// Atomically saves all nodes in this map to the db.
+    #[deprecated]
     pub async fn save(&self, tx: &mut db::WriteTransaction, parent: &Hash) -> Result<(), Error> {
-        for (bucket, node) in self {
-            node.save(tx, parent, bucket).await?;
-        }
-
-        Ok(())
+        save_all(tx, self, parent).await
     }
 
     /// Returns the same nodes but with the `state` and `block_presence` fields changed to
@@ -377,7 +396,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = InnerNode::new(hash, Summary::INCOMPLETE);
-        node.save(&mut tx, &parent, bucket).await.unwrap();
+        save(&mut tx, &node, &parent, bucket).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -401,10 +420,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
-        node0.save(&mut tx, &parent, bucket).await.unwrap();
+        save(&mut tx, &node0, &parent, bucket).await.unwrap();
 
         let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
-        node1.save(&mut tx, &parent, bucket).await.unwrap();
+        save(&mut tx, &node1, &parent, bucket).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -434,10 +453,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
-        node0.save(&mut tx, &parent, bucket).await.unwrap();
+        save(&mut tx, &node0, &parent, bucket).await.unwrap();
 
         let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
-        assert_matches!(node1.save(&mut tx, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+        assert_matches!(save(&mut tx, &node1, &parent, bucket).await, Err(_)); // TODO: match concrete error type
     }
 
     async fn setup() -> (TempDir, db::Pool) {

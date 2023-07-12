@@ -11,7 +11,7 @@ pub(crate) struct ReceiveFilter {
 }
 
 impl ReceiveFilter {
-    pub fn new(db: db::Pool) -> Self {
+    pub(super) fn new(db: db::Pool) -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
         Self {

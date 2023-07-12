@@ -11,7 +11,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Index, ReceiveFilter, SingleBlockPresence, VersionVectorOp,
+        Index, SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, RepositoryState},
@@ -20,7 +20,7 @@ use crate::{
     test_utils,
     version_vector::VersionVector,
 };
-use futures_util::future;
+use futures_util::{future, TryStreamExt};
 use rand::prelude::*;
 use std::{fmt, future::Future, sync::Arc};
 use tempfile::TempDir;
@@ -76,7 +76,7 @@ async fn transfer_snapshot_between_two_replicas_case(
     save_snapshot(&a_state.index, a_id, &write_keys, &snapshot).await;
     receive_blocks(&a_state, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_state.index, a_id).await.is_none());
+    assert!(load_latest_root_node(&b_state.index, &a_id).await.is_none());
 
     let mut server = create_server(a_state.clone());
     let mut client = create_client(b_state.clone());
@@ -414,7 +414,7 @@ async fn save_snapshot(
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
-    let receive_filter = ReceiveFilter::new(index.db().clone());
+    let receive_filter = index.store().receive_filter();
 
     receive_nodes(
         index,
@@ -434,7 +434,7 @@ async fn wait_until_snapshots_in_sync(
 ) {
     let mut rx = client_index.subscribe();
 
-    let server_root = load_latest_root_node(server_index, server_id).await;
+    let server_root = load_latest_root_node(server_index, &server_id).await;
     let server_root = if let Some(server_root) = server_root {
         server_root
     } else {
@@ -446,7 +446,7 @@ async fn wait_until_snapshots_in_sync(
     }
 
     loop {
-        if let Some(client_root) = load_latest_root_node(client_index, server_id).await {
+        if let Some(client_root) = load_latest_root_node(client_index, &server_id).await {
             if client_root.summary.state.is_approved()
                 && client_root.proof.hash == server_root.proof.hash
             {
@@ -535,8 +535,14 @@ async fn create_block(
     tx.commit().await.unwrap();
 }
 
-async fn load_latest_root_node(index: &Index, writer_id: PublicKey) -> Option<RootNode> {
-    RootNode::load_latest_by_writer(&mut index.db().acquire().await.unwrap(), writer_id)
+async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
+    index
+        .store()
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_root_nodes_by_writer_in_any_state(writer_id)
+        .try_next()
         .await
         .unwrap()
 }

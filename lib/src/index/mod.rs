@@ -1,6 +1,5 @@
 mod node;
 mod proof;
-mod receive_filter;
 #[cfg(test)]
 mod tests;
 
@@ -12,7 +11,6 @@ pub(crate) use self::{
         Summary, UpdateSummaryReason,
     },
     proof::{Proof, UntrustedProof},
-    receive_filter::ReceiveFilter,
 };
 
 use self::proof::ProofError;
@@ -27,7 +25,8 @@ use crate::{
     repository::RepositoryId,
     storage_size::StorageSize,
     store::{
-        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, RootNode, Store, WriteTransaction,
+        self, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, ReceiveFilter, RootNode, Store,
+        WriteTransaction,
     },
     version_vector::VersionVector,
 };
@@ -57,11 +56,6 @@ impl Index {
 
     pub fn store(&self) -> &Store {
         &self.store
-    }
-
-    #[deprecated = "use store"]
-    pub fn db(&self) -> &db::Pool {
-        self.store.raw()
     }
 
     pub fn repository_id(&self) -> &RepositoryId {

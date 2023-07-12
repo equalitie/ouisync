@@ -402,10 +402,10 @@ pub(super) fn load_writer_ids<'a>(
 /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
 /// most recent to the least recent.
 #[cfg(test)]
-pub(super) fn load_all_by_writer_in_any_state(
-    conn: &mut db::Connection,
-    writer_id: PublicKey,
-) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+pub(super) fn load_all_by_writer_in_any_state<'a>(
+    conn: &'a mut db::Connection,
+    writer_id: &'a PublicKey,
+) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
     sqlx::query(
         "SELECT
              snapshot_id,
@@ -418,11 +418,11 @@ pub(super) fn load_all_by_writer_in_any_state(
          WHERE writer_id = ?
          ORDER BY snapshot_id DESC",
     )
-    .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
+    .bind(writer_id) // needed to satisfy the borrow checker.
     .fetch(conn)
     .map_ok(move |row| RootNode {
         snapshot_id: row.get(0),
-        proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
+        proof: Proof::new_unchecked(*writer_id, row.get(1), row.get(2), row.get(3)),
         summary: Summary {
             state: row.get(4),
             block_presence: row.get(5),
@@ -449,63 +449,6 @@ impl RootNode {
                 block_presence: MultiBlockPresence::Full,
             },
         }
-    }
-
-    /// Creates a root node with the specified proof.
-    ///
-    /// The version vector must be greater than the version vector of any currently existing root
-    /// node in the same branch, otherwise no node is created and an error is returned.
-    #[deprecated = "don't use directly"]
-    pub async fn create(
-        tx: &mut db::WriteTransaction,
-        proof: Proof,
-        summary: Summary,
-    ) -> Result<Self, Error> {
-        create(tx, proof, summary).await
-    }
-
-    /// Returns a stream of all root nodes corresponding to the specified writer ordered from the
-    /// most recent to the least recent.
-    #[cfg(test)]
-    #[deprecated]
-    pub fn load_all_by_writer(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> impl Stream<Item = Result<Self, Error>> + '_ {
-        sqlx::query(
-            "SELECT
-                 snapshot_id,
-                 versions,
-                 hash,
-                 signature,
-                 state,
-                 block_presence
-             FROM snapshot_root_nodes
-             WHERE writer_id = ?
-             ORDER BY snapshot_id DESC",
-        )
-        .bind(writer_id.as_ref().to_owned()) // needed to satisfy the borrow checker.
-        .fetch(conn)
-        .map_ok(move |row| Self {
-            snapshot_id: row.get(0),
-            proof: Proof::new_unchecked(writer_id, row.get(1), row.get(2), row.get(3)),
-            summary: Summary {
-                state: row.get(4),
-                block_presence: row.get(5),
-            },
-        })
-        .err_into()
-    }
-
-    /// Returns the latest root node of the specified writer or `None` if no snapshot of that
-    /// writer exists.
-    #[cfg(test)]
-    #[deprecated]
-    pub async fn load_latest_by_writer(
-        conn: &mut db::Connection,
-        writer_id: PublicKey,
-    ) -> Result<Option<Self>, Error> {
-        Self::load_all_by_writer(conn, writer_id).try_next().await
     }
 
     /// Returns all nodes with the specified hash
@@ -663,7 +606,7 @@ mod tests {
         .unwrap();
         assert_eq!(node0.proof.hash, hash);
 
-        let nodes: Vec<_> = load_all_by_writer_in_any_state(&mut tx, writer_id)
+        let nodes: Vec<_> = load_all_by_writer_in_any_state(&mut tx, &writer_id)
             .try_collect()
             .await
             .unwrap();

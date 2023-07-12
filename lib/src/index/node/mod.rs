@@ -5,14 +5,14 @@ mod summary;
 
 pub(crate) use self::summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 
-use super::{receive_filter::ReceiveFilter, try_collect_into};
+use super::try_collect_into;
 use crate::{
     block::BlockId,
     collections::{HashMap, HashSet},
     crypto::{sign::PublicKey, Hash},
     db,
     error::Result,
-    store::{self, InnerNode, LeafNode, RootNode},
+    store::{self, InnerNode, LeafNode, ReceiveFilter, RootNode},
 };
 use futures_util::TryStreamExt;
 

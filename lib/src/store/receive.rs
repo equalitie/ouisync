@@ -218,7 +218,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inners.save(&mut tx, &hash).await.unwrap();
+        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -266,7 +266,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inners.save(&mut tx, &hash).await.unwrap();
+        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -294,7 +294,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inners.save(&mut tx, &hash).await.unwrap();
+        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -342,10 +342,7 @@ mod tests {
 
         for layer in snapshot.inner_layers() {
             for (parent_hash, nodes) in layer.inner_maps() {
-                nodes
-                    .clone()
-                    .into_incomplete()
-                    .save(&mut tx, parent_hash)
+                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
                     .await
                     .unwrap();
 
@@ -440,10 +437,7 @@ mod tests {
 
         for layer in snapshot.inner_layers() {
             for (parent_hash, nodes) in layer.inner_maps() {
-                nodes
-                    .clone()
-                    .into_incomplete()
-                    .save(&mut tx, parent_hash)
+                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
                     .await
                     .unwrap();
             }

@@ -11,9 +11,9 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof},
+    index::{MultiBlockPresence, ReceiveError, UntrustedProof},
     repository::{BlockRequestMode, RepositoryMonitor, RepositoryState},
-    store::{self, InnerNodeMap, LeafNodeSet},
+    store::{self, InnerNodeMap, LeafNodeSet, ReceiveFilter},
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -38,7 +38,7 @@ impl Client {
         tx: mpsc::Sender<Content>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let db = repo.store().raw().clone();
+        let receive_filter = repo.store().receive_filter();
         let block_tracker = repo.block_tracker.client();
 
         let pending_requests = Arc::new(PendingRequests::new(repo.monitor.clone()));
@@ -56,7 +56,7 @@ impl Client {
             repository: repo,
             pending_requests,
             request_tx,
-            receive_filter: ReceiveFilter::new(db),
+            receive_filter,
             block_tracker,
             _request_sender: request_sender,
         }
