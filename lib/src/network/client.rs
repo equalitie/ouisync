@@ -207,11 +207,7 @@ impl Client {
         _debug: DebugReceivedResponse,
     ) -> Result<()> {
         let hash = proof.hash;
-        let status = self
-            .vault
-            .index
-            .receive_root_node(proof, block_presence)
-            .await?;
+        let status = self.vault.receive_root_node(proof, block_presence).await?;
 
         if status.request_children {
             tracing::trace!("received updated root node");
@@ -238,7 +234,6 @@ impl Client {
         let quota = self.vault.quota().await?.map(Into::into);
         let status = self
             .vault
-            .index
             .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
 
@@ -282,7 +277,7 @@ impl Client {
     ) -> Result<()> {
         let total = nodes.len();
         let quota = self.vault.quota().await?.map(Into::into);
-        let status = self.vault.index.receive_leaf_nodes(nodes, quota).await?;
+        let status = self.vault.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",

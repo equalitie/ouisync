@@ -2,7 +2,6 @@ use super::{
     node::{self, SingleBlockPresence},
     node_test_utils::{self, Block, Snapshot},
     proof::Proof,
-    Index,
 };
 use crate::{
     block::{BlockId, BlockTracker, BLOCK_SIZE},
@@ -24,11 +23,11 @@ use tokio::task;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_root_node() {
-    let (_base_dir, index, write_keys) = setup().await;
+    let (_base_dir, vault, write_keys) = setup().await;
     let remote_id = PublicKey::random();
 
     // Initially the remote branch doesn't exist
-    assert!(index
+    assert!(vault
         .store()
         .acquire_read()
         .await
@@ -40,7 +39,7 @@ async fn receive_valid_root_node() {
         .is_none());
 
     // Receive root node from the remote replica.
-    index
+    vault
         .receive_root_node(
             Proof::new(
                 remote_id,
@@ -55,7 +54,7 @@ async fn receive_valid_root_node() {
         .unwrap();
 
     // The remote branch now exist.
-    assert!(index
+    assert!(vault
         .store()
         .acquire_read()
         .await
@@ -390,12 +389,12 @@ mod receive_and_create_root_node {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_valid_child_nodes() {
-    let (_base_dir, index, write_keys) = setup().await;
+    let (_base_dir, vault, write_keys) = setup().await;
     let remote_id = PublicKey::random();
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
-    index
+    vault
         .receive_root_node(
             Proof::new(
                 remote_id,
@@ -409,16 +408,16 @@ async fn receive_valid_child_nodes() {
         .await
         .unwrap();
 
-    let receive_filter = index.store().receive_filter();
+    let receive_filter = vault.store().receive_filter();
 
     for layer in snapshot.inner_layers() {
         for (hash, inner_nodes) in layer.inner_maps() {
-            index
+            vault
                 .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
 
-            assert!(!index
+            assert!(!vault
                 .store()
                 .acquire_read()
                 .await
@@ -431,12 +430,12 @@ async fn receive_valid_child_nodes() {
     }
 
     for (hash, leaf_nodes) in snapshot.leaf_sets() {
-        index
+        vault
             .receive_leaf_nodes(leaf_nodes.clone().into(), None)
             .await
             .unwrap();
 
-        assert!(!index
+        assert!(!vault
             .store()
             .acquire_read()
             .await
@@ -450,14 +449,14 @@ async fn receive_valid_child_nodes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn receive_child_nodes_with_missing_root_parent() {
-    let (_base_dir, index, _write_keys) = setup().await;
+    let (_base_dir, vault, _write_keys) = setup().await;
 
     let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-    let receive_filter = index.store().receive_filter();
+    let receive_filter = vault.store().receive_filter();
 
     for layer in snapshot.inner_layers() {
         let (hash, inner_nodes) = layer.inner_maps().next().unwrap();
-        let status = index
+        let status = vault
             .receive_inner_nodes(inner_nodes.clone().into(), &receive_filter, None)
             .await
             .unwrap();
@@ -465,7 +464,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
         assert!(status.request_children.is_empty());
 
         // The orphaned inner nodes were not written to the db.
-        let inner_nodes = index
+        let inner_nodes = vault
             .store()
             .acquire_read()
             .await
@@ -477,7 +476,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     }
 
     let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
-    let status = index
+    let status = vault
         .receive_leaf_nodes(leaf_nodes.clone().into(), None)
         .await
         .unwrap();
@@ -486,7 +485,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
     assert!(status.request_blocks.is_empty());
 
     // The orphaned leaf nodes were not written to the db.
-    let leaf_nodes = index
+    let leaf_nodes = vault
         .store()
         .acquire_read()
         .await
@@ -499,18 +498,7 @@ async fn receive_child_nodes_with_missing_root_parent() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
-    let (_base_dir, index, write_keys) = setup().await;
-    let repo = Vault {
-        index,
-        block_tracker: BlockTracker::new(),
-        block_request_mode: BlockRequestMode::Lazy,
-        local_id: LocalId::new(),
-        monitor: Arc::new(RepositoryMonitor::new(
-            StateMonitor::make_root(),
-            Metrics::new(),
-            "test",
-        )),
-    };
+    let (_base_dir, vault, write_keys) = setup().await;
 
     let mut rng = rand::thread_rng();
 
@@ -521,12 +509,12 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let vv0 = VersionVector::first(remote_id);
 
     // Receive it all.
-    receive_snapshot(&repo.index, remote_id, &snapshot0, &write_keys).await;
-    node_test_utils::receive_blocks(&repo, &snapshot0).await;
+    receive_snapshot(&vault, remote_id, &snapshot0, &write_keys).await;
+    node_test_utils::receive_blocks(&vault, &snapshot0).await;
 
     // Verify we can retrieve all the blocks.
     check_all_blocks_exist(
-        &mut repo.store().begin_read().await.unwrap(),
+        &mut vault.store().begin_read().await.unwrap(),
         &remote_id,
         &snapshot0,
     )
@@ -537,7 +525,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let vv1 = vv0.incremented(remote_id);
 
     // Receive its root node only.
-    repo.index
+    vault
         .receive_root_node(
             Proof::new(remote_id, vv1, *snapshot1.root_hash(), &write_keys).into(),
             MultiBlockPresence::Full,
@@ -547,7 +535,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 
     // All the original blocks are still retrievable
     check_all_blocks_exist(
-        &mut repo.store().begin_read().await.unwrap(),
+        &mut vault.store().begin_read().await.unwrap(),
         &remote_id,
         &snapshot0,
     )
@@ -557,7 +545,7 @@ async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
 #[tokio::test]
 async fn prune_snapshots_insert_present() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+    let (_base_dir, vault, write_keys) = setup_with_rng(&mut rng).await;
 
     let remote_id = PublicKey::generate(&mut rng);
 
@@ -565,21 +553,21 @@ async fn prune_snapshots_insert_present() {
     let mut blocks = vec![rng.gen()];
     let snapshot = Snapshot::new(blocks.clone());
 
-    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, &blocks[0].1).await;
+    receive_snapshot(&vault, remote_id, &snapshot, &write_keys).await;
+    receive_block(&vault, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
     let snapshot = Snapshot::new(blocks.clone());
 
-    receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, &blocks[1].1).await;
+    receive_snapshot(&vault, remote_id, &snapshot, &write_keys).await;
+    receive_block(&vault, &blocks[1].1).await;
 
-    assert_eq!(count_snapshots(&index, &remote_id).await, 2);
+    assert_eq!(count_snapshots(&vault, &remote_id).await, 2);
 
-    prune_snapshots(&index, &remote_id).await;
+    prune_snapshots(&vault, &remote_id).await;
 
-    assert_eq!(count_snapshots(&index, &remote_id).await, 1);
+    assert_eq!(count_snapshots(&vault, &remote_id).await, 1);
 }
 
 #[tokio::test]
@@ -737,16 +725,16 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
 #[tokio::test]
 async fn receive_existing_snapshot() {
     let mut rng = StdRng::seed_from_u64(0);
-    let (_base_dir, index, write_keys) = setup_with_rng(&mut rng).await;
+    let (_base_dir, vault, write_keys) = setup_with_rng(&mut rng).await;
 
     let remote_id = PublicKey::generate(&mut rng);
     let snapshot = Snapshot::generate(&mut rng, 32);
     let vv = VersionVector::first(remote_id);
 
-    let receive_filter = index.store().receive_filter();
+    let receive_filter = vault.store().receive_filter();
 
     node_test_utils::receive_nodes(
-        &index,
+        &vault,
         &write_keys,
         remote_id,
         vv.clone(),
@@ -757,7 +745,7 @@ async fn receive_existing_snapshot() {
 
     // Same root node that we already received
     let proof = Proof::new(remote_id, vv, *snapshot.root_hash(), &write_keys);
-    let status = index
+    let status = vault
         .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
@@ -767,7 +755,7 @@ async fn receive_existing_snapshot() {
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            let status = index
+            let status = vault
                 .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                 .await
                 .unwrap();
@@ -778,20 +766,32 @@ async fn receive_existing_snapshot() {
     }
 }
 
-async fn setup() -> (TempDir, Index, Keypair) {
+async fn setup() -> (TempDir, Vault, Keypair) {
     setup_with_rng(&mut StdRng::from_entropy()).await
 }
 
-async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Index, Keypair) {
+async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, Keypair) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
     let store = Store::new(pool);
 
     let write_keys = Keypair::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
-    let index = Index::new(store, repository_id, event_tx);
+    let vault = Vault {
+        repository_id,
+        store,
+        event_tx,
+        block_tracker: BlockTracker::new(),
+        block_request_mode: BlockRequestMode::Lazy,
+        local_id: LocalId::new(),
+        monitor: Arc::new(RepositoryMonitor::new(
+            StateMonitor::make_root(),
+            Metrics::new(),
+            "test",
+        )),
+    };
 
-    (base_dir, index, write_keys)
+    (base_dir, vault, write_keys)
 }
 
 async fn check_all_blocks_exist(
@@ -806,12 +806,12 @@ async fn check_all_blocks_exist(
 }
 
 async fn receive_snapshot(
-    index: &Index,
+    vault: &Vault,
     writer_id: PublicKey,
     snapshot: &Snapshot,
     write_keys: &Keypair,
 ) {
-    let vv = match index
+    let vv = match vault
         .store()
         .acquire_read()
         .await
@@ -825,20 +825,20 @@ async fn receive_snapshot(
     };
     let vv = vv.incremented(writer_id);
 
-    let receive_filter = index.store().receive_filter();
+    let receive_filter = vault.store().receive_filter();
 
-    node_test_utils::receive_nodes(index, write_keys, writer_id, vv, &receive_filter, snapshot)
+    node_test_utils::receive_nodes(vault, write_keys, writer_id, vv, &receive_filter, snapshot)
         .await
 }
 
-async fn receive_block(index: &Index, block: &Block) {
-    let mut tx = index.store().begin_write().await.unwrap();
+async fn receive_block(vault: &Vault, block: &Block) {
+    let mut tx = vault.store().begin_write().await.unwrap();
     tx.receive_block(&block.data, &block.nonce).await.unwrap();
     tx.commit().await.unwrap();
 }
 
-async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
-    index
+async fn count_snapshots(vault: &Vault, writer_id: &PublicKey) -> usize {
+    vault
         .store()
         .acquire_read()
         .await
@@ -849,8 +849,8 @@ async fn count_snapshots(index: &Index, writer_id: &PublicKey) -> usize {
         .unwrap()
 }
 
-async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
-    let root_node = index
+async fn prune_snapshots(vault: &Vault, writer_id: &PublicKey) {
+    let root_node = vault
         .store()
         .acquire_read()
         .await
@@ -858,7 +858,7 @@ async fn prune_snapshots(index: &Index, writer_id: &PublicKey) {
         .load_root_node(writer_id)
         .await
         .unwrap();
-    index
+    vault
         .store()
         .remove_outdated_snapshots(&root_node)
         .await

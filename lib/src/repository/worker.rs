@@ -31,7 +31,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
         let commands = stream::select(
-            from_events(shared.vault.index.subscribe(), event_scope),
+            from_events(shared.vault.event_tx.subscribe(), event_scope),
             from_unlocks(unlock_rx),
         );
 
@@ -44,7 +44,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
 
     // Scan
     let scan = async {
-        let commands = from_events(shared.vault.index.subscribe(), event_scope);
+        let commands = from_events(shared.vault.event_tx.subscribe(), event_scope);
         utils::run(|| scan(&shared), commands).await;
     };
 

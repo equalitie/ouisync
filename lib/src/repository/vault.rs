@@ -1,24 +1,31 @@
 //! Repository state and operations that don't require read or write access.
 
-use super::{quota, LocalId, Metadata, RepositoryMonitor};
+use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
     block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
-    crypto::sign::PublicKey,
+    crypto::{sign::PublicKey, CacheHash},
     db,
+    debug::DebugPrinter,
     error::{Error, Result},
-    event::Payload,
-    index::{Index, NodeState, SingleBlockPresence},
+    event::{EventSender, Payload},
+    index::{MultiBlockPresence, NodeState, ProofError, SingleBlockPresence, UntrustedProof},
     progress::Progress,
     storage_size::StorageSize,
-    store::{self, Store},
+    store::{
+        self, InnerNodeMap, InnerNodeReceiveStatus, LeafNodeReceiveStatus, LeafNodeSet,
+        ReceiveFilter, RootNodeReceiveStatus, Store, WriteTransaction,
+    },
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;
 use std::{collections::BTreeSet, sync::Arc};
+use tracing::Level;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
-    pub index: Index,
+    pub repository_id: RepositoryId,
+    pub store: Store,
+    pub event_tx: EventSender,
     pub block_tracker: BlockTracker,
     pub block_request_mode: BlockRequestMode,
     pub local_id: LocalId,
@@ -26,17 +33,22 @@ pub(crate) struct Vault {
 }
 
 impl Vault {
-    pub(crate) fn store(&self) -> &Store {
-        self.index.store()
+    pub fn repository_id(&self) -> &RepositoryId {
+        &self.repository_id
     }
 
-    pub(crate) async fn count_blocks(&self) -> Result<usize> {
+    pub(crate) fn store(&self) -> &Store {
+        &self.store
+    }
+
+    pub async fn count_blocks(&self) -> Result<usize> {
         Ok(self.store().acquire_read().await?.count_blocks().await?)
     }
 
     /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
-    pub(crate) async fn sync_progress(&self) -> Result<Progress> {
+    // TODO: Move this to Store
+    pub async fn sync_progress(&self) -> Result<Progress> {
         let mut conn = self.store().raw().acquire().await?;
 
         let total = db::decode_u64(
@@ -59,15 +71,73 @@ impl Vault {
         })
     }
 
+    /// Receive `RootNode` from other replica and store it into the db. Returns whether the
+    /// received node has any new information compared to all the nodes already stored locally.
+    pub async fn receive_root_node(
+        &self,
+        proof: UntrustedProof,
+        block_presence: MultiBlockPresence,
+    ) -> Result<RootNodeReceiveStatus> {
+        let proof = match proof.verify(self.repository_id()) {
+            Ok(proof) => proof,
+            Err(ProofError(proof)) => {
+                tracing::trace!(branch_id = ?proof.writer_id, hash = ?proof.hash, "invalid proof");
+                return Ok(RootNodeReceiveStatus::default());
+            }
+        };
+
+        // Ignore branches with empty version vectors because they have no content yet.
+        if proof.version_vector.is_empty() {
+            return Ok(RootNodeReceiveStatus::default());
+        }
+
+        let mut tx = self.store().begin_write().await?;
+        let status = tx.receive_root_node(proof, block_presence).await?;
+        self.finalize_receive(tx, &status.new_approved).await?;
+
+        Ok(status)
+    }
+
+    /// Receive inner nodes from other replica and store them into the db.
+    /// Returns hashes of those nodes that were more up to date than the locally stored ones.
+    /// Also returns the receive status.
+    pub async fn receive_inner_nodes(
+        &self,
+        nodes: CacheHash<InnerNodeMap>,
+        receive_filter: &ReceiveFilter,
+        quota: Option<StorageSize>,
+    ) -> Result<InnerNodeReceiveStatus> {
+        let mut tx = self.store().begin_write().await?;
+        let status = tx.receive_inner_nodes(nodes, receive_filter, quota).await?;
+        self.finalize_receive(tx, &status.new_approved).await?;
+
+        Ok(status)
+    }
+
+    /// Receive leaf nodes from other replica and store them into the db.
+    /// Returns the ids of the blocks that the remote replica has but the local one has not.
+    /// Also returns the receive status.
+    pub async fn receive_leaf_nodes(
+        &self,
+        nodes: CacheHash<LeafNodeSet>,
+        quota: Option<StorageSize>,
+    ) -> Result<LeafNodeReceiveStatus> {
+        let mut tx = self.store().begin_write().await?;
+        let status = tx.receive_leaf_nodes(nodes, quota).await?;
+        self.finalize_receive(tx, &status.new_approved).await?;
+
+        Ok(status)
+    }
+
     /// Receive a block from other replica.
-    pub(crate) async fn receive_block(
+    pub async fn receive_block(
         &self,
         data: &BlockData,
         nonce: &BlockNonce,
         promise: Option<BlockPromise>,
     ) -> Result<()> {
         let block_id = data.id;
-        let event_tx = self.index.notify().clone();
+        let event_tx = self.event_tx.clone();
 
         let mut tx = self.store().begin_write().await?;
         let status = match tx.receive_block(data, nonce).await {
@@ -104,7 +174,7 @@ impl Vault {
 
     /// Returns all block ids referenced from complete snapshots. The result is paginated (with
     /// `page_size` entries per page) to avoid loading too many items into memory.
-    pub(crate) fn block_ids(&self, page_size: u32) -> BlockIdsPage {
+    pub fn block_ids(&self, page_size: u32) -> BlockIdsPage {
         BlockIdsPage {
             pool: self.store().raw().clone(),
             lower_bound: None,
@@ -112,12 +182,12 @@ impl Vault {
         }
     }
 
-    pub(crate) fn metadata(&self) -> Metadata {
+    pub fn metadata(&self) -> Metadata {
         Metadata::new(self.store().raw().clone())
     }
 
     /// Total size of the stored data
-    pub(crate) async fn size(&self) -> Result<StorageSize> {
+    pub async fn size(&self) -> Result<StorageSize> {
         let mut conn = self.store().raw().acquire().await?;
 
         // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
@@ -131,7 +201,7 @@ impl Vault {
         Ok(StorageSize::from_blocks(count))
     }
 
-    pub(crate) async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
+    pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
         let mut tx = self.store().raw().begin_write().await?;
 
         if let Some(quota) = quota {
@@ -145,7 +215,7 @@ impl Vault {
         Ok(())
     }
 
-    pub(crate) async fn quota(&self) -> Result<Option<StorageSize>> {
+    pub async fn quota(&self) -> Result<Option<StorageSize>> {
         let mut conn = self.store().raw().acquire().await?;
         match quota::get(&mut conn).await {
             Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
@@ -154,13 +224,61 @@ impl Vault {
         }
     }
 
-    pub(crate) async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
+    pub async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
         let mut tx = self.store().raw().begin_read().await?;
         let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
 
         while let Some(block_id) = block_ids.try_next().await? {
             self.block_tracker.approve(&block_id);
         }
+
+        Ok(())
+    }
+
+    pub async fn debug_print(&self, print: DebugPrinter) {
+        self.store().debug_print_root_node(print).await
+    }
+
+    // Finalizes receiving nodes from a remote replica, commits the transaction and notifies the
+    // affected branches.
+    async fn finalize_receive(
+        &self,
+        mut tx: WriteTransaction,
+        new_approved: &[PublicKey],
+    ) -> Result<()> {
+        // For logging completed snapshots
+        let root_nodes = if tracing::enabled!(Level::DEBUG) {
+            let mut root_nodes = Vec::with_capacity(new_approved.len());
+
+            for branch_id in new_approved {
+                root_nodes.push(tx.load_root_node(branch_id).await?);
+            }
+
+            root_nodes
+        } else {
+            Vec::new()
+        };
+
+        tx.commit_and_then({
+            let new_approved = new_approved.to_vec();
+            let event_tx = self.event_tx.clone();
+
+            move || {
+                for root_node in root_nodes {
+                    tracing::debug!(
+                        branch_id = ?root_node.proof.writer_id,
+                        hash = ?root_node.proof.hash,
+                        vv = ?root_node.proof.version_vector,
+                        "snapshot complete"
+                    );
+                }
+
+                for branch_id in new_approved {
+                    event_tx.send(Payload::BranchChanged(branch_id));
+                }
+            }
+        })
+        .await?;
 
         Ok(())
     }
@@ -408,13 +526,13 @@ mod tests {
         let branch_id = PublicKey::random();
         let write_keys = Keypair::random();
         let repository_id = RepositoryId::from(write_keys.public);
-        let state = create_state(pool, repository_id);
-        let receive_filter = state.store().receive_filter();
+        let vault = create_vault(pool, repository_id);
+        let receive_filter = vault.store().receive_filter();
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
 
         receive_nodes(
-            &state.index,
+            &vault,
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
@@ -422,9 +540,9 @@ mod tests {
             &snapshot,
         )
         .await;
-        receive_blocks(&state, &snapshot).await;
+        receive_blocks(&vault, &snapshot).await;
 
-        let mut reader = state.store().acquire_read().await.unwrap();
+        let mut reader = vault.store().acquire_read().await.unwrap();
 
         for (id, block) in snapshot.blocks() {
             let mut content = vec![0; BLOCK_SIZE];
@@ -439,7 +557,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn receive_orphaned_block() {
         let (_base_dir, pool) = setup().await;
-        let store = create_state(pool, RepositoryId::random());
+        let store = create_vault(pool, RepositoryId::random());
 
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
         let block_tracker = store.block_tracker.client();
@@ -478,8 +596,8 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::generate(&mut rng);
         let repository_id = RepositoryId::from(write_keys.public);
-        let state = create_state(pool, repository_id);
-        let receive_filter = state.store().receive_filter();
+        let vault = create_vault(pool, repository_id);
+        let receive_filter = vault.store().receive_filter();
 
         let all_blocks: Vec<(Hash, Block)> =
             (&mut rng).sample_iter(Standard).take(block_count).collect();
@@ -498,7 +616,7 @@ mod tests {
         let mut expected_received_blocks = HashSet::new();
 
         assert_eq!(
-            state.sync_progress().await.unwrap(),
+            vault.sync_progress().await.unwrap(),
             Progress {
                 value: expected_received_blocks.len() as u64,
                 total: expected_total_blocks.len() as u64
@@ -507,7 +625,7 @@ mod tests {
 
         for (branch_id, snapshot) in branches {
             receive_nodes(
-                &state.index,
+                &vault,
                 &write_keys,
                 branch_id,
                 VersionVector::first(branch_id),
@@ -518,18 +636,18 @@ mod tests {
             expected_total_blocks.extend(snapshot.blocks().keys().copied());
 
             assert_eq!(
-                state.sync_progress().await.unwrap(),
+                vault.sync_progress().await.unwrap(),
                 Progress {
                     value: expected_received_blocks.len() as u64,
                     total: expected_total_blocks.len() as u64,
                 }
             );
 
-            receive_blocks(&state, &snapshot).await;
+            receive_blocks(&vault, &snapshot).await;
             expected_received_blocks.extend(snapshot.blocks().keys().copied());
 
             assert_eq!(
-                state.sync_progress().await.unwrap(),
+                vault.sync_progress().await.unwrap(),
                 Progress {
                     value: expected_received_blocks.len() as u64,
                     total: expected_total_blocks.len() as u64,
@@ -538,7 +656,7 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        state.store().close().await.unwrap();
+        vault.store().close().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -546,7 +664,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let state = create_state(pool, RepositoryId::from(write_keys.public));
+        let state = create_vault(pool, RepositoryId::from(write_keys.public));
 
         let branch_id = PublicKey::random();
 
@@ -576,14 +694,14 @@ mod tests {
     async fn block_ids_remote() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = store.store().receive_filter();
+        let vault = create_vault(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = vault.store().receive_filter();
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
 
         receive_nodes(
-            &store.index,
+            &vault,
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
@@ -592,7 +710,7 @@ mod tests {
         )
         .await;
 
-        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
         let expected = snapshot.blocks().keys().copied().collect();
 
         assert_eq!(actual, expected);
@@ -602,7 +720,7 @@ mod tests {
     async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_state(pool, RepositoryId::from(write_keys.public));
+        let vault = create_vault(pool, RepositoryId::from(write_keys.public));
 
         let branch_id = PublicKey::random();
 
@@ -614,7 +732,7 @@ mod tests {
             }
         };
 
-        let receive_filter = store.store().receive_filter();
+        let receive_filter = vault.store().receive_filter();
         let version_vector = VersionVector::first(branch_id);
         let proof = Proof::new(
             branch_id,
@@ -623,16 +741,14 @@ mod tests {
             &write_keys,
         );
 
-        store
-            .index
+        vault
             .receive_root_node(proof.into(), MultiBlockPresence::None)
             .await
             .unwrap();
 
         for layer in snapshot.inner_layers() {
             for (_, nodes) in layer.inner_maps() {
-                store
-                    .index
+                vault
                     .receive_inner_nodes(nodes.clone().into(), &receive_filter, None)
                     .await
                     .unwrap();
@@ -640,14 +756,13 @@ mod tests {
         }
 
         for (_, nodes) in snapshot.leaf_sets().take(1) {
-            store
-                .index
+            vault
                 .receive_leaf_nodes(nodes.clone().into(), None)
                 .await
                 .unwrap();
         }
 
-        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
         assert!(actual.is_empty());
     }
 
@@ -655,8 +770,8 @@ mod tests {
     async fn block_ids_multiple_branches() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = store.store().receive_filter();
+        let vault = create_vault(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = vault.store().receive_filter();
 
         let branch_id_0 = PublicKey::random();
         let branch_id_1 = PublicKey::random();
@@ -670,7 +785,7 @@ mod tests {
         let snapshot_1 = Snapshot::new(blocks_1.iter().cloned());
 
         receive_nodes(
-            &store.index,
+            &vault,
             &write_keys,
             branch_id_0,
             VersionVector::first(branch_id_0),
@@ -680,7 +795,7 @@ mod tests {
         .await;
 
         receive_nodes(
-            &store.index,
+            &vault,
             &write_keys,
             branch_id_1,
             VersionVector::first(branch_id_1),
@@ -689,7 +804,7 @@ mod tests {
         )
         .await;
 
-        let actual = store.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
         let expected = all_blocks
             .iter()
             .map(|(_, block)| block.id())
@@ -703,14 +818,14 @@ mod tests {
     async fn block_ids_pagination() {
         let (_base_dir, pool) = setup().await;
         let write_keys = Keypair::random();
-        let store = create_state(pool, RepositoryId::from(write_keys.public));
-        let receive_filter = store.store().receive_filter();
+        let vault = create_vault(pool, RepositoryId::from(write_keys.public));
+        let receive_filter = vault.store().receive_filter();
 
         let branch_id = PublicKey::random();
         let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
 
         receive_nodes(
-            &store.index,
+            &vault,
             &write_keys,
             branch_id,
             VersionVector::first(branch_id),
@@ -722,7 +837,7 @@ mod tests {
         let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
         sorted_blocks.sort();
 
-        let mut page = store.block_ids(2);
+        let mut page = vault.block_ids(2);
 
         let actual = page.next().await.unwrap();
         let expected = sorted_blocks[..2].iter().copied().collect();
@@ -740,12 +855,13 @@ mod tests {
         db::create_temp().await.unwrap()
     }
 
-    fn create_state(pool: db::Pool, repo_id: RepositoryId) -> Vault {
+    fn create_vault(pool: db::Pool, repository_id: RepositoryId) -> Vault {
         let event_tx = EventSender::new(1);
         let store = Store::new(pool);
-        let index = Index::new(store, repo_id, event_tx);
         Vault {
-            index,
+            repository_id,
+            store,
+            event_tx,
             block_tracker: BlockTracker::new(),
             block_request_mode: BlockRequestMode::Lazy,
             local_id: LocalId::new(),

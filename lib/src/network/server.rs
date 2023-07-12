@@ -242,7 +242,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn run(self) -> Result<()> {
-        let mut subscription = self.vault.index.subscribe();
+        let mut subscription = self.vault.event_tx.subscribe();
 
         // send initial branches
         self.handle_all_branches_changed().await?;

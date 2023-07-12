@@ -250,7 +250,7 @@ impl Network {
     /// dropped.
     pub async fn register(&self, handle: RepositoryHandle) -> Registration {
         *handle.vault.monitor.info_hash.get() =
-            Some(repository_info_hash(handle.vault.index.repository_id()));
+            Some(repository_info_hash(handle.vault.repository_id()));
 
         let metadata = handle.vault.metadata();
         let dht_enabled = metadata.get(DHT_ENABLED).await.unwrap_or(false);
@@ -259,7 +259,7 @@ impl Network {
         let dht = if dht_enabled {
             Some(
                 self.inner
-                    .start_dht_lookup(repository_info_hash(handle.vault.index.repository_id())),
+                    .start_dht_lookup(repository_info_hash(handle.vault.repository_id())),
             )
         } else {
             None
@@ -325,7 +325,7 @@ impl Registration {
         if enabled {
             holder.dht = Some(
                 self.inner
-                    .start_dht_lookup(repository_info_hash(holder.vault.index.repository_id())),
+                    .start_dht_lookup(repository_info_hash(holder.vault.repository_id())),
             );
         } else {
             holder.dht = None;

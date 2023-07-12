@@ -1,7 +1,4 @@
-use super::{
-    super::{proof::Proof, Index},
-    MultiBlockPresence, NodeState, SingleBlockPresence, Summary,
-};
+use super::{super::proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
     block::{tracker::OfferState, BlockData, BlockId, BlockNonce},
     collections::HashMap,
@@ -9,9 +6,11 @@ use crate::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
-    index::ReceiveFilter,
     repository::Vault,
-    store::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT},
+    store::{
+        get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, ReceiveFilter,
+        INNER_LAYER_COUNT,
+    },
     version_vector::VersionVector,
 };
 use rand::{
@@ -156,7 +155,7 @@ impl Distribution<Block> for Standard {
 
 // Receive all nodes in `snapshot` into `index`.
 pub(crate) async fn receive_nodes(
-    index: &Index,
+    vault: &Vault,
     write_keys: &Keypair,
     branch_id: PublicKey,
     version_vector: VersionVector,
@@ -164,14 +163,14 @@ pub(crate) async fn receive_nodes(
     snapshot: &Snapshot,
 ) {
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
-    index
+    vault
         .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index
+            vault
                 .receive_inner_nodes(nodes.clone().into(), receive_filter, None)
                 .await
                 .unwrap();
@@ -179,7 +178,7 @@ pub(crate) async fn receive_nodes(
     }
 
     for (_, nodes) in snapshot.leaf_sets() {
-        index
+        vault
             .receive_leaf_nodes(nodes.clone().into(), None)
             .await
             .unwrap();

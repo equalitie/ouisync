@@ -35,7 +35,6 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventSender},
     file::File,
-    index::Index,
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
@@ -166,7 +165,6 @@ impl Repository {
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
         let store = Store::new(pool);
-        let index = Index::new(store, *secrets.id(), event_tx);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -175,7 +173,9 @@ impl Repository {
         };
 
         let vault = Vault {
-            index,
+            repository_id: *secrets.id(),
+            store,
+            event_tx,
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
@@ -613,7 +613,7 @@ impl Repository {
 
     /// Subscribe to event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.vault.index.subscribe()
+        self.shared.vault.event_tx.subscribe()
     }
 
     /// Gets the access mode this repository is opened in.
@@ -753,7 +753,7 @@ impl Repository {
 
         print.display(&"Index");
         let print = print.indent();
-        self.shared.vault.index.debug_print(print).await;
+        self.shared.vault.debug_print(print).await;
     }
 
     /// Returns the total number of blocks in this repository. This is useful for diagnostics and
@@ -798,7 +798,7 @@ impl Shared {
             self.vault.store().clone(),
             keys,
             self.branch_shared.clone(),
-            self.vault.index.notify().clone(),
+            self.vault.event_tx.clone(),
         ))
     }
 
@@ -833,9 +833,9 @@ async fn generate_and_store_writer_id(
     Ok(writer_id)
 }
 
-async fn report_sync_progress(state: Vault) {
+async fn report_sync_progress(vault: Vault) {
     let mut prev_progress = Progress { value: 0, total: 0 };
-    let mut event_rx = ThrottleReceiver::new(state.index.subscribe(), Duration::from_secs(1));
+    let mut event_rx = ThrottleReceiver::new(vault.event_tx.subscribe(), Duration::from_secs(1));
 
     loop {
         match event_rx.recv().await {
@@ -843,7 +843,7 @@ async fn report_sync_progress(state: Vault) {
             Err(RecvError::Closed) => break,
         }
 
-        let next_progress = match state.sync_progress().await {
+        let next_progress = match vault.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 tracing::error!("failed to retrieve sync progress: {:?}", error);

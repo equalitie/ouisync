@@ -11,7 +11,7 @@ use crate::{
     event::{Event, EventSender, Payload},
     index::{
         node_test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Index, SingleBlockPresence, VersionVectorOp,
+        SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
@@ -69,17 +69,17 @@ async fn transfer_snapshot_between_two_replicas_case(
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_state, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_state, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, leaf_count);
-    save_snapshot(&a_state.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_state, &snapshot).await;
+    save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_vault, &snapshot).await;
 
-    assert!(load_latest_root_node(&b_state.index, &a_id).await.is_none());
+    assert!(load_latest_root_node(&b_vault, &a_id).await.is_none());
 
-    let mut server = create_server(a_state.clone());
-    let mut client = create_client(b_state.clone());
+    let mut server = create_server(a_vault.clone());
+    let mut client = create_client(b_vault.clone());
 
     // Wait until replica B catches up to replica A, then have replica A perform a local change
     // and repeat.
@@ -87,11 +87,10 @@ async fn transfer_snapshot_between_two_replicas_case(
         let mut remaining_changesets = changeset_count;
 
         loop {
-            wait_until_snapshots_in_sync(&a_state.index, a_id, &b_state.index).await;
+            wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault).await;
 
             if remaining_changesets > 0 {
-                create_changeset(&mut rng, &a_state.index, &a_id, &write_keys, changeset_size)
-                    .await;
+                create_changeset(&mut rng, &a_vault, &a_id, &write_keys, changeset_size).await;
                 remaining_changesets -= 1;
             } else {
                 break;
@@ -102,8 +101,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     // HACK: prevent "too many open files" error.
-    a_state.store().raw().close().await.unwrap();
-    b_state.store().raw().close().await.unwrap();
+    a_vault.store().raw().close().await.unwrap();
+    b_vault.store().raw().close().await.unwrap();
 }
 
 // NOTE: Reducing the number of cases otherwise this test is too slow.
@@ -123,35 +122,35 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     let mut rng = StdRng::seed_from_u64(rng_seed);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_state, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_state, b_id) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, b_id) = create_repository(&mut rng, &write_keys).await;
 
     // Initially both replicas have the whole snapshot but no blocks.
     let snapshot = Snapshot::generate(&mut rng, block_count);
-    save_snapshot(&a_state.index, a_id, &write_keys, &snapshot).await;
-    save_snapshot(&b_state.index, b_id, &write_keys, &snapshot).await;
+    save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
+    save_snapshot(&b_vault, b_id, &write_keys, &snapshot).await;
 
-    let mut server = create_server(a_state.clone());
-    let mut client = create_client(b_state.clone());
+    let mut server = create_server(a_vault.clone());
+    let mut client = create_client(b_vault.clone());
 
-    let a_block_tracker = a_state.block_tracker.client();
+    let a_block_tracker = a_vault.block_tracker.client();
 
     // Keep adding the blocks to replica A and verify they get received by replica B as well.
     let drive = async {
         for (id, block) in snapshot.blocks() {
             // Write the block by replica A.
-            a_state.block_tracker.require(*id);
+            a_vault.block_tracker.require(*id);
             a_block_tracker.offer(*id, OfferState::Approved);
             let promise = a_block_tracker.acceptor().try_accept().unwrap();
 
-            a_state
+            a_vault
                 .receive_block(&block.data, &block.nonce, Some(promise))
                 .await
                 .unwrap();
             tracing::info!(?id, "write block");
 
             // Then wait until replica B receives and writes it too.
-            wait_until_block_exists(&b_state.index, id).await;
+            wait_until_block_exists(&b_vault, id).await;
         }
     };
 
@@ -161,8 +160,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     drop(client);
 
     // HACK: prevent "too many open files" error.
-    a_state.store().raw().close().await.unwrap();
-    b_state.store().raw().close().await.unwrap();
+    a_vault.store().raw().close().await.unwrap();
+    b_vault.store().raw().close().await.unwrap();
 }
 
 // Receive a `LeafNode` with non-missing block, then drop the connection before the block itself is
@@ -172,20 +171,20 @@ async fn failed_block_only_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_a_base_dir, b_store, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
-    save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store, &snapshot).await;
+    save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_vault, &snapshot).await;
 
-    let mut server = create_server(a_store.clone());
-    let mut client = create_client(b_store.clone());
+    let mut server = create_server(a_vault.clone());
+    let mut client = create_client(b_vault.clone());
 
     simulate_connection_until(
         &mut server,
         &mut client,
-        wait_until_snapshots_in_sync(&a_store.index, a_id, &b_store.index),
+        wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault),
     )
     .await;
 
@@ -193,12 +192,12 @@ async fn failed_block_only_peer() {
     drop(server);
     drop(client);
 
-    let mut server = create_server(a_store.clone());
-    let mut client = create_client(b_store.clone());
+    let mut server = create_server(a_vault.clone());
+    let mut client = create_client(b_vault.clone());
 
     simulate_connection_until(&mut server, &mut client, async {
         for id in snapshot.blocks().keys() {
-            wait_until_block_exists(&b_store.index, id).await
+            wait_until_block_exists(&b_vault, id).await
         }
     })
     .await;
@@ -211,13 +210,13 @@ async fn failed_block_same_peer() {
     let mut rng = StdRng::seed_from_u64(0);
 
     let write_keys = Keypair::generate(&mut rng);
-    let (_a_base_dir, a_store, a_id) = create_repository(&mut rng, &write_keys).await;
-    let (_b_base_dir, b_store, _) = create_repository(&mut rng, &write_keys).await;
-    let (_c_base_dir, c_store, _) = create_repository(&mut rng, &write_keys).await;
+    let (_a_base_dir, a_vault, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, _) = create_repository(&mut rng, &write_keys).await;
+    let (_c_base_dir, c_vault, _) = create_repository(&mut rng, &write_keys).await;
 
     let snapshot = Snapshot::generate(&mut rng, 1);
-    save_snapshot(&a_store.index, a_id, &write_keys, &snapshot).await;
-    receive_blocks(&a_store, &snapshot).await;
+    save_snapshot(&a_vault, a_id, &write_keys, &snapshot).await;
+    receive_blocks(&a_vault, &snapshot).await;
 
     // [A]-(server_ac)---+
     //                   |
@@ -229,11 +228,11 @@ async fn failed_block_same_peer() {
     //                   |
     // [B]-(server_bc)---+
 
-    let mut server_ac = create_server(a_store.clone());
-    let mut client_ca = create_client(c_store.clone());
+    let mut server_ac = create_server(a_vault.clone());
+    let mut client_ca = create_client(c_vault.clone());
 
-    let mut server_bc = create_server(b_store.clone());
-    let mut client_cb = create_client(c_store.clone());
+    let mut server_bc = create_server(b_vault.clone());
+    let mut client_cb = create_client(c_vault.clone());
 
     // Run both connections in parallel until C syncs its index (but not blocks) with A
     let conn_ac = simulate_connection(&mut server_ac, &mut client_ca);
@@ -245,7 +244,7 @@ async fn failed_block_same_peer() {
 
     run_until(
         future::join(conn_ac, &mut conn_bc),
-        wait_until_snapshots_in_sync(&a_store.index, a_id, &c_store.index),
+        wait_until_snapshots_in_sync(&a_vault, a_id, &c_vault),
     )
     .await;
 
@@ -253,8 +252,8 @@ async fn failed_block_same_peer() {
     drop(server_ac);
     drop(client_ca);
 
-    let mut server_ac = create_server(a_store.clone());
-    let mut client_ca = create_client(c_store.clone());
+    let mut server_ac = create_server(a_vault.clone());
+    let mut client_ca = create_client(c_vault.clone());
 
     // Run the new A-C connection in parallel with the existing B-C connection until all blocks are
     // received.
@@ -263,7 +262,7 @@ async fn failed_block_same_peer() {
 
     run_until(future::join(conn_ac, conn_bc), async {
         for id in snapshot.blocks().keys() {
-            wait_until_block_exists(&c_store.index, id).await
+            wait_until_block_exists(&c_vault, id).await
         }
     })
     .await;
@@ -285,7 +284,7 @@ async fn failed_block_other_peer() {
 
         // Create the snapshot by A
         let snapshot = Snapshot::generate(&mut rng, 1);
-        save_snapshot(&a_state.index, a_id, &write_keys, &snapshot).await;
+        save_snapshot(&a_state, a_id, &write_keys, &snapshot).await;
         receive_blocks(&a_state, &snapshot).await;
 
         // Sync B with A
@@ -293,7 +292,7 @@ async fn failed_block_other_peer() {
         let mut client_ba = create_client(b_state.clone());
         simulate_connection_until(&mut server_ab, &mut client_ba, async {
             for id in snapshot.blocks().keys() {
-                wait_until_block_exists(&b_state.index, id).await;
+                wait_until_block_exists(&b_state, id).await;
             }
         })
         .await;
@@ -325,8 +324,8 @@ async fn failed_block_other_peer() {
         let conn_ac = conn_ac.instrument(tracing::info_span!("AC"));
 
         run_until(future::join(conn_ac, &mut conn_bc), async {
-            wait_until_snapshots_in_sync(&a_state.index, a_id, &c_state.index).await;
-            wait_until_snapshots_in_sync(&b_state.index, b_id, &c_state.index).await;
+            wait_until_snapshots_in_sync(&a_state, a_id, &c_state).await;
+            wait_until_snapshots_in_sync(&b_state, b_id, &c_state).await;
         })
         .await;
 
@@ -358,7 +357,7 @@ async fn failed_block_other_peer() {
         // the only remaining peer at this point.
         run_until(conn_bc, async {
             for id in snapshot.blocks().keys() {
-                wait_until_block_exists(&c_state.index, id).await;
+                wait_until_block_exists(&c_state, id).await;
             }
         })
         .await;
@@ -377,11 +376,10 @@ async fn create_repository<R: Rng + CryptoRng>(
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
 
-    let index = Index::new(store, repository_id, event_tx);
-    // index.create_branch(writer_id, write_keys).await.unwrap();
-
     let state = Vault {
-        index,
+        repository_id,
+        store,
+        event_tx,
         block_tracker: BlockTracker::new(),
         block_request_mode: BlockRequestMode::Greedy,
         local_id: LocalId::new(),
@@ -400,7 +398,7 @@ async fn create_repository<R: Rng + CryptoRng>(
 const CAPACITY: usize = 256;
 
 async fn save_snapshot(
-    index: &Index,
+    vault: &Vault,
     writer_id: PublicKey,
     write_keys: &Keypair,
     snapshot: &Snapshot,
@@ -414,10 +412,10 @@ async fn save_snapshot(
     let mut version_vector = VersionVector::new();
     version_vector.insert(writer_id, 2); // to force overwrite the initial root node
 
-    let receive_filter = index.store().receive_filter();
+    let receive_filter = vault.store().receive_filter();
 
     receive_nodes(
-        index,
+        vault,
         write_keys,
         writer_id,
         version_vector,
@@ -428,13 +426,13 @@ async fn save_snapshot(
 }
 
 async fn wait_until_snapshots_in_sync(
-    server_index: &Index,
+    server_vault: &Vault,
     server_id: PublicKey,
-    client_index: &Index,
+    client_vault: &Vault,
 ) {
-    let mut rx = client_index.subscribe();
+    let mut rx = client_vault.event_tx.subscribe();
 
-    let server_root = load_latest_root_node(server_index, &server_id).await;
+    let server_root = load_latest_root_node(server_vault, &server_id).await;
     let server_root = if let Some(server_root) = server_root {
         server_root
     } else {
@@ -446,7 +444,7 @@ async fn wait_until_snapshots_in_sync(
     }
 
     loop {
-        if let Some(client_root) = load_latest_root_node(client_index, &server_id).await {
+        if let Some(client_root) = load_latest_root_node(client_vault, &server_id).await {
             if client_root.summary.state.is_approved()
                 && client_root.proof.hash == server_root.proof.hash
             {
@@ -463,10 +461,10 @@ async fn wait_until_snapshots_in_sync(
     }
 }
 
-async fn wait_until_block_exists(index: &Index, block_id: &BlockId) {
-    let mut rx = index.subscribe();
+async fn wait_until_block_exists(vault: &Vault, block_id: &BlockId) {
+    let mut rx = vault.event_tx.subscribe();
 
-    while !index
+    while !vault
         .store()
         .acquire_read()
         .await
@@ -489,27 +487,27 @@ async fn recv_any(rx: &mut broadcast::Receiver<Event>) {
 // Simulate a changeset, e.g. create a file, write to it and flush it.
 async fn create_changeset(
     rng: &mut StdRng,
-    index: &Index,
+    vault: &Vault,
     writer_id: &PublicKey,
     write_keys: &Keypair,
     size: usize,
 ) {
     for _ in 0..size {
-        create_block(rng, index, writer_id, write_keys).await;
+        create_block(rng, vault, writer_id, write_keys).await;
     }
 
-    let mut tx = index.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_write().await.unwrap();
     tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
     tx.commit().await.unwrap();
 
-    index.notify().send(Payload::BranchChanged(*writer_id));
+    vault.event_tx.send(Payload::BranchChanged(*writer_id));
 }
 
 async fn create_block(
     rng: &mut StdRng,
-    index: &Index,
+    vault: &Vault,
     branch_id: &PublicKey,
     write_keys: &Keypair,
 ) {
@@ -521,7 +519,7 @@ async fn create_block(
     let block_id = BlockId::from_content(&content);
     let nonce = rng.gen();
 
-    let mut tx = index.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_write().await.unwrap();
     tx.link_block(
         branch_id,
         &encoded_locator,
@@ -535,8 +533,8 @@ async fn create_block(
     tx.commit().await.unwrap();
 }
 
-async fn load_latest_root_node(index: &Index, writer_id: &PublicKey) -> Option<RootNode> {
-    index
+async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<RootNode> {
+    vault
         .store()
         .acquire_read()
         .await
