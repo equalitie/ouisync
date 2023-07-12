@@ -23,7 +23,7 @@ rust-version = "1.65.0"
 
 [workspace.dependencies]
 async-trait = "0.1.67"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "5641a20e597c953278932a2b4616ff6d884f1177" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "e1970337d649ae5034ab538d7ae71a9307cd35be" }
 bytes = "1.4.0"
 camino = "1.0.9"
 futures-util = { version = "0.3.27", default-features = false }
