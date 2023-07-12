@@ -1,4 +1,5 @@
 mod block;
+mod block_ids;
 mod error;
 mod inner_node;
 mod leaf_node;
@@ -13,11 +14,12 @@ mod tests;
 
 pub use error::Error;
 
-pub(crate) use block::ReceiveStatus as BlockReceiveStatus;
-pub(crate) use inner_node::ReceiveStatus as InnerNodeReceiveStatus;
-pub(crate) use leaf_node::ReceiveStatus as LeafNodeReceiveStatus;
-pub(crate) use receive_filter::ReceiveFilter;
-pub(crate) use root_node::ReceiveStatus as RootNodeReceiveStatus;
+pub(crate) use {
+    block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage,
+    inner_node::ReceiveStatus as InnerNodeReceiveStatus,
+    leaf_node::ReceiveStatus as LeafNodeReceiveStatus, receive_filter::ReceiveFilter,
+    root_node::ReceiveStatus as RootNodeReceiveStatus,
+};
 
 use crate::{
     block::{BlockData, BlockId, BlockNonce},
@@ -156,6 +158,12 @@ impl Store {
         ReceiveFilter::new(self.raw().clone())
     }
 
+    /// Returns all block ids referenced from complete snapshots. The result is paginated (with
+    /// `page_size` entries per page) to avoid loading too many items into memory.
+    pub fn block_ids(&self, page_size: u32) -> BlockIdsPage {
+        BlockIdsPage::new(self.db.clone(), page_size)
+    }
+
     pub async fn debug_print_root_node(&self, printer: DebugPrinter) {
         match self.acquire_read().await {
             Ok(mut reader) => root_node::debug_print(reader.db(), printer).await,
@@ -260,6 +268,13 @@ impl Reader {
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
         leaf_node::load_locators(self.db(), block_id)
+    }
+
+    pub(super) fn missing_block_ids_in_branch<'a>(
+        &'a mut self,
+        branch_id: &'a PublicKey,
+    ) -> impl Stream<Item = Result<BlockId, Error>> + 'a {
+        block_ids::missing_block_ids_in_branch(self.db(), branch_id)
     }
 
     // Access the underlying database connection.

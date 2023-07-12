@@ -357,7 +357,8 @@ mod trash {
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        let mut unreachable_block_ids_page = shared.vault.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+        let mut unreachable_block_ids_page =
+            shared.vault.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;

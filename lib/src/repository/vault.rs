@@ -2,22 +2,22 @@
 
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce, BlockTracker},
+    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTracker},
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,
     error::{Error, Result},
     event::{EventSender, Payload},
-    index::{MultiBlockPresence, NodeState, ProofError, SingleBlockPresence, UntrustedProof},
+    index::{MultiBlockPresence, ProofError, UntrustedProof},
     storage_size::StorageSize,
     store::{
         self, InnerNodeMap, InnerNodeReceiveStatus, LeafNodeReceiveStatus, LeafNodeSet,
         ReceiveFilter, RootNodeReceiveStatus, Store, WriteTransaction,
     },
 };
-use futures_util::{Stream, TryStreamExt};
+use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 use tracing::Level;
 
 #[derive(Clone)]
@@ -141,16 +141,6 @@ impl Vault {
         Ok(())
     }
 
-    /// Returns all block ids referenced from complete snapshots. The result is paginated (with
-    /// `page_size` entries per page) to avoid loading too many items into memory.
-    pub fn block_ids(&self, page_size: u32) -> BlockIdsPage {
-        BlockIdsPage {
-            pool: self.store().raw().clone(),
-            lower_bound: None,
-            page_size,
-        }
-    }
-
     pub fn metadata(&self) -> Metadata {
         Metadata::new(self.store().raw().clone())
     }
@@ -194,8 +184,8 @@ impl Vault {
     }
 
     pub async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {
-        let mut tx = self.store().raw().begin_read().await?;
-        let mut block_ids = branch_missing_block_ids(&mut tx, branch_id);
+        let mut tx = self.store().begin_read().await?;
+        let mut block_ids = tx.missing_block_ids_in_branch(branch_id);
 
         while let Some(block_id) = block_ids.try_next().await? {
             self.block_tracker.approve(&block_id);
@@ -253,96 +243,12 @@ impl Vault {
     }
 }
 
-// TODO: move this to Store
-pub(crate) struct BlockIdsPage {
-    pool: db::Pool,
-    lower_bound: Option<BlockId>,
-    page_size: u32,
-}
-
-impl BlockIdsPage {
-    /// Returns the next page of the results. If the returned collection is empty it means the end
-    /// of the results was reached. Calling `next` afterwards resets the page back to zero.
-    pub async fn next(&mut self) -> Result<BTreeSet<BlockId>> {
-        let mut conn = self.pool.acquire().await?;
-
-        let ids: Result<BTreeSet<_>> = sqlx::query(
-            "WITH RECURSIVE
-                 inner_nodes(hash) AS (
-                     SELECT i.hash
-                        FROM snapshot_inner_nodes AS i
-                        INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                        WHERE r.state = ?
-                     UNION ALL
-                     SELECT c.hash
-                        FROM snapshot_inner_nodes AS c
-                        INNER JOIN inner_nodes AS p ON p.hash = c.parent
-                 )
-             SELECT DISTINCT block_id
-                 FROM snapshot_leaf_nodes
-                 WHERE parent IN inner_nodes AND block_id > COALESCE(?, x'')
-                 ORDER BY block_id
-                 LIMIT ?",
-        )
-        .bind(NodeState::Approved)
-        .bind(self.lower_bound.as_ref())
-        .bind(self.page_size)
-        .fetch(&mut *conn)
-        .map_ok(|row| row.get::<BlockId, _>(0))
-        .err_into()
-        .try_collect()
-        .await;
-
-        let ids = ids?;
-
-        // TODO: use `last` when we bump to rust 1.66
-        self.lower_bound = ids.iter().next_back().copied();
-
-        Ok(ids)
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum BlockRequestMode {
     // Request only required blocks
     Lazy,
     // Request all blocks
     Greedy,
-}
-
-/// Yields all missing block ids referenced from the latest complete snapshot of the given branch.
-// TODO: move this to Store
-fn branch_missing_block_ids<'a>(
-    conn: &'a mut db::Connection,
-    branch_id: &'a PublicKey,
-) -> impl Stream<Item = Result<BlockId>> + 'a {
-    sqlx::query(
-        "WITH RECURSIVE
-             inner_nodes(hash) AS (
-                 SELECT i.hash
-                     FROM snapshot_inner_nodes AS i
-                     INNER JOIN snapshot_root_nodes AS r ON r.hash = i.parent
-                     WHERE r.snapshot_id = (
-                         SELECT MAX(snapshot_id)
-                         FROM snapshot_root_nodes
-                         WHERE writer_id = ? AND state = ?
-                     )
-                 UNION ALL
-                 SELECT c.hash
-                     FROM snapshot_inner_nodes AS c
-                     INNER JOIN inner_nodes AS p ON p.hash = c.parent
-             )
-         SELECT DISTINCT block_id
-             FROM snapshot_leaf_nodes
-             WHERE parent IN inner_nodes AND block_presence = ?
-         ",
-    )
-    .bind(branch_id)
-    .bind(NodeState::Approved)
-    .bind(SingleBlockPresence::Missing)
-    .fetch(conn)
-    .map_ok(|row| row.get(0))
-    .err_into()
 }
 
 #[cfg(test)]
@@ -374,7 +280,7 @@ mod tests {
         let (_base_dir, pool) = setup().await;
         let read_key = SecretKey::random();
         let write_keys = Keypair::random();
-        let state = create_vault(pool, RepositoryId::from(write_keys.public));
+        let vault = create_vault(pool, RepositoryId::from(write_keys.public));
 
         let branch_id = PublicKey::random();
 
@@ -382,7 +288,7 @@ mod tests {
         let locator = locator.encode(&read_key);
         let block_id = rand::random();
 
-        let mut tx = state.store().begin_write().await.unwrap();
+        let mut tx = vault.store().begin_write().await.unwrap();
         tx.link_block(
             &branch_id,
             &locator,
@@ -394,7 +300,7 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let actual = state.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
         let expected = [block_id].into_iter().collect();
 
         assert_eq!(actual, expected);
@@ -420,7 +326,7 @@ mod tests {
         )
         .await;
 
-        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
         let expected = snapshot.blocks().keys().copied().collect();
 
         assert_eq!(actual, expected);
@@ -472,7 +378,7 @@ mod tests {
                 .unwrap();
         }
 
-        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
         assert!(actual.is_empty());
     }
 
@@ -514,7 +420,7 @@ mod tests {
         )
         .await;
 
-        let actual = vault.block_ids(u32::MAX).next().await.unwrap();
+        let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
         let expected = all_blocks
             .iter()
             .map(|(_, block)| block.id())
@@ -547,7 +453,7 @@ mod tests {
         let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
         sorted_blocks.sort();
 
-        let mut page = vault.block_ids(2);
+        let mut page = vault.store.block_ids(2);
 
         let actual = page.next().await.unwrap();
         let expected = sorted_blocks[..2].iter().copied().collect();
