@@ -187,9 +187,18 @@ pub(super) async fn filter_nodes_with_new_blocks(
     Ok(output)
 }
 
+pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
+    Ok(db::decode_u64(
+        sqlx::query("SELECT COUNT(*) FROM snapshot_leaf_nodes")
+            .fetch_one(conn)
+            .await?
+            .get(0),
+    ))
+}
+
 #[cfg(test)]
 #[async_recursion]
-pub(super) async fn count(
+pub(super) async fn count_in(
     conn: &mut db::Connection,
     current_layer: usize,
     node: &Hash,
@@ -202,7 +211,7 @@ pub(super) async fn count(
         let mut sum = 0;
 
         for (_bucket, child) in children {
-            sum += count(conn, current_layer + 1, &child.hash).await?;
+            sum += count_in(conn, current_layer + 1, &child.hash).await?;
         }
 
         Ok(sum)

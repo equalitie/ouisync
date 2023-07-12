@@ -3,10 +3,13 @@ mod metadata;
 mod monitor;
 mod params;
 mod reopen_token;
-#[cfg(test)]
-mod tests;
 mod vault;
 mod worker;
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod vault_tests;
 
 pub use self::{
     id::RepositoryId, metadata::Metadata, params::RepositoryParams, reopen_token::ReopenToken,
@@ -624,7 +627,7 @@ impl Repository {
     /// Gets the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
-        self.shared.vault.sync_progress().await
+        Ok(self.shared.vault.store().sync_progress().await?)
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -758,8 +761,8 @@ impl Repository {
 
     /// Returns the total number of blocks in this repository. This is useful for diagnostics and
     /// tests.
-    pub async fn count_blocks(&self) -> Result<usize> {
-        self.shared.vault.count_blocks().await
+    pub async fn count_blocks(&self) -> Result<u64> {
+        Ok(self.shared.vault.store().count_blocks().await?)
     }
 
     fn db(&self) -> &db::Pool {
@@ -843,7 +846,7 @@ async fn report_sync_progress(vault: Vault) {
             Err(RecvError::Closed) => break,
         }
 
-        let next_progress = match vault.sync_progress().await {
+        let next_progress = match vault.store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 tracing::error!("failed to retrieve sync progress: {:?}", error);

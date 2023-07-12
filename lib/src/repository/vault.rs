@@ -9,7 +9,6 @@ use crate::{
     error::{Error, Result},
     event::{EventSender, Payload},
     index::{MultiBlockPresence, NodeState, ProofError, SingleBlockPresence, UntrustedProof},
-    progress::Progress,
     storage_size::StorageSize,
     store::{
         self, InnerNodeMap, InnerNodeReceiveStatus, LeafNodeReceiveStatus, LeafNodeSet,
@@ -39,36 +38,6 @@ impl Vault {
 
     pub(crate) fn store(&self) -> &Store {
         &self.store
-    }
-
-    pub async fn count_blocks(&self) -> Result<usize> {
-        Ok(self.store().acquire_read().await?.count_blocks().await?)
-    }
-
-    /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
-    /// all blocks)
-    // TODO: Move this to Store
-    pub async fn sync_progress(&self) -> Result<Progress> {
-        let mut conn = self.store().raw().acquire().await?;
-
-        let total = db::decode_u64(
-            sqlx::query("SELECT COUNT(*) FROM snapshot_leaf_nodes")
-                .fetch_one(&mut *conn)
-                .await?
-                .get(0),
-        );
-
-        let present = db::decode_u64(
-            sqlx::query("SELECT COUNT(*) FROM blocks")
-                .fetch_one(&mut *conn)
-                .await?
-                .get(0),
-        );
-
-        Ok(Progress {
-            value: present,
-            total,
-        })
     }
 
     /// Receive `RootNode` from other replica and store it into the db. Returns whether the
@@ -380,172 +349,25 @@ fn branch_missing_block_ids<'a>(
 mod tests {
     use super::*;
     use crate::{
-        block::{tracker::OfferState, BlockId, BLOCK_SIZE},
-        collections::HashSet,
         crypto::{
             cipher::SecretKey,
             sign::{Keypair, PublicKey},
             Hash,
         },
         db,
-        error::Error,
         event::EventSender,
         index::{
-            node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
+            node_test_utils::{receive_nodes, Block, Snapshot},
             MultiBlockPresence, Proof, SingleBlockPresence,
         },
         locator::Locator,
         metrics::Metrics,
         repository::RepositoryId,
         state_monitor::StateMonitor,
-        store::{self, Store},
-        test_utils,
+        store::Store,
         version_vector::VersionVector,
     };
-    use assert_matches::assert_matches;
-    use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use tempfile::TempDir;
-    use test_strategy::proptest;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn receive_valid_blocks() {
-        let (_base_dir, pool) = setup().await;
-
-        let branch_id = PublicKey::random();
-        let write_keys = Keypair::random();
-        let repository_id = RepositoryId::from(write_keys.public);
-        let vault = create_vault(pool, repository_id);
-        let receive_filter = vault.store().receive_filter();
-
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
-
-        receive_nodes(
-            &vault,
-            &write_keys,
-            branch_id,
-            VersionVector::first(branch_id),
-            &receive_filter,
-            &snapshot,
-        )
-        .await;
-        receive_blocks(&vault, &snapshot).await;
-
-        let mut reader = vault.store().acquire_read().await.unwrap();
-
-        for (id, block) in snapshot.blocks() {
-            let mut content = vec![0; BLOCK_SIZE];
-            let nonce = reader.read_block(id, &mut content).await.unwrap();
-
-            assert_eq!(&content[..], &block.data.content[..]);
-            assert_eq!(nonce, block.nonce);
-            assert_eq!(BlockId::from_content(&content), *id);
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn receive_orphaned_block() {
-        let (_base_dir, pool) = setup().await;
-        let store = create_vault(pool, RepositoryId::random());
-
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
-        let block_tracker = store.block_tracker.client();
-
-        for block in snapshot.blocks().values() {
-            store.block_tracker.require(*block.id());
-            block_tracker.offer(*block.id(), OfferState::Approved);
-            let promise = block_tracker.acceptor().try_accept().unwrap();
-
-            assert_matches!(
-                store
-                    .receive_block(&block.data, &block.nonce, Some(promise))
-                    .await,
-                Err(Error::Store(store::Error::BlockNotReferenced))
-            );
-        }
-
-        let mut reader = store.store().acquire_read().await.unwrap();
-        for id in snapshot.blocks().keys() {
-            assert!(!reader.block_exists(id).await.unwrap());
-        }
-    }
-
-    #[proptest]
-    fn sync_progress(
-        #[strategy(1usize..16)] block_count: usize,
-        #[strategy(1usize..5)] branch_count: usize,
-        #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
-    ) {
-        test_utils::run(sync_progress_case(block_count, branch_count, rng_seed))
-    }
-
-    async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u64) {
-        let mut rng = StdRng::seed_from_u64(rng_seed);
-
-        let (_base_dir, pool) = setup().await;
-        let write_keys = Keypair::generate(&mut rng);
-        let repository_id = RepositoryId::from(write_keys.public);
-        let vault = create_vault(pool, repository_id);
-        let receive_filter = vault.store().receive_filter();
-
-        let all_blocks: Vec<(Hash, Block)> =
-            (&mut rng).sample_iter(Standard).take(block_count).collect();
-        let branches: Vec<(PublicKey, Snapshot)> = (0..branch_count)
-            .map(|_| {
-                let block_count = rng.gen_range(0..block_count);
-                let blocks = all_blocks.choose_multiple(&mut rng, block_count).cloned();
-                let snapshot = Snapshot::new(blocks);
-                let branch_id = PublicKey::generate(&mut rng);
-
-                (branch_id, snapshot)
-            })
-            .collect();
-
-        let mut expected_total_blocks = HashSet::new();
-        let mut expected_received_blocks = HashSet::new();
-
-        assert_eq!(
-            vault.sync_progress().await.unwrap(),
-            Progress {
-                value: expected_received_blocks.len() as u64,
-                total: expected_total_blocks.len() as u64
-            }
-        );
-
-        for (branch_id, snapshot) in branches {
-            receive_nodes(
-                &vault,
-                &write_keys,
-                branch_id,
-                VersionVector::first(branch_id),
-                &receive_filter,
-                &snapshot,
-            )
-            .await;
-            expected_total_blocks.extend(snapshot.blocks().keys().copied());
-
-            assert_eq!(
-                vault.sync_progress().await.unwrap(),
-                Progress {
-                    value: expected_received_blocks.len() as u64,
-                    total: expected_total_blocks.len() as u64,
-                }
-            );
-
-            receive_blocks(&vault, &snapshot).await;
-            expected_received_blocks.extend(snapshot.blocks().keys().copied());
-
-            assert_eq!(
-                vault.sync_progress().await.unwrap(),
-                Progress {
-                    value: expected_received_blocks.len() as u64,
-                    total: expected_total_blocks.len() as u64,
-                }
-            );
-        }
-
-        // HACK: prevent "too many open files" error.
-        vault.store().close().await.unwrap();
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn block_ids_local() {

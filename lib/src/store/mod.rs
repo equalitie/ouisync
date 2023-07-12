@@ -28,6 +28,7 @@ use crate::{
     db,
     debug::DebugPrinter,
     index::{MultiBlockPresence, Proof, SingleBlockPresence, Summary, VersionVectorOp},
+    progress::Progress,
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
@@ -86,6 +87,25 @@ impl Store {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
                 },
             },
+        })
+    }
+
+    pub async fn count_blocks(&self) -> Result<u64, Error> {
+        self.acquire_read().await?.count_blocks().await
+    }
+
+    /// Retrieve the syncing progress of this repository (number of downloaded blocks / number of
+    /// all blocks)
+    // TODO: Move this to Store
+    pub async fn sync_progress(&self) -> Result<Progress, Error> {
+        let mut reader = self.acquire_read().await?;
+
+        let total = reader.count_leaf_nodes().await?;
+        let present = reader.count_blocks().await?;
+
+        Ok(Progress {
+            value: present,
+            total,
         })
     }
 
@@ -182,14 +202,21 @@ impl Reader {
     }
 
     /// Returns the total number of blocks in the store.
-    pub async fn count_blocks(&mut self) -> Result<usize, Error> {
+    pub async fn count_blocks(&mut self) -> Result<u64, Error> {
         block::count(self.db()).await
     }
 
+    pub async fn count_leaf_nodes(&mut self) -> Result<u64, Error> {
+        leaf_node::count(self.db()).await
+    }
+
     #[cfg(test)]
-    pub async fn count_leaf_nodes(&mut self, branch_id: &PublicKey) -> Result<usize, Error> {
+    pub async fn count_leaf_nodes_in_branch(
+        &mut self,
+        branch_id: &PublicKey,
+    ) -> Result<usize, Error> {
         let root_hash = self.load_root_node(branch_id).await?.proof.hash;
-        leaf_node::count(self.db(), 0, &root_hash).await
+        leaf_node::count_in(self.db(), 0, &root_hash).await
     }
 
     /// Load the latest approved root node of the given branch.

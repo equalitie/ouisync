@@ -131,13 +131,13 @@ pub(super) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Resul
 }
 
 /// Returns the total number of blocks in the store.
-pub(super) async fn count(conn: &mut db::Connection) -> Result<usize, Error> {
+pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
     Ok(db::decode_u64(
         sqlx::query("SELECT COUNT(*) FROM blocks")
             .fetch_one(conn)
             .await?
             .get(0),
-    ) as usize)
+    ))
 }
 
 /// Checks whether the block exists in the store.

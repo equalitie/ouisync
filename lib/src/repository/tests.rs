@@ -32,7 +32,7 @@ async fn count_local_index_leaf_nodes(repo: &Repository) -> usize {
         .acquire_read()
         .await
         .unwrap()
-        .count_leaf_nodes(branch.id())
+        .count_leaf_nodes_in_branch(branch.id())
         .await
         .unwrap()
 }
