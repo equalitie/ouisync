@@ -119,12 +119,7 @@ mod tests {
     async fn count_referenced_blocks_empty() {
         let (_base_dir, store) = setup().await;
         let mut reader = store.acquire_read().await.unwrap();
-        assert_eq!(
-            count_referenced_blocks(reader.raw_mut(), &[])
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(count_referenced_blocks(reader.db(), &[]).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -135,7 +130,7 @@ mod tests {
 
         let mut tx = store.begin_write().await.unwrap();
 
-        assert_eq!(count_referenced_blocks(tx.raw_mut(), &[]).await.unwrap(), 0);
+        assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
 
         tx.link_block(
             &branch_id,
@@ -150,7 +145,7 @@ mod tests {
         let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
 
         assert_eq!(
-            count_referenced_blocks(tx.raw_mut(), &[root_hash])
+            count_referenced_blocks(tx.db(), &[root_hash])
                 .await
                 .unwrap(),
             1
@@ -199,21 +194,21 @@ mod tests {
         let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;
         let root_hash_b = tx.load_root_node(&branch_b_id).await.unwrap().proof.hash;
 
-        assert_eq!(count_referenced_blocks(tx.raw_mut(), &[]).await.unwrap(), 0);
+        assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
         assert_eq!(
-            count_referenced_blocks(tx.raw_mut(), &[root_hash_a])
+            count_referenced_blocks(tx.db(), &[root_hash_a])
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            count_referenced_blocks(tx.raw_mut(), &[root_hash_b])
+            count_referenced_blocks(tx.db(), &[root_hash_b])
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            count_referenced_blocks(tx.raw_mut(), &[root_hash_a, root_hash_b])
+            count_referenced_blocks(tx.db(), &[root_hash_a, root_hash_b])
                 .await
                 .unwrap(),
             3

@@ -404,7 +404,7 @@ async fn count_child_nodes(reader: &mut Reader) -> Result<usize, Error> {
             (SELECT COUNT(*) FROM snapshot_inner_nodes) +
             (SELECT COUNT(*) FROM snapshot_leaf_nodes)",
     )
-    .fetch_one(reader.raw_mut())
+    .fetch_one(reader.db())
     .await?;
 
     Ok(row.get::<u32, _>(0) as usize)
@@ -413,7 +413,7 @@ async fn count_child_nodes(reader: &mut Reader) -> Result<usize, Error> {
 async fn has_empty_inner_node(reader: &mut Reader) -> bool {
     sqlx::query("SELECT 0 FROM snapshot_inner_nodes WHERE hash = ? LIMIT 1")
         .bind(&*EMPTY_INNER_HASH)
-        .fetch_optional(reader.raw_mut())
+        .fetch_optional(reader.db())
         .await
         .unwrap()
         .is_some()
@@ -424,7 +424,7 @@ async fn check_complete(reader: &mut Reader, root_hash: &Hash) {
         return;
     }
 
-    let nodes = inner_node::load_children(reader.raw_mut(), root_hash)
+    let nodes = inner_node::load_children(reader.db(), root_hash)
         .await
         .unwrap();
     assert!(!nodes.is_empty());
@@ -432,10 +432,10 @@ async fn check_complete(reader: &mut Reader, root_hash: &Hash) {
     let mut stack: Vec<_> = nodes.into_iter().map(|(_, node)| node).collect();
 
     while let Some(node) = stack.pop() {
-        let inners = inner_node::load_children(reader.raw_mut(), &node.hash)
+        let inners = inner_node::load_children(reader.db(), &node.hash)
             .await
             .unwrap();
-        let leaves = leaf_node::load_children(reader.raw_mut(), &node.hash)
+        let leaves = leaf_node::load_children(reader.db(), &node.hash)
             .await
             .unwrap();
 

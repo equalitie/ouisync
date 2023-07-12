@@ -94,7 +94,7 @@ impl Store {
     pub async fn remove_outdated_snapshots(&self, root_node: &RootNode) -> Result<(), Error> {
         // First remove all incomplete snapshots as they can never serve as fallback.
         let mut tx = self.begin_write().await?;
-        root_node::remove_older_incomplete(tx.raw_mut(), root_node).await?;
+        root_node::remove_older_incomplete(tx.db(), root_node).await?;
         tx.commit().await?;
 
         let mut reader = self.acquire_read().await?;
@@ -103,7 +103,7 @@ impl Store {
         let mut new = Cow::Borrowed(root_node);
 
         while let Some(old) = reader.load_prev_root_node(&new).await? {
-            if root_node::check_fallback(reader.raw_mut(), &old, &new).await? {
+            if root_node::check_fallback(reader.db(), &old, &new).await? {
                 // `old` can serve as fallback for `self` and so we can't prune it yet. Try the
                 // previous snapshot.
                 tracing::trace!(
@@ -117,7 +117,7 @@ impl Store {
             } else {
                 // `old` can't serve as fallback for `self` and so we can safely remove it
                 let mut tx = self.begin_write().await?;
-                root_node::remove(tx.raw_mut(), &old).await?;
+                root_node::remove(tx.db(), &old).await?;
                 tx.commit().await?;
 
                 tracing::trace!(
@@ -138,7 +138,7 @@ impl Store {
 
     pub async fn debug_print_root_node(&self, printer: DebugPrinter) {
         match self.acquire_read().await {
-            Ok(mut reader) => root_node::debug_print(reader.raw_mut(), printer).await,
+            Ok(mut reader) => root_node::debug_print(reader.db(), printer).await,
             Err(error) => printer.display(&format!("Failed to acquire reader {:?}", error)),
         }
     }
@@ -149,7 +149,8 @@ impl Store {
         Ok(self.db.close().await?)
     }
 
-    // TODO: remove this method once the refactoring is complete
+    /// Access the underlying database pool.
+    /// TODO: make this non-public when the store extraction is complete.
     pub fn raw(&self) -> &db::Pool {
         &self.db
     }
@@ -171,40 +172,40 @@ impl Reader {
         id: &BlockId,
         buffer: &mut [u8],
     ) -> Result<BlockNonce, Error> {
-        block::read(self.raw_mut(), id, buffer).await
+        block::read(self.db(), id, buffer).await
     }
 
     /// Checks whether the block exists in the store.
     #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
-        block::exists(self.raw_mut(), id).await
+        block::exists(self.db(), id).await
     }
 
     /// Returns the total number of blocks in the store.
     pub async fn count_blocks(&mut self) -> Result<usize, Error> {
-        block::count(self.raw_mut()).await
+        block::count(self.db()).await
     }
 
     #[cfg(test)]
     pub async fn count_leaf_nodes(&mut self, branch_id: &PublicKey) -> Result<usize, Error> {
         let root_hash = self.load_root_node(branch_id).await?.proof.hash;
-        leaf_node::count(self.raw_mut(), 0, &root_hash).await
+        leaf_node::count(self.db(), 0, &root_hash).await
     }
 
     /// Load the latest approved root node of the given branch.
     pub async fn load_root_node(&mut self, branch_id: &PublicKey) -> Result<RootNode, Error> {
-        root_node::load(self.raw_mut(), branch_id).await
+        root_node::load(self.db(), branch_id).await
     }
 
     pub async fn load_prev_root_node(
         &mut self,
         node: &RootNode,
     ) -> Result<Option<RootNode>, Error> {
-        root_node::load_prev(self.raw_mut(), node).await
+        root_node::load_prev(self.db(), node).await
     }
 
     pub fn load_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-        root_node::load_all(self.raw_mut())
+        root_node::load_all(self.db())
     }
 
     #[cfg(test)]
@@ -212,30 +213,30 @@ impl Reader {
         &'a mut self,
         writer_id: &'a PublicKey,
     ) -> impl Stream<Item = Result<RootNode, Error>> + 'a {
-        root_node::load_all_by_writer_in_any_state(self.raw_mut(), writer_id)
+        root_node::load_all_by_writer_in_any_state(self.db(), writer_id)
     }
 
     pub async fn root_node_exists(&mut self, node: &RootNode) -> Result<bool, Error> {
-        root_node::exists(self.raw_mut(), node).await
+        root_node::exists(self.db(), node).await
     }
 
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
-        inner_node::load_children(self.raw_mut(), parent_hash).await
+        inner_node::load_children(self.db(), parent_hash).await
     }
 
     pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodeSet, Error> {
-        leaf_node::load_children(self.raw_mut(), parent_hash).await
+        leaf_node::load_children(self.db(), parent_hash).await
     }
 
     pub fn load_locators<'a>(
         &'a mut self,
         block_id: &'a BlockId,
     ) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-        leaf_node::load_locators(self.raw_mut(), block_id)
+        leaf_node::load_locators(self.db(), block_id)
     }
 
-    // TODO: remove pub
-    pub fn raw_mut(&mut self) -> &mut db::Connection {
+    // Access the underlying database connection.
+    fn db(&mut self) -> &mut db::Connection {
         &mut self.inner
     }
 }
@@ -275,7 +276,7 @@ impl ReadTransaction {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_node::load_children(self.raw_mut(), &parent).await?;
+            path.inner[level] = inner_node::load_children(self.db(), &parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -284,13 +285,13 @@ impl ReadTransaction {
             };
         }
 
-        path.leaves = leaf_node::load_children(self.raw_mut(), &parent).await?;
+        path.leaves = leaf_node::load_children(self.db(), &parent).await?;
 
         Ok(path)
     }
 
-    // TODO: remove `pub` from this method once the refactoring is complete
-    pub fn raw_mut(&mut self) -> &mut db::ReadTransaction {
+    // Access the underlying database transaction.
+    fn db(&mut self) -> &mut db::ReadTransaction {
         match &mut self.inner.inner {
             Handle::ReadTransaction(tx) => tx,
             Handle::WriteTransaction(tx) => tx,
@@ -327,7 +328,7 @@ impl WriteTransaction {
         block_presence: SingleBlockPresence,
         write_keys: &Keypair,
     ) -> Result<bool, Error> {
-        let root_node = root_node::load_or_create(self.raw_mut(), branch_id, write_keys).await?;
+        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         if path.has_leaf(block_id) {
@@ -351,7 +352,7 @@ impl WriteTransaction {
         expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load(self.raw_mut(), branch_id).await?;
+        let root_node = root_node::load(self.db(), branch_id).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         let block_id = path
@@ -383,24 +384,20 @@ impl WriteTransaction {
         buffer: &[u8],
         nonce: &BlockNonce,
     ) -> Result<(), Error> {
-        block::write(self.raw_mut(), id, buffer, nonce).await
+        block::write(self.db(), id, buffer, nonce).await
     }
 
     /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
-        block::remove(self.raw_mut(), id).await?;
-        leaf_node::set_missing(self.raw_mut(), id).await?;
+        block::remove(self.db(), id).await?;
+        leaf_node::set_missing(self.db(), id).await?;
 
-        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(self.raw_mut(), id)
+        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(self.db(), id)
             .try_collect()
             .await?;
 
-        receive::update_summaries(
-            self.raw_mut(),
-            parent_hashes,
-            UpdateSummaryReason::BlockRemoved,
-        )
-        .await?;
+        receive::update_summaries(self.db(), parent_hashes, UpdateSummaryReason::BlockRemoved)
+            .await?;
 
         Ok(())
     }
@@ -412,7 +409,7 @@ impl WriteTransaction {
         op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load_or_create(self.raw_mut(), branch_id, write_keys).await?;
+        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
         op.apply(branch_id, &mut new_vv);
@@ -435,8 +432,8 @@ impl WriteTransaction {
     }
 
     pub async fn remove_branch(&mut self, root_node: &RootNode) -> Result<(), Error> {
-        root_node::remove_older(self.raw_mut(), root_node).await?;
-        root_node::remove(self.raw_mut(), root_node).await?;
+        root_node::remove_older(self.db(), root_node).await?;
+        root_node::remove(self.db(), root_node).await?;
 
         Ok(())
     }
@@ -457,15 +454,15 @@ impl WriteTransaction {
         // be happens-after any node inserted earlier in the same branch.
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = root_node::decide_action(self.raw_mut(), &proof, &block_presence).await?;
+        let action = root_node::decide_action(self.db(), &proof, &block_presence).await?;
 
         if action.insert {
-            let node = root_node::create(self.raw_mut(), proof, Summary::INCOMPLETE).await?;
+            let node = root_node::create(self.db(), proof, Summary::INCOMPLETE).await?;
 
             // Ignoring quota here because if the snapshot became complete by receiving this root
             // node it means that we already have all the other nodes and so the quota validation
             // already took place.
-            let status = receive::finalize(self.raw_mut(), hash, None).await?;
+            let status = receive::finalize(self.db(), hash, None).await?;
 
             tracing::debug!(
                 branch_id = ?node.proof.writer_id,
@@ -495,19 +492,18 @@ impl WriteTransaction {
     ) -> Result<InnerNodeReceiveStatus, Error> {
         let parent_hash = nodes.hash();
 
-        if !receive::parent_exists(self.raw_mut(), &parent_hash).await? {
+        if !receive::parent_exists(self.db(), &parent_hash).await? {
             return Ok(InnerNodeReceiveStatus::default());
         }
 
         let request_children =
-            inner_node::filter_nodes_with_new_blocks(self.raw_mut(), &nodes, receive_filter)
-                .await?;
+            inner_node::filter_nodes_with_new_blocks(self.db(), &nodes, receive_filter).await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
-        inner_node::inherit_summaries(self.raw_mut(), &mut nodes).await?;
-        inner_node::save_all(self.raw_mut(), &nodes, &parent_hash).await?;
+        inner_node::inherit_summaries(self.db(), &mut nodes).await?;
+        inner_node::save_all(self.db(), &nodes, &parent_hash).await?;
 
-        let status = receive::finalize(self.raw_mut(), parent_hash, quota).await?;
+        let status = receive::finalize(self.db(), parent_hash, quota).await?;
 
         Ok(InnerNodeReceiveStatus {
             new_approved: status.new_approved,
@@ -525,21 +521,15 @@ impl WriteTransaction {
     ) -> Result<LeafNodeReceiveStatus, Error> {
         let parent_hash = nodes.hash();
 
-        if !receive::parent_exists(self.raw_mut(), &parent_hash).await? {
+        if !receive::parent_exists(self.db(), &parent_hash).await? {
             return Ok(LeafNodeReceiveStatus::default());
         }
 
-        let request_blocks =
-            leaf_node::filter_nodes_with_new_blocks(self.raw_mut(), &nodes).await?;
+        let request_blocks = leaf_node::filter_nodes_with_new_blocks(self.db(), &nodes).await?;
 
-        leaf_node::save_all(
-            self.raw_mut(),
-            &nodes.into_inner().into_missing(),
-            &parent_hash,
-        )
-        .await?;
+        leaf_node::save_all(self.db(), &nodes.into_inner().into_missing(), &parent_hash).await?;
 
-        let status = receive::finalize(self.raw_mut(), parent_hash, quota).await?;
+        let status = receive::finalize(self.db(), parent_hash, quota).await?;
 
         Ok(LeafNodeReceiveStatus {
             old_approved: status.old_approved,
@@ -556,7 +546,7 @@ impl WriteTransaction {
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<BlockReceiveStatus, Error> {
-        block::receive(self.raw_mut(), data, nonce).await
+        block::receive(self.db(), data, nonce).await
     }
 
     pub async fn commit(self) -> Result<(), Error> {
@@ -589,13 +579,13 @@ impl WriteTransaction {
     ) -> Result<(), Error> {
         for (i, inner_layer) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
-                inner_node::save_all(self.raw_mut(), inner_layer, &parent_hash).await?;
+                inner_node::save_all(self.db(), inner_layer, &parent_hash).await?;
             }
         }
 
         let layer = Path::total_layer_count() - 1;
         if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
-            leaf_node::save_all(self.raw_mut(), &path.leaves, &parent_hash).await?;
+            leaf_node::save_all(self.db(), &path.leaves, &parent_hash).await?;
         }
 
         let writer_id = old_root_node.proof.writer_id;
@@ -614,8 +604,8 @@ impl WriteTransaction {
         new_proof: Proof,
         new_summary: Summary,
     ) -> Result<(), Error> {
-        let root_node = root_node::create(self.raw_mut(), new_proof, new_summary).await?;
-        root_node::remove_older(self.raw_mut(), &root_node).await?;
+        let root_node = root_node::create(self.db(), new_proof, new_summary).await?;
+        root_node::remove_older(self.db(), &root_node).await?;
 
         tracing::trace!(
             vv = ?root_node.proof.version_vector,
@@ -627,8 +617,8 @@ impl WriteTransaction {
         Ok(())
     }
 
-    // TODO: un-expose this method once the refactoring is complete
-    pub fn raw_mut(&mut self) -> &mut db::WriteTransaction {
+    // Access the underlying database transaction.
+    fn db(&mut self) -> &mut db::WriteTransaction {
         match &mut self.inner.inner.inner {
             Handle::WriteTransaction(tx) => tx,
             Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),

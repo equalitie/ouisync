@@ -439,10 +439,6 @@ impl Repository {
         }
     }
 
-    pub(crate) fn db(&self) -> &db::Pool {
-        self.shared.state.store().raw()
-    }
-
     /// Get the state monitor node of this repository.
     pub fn monitor(&self) -> &StateMonitor {
         self.shared.state.monitor.node()
@@ -764,6 +760,10 @@ impl Repository {
     /// tests.
     pub async fn count_blocks(&self) -> Result<usize> {
         self.shared.state.count_blocks().await
+    }
+
+    fn db(&self) -> &db::Pool {
+        self.shared.state.store().raw()
     }
 }
 
