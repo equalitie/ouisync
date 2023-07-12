@@ -7,7 +7,7 @@ use crate::{
     db,
     error::{Error, Result},
     event::Payload,
-    index::{self, Index, NodeState, SingleBlockPresence},
+    index::{Index, NodeState, SingleBlockPresence},
     progress::Progress,
     storage_size::StorageSize,
     store::{self, Store},
@@ -59,41 +59,37 @@ impl RepositoryState {
         })
     }
 
-    /// Write a block received from a remote replica to the block store. The block must already be
-    /// referenced by the index, otherwise an `BlockNotReferenced` error is returned.
-    pub(crate) async fn write_received_block(
+    /// Receive a block from other replica.
+    pub(crate) async fn receive_block(
         &self,
         data: &BlockData,
         nonce: &BlockNonce,
         promise: Option<BlockPromise>,
     ) -> Result<()> {
-        let mut tx = self.store().begin_write().await?;
+        let block_id = data.id;
+        let event_tx = self.index.notify().clone();
 
-        let writer_ids = match index::receive_block(tx.raw_mut(), &data.id).await {
-            Ok(writer_ids) => writer_ids,
+        let mut tx = self.store().begin_write().await?;
+        let status = match tx.receive_block(data, nonce).await {
+            Ok(status) => status,
             Err(error) => {
-                if matches!(error, Error::Store(store::Error::BlockNotReferenced)) {
+                if matches!(error, store::Error::BlockNotReferenced) {
                     // We no longer need this block but we still need to un-track it.
                     if let Some(promise) = promise {
                         promise.complete();
                     }
                 }
 
-                return Err(error);
+                return Err(error.into());
             }
         };
 
-        tx.write_block(&data.id, &data.content, nonce).await?;
-
-        let data_id = data.id;
-        let event_tx = self.index.notify().clone();
-
         tx.commit_and_then(move || {
             // Notify affected branches.
-            for writer_id in writer_ids {
+            for branch_id in status.branches {
                 event_tx.send(Payload::BlockReceived {
-                    block_id: data_id,
-                    branch_id: writer_id,
+                    block_id,
+                    branch_id,
                 });
             }
 
@@ -453,7 +449,7 @@ mod tests {
 
             assert_matches!(
                 store
-                    .write_received_block(&block.data, &block.nonce, Some(promise))
+                    .receive_block(&block.data, &block.nonce, Some(promise))
                     .await,
                 Err(Error::Store(store::Error::BlockNotReferenced))
             );

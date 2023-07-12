@@ -1,4 +1,5 @@
 use crate::crypto::{Digest, Hash, Hashable};
+use rand::{distributions::Standard, prelude::Distribution, Rng};
 use serde::{Deserialize, Serialize};
 use std::{array::TryFromSliceError, fmt};
 
@@ -70,5 +71,14 @@ impl From<Box<[u8]>> for BlockData {
     fn from(content: Box<[u8]>) -> Self {
         let id = BlockId::from_content(&content);
         Self { content, id }
+    }
+}
+
+impl Distribution<BlockData> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlockData {
+        let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
+        rng.fill(&mut content[..]);
+
+        BlockData::from(content)
     }
 }

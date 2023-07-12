@@ -3,7 +3,7 @@ use super::{
     MultiBlockPresence, NodeState, SingleBlockPresence, Summary,
 };
 use crate::{
-    block::{tracker::OfferState, BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    block::{tracker::OfferState, BlockData, BlockId, BlockNonce},
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -147,14 +147,9 @@ impl Block {
 
 impl Distribution<Block> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        let mut content = vec![0; BLOCK_SIZE];
-        rng.fill(&mut content[..]);
-
-        let nonce = rng.gen();
-
         Block {
-            data: BlockData::from(content.into_boxed_slice()),
-            nonce,
+            data: rng.gen(),
+            nonce: rng.gen(),
         }
     }
 }
@@ -200,7 +195,7 @@ pub(crate) async fn receive_blocks(repo: &RepositoryState, snapshot: &Snapshot) 
         client.offer(*block.id(), OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 
-        repo.write_received_block(&block.data, &block.nonce, Some(promise))
+        repo.receive_block(&block.data, &block.nonce, Some(promise))
             .await
             .unwrap();
     }

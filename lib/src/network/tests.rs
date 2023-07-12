@@ -145,7 +145,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
             let promise = a_block_tracker.acceptor().try_accept().unwrap();
 
             a_state
-                .write_received_block(&block.data, &block.nonce, Some(promise))
+                .receive_block(&block.data, &block.nonce, Some(promise))
                 .await
                 .unwrap();
             tracing::info!(?id, "write block");

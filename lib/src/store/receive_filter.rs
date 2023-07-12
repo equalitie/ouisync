@@ -43,20 +43,20 @@ impl ReceiveFilter {
 
         Ok(true)
     }
-
-    pub async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
-        sqlx::query("DELETE FROM received_nodes WHERE hash = ?")
-            .bind(hash)
-            .execute(tx)
-            .await?;
-        Ok(())
-    }
 }
 
 impl Drop for ReceiveFilter {
     fn drop(&mut self) {
         task::spawn(remove_all(self.db.clone(), self.id));
     }
+}
+
+pub(super) async fn remove(tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
+    sqlx::query("DELETE FROM received_nodes WHERE hash = ?")
+        .bind(hash)
+        .execute(tx)
+        .await?;
+    Ok(())
 }
 
 async fn load(

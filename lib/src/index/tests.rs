@@ -1,6 +1,6 @@
 use super::{
     node::{self, SingleBlockPresence},
-    node_test_utils::{self, Snapshot},
+    node_test_utils::{self, Block, Snapshot},
     proof::Proof,
     Index,
 };
@@ -274,7 +274,7 @@ mod receive_and_create_root_node {
         let block_id_0_1 = rng.gen();
 
         let locator_1 = rng.gen();
-        let block_id_1 = rng.gen();
+        let block_1: Block = rng.gen();
 
         let locator_2 = rng.gen();
         let block_id_2 = rng.gen();
@@ -284,7 +284,7 @@ mod receive_and_create_root_node {
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
-            (locator_1, block_id_1, SingleBlockPresence::Missing),
+            (locator_1, block_1.data.id, SingleBlockPresence::Missing),
             (locator_2, block_id_2, SingleBlockPresence::Missing),
         ] {
             tx.link_block(&local_id, &locator, &block_id, presence, &write_keys)
@@ -308,7 +308,7 @@ mod receive_and_create_root_node {
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
         let mut tx = index.store().begin_write().await.unwrap();
-        node::receive_block(tx.raw_mut(), &block_id_1)
+        tx.receive_block(&block_1.data, &block_1.nonce)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -566,14 +566,14 @@ async fn prune_snapshots_insert_present() {
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[0].1.id()).await;
+    receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[1].1.id()).await;
+    receive_block(&index, &blocks[1].1).await;
 
     assert_eq!(count_snapshots(&index, &remote_id).await, 2);
 
@@ -594,7 +594,7 @@ async fn prune_snapshots_insert_missing() {
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[0].1.id()).await;
+    receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
     blocks.push(rng.gen());
@@ -624,14 +624,14 @@ async fn prune_snapshots_update_from_present_to_present() {
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[0].1.id()).await;
+    receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
     blocks[0].1 = rng.gen();
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[0].1.id()).await;
+    receive_block(&index, &blocks[0].1).await;
 
     assert_eq!(count_snapshots(&index, &remote_id).await, 2);
 
@@ -652,7 +652,7 @@ async fn prune_snapshots_update_from_present_to_missing() {
     let snapshot = Snapshot::new(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &write_keys).await;
-    receive_block(&index, blocks[0].1.id()).await;
+    receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
     blocks[0].1 = rng.gen();
@@ -831,9 +831,9 @@ async fn receive_snapshot(
         .await
 }
 
-async fn receive_block(index: &Index, block_id: &BlockId) {
+async fn receive_block(index: &Index, block: &Block) {
     let mut tx = index.store().begin_write().await.unwrap();
-    node::receive_block(tx.raw_mut(), block_id).await.unwrap();
+    tx.receive_block(&block.data, &block.nonce).await.unwrap();
     tx.commit().await.unwrap();
 }
 

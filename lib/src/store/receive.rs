@@ -2,16 +2,20 @@
 
 use super::{
     error::Error,
+    inner_node::InnerNode,
     quota::{self, QuotaError},
-    root_node,
+    receive_filter,
+    root_node::{self, RootNode},
 };
 use crate::{
+    collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     db,
     future::try_collect_into,
-    index::{update_summaries, NodeState, UpdateSummaryReason},
+    index::NodeState,
     storage_size::StorageSize,
 };
+use futures_util::TryStreamExt;
 use sqlx::Row;
 
 /// Status of receiving nodes from remote replica.
@@ -21,6 +25,14 @@ pub(super) struct ReceiveStatus {
     pub old_approved: bool,
     /// List of branches whose snapshots have been approved.
     pub new_approved: Vec<PublicKey>,
+}
+
+/// Reason for updating the summary
+pub(super) enum UpdateSummaryReason {
+    /// Updating summary because a block was removed
+    BlockRemoved,
+    /// Updating summary for some other reason
+    Other,
 }
 
 /// Does a parent node (root or inner) with the given hash exist?
@@ -35,6 +47,48 @@ pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
     .fetch_one(conn)
     .await?
     .get(0))
+}
+
+/// Update summary of the nodes with the specified hashes and all their ancestor nodes.
+/// Returns the affected snapshots and their states.
+pub(super) async fn update_summaries(
+    tx: &mut db::WriteTransaction,
+    mut nodes: Vec<Hash>,
+    reason: UpdateSummaryReason,
+) -> Result<HashMap<Hash, NodeState>, Error> {
+    let mut states = HashMap::default();
+
+    while let Some(hash) = nodes.pop() {
+        let mut has_parent = false;
+
+        // NOTE: There are no orphaned nodes so when `load_parent_hashes` returns nothing it can
+        // only mean that the node is a root.
+
+        try_collect_into(
+            InnerNode::load_parent_hashes(tx, &hash).map_ok(|hash| {
+                has_parent = true;
+                hash
+            }),
+            &mut nodes,
+        )
+        .await?;
+
+        if has_parent {
+            InnerNode::update_summaries(tx, &hash).await?;
+
+            match reason {
+                // If block was removed we need to remove the corresponding receive filter entries
+                // so if the block becomes needed again we can request it again.
+                UpdateSummaryReason::BlockRemoved => receive_filter::remove(tx, &hash).await?,
+                UpdateSummaryReason::Other => (),
+            }
+        } else {
+            let state = RootNode::update_summaries(tx, &hash).await?;
+            states.entry(hash).or_insert(state).update(state);
+        }
+    }
+
+    Ok(states)
 }
 
 pub(super) async fn finalize(
@@ -97,6 +151,7 @@ pub(super) async fn finalize(
 #[cfg(test)]
 mod tests {
     use super::super::{
+        block,
         inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH},
         leaf_node::{self, LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
         root_node,
@@ -357,7 +412,7 @@ mod tests {
         .await
         .unwrap();
 
-        update_summaries(&mut tx, root_node.proof.hash).await;
+        update_summaries_and_approve(&mut tx, root_node.proof.hash).await;
         root_node.reload(&mut tx).await.unwrap();
         assert_eq!(root_node.summary.state.is_approved(), leaf_count == 0);
 
@@ -370,7 +425,7 @@ mod tests {
                     .await
                     .unwrap();
 
-                update_summaries(&mut tx, *parent_hash).await;
+                update_summaries_and_approve(&mut tx, *parent_hash).await;
 
                 root_node.reload(&mut tx).await.unwrap();
                 assert!(!root_node.summary.state.is_approved());
@@ -385,7 +440,7 @@ mod tests {
                 .unwrap();
             unsaved_leaves -= nodes.len();
 
-            update_summaries(&mut tx, *parent_hash).await;
+            update_summaries_and_approve(&mut tx, *parent_hash).await;
             root_node.reload(&mut tx).await.unwrap();
 
             if unsaved_leaves > 0 {
@@ -399,8 +454,8 @@ mod tests {
         drop(tx);
         pool.close().await.unwrap();
 
-        async fn update_summaries(tx: &mut db::WriteTransaction, hash: Hash) {
-            for (hash, state) in index::update_summaries(tx, vec![hash], UpdateSummaryReason::Other)
+        async fn update_summaries_and_approve(tx: &mut db::WriteTransaction, hash: Hash) {
+            for (hash, state) in update_summaries(tx, vec![hash], UpdateSummaryReason::Other)
                 .await
                 .unwrap()
             {
@@ -468,7 +523,7 @@ mod tests {
             leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
-            index::update_summaries(&mut tx, vec![*parent_hash], UpdateSummaryReason::Other)
+            update_summaries(&mut tx, vec![*parent_hash], UpdateSummaryReason::Other)
                 .await
                 .unwrap();
         }
@@ -480,8 +535,10 @@ mod tests {
 
         let mut received_blocks = 0;
 
-        for block_id in snapshot.blocks().keys() {
-            index::receive_block(&mut tx, block_id).await.unwrap();
+        for block in snapshot.blocks().values() {
+            block::receive(&mut tx, &block.data, &block.nonce)
+                .await
+                .unwrap();
             received_blocks += 1;
 
             root_node.reload(&mut tx).await.unwrap();

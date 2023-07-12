@@ -342,7 +342,7 @@ impl Client {
     ) -> Result<()> {
         match self
             .repository
-            .write_received_block(&data, &nonce, block_promise)
+            .receive_block(&data, &nonce, block_promise)
             .await
         {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer

@@ -6,10 +6,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
 pub(crate) use self::{
-    node::{
-        receive_block, update_summaries, MultiBlockPresence, NodeState, SingleBlockPresence,
-        Summary, UpdateSummaryReason,
-    },
+    node::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
     proof::{Proof, UntrustedProof},
 };
 
@@ -19,7 +16,6 @@ use crate::{
     debug::DebugPrinter,
     error::Result,
     event::{Event, EventSender, Payload},
-    future::try_collect_into,
     repository::RepositoryId,
     storage_size::StorageSize,
     store::{

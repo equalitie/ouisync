@@ -11,20 +11,26 @@ mod root_node;
 #[cfg(test)]
 mod tests;
 
+pub use error::Error;
+
+pub(crate) use block::ReceiveStatus as BlockReceiveStatus;
+pub(crate) use inner_node::ReceiveStatus as InnerNodeReceiveStatus;
+pub(crate) use leaf_node::ReceiveStatus as LeafNodeReceiveStatus;
+pub(crate) use receive_filter::ReceiveFilter;
+pub(crate) use root_node::ReceiveStatus as RootNodeReceiveStatus;
+
 use crate::{
-    block::{BlockId, BlockNonce, BLOCK_SIZE},
+    block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
     crypto::{
         sign::{Keypair, PublicKey},
         CacheHash, Hash, Hashable,
     },
     db,
-    index::{
-        update_summaries, MultiBlockPresence, Proof, SingleBlockPresence, Summary,
-        UpdateSummaryReason, VersionVectorOp,
-    },
+    index::{MultiBlockPresence, Proof, SingleBlockPresence, Summary, VersionVectorOp},
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
+use receive::UpdateSummaryReason;
 use sqlx::Row;
 use std::{
     borrow::Cow,
@@ -32,17 +38,11 @@ use std::{
 };
 use tracing::Instrument;
 
-pub use error::Error;
-pub(crate) use inner_node::ReceiveStatus as InnerNodeReceiveStatus;
-pub(crate) use leaf_node::ReceiveStatus as LeafNodeReceiveStatus;
-pub(crate) use receive_filter::ReceiveFilter;
-pub(crate) use root_node::ReceiveStatus as RootNodeReceiveStatus;
-
 // TODO: these items should mostly be internal to this module
 #[cfg(test)]
-pub(crate) use self::inner_node::{get_bucket, EMPTY_INNER_HASH};
+pub(crate) use self::inner_node::{get_bucket, InnerNode, EMPTY_INNER_HASH};
 pub(crate) use self::{
-    inner_node::{InnerNode, InnerNodeMap, INNER_LAYER_COUNT},
+    inner_node::{InnerNodeMap, INNER_LAYER_COUNT},
     leaf_node::{LeafNode, LeafNodeSet},
     path::Path,
     root_node::RootNode,
@@ -401,24 +401,7 @@ impl WriteTransaction {
         buffer: &[u8],
         nonce: &BlockNonce,
     ) -> Result<(), Error> {
-        assert_eq!(
-            buffer.len(),
-            BLOCK_SIZE,
-            "incorrect buffer length for block write"
-        );
-
-        sqlx::query(
-            "INSERT INTO blocks (id, nonce, content)
-             VALUES (?, ?, ?)
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(id)
-        .bind(nonce.as_slice())
-        .bind(buffer)
-        .execute(self.raw_mut())
-        .await?;
-
-        Ok(())
+        block::write(self.raw_mut(), id, buffer, nonce).await
     }
 
     /// Removes the specified block from the store and marks it as missing in the index.
@@ -430,7 +413,7 @@ impl WriteTransaction {
             .try_collect()
             .await?;
 
-        update_summaries(
+        receive::update_summaries(
             self.raw_mut(),
             parent_hashes,
             UpdateSummaryReason::BlockRemoved,
@@ -581,6 +564,16 @@ impl WriteTransaction {
             new_approved: status.new_approved,
             request_blocks,
         })
+    }
+
+    /// Write a block received from a remote replica. The block must already be referenced by the
+    /// index, otherwise an `BlockNotReferenced` error is returned.
+    pub(crate) async fn receive_block(
+        &mut self,
+        data: &BlockData,
+        nonce: &BlockNonce,
+    ) -> Result<BlockReceiveStatus, Error> {
+        block::receive(self.raw_mut(), data, nonce).await
     }
 
     pub async fn commit(self) -> Result<(), Error> {
