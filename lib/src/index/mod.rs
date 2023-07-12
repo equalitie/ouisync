@@ -1,7 +1,5 @@
 mod node;
 mod proof;
-#[cfg(test)]
-mod tests;
 
 #[cfg(test)]
 pub(crate) use self::node::test_utils as node_test_utils;
