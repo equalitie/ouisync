@@ -1,4 +1,4 @@
-use super::{super::proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
+use super::{proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
     block::{tracker::OfferState, BlockData, BlockId, BlockNonce},
     collections::HashMap,

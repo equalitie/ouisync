@@ -1,4 +1,4 @@
-//! Receiving data from other replicas and writing them into the store.
+//! Operations on the whole index (or its subset) as opposed to individual nodes.
 
 use super::{
     error::Error,
@@ -161,7 +161,7 @@ mod tests {
             sign::{Keypair, PublicKey},
             Hashable,
         },
-        index::{node_test_utils::Snapshot, MultiBlockPresence, Proof, Summary},
+        index::{test_utils::Snapshot, MultiBlockPresence, Proof, Summary},
         test_utils,
         version_vector::VersionVector,
     };

@@ -1,11 +1,11 @@
 mod block;
 mod block_ids;
 mod error;
+mod index;
 mod inner_node;
 mod leaf_node;
 mod path;
 mod quota;
-mod receive;
 mod receive_filter;
 mod root_node;
 
@@ -34,7 +34,7 @@ use crate::{
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
-use receive::UpdateSummaryReason;
+use index::UpdateSummaryReason;
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
@@ -155,7 +155,7 @@ impl Store {
     }
 
     pub fn receive_filter(&self) -> ReceiveFilter {
-        ReceiveFilter::new(self.raw().clone())
+        ReceiveFilter::new(self.db.clone())
     }
 
     /// Returns all block ids referenced from complete snapshots. The result is paginated (with
@@ -179,7 +179,7 @@ impl Store {
 
     /// Access the underlying database pool.
     /// TODO: make this non-public when the store extraction is complete.
-    pub fn raw(&self) -> &db::Pool {
+    pub fn db(&self) -> &db::Pool {
         &self.db
     }
 }
@@ -438,7 +438,7 @@ impl WriteTransaction {
             .try_collect()
             .await?;
 
-        receive::update_summaries(self.db(), parent_hashes, UpdateSummaryReason::BlockRemoved)
+        index::update_summaries(self.db(), parent_hashes, UpdateSummaryReason::BlockRemoved)
             .await?;
 
         Ok(())
@@ -504,7 +504,7 @@ impl WriteTransaction {
             // Ignoring quota here because if the snapshot became complete by receiving this root
             // node it means that we already have all the other nodes and so the quota validation
             // already took place.
-            let status = receive::finalize(self.db(), hash, None).await?;
+            let status = index::finalize(self.db(), hash, None).await?;
 
             tracing::debug!(
                 branch_id = ?node.proof.writer_id,
@@ -534,7 +534,7 @@ impl WriteTransaction {
     ) -> Result<InnerNodeReceiveStatus, Error> {
         let parent_hash = nodes.hash();
 
-        if !receive::parent_exists(self.db(), &parent_hash).await? {
+        if !index::parent_exists(self.db(), &parent_hash).await? {
             return Ok(InnerNodeReceiveStatus::default());
         }
 
@@ -545,7 +545,7 @@ impl WriteTransaction {
         inner_node::inherit_summaries(self.db(), &mut nodes).await?;
         inner_node::save_all(self.db(), &nodes, &parent_hash).await?;
 
-        let status = receive::finalize(self.db(), parent_hash, quota).await?;
+        let status = index::finalize(self.db(), parent_hash, quota).await?;
 
         Ok(InnerNodeReceiveStatus {
             new_approved: status.new_approved,
@@ -563,7 +563,7 @@ impl WriteTransaction {
     ) -> Result<LeafNodeReceiveStatus, Error> {
         let parent_hash = nodes.hash();
 
-        if !receive::parent_exists(self.db(), &parent_hash).await? {
+        if !index::parent_exists(self.db(), &parent_hash).await? {
             return Ok(LeafNodeReceiveStatus::default());
         }
 
@@ -571,7 +571,7 @@ impl WriteTransaction {
 
         leaf_node::save_all(self.db(), &nodes.into_inner().into_missing(), &parent_hash).await?;
 
-        let status = receive::finalize(self.db(), parent_hash, quota).await?;
+        let status = index::finalize(self.db(), parent_hash, quota).await?;
 
         Ok(LeafNodeReceiveStatus {
             old_approved: status.old_approved,

@@ -12,7 +12,7 @@ use crate::{
     error::Error,
     event::EventSender,
     index::{
-        node_test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
+        test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
         MultiBlockPresence, Proof, SingleBlockPresence,
     },
     locator::Locator,

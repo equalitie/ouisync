@@ -766,7 +766,7 @@ impl Repository {
     }
 
     fn db(&self) -> &db::Pool {
-        self.shared.vault.store().raw()
+        self.shared.vault.store().db()
     }
 }
 

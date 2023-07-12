@@ -10,7 +10,7 @@ use crate::{
     db,
     event::{Event, EventSender, Payload},
     index::{
-        node_test_utils::{receive_blocks, receive_nodes, Snapshot},
+        test_utils::{receive_blocks, receive_nodes, Snapshot},
         SingleBlockPresence, VersionVectorOp,
     },
     metrics::Metrics,
@@ -101,8 +101,8 @@ async fn transfer_snapshot_between_two_replicas_case(
     simulate_connection_until(&mut server, &mut client, drive).await;
 
     // HACK: prevent "too many open files" error.
-    a_vault.store().raw().close().await.unwrap();
-    b_vault.store().raw().close().await.unwrap();
+    a_vault.store().close().await.unwrap();
+    b_vault.store().close().await.unwrap();
 }
 
 // NOTE: Reducing the number of cases otherwise this test is too slow.
@@ -160,8 +160,8 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
     drop(client);
 
     // HACK: prevent "too many open files" error.
-    a_vault.store().raw().close().await.unwrap();
-    b_vault.store().raw().close().await.unwrap();
+    a_vault.store().close().await.unwrap();
+    b_vault.store().close().await.unwrap();
 }
 
 // Receive a `LeafNode` with non-missing block, then drop the connection before the block itself is

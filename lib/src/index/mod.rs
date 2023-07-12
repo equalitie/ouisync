@@ -1,11 +1,12 @@
-mod node;
 mod proof;
+mod summary;
 
 #[cfg(test)]
-pub(crate) use self::node::test_utils as node_test_utils;
+pub(crate) mod test_utils;
+
 pub(crate) use self::{
-    node::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
     proof::{Proof, ProofError, UntrustedProof},
+    summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
 };
 
 use crate::{crypto::sign::PublicKey, version_vector::VersionVector};

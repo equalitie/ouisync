@@ -1,8 +1,7 @@
 use super::{
     error::Error,
-    leaf_node,
-    receive::{self, UpdateSummaryReason},
-    root_node,
+    index::{self, UpdateSummaryReason},
+    leaf_node, root_node,
 };
 use crate::{
     block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
@@ -35,7 +34,7 @@ pub(super) async fn receive(
         .await?;
     let mut branches = HashSet::default();
 
-    for (hash, state) in receive::update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {
+    for (hash, state) in index::update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {
         if !state.is_approved() {
             continue;
         }

@@ -142,12 +142,12 @@ impl Vault {
     }
 
     pub fn metadata(&self) -> Metadata {
-        Metadata::new(self.store().raw().clone())
+        Metadata::new(self.store().db().clone())
     }
 
     /// Total size of the stored data
     pub async fn size(&self) -> Result<StorageSize> {
-        let mut conn = self.store().raw().acquire().await?;
+        let mut conn = self.store().db().acquire().await?;
 
         // Note: for simplicity, we are currently counting only blocks (content + id + nonce)
         let count = db::decode_u64(
@@ -161,7 +161,7 @@ impl Vault {
     }
 
     pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
-        let mut tx = self.store().raw().begin_write().await?;
+        let mut tx = self.store().db().begin_write().await?;
 
         if let Some(quota) = quota {
             quota::set(&mut tx, quota.to_bytes()).await?
@@ -175,7 +175,7 @@ impl Vault {
     }
 
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
-        let mut conn = self.store().raw().acquire().await?;
+        let mut conn = self.store().db().acquire().await?;
         match quota::get(&mut conn).await {
             Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
             Err(Error::EntryNotFound) => Ok(None),
