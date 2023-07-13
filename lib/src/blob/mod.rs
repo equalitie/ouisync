@@ -9,7 +9,6 @@ pub(crate) use self::block_ids::BlockIds;
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
     blob_id::BlobId,
-    block::{BlockId, BlockNonce, BLOCK_SIZE},
     branch::Branch,
     crypto::{
         cipher::{self, Nonce, SecretKey},
@@ -17,7 +16,7 @@ use crate::{
     },
     error::{Error, Result},
     locator::Locator,
-    protocol::{RootNode, SingleBlockPresence},
+    protocol::{BlockId, BlockNonce, RootNode, SingleBlockPresence, BLOCK_SIZE},
     store::{self, ReadTransaction, WriteTransaction},
 };
 use std::{io::SeekFrom, mem};

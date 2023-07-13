@@ -7,11 +7,13 @@ use super::{
 use crate::{
     block::{
         tracker::{BlockPromise, OfferState},
-        BlockData, BlockNonce, BlockTrackerClient,
+        BlockTrackerClient,
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
+    protocol::{
+        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof,
+    },
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
     store::{self, ReceiveFilter},
 };

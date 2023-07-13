@@ -1,12 +1,15 @@
 use super::{proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
-    block::{tracker::OfferState, BlockData, BlockId, BlockNonce},
+    block::tracker::OfferState,
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
-    protocol::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT},
+    protocol::{
+        get_bucket, BlockData, BlockId, BlockNonce, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        INNER_LAYER_COUNT,
+    },
     repository::Vault,
     store::ReceiveFilter,
     version_vector::VersionVector,

@@ -4,11 +4,11 @@ use super::{
     leaf_node, root_node,
 };
 use crate::{
-    block::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
     collections::HashSet,
     crypto::sign::PublicKey,
     db,
     future::try_collect_into,
+    protocol::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;

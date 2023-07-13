@@ -5,14 +5,14 @@ use super::{
     server::Server,
 };
 use crate::{
-    block::{tracker::OfferState, BlockId, BlockTracker, BLOCK_SIZE},
+    block::{tracker::OfferState, BlockTracker},
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},
     metrics::Metrics,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
-        RootNode, SingleBlockPresence, VersionVectorOp,
+        BlockId, RootNode, SingleBlockPresence, VersionVectorOp, BLOCK_SIZE,
     },
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,

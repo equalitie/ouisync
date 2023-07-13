@@ -4,12 +4,11 @@ pub(crate) use progress_cache::FileProgressCache;
 
 use crate::{
     blob::{lock::UpgradableLock, Blob},
-    block::BLOCK_SIZE,
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
     locator::Locator,
-    protocol::VersionVectorOp,
+    protocol::{VersionVectorOp, BLOCK_SIZE},
     store::WriteTransaction,
     version_vector::VersionVector,
 };

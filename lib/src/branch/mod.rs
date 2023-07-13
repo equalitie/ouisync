@@ -1,7 +1,6 @@
 use crate::{
     access_control::AccessKeys,
     blob::lock::{BranchLocker, Locker},
-    block::BlockId,
     crypto::sign::PublicKey,
     debug::DebugPrinter,
     directory::{Directory, DirectoryFallback, DirectoryLocking, EntryRef},
@@ -10,6 +9,7 @@ use crate::{
     file::{File, FileProgressCache},
     locator::Locator,
     path,
+    protocol::BlockId,
     store::{self, Store},
     version_vector::VersionVector,
 };

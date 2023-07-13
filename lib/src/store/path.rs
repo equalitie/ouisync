@@ -1,8 +1,7 @@
 use crate::{
-    block::BlockId,
     crypto::{Hash, Hashable},
     protocol::{
-        self, InnerNode, InnerNodeMap, LeafNodeModifyStatus, LeafNodeSet, NodeState,
+        self, BlockId, InnerNode, InnerNodeMap, LeafNodeModifyStatus, LeafNodeSet, NodeState,
         SingleBlockPresence, Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
     },
 };

@@ -1,9 +1,8 @@
 use super::error::Error;
 use crate::{
-    block::BlockId,
     crypto::{sign::PublicKey, Hash},
     db,
-    protocol::{LeafNode, LeafNodeSet, SingleBlockPresence},
+    protocol::{BlockId, LeafNode, LeafNodeSet, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;

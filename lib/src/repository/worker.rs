@@ -339,8 +339,8 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        block::BlockId,
         crypto::sign::{Keypair, PublicKey},
+        protocol::BlockId,
         store::{self, WriteTransaction},
     };
     use futures_util::TryStreamExt;

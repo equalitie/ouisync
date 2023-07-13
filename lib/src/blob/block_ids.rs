@@ -1,11 +1,10 @@
 use super::{block_count, read_len};
 use crate::{
     blob_id::BlobId,
-    block::BlockId,
     branch::Branch,
     error::{Error, Result},
     locator::Locator,
-    protocol::{RootNode, SingleBlockPresence},
+    protocol::{BlockId, RootNode, SingleBlockPresence},
     store,
 };
 

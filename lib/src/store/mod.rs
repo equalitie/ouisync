@@ -23,7 +23,6 @@ pub(crate) use {
 
 use self::{index::UpdateSummaryReason, path::Path};
 use crate::{
-    block::{BlockData, BlockId, BlockNonce},
     crypto::{
         sign::{Keypair, PublicKey},
         CacheHash, Hash, Hashable,
@@ -32,8 +31,8 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof, RootNode, SingleBlockPresence,
-        Summary, VersionVectorOp, INNER_LAYER_COUNT,
+        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
+        RootNode, SingleBlockPresence, Summary, VersionVectorOp, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
 };

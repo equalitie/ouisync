@@ -1,9 +1,8 @@
 use crate::{
-    block::{BlockId, BLOCK_SIZE},
     crypto::cipher,
     error::Result,
     locator::Locator,
-    protocol::RootNode,
+    protocol::{BlockId, RootNode, BLOCK_SIZE},
     store::ReadTransaction,
 };
 use std::{

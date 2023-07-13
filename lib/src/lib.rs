@@ -49,7 +49,6 @@ mod versioned;
 pub use self::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
-    block::BLOCK_SIZE,
     branch::Branch,
     debug::DebugPrinter,
     device_id::DeviceId,
@@ -61,6 +60,7 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
+    protocol::BLOCK_SIZE,
     repository::{
         delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryHandle,
         RepositoryId, RepositoryParams,

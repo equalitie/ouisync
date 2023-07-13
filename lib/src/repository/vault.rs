@@ -2,13 +2,16 @@
 
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockNonce, BlockTracker},
+    block::{tracker::BlockPromise, BlockTracker},
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,
     error::{Error, Result},
     event::{EventSender, Payload},
-    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof},
+    protocol::{
+        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError,
+        UntrustedProof,
+    },
     storage_size::StorageSize,
     store::{
         self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, ReceiveFilter, RootNodeReceiveStatus,

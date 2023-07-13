@@ -1,7 +1,7 @@
 use super::SingleBlockPresence;
 use crate::{
-    block::BlockId,
     crypto::{Digest, Hash, Hashable},
+    protocol::BlockId,
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};

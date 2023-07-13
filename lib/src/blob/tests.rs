@@ -1,12 +1,12 @@
 use super::*;
 use crate::{
     access_control::{AccessKeys, WriteSecrets},
-    block::BLOCK_SIZE,
     branch::BranchShared,
     crypto::sign::PublicKey,
     db,
     error::Error,
     event::EventSender,
+    protocol::BLOCK_SIZE,
     store::Store,
     test_utils,
 };

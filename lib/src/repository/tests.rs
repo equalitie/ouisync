@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
-    blob,
-    block::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
-    db, test_utils,
+    blob, db,
+    protocol::{BlockId, BLOCK_NONCE_SIZE, BLOCK_SIZE},
+    test_utils,
     version_vector::VersionVector,
     WriteSecrets,
 };

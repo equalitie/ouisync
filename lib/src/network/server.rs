@@ -3,11 +3,10 @@ use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block::{BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    protocol::RootNode,
+    protocol::{BlockId, RootNode, BLOCK_SIZE},
     repository::Vault,
     store,
 };

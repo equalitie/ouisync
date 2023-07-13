@@ -3,11 +3,14 @@ use super::{
     message::{Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block::{tracker::BlockPromise, BlockData, BlockId, BlockNonce},
+    block::tracker::BlockPromise,
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
+    protocol::{
+        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
+        UntrustedProof,
+    },
     repository::RepositoryMonitor,
     sync::uninitialized_watch,
 };

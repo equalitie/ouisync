@@ -1,8 +1,7 @@
 use super::{vault::*, LocalId, RepositoryId, RepositoryMonitor};
 use crate::{
     access_control::WriteSecrets,
-    block::BLOCK_SIZE,
-    block::{tracker::OfferState, BlockId, BlockTracker},
+    block::{tracker::OfferState, BlockTracker},
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -16,7 +15,7 @@ use crate::{
     progress::Progress,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-        MultiBlockPresence, Proof, SingleBlockPresence, EMPTY_INNER_HASH,
+        BlockId, MultiBlockPresence, Proof, SingleBlockPresence, BLOCK_SIZE, EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,
     store::{self, ReadTransaction, Store},

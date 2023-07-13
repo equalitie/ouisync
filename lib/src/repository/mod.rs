@@ -24,7 +24,7 @@ pub(crate) use self::{
 
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
-    block::{BlockTracker, BLOCK_SIZE},
+    block::BlockTracker,
     branch::{Branch, BranchShared},
     crypto::{
         cipher,
@@ -41,6 +41,7 @@ use crate::{
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
+    protocol::BLOCK_SIZE,
     state_monitor::StateMonitor,
     storage_size::StorageSize,
     store::{self, Store},

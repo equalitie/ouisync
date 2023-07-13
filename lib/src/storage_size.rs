@@ -1,4 +1,4 @@
-use crate::block::BLOCK_RECORD_SIZE;
+use crate::protocol::BLOCK_RECORD_SIZE;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
