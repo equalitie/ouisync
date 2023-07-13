@@ -11,7 +11,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     db,
     future::try_collect_into,
-    index::NodeState,
+    protocol::NodeState,
     storage_size::StorageSize,
 };
 use futures_util::TryStreamExt;
@@ -149,19 +149,17 @@ pub(super) async fn finalize(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        block,
-        inner_node::{self, InnerNode, InnerNodeMap, EMPTY_INNER_HASH},
-        leaf_node::{self, LeafNode, LeafNodeSet, EMPTY_LEAF_HASH},
-        root_node::{self, RootNode},
-    };
+    use super::super::{block, inner_node, leaf_node, root_node};
     use super::*;
     use crate::{
         crypto::{
             sign::{Keypair, PublicKey},
             Hashable,
         },
-        index::{test_utils::Snapshot, MultiBlockPresence, Proof, Summary},
+        protocol::{
+            test_utils::Snapshot, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+            MultiBlockPresence, Proof, RootNode, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH,
+        },
         test_utils,
         version_vector::VersionVector,
     };

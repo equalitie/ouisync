@@ -1,7 +1,5 @@
-use crate::{
-    format::Hex,
-    store::{InnerNodeMap, LeafNodeSet},
-};
+use super::{InnerNodeMap, LeafNodeSet};
+use crate::format::Hex;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     encode::IsNull,

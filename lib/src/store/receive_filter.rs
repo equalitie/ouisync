@@ -1,5 +1,5 @@
 use super::error::Error;
-use crate::{crypto::Hash, db, index::MultiBlockPresence};
+use crate::{crypto::Hash, db, protocol::MultiBlockPresence};
 use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task;

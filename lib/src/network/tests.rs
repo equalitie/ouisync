@@ -9,14 +9,14 @@ use crate::{
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},
-    index::{
-        test_utils::{receive_blocks, receive_nodes, Snapshot},
-        SingleBlockPresence, VersionVectorOp,
-    },
     metrics::Metrics,
+    protocol::{
+        test_utils::{receive_blocks, receive_nodes, Snapshot},
+        RootNode, SingleBlockPresence, VersionVectorOp,
+    },
     repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
-    store::{RootNode, Store},
+    store::Store,
     test_utils,
     version_vector::VersionVector,
 };

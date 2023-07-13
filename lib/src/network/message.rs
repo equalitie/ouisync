@@ -8,9 +8,8 @@ use crate::{
     block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
-    index::{MultiBlockPresence, UntrustedProof},
+    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryId,
-    store::{InnerNodeMap, LeafNodeSet},
 };
 use serde::{Deserialize, Serialize};
 use std::{fmt, io::Write};

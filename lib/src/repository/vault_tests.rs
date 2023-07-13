@@ -11,15 +11,15 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    index::{
-        test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-        MultiBlockPresence, Proof, SingleBlockPresence,
-    },
     locator::Locator,
     metrics::Metrics,
     progress::Progress,
+    protocol::{
+        test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
+        MultiBlockPresence, Proof, SingleBlockPresence, EMPTY_INNER_HASH,
+    },
     state_monitor::StateMonitor,
-    store::{self, ReadTransaction, Store, EMPTY_INNER_HASH},
+    store::{self, ReadTransaction, Store},
     test_utils,
     version_vector::VersionVector,
 };

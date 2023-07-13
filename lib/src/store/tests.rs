@@ -1,5 +1,7 @@
 use super::*;
-use crate::{crypto::cipher::SecretKey, locator::Locator, test_utils, BLOCK_SIZE};
+use crate::{
+    crypto::cipher::SecretKey, locator::Locator, protocol::EMPTY_INNER_HASH, test_utils, BLOCK_SIZE,
+};
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
     rngs::StdRng,

@@ -110,7 +110,7 @@ mod tests {
     use super::*;
     use crate::{
         crypto::sign::{Keypair, PublicKey},
-        index::SingleBlockPresence,
+        protocol::SingleBlockPresence,
         store::Store,
     };
     use tempfile::TempDir;

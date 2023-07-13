@@ -1,7 +1,4 @@
-use super::{
-    error::Error,
-    inner_node::{self, EMPTY_INNER_HASH},
-};
+use super::{error::Error, inner_node};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -9,34 +6,12 @@ use crate::{
     },
     db,
     debug::DebugPrinter,
-    index::{MultiBlockPresence, NodeState, Proof, SingleBlockPresence, SnapshotId, Summary},
+    protocol::{MultiBlockPresence, NodeState, Proof, RootNode, SingleBlockPresence, Summary},
     version_vector::VersionVector,
-    versioned::{BranchItem, Versioned},
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::Row;
 use std::cmp::Ordering;
-
-const EMPTY_SNAPSHOT_ID: SnapshotId = 0;
-
-#[derive(Clone, Eq, PartialEq, Debug)]
-pub(crate) struct RootNode {
-    pub snapshot_id: SnapshotId,
-    pub proof: Proof,
-    pub summary: Summary,
-}
-
-impl Versioned for RootNode {
-    fn version_vector(&self) -> &VersionVector {
-        &self.proof.version_vector
-    }
-}
-
-impl BranchItem for RootNode {
-    fn branch_id(&self) -> &PublicKey {
-        &self.proof.writer_id
-    }
-}
 
 /// Status of receiving a root node
 #[derive(Default)]
@@ -619,27 +594,6 @@ pub(super) fn load_all_by_writer_in_any_state<'a>(
         },
     })
     .err_into()
-}
-
-impl RootNode {
-    /// Creates a root node with no children without storing it in the database.
-    pub fn empty(writer_id: PublicKey, write_keys: &Keypair) -> Self {
-        let proof = Proof::new(
-            writer_id,
-            VersionVector::new(),
-            *EMPTY_INNER_HASH,
-            write_keys,
-        );
-
-        Self {
-            snapshot_id: EMPTY_SNAPSHOT_ID,
-            proof,
-            summary: Summary {
-                state: NodeState::Approved,
-                block_presence: MultiBlockPresence::Full,
-            },
-        }
-    }
 }
 
 #[cfg(test)]

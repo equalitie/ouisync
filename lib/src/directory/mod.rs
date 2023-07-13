@@ -26,9 +26,9 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    index::VersionVectorOp,
     locator::Locator,
-    store::{self, ReadTransaction, RootNode, WriteTransaction},
+    protocol::{RootNode, VersionVectorOp},
+    store::{self, ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;

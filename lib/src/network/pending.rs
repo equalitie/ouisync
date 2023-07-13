@@ -7,9 +7,8 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    index::{MultiBlockPresence, UntrustedProof},
+    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
-    store::{InnerNodeMap, LeafNodeSet},
     sync::uninitialized_watch,
 };
 use scoped_task::ScopedJoinHandle;

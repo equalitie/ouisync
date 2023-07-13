@@ -3,7 +3,8 @@ use crate::{
     crypto::cipher,
     error::Result,
     locator::Locator,
-    store::{ReadTransaction, RootNode},
+    protocol::RootNode,
+    store::ReadTransaction,
 };
 use std::{
     convert::TryInto,

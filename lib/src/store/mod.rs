@@ -21,6 +21,7 @@ pub(crate) use {
     root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
+use self::{index::UpdateSummaryReason, path::Path};
 use crate::{
     block::{BlockData, BlockId, BlockNonce},
     crypto::{
@@ -29,30 +30,19 @@ use crate::{
     },
     db,
     debug::DebugPrinter,
-    index::{MultiBlockPresence, Proof, SingleBlockPresence, Summary, VersionVectorOp},
     progress::Progress,
+    protocol::{
+        InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof, RootNode, SingleBlockPresence,
+        Summary, VersionVectorOp, INNER_LAYER_COUNT,
+    },
     storage_size::StorageSize,
 };
 use futures_util::{Stream, TryStreamExt};
-use index::UpdateSummaryReason;
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
 };
 use tracing::Instrument;
-
-// TODO: these items should mostly be internal to this module
-#[cfg(test)]
-pub(crate) use self::{
-    inner_node::{get_bucket, InnerNode, EMPTY_INNER_HASH},
-    leaf_node::LeafNode,
-};
-pub(crate) use self::{
-    inner_node::{InnerNodeMap, INNER_LAYER_COUNT},
-    leaf_node::LeafNodeSet,
-    path::Path,
-    root_node::RootNode,
-};
 
 /// Data store
 #[derive(Clone)]

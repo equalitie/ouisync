@@ -4,9 +4,9 @@ use crate::{
     block::BlockId,
     branch::Branch,
     error::{Error, Result},
-    index::SingleBlockPresence,
     locator::Locator,
-    store::{self, RootNode},
+    protocol::{RootNode, SingleBlockPresence},
+    store,
 };
 
 /// Stream-like object that yields the block ids of the given blob in their sequential order.

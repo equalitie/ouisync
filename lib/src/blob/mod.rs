@@ -16,9 +16,9 @@ use crate::{
         sign::{self, PublicKey},
     },
     error::{Error, Result},
-    index::SingleBlockPresence,
     locator::Locator,
-    store::{self, ReadTransaction, RootNode, WriteTransaction},
+    protocol::{RootNode, SingleBlockPresence},
+    store::{self, ReadTransaction, WriteTransaction},
 };
 use std::{io::SeekFrom, mem};
 use tracing::{field, instrument, Instrument, Span};

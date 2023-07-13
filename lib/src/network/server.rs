@@ -7,8 +7,9 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
+    protocol::RootNode,
     repository::Vault,
-    store::{self, RootNode},
+    store,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{

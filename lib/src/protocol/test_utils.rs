@@ -6,11 +6,9 @@ use crate::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
+    protocol::{get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, INNER_LAYER_COUNT},
     repository::Vault,
-    store::{
-        get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, ReceiveFilter,
-        INNER_LAYER_COUNT,
-    },
+    store::ReceiveFilter,
     version_vector::VersionVector,
 };
 use rand::{

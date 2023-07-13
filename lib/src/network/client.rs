@@ -11,9 +11,9 @@ use crate::{
     },
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{MultiBlockPresence, UntrustedProof},
+    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
-    store::{self, InnerNodeMap, LeafNodeSet, ReceiveFilter},
+    store::{self, ReceiveFilter},
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};

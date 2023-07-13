@@ -6,7 +6,7 @@ use crate::{
     blob_id::BlobId,
     branch::Branch,
     error::{Error, Result},
-    index::VersionVectorOp,
+    protocol::VersionVectorOp,
     version_vector::VersionVector,
 };
 use serde::Deserialize;

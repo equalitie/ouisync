@@ -3,7 +3,7 @@ use crate::{
     block::BlockId,
     crypto::sign::PublicKey,
     db,
-    index::{NodeState, SingleBlockPresence},
+    protocol::{NodeState, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt};
 use sqlx::Row;

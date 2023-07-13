@@ -8,11 +8,11 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     event::{EventSender, Payload},
-    index::{MultiBlockPresence, ProofError, UntrustedProof},
+    protocol::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof},
     storage_size::StorageSize,
     store::{
-        self, InnerNodeMap, InnerNodeReceiveStatus, LeafNodeReceiveStatus, LeafNodeSet,
-        ReceiveFilter, RootNodeReceiveStatus, Store, WriteTransaction,
+        self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, ReceiveFilter, RootNodeReceiveStatus,
+        Store, WriteTransaction,
     },
 };
 use futures_util::TryStreamExt;
