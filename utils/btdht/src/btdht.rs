@@ -48,10 +48,11 @@ async fn main() -> io::Result<()> {
 
     let info_hash = if let Some(token) = &options.token {
         Some(network::repository_info_hash(token.id()))
-    } else if let Some(swarm_name) = &options.swarm_name {
-        Some(InfoHash::sha1(swarm_name.as_bytes()))
     } else {
-        None
+        options
+            .swarm_name
+            .as_ref()
+            .map(|swarm_name| InfoHash::sha1(swarm_name.as_bytes()))
     };
 
     if let Action::Single(single_action) = &options.action {
