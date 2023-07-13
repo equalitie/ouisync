@@ -224,9 +224,16 @@ async fn write_to_file(file: &mut File, size: usize) {
     file.write(&common::random_content(size)).await.unwrap();
 }
 
-async fn expect_block_count(repo: &Repository, expected_block_count: u64) {
+async fn expect_block_count(repo: &Repository, expected: u64) {
     common::eventually(repo, || async {
-        repo.count_blocks().await.unwrap() == expected_block_count
+        let actual = repo.count_blocks().await.unwrap();
+
+        if actual == expected {
+            true
+        } else {
+            tracing::warn!(actual, expected, "block count");
+            false
+        }
     })
     .await
 }

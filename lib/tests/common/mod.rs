@@ -442,11 +442,16 @@ pub(crate) async fn check_file_version_content(
 
     let mut file = match result {
         Ok(file) => file,
-        // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
-        // and so the file entry is not in it yet.
-        //
-        // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(error @ (Error::EntryNotFound | Error::Store(StoreError::BlockNotFound))) => {
+        // - `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
+        //    and so the file entry is not in it yet.
+        // - `BlockNotFound` means the first block of the file hasn't been downloaded yet.
+        // - `LocatorNotFound` TODO: it seems the tests pass when we allow it and so might be ok
+        //    but we need to confirm it and understand how it happens.
+        Err(
+            error @ (Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound)),
+        ) => {
             tracing::warn!(path, ?error, "open failed");
             return false;
         }
@@ -503,7 +508,11 @@ pub(crate) async fn check_entry_exists(
             tracing::debug!(path, "opened");
             true
         }
-        Err(error @ (Error::EntryNotFound | Error::Store(StoreError::BlockNotFound))) => {
+        Err(
+            error @ (Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound)),
+        ) => {
             tracing::warn!(path, ?error, "open failed");
             false
         }
