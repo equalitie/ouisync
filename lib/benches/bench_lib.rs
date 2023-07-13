@@ -11,18 +11,21 @@ use utils::Actor;
 criterion_group!(default, write_file, read_file, remove_file, sync);
 criterion_main!(default);
 
+const FILE_SIZES_K: &[u64] = &[128, 256, 512, 1024, 2 * 1024, 4 * 1024, 8 * 1024];
+
 fn write_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let file_size = 1024 * 1024;
+    let mut group = c.benchmark_group("lib/write_file");
+    group.sample_size(10);
+
     let buffer_size = 4096;
 
-    let mut group = c.benchmark_group("lib/write_file");
-    group.sample_size(50);
-    group.throughput(Throughput::Bytes(file_size));
-    group.bench_function(
-        BenchmarkId::from_parameter(format!("{file_size}@{buffer_size}")),
-        |b| {
+    for &m in FILE_SIZES_K {
+        let file_size = m * 1024;
+
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} kiB")), |b| {
             b.iter_batched_ref(
                 || {
                     let mut rng = StdRng::from_entropy();
@@ -46,23 +49,24 @@ fn write_file(c: &mut Criterion) {
                 },
                 BatchSize::LargeInput,
             );
-        },
-    );
+        });
+    }
     group.finish();
 }
 
 fn read_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let file_size = 1024 * 1024;
+    let mut group = c.benchmark_group("lib/read_file");
+    group.sample_size(10);
+
     let buffer_size = 4096;
 
-    let mut group = c.benchmark_group("lib/read_file");
-    group.sample_size(50);
-    group.throughput(Throughput::Bytes(file_size));
-    group.bench_function(
-        BenchmarkId::from_parameter(format!("{file_size}@{buffer_size}")),
-        |b| {
+    for &m in FILE_SIZES_K {
+        let file_size = m * 1024;
+
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} kiB")), |b| {
             let file_name = Utf8Path::new("file.dat");
 
             b.iter_batched_ref(
@@ -97,47 +101,51 @@ fn read_file(c: &mut Criterion) {
                 },
                 BatchSize::LargeInput,
             );
-        },
-    );
+        });
+    }
     group.finish();
 }
 
 fn remove_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    let file_size = 1024 * 1024;
-
     let mut group = c.benchmark_group("lib/remove_file");
-    group.sample_size(50);
-    group.throughput(Throughput::Bytes(file_size));
-    group.bench_function(BenchmarkId::from_parameter(file_size), |b| {
-        let file_name = Utf8Path::new("file.dat");
+    group.sample_size(10);
 
-        b.iter_batched_ref(
-            || {
-                let mut rng = StdRng::from_entropy();
-                let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    for &m in FILE_SIZES_K {
+        let file_size = m * 1024;
 
-                let repo = runtime.block_on(async {
-                    let repo = utils::create_repo(
-                        &mut rng,
-                        &base_dir.path().join("repo.db"),
-                        0,
-                        StateMonitor::make_root(),
-                    )
-                    .await;
-                    utils::write_file(&mut rng, &repo, file_name, file_size as usize, 4096).await;
-                    repo
-                });
+        group.throughput(Throughput::Bytes(file_size));
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} KiB")), |b| {
+            let file_name = Utf8Path::new("file.dat");
 
-                (base_dir, repo)
-            },
-            |(_base_dir, repo)| {
-                runtime.block_on(async { repo.remove_entry(file_name).await.unwrap() });
-            },
-            BatchSize::LargeInput,
-        );
-    });
+            b.iter_batched_ref(
+                || {
+                    let mut rng = StdRng::from_entropy();
+                    let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+
+                    let repo = runtime.block_on(async {
+                        let repo = utils::create_repo(
+                            &mut rng,
+                            &base_dir.path().join("repo.db"),
+                            0,
+                            StateMonitor::make_root(),
+                        )
+                        .await;
+                        utils::write_file(&mut rng, &repo, file_name, file_size as usize, 4096)
+                            .await;
+                        repo
+                    });
+
+                    (base_dir, repo)
+                },
+                |(_base_dir, repo)| {
+                    runtime.block_on(async { repo.remove_entry(file_name).await.unwrap() });
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
     group.finish();
 }
 
@@ -147,7 +155,7 @@ fn sync(c: &mut Criterion) {
     let mut group = c.benchmark_group("lib/sync");
     group.sample_size(10);
 
-    for m in [128, 256, 512, 1024, 2 * 1024, 3 * 1024, 4 * 1024, 5 * 1024] {
+    for &m in FILE_SIZES_K {
         let file_size = m * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
