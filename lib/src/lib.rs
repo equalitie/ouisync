@@ -16,7 +16,7 @@ pub mod path;
 mod access_control;
 mod blob;
 mod blob_id;
-mod block;
+mod block_tracker;
 mod branch;
 mod collections;
 mod conflict;

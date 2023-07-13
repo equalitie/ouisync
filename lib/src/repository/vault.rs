@@ -2,7 +2,7 @@
 
 use super::{quota, LocalId, Metadata, RepositoryId, RepositoryMonitor};
 use crate::{
-    block::{tracker::BlockPromise, BlockTracker},
+    block_tracker::{BlockPromise, BlockTracker},
     crypto::{sign::PublicKey, CacheHash},
     db,
     debug::DebugPrinter,

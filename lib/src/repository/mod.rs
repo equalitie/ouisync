@@ -24,7 +24,7 @@ pub(crate) use self::{
 
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
-    block::BlockTracker,
+    block_tracker::BlockTracker,
     branch::{Branch, BranchShared},
     crypto::{
         cipher,

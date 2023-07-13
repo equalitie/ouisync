@@ -5,7 +5,7 @@ use super::{
     server::Server,
 };
 use crate::{
-    block::{tracker::OfferState, BlockTracker},
+    block_tracker::{BlockTracker, OfferState},
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},

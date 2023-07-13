@@ -1,6 +1,6 @@
 use super::{proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
-    block::tracker::OfferState,
+    block_tracker::OfferState,
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},

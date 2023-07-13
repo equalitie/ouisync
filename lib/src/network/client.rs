@@ -5,10 +5,7 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block::{
-        tracker::{BlockPromise, OfferState},
-        BlockTrackerClient,
-    },
+    block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     protocol::{

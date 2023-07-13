@@ -1,7 +1,7 @@
 use super::{vault::*, LocalId, RepositoryId, RepositoryMonitor};
 use crate::{
     access_control::WriteSecrets,
-    block::{tracker::OfferState, BlockTracker},
+    block_tracker::{BlockTracker, OfferState},
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
