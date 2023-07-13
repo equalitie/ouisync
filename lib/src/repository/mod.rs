@@ -659,15 +659,14 @@ impl Repository {
                 .await
             {
                 Ok(dir) => dir,
-                Err(error @ Error::Store(store::Error::BranchNotFound))
-                    if branch.id() == local_branch.id() =>
-                {
+                Err(error @ Error::Store(store::Error::BranchNotFound)) => {
                     tracing::trace!(
                         branch_id = ?branch.id(),
                         ?error,
-                        "failed to open root directory on local branch"
+                        "failed to open root directory"
                     );
-                    // Local branch doesn't exist yet in the store. This is safe to ignore.
+                    // Either this is the local branch which doesn't exist yet in the store or a
+                    // remote branch which has been pruned in the meantime. This is safe to ignore.
                     continue;
                 }
                 Err(error @ Error::Store(store::Error::BlockNotFound)) => {

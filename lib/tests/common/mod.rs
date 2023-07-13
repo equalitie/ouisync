@@ -452,11 +452,11 @@ pub(crate) async fn check_file_version_content(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            tracing::warn!(path, ?error, "open failed");
+            tracing::warn!(path, ?branch_id, ?error, "open failed");
             return false;
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            tracing::error!(path, ?branch_id, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
