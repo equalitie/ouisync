@@ -11,7 +11,7 @@ use utils::Actor;
 criterion_group!(default, write_file, read_file, remove_file, sync);
 criterion_main!(default);
 
-const FILE_SIZES_K: &[u64] = &[128, 256, 512, 1024, 2 * 1024, 4 * 1024, 8 * 1024];
+const FILE_SIZES_M: &[u64] = &[1, 8];
 
 fn write_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
@@ -21,11 +21,11 @@ fn write_file(c: &mut Criterion) {
 
     let buffer_size = 4096;
 
-    for &m in FILE_SIZES_K {
-        let file_size = m * 1024;
+    for &m in FILE_SIZES_M {
+        let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
-        group.bench_function(BenchmarkId::from_parameter(format!("{m} kiB")), |b| {
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
             b.iter_batched_ref(
                 || {
                     let mut rng = StdRng::from_entropy();
@@ -62,11 +62,11 @@ fn read_file(c: &mut Criterion) {
 
     let buffer_size = 4096;
 
-    for &m in FILE_SIZES_K {
-        let file_size = m * 1024;
+    for &m in FILE_SIZES_M {
+        let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
-        group.bench_function(BenchmarkId::from_parameter(format!("{m} kiB")), |b| {
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
             let file_name = Utf8Path::new("file.dat");
 
             b.iter_batched_ref(
@@ -112,11 +112,11 @@ fn remove_file(c: &mut Criterion) {
     let mut group = c.benchmark_group("lib/remove_file");
     group.sample_size(10);
 
-    for &m in FILE_SIZES_K {
-        let file_size = m * 1024;
+    for &m in FILE_SIZES_M {
+        let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
-        group.bench_function(BenchmarkId::from_parameter(format!("{m} KiB")), |b| {
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
             let file_name = Utf8Path::new("file.dat");
 
             b.iter_batched_ref(
@@ -155,11 +155,11 @@ fn sync(c: &mut Criterion) {
     let mut group = c.benchmark_group("lib/sync");
     group.sample_size(10);
 
-    for &m in FILE_SIZES_K {
-        let file_size = m * 1024;
+    for &m in FILE_SIZES_M {
+        let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
-        group.bench_function(BenchmarkId::from_parameter(format!("{} kiB", m)), |b| {
+        group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
             let file_name = Utf8Path::new("file.dat");
 
             b.iter_batched_ref(
