@@ -1,14 +1,15 @@
 pub(crate) mod lock;
 
 mod block_ids;
+mod id;
 mod open_block;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::block_ids::BlockIds;
+pub(crate) use self::{block_ids::BlockIds, id::BlobId};
+
 use self::open_block::{Buffer, Cursor, OpenBlock};
 use crate::{
-    blob_id::BlobId,
     branch::Branch,
     crypto::{
         cipher::{self, Nonce, SecretKey},

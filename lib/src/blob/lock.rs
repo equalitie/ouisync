@@ -1,7 +1,7 @@
 //! Locks for coordinating concurrent operations on blobs.
 
 use crate::{
-    blob_id::BlobId,
+    blob::BlobId,
     collections::{hash_map::Entry, HashMap},
     crypto::sign::PublicKey,
     deadlock::BlockingMutex,

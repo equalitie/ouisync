@@ -5,7 +5,7 @@ use super::{
     Directory, DirectoryFallback, DirectoryLocking,
 };
 use crate::{
-    blob_id::BlobId,
+    blob::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
     error::{Error, Result},

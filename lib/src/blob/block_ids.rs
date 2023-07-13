@@ -1,6 +1,6 @@
 use super::{block_count, read_len};
 use crate::{
-    blob_id::BlobId,
+    blob::BlobId,
     branch::Branch,
     error::{Error, Result},
     locator::Locator,

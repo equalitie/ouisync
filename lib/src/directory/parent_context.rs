@@ -1,10 +1,10 @@
 use super::{content::InsertError, DirectoryFallback, Error};
 use crate::{
+    blob::BlobId,
     blob::{
         self,
         lock::{LockKind, ReadLock},
     },
-    blob_id::BlobId,
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,

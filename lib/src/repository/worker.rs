@@ -1,8 +1,7 @@
 use self::utils::{unlock, Command};
 use super::Shared;
 use crate::{
-    blob::BlockIds,
-    blob_id::BlobId,
+    blob::{BlobId, BlockIds},
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},

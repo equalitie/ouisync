@@ -3,7 +3,7 @@
 use super::entry_data::EntryData;
 use crate::{
     blob::lock::UniqueLock,
-    blob_id::BlobId,
+    blob::BlobId,
     branch::Branch,
     error::{Error, Result},
     protocol::VersionVectorOp,
