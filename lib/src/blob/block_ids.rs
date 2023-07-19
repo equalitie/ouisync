@@ -54,7 +54,7 @@ impl BlockIds {
         let encoded = self.locator.encode(self.branch.keys().read());
         let mut tx = self.branch.store().begin_read().await?;
 
-        match tx.find_block_in(&self.root_node, &encoded).await {
+        match tx.find_block_at(&self.root_node, &encoded).await {
             Ok(block) => {
                 self.locator = self.locator.next();
                 Ok(Some(block))

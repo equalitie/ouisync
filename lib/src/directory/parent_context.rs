@@ -86,7 +86,7 @@ impl ParentContext {
         let mut directory = directory.fork(dst_branch).await?;
 
         let new_context = Self {
-            directory_id: *directory.locator().blob_id(),
+            directory_id: *directory.blob_id(),
             directory_lock: directory.lock.clone(),
             entry_name: self.entry_name.clone(),
             parent: directory.parent.clone().map(Box::new),

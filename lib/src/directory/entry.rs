@@ -304,7 +304,7 @@ impl<'a> RefInner<'a> {
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.parent.blob.branch().id() == other.parent.blob.branch().id()
-            && self.parent.blob.locator() == other.parent.blob.locator()
+            && self.parent.blob.id() == other.parent.blob.id()
             && self.name == other.name
     }
 }

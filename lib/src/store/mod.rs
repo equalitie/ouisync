@@ -286,10 +286,10 @@ impl ReadTransaction {
         encoded_locator: &Hash,
     ) -> Result<(BlockId, SingleBlockPresence), Error> {
         let root_node = self.load_root_node(branch_id).await?;
-        self.find_block_in(&root_node, encoded_locator).await
+        self.find_block_at(&root_node, encoded_locator).await
     }
 
-    pub async fn find_block_in(
+    pub async fn find_block_at(
         &mut self,
         root_node: &RootNode,
         encoded_locator: &Hash,

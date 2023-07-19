@@ -548,7 +548,7 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
 pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
-        file.write(&content[offset..end]).await.unwrap();
+        file.write_all(&content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(

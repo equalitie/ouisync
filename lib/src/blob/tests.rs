@@ -20,14 +20,14 @@ async fn empty_blob() {
     let (_, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let mut blob = Blob::create(branch.clone(), Locator::ROOT);
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
     blob.flush(&mut tx).await.unwrap();
 
     // Re-open the blob and read its contents.
-    let mut blob = Blob::open(&mut tx, branch, Locator::ROOT).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
 
     let mut buffer = [0; 1];
-    assert_eq!(blob.read(&mut tx, &mut buffer[..]).await.unwrap(), 0);
+    assert_eq!(blob.read(&mut buffer[..]).unwrap(), 0);
 
     drop(tx);
     store.close().await.unwrap();
@@ -57,31 +57,27 @@ async fn write_and_read_case(
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = if is_root {
-        Locator::ROOT
-    } else {
-        random_head_locator(&mut rng)
-    };
+    let block_id = if is_root { BlobId::ROOT } else { rng.gen() };
 
     // Create the blob and write to it in chunks of `write_len` bytes.
-    let mut blob = Blob::create(branch.clone(), locator);
+    let mut blob = Blob::create(branch.clone(), block_id);
 
     let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
     for chunk in orig_content.chunks(write_len) {
-        blob.write(&mut tx, chunk).await.unwrap();
+        blob.write_all(&mut tx, chunk).await.unwrap();
     }
 
     blob.flush(&mut tx).await.unwrap();
 
     // Re-open the blob and read from it in chunks of `read_len` bytes
-    let mut blob = Blob::open(&mut tx, branch.clone(), locator).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch.clone(), block_id).await.unwrap();
 
     let mut read_content = vec![0; 0];
     let mut read_buffer = vec![0; read_len];
 
     loop {
-        let len = blob.read(&mut tx, &mut read_buffer[..]).await.unwrap();
+        let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
 
         if len == 0 {
             break; // done
@@ -108,14 +104,14 @@ fn len(
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-        blob.write(&mut tx, &content[..]).await.unwrap();
+        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+        blob.write_all(&mut tx, &content[..]).await.unwrap();
         assert_eq!(blob.len(), content_len as u64);
 
         blob.flush(&mut tx).await.unwrap();
         assert_eq!(blob.len(), content_len as u64);
 
-        let blob = Blob::open(&mut tx, branch, Locator::ROOT).await.unwrap();
+        let blob = Blob::open(&mut tx, branch, BlobId::ROOT).await.unwrap();
         assert_eq!(blob.len(), content_len as u64);
 
         drop(tx);
@@ -157,14 +153,14 @@ async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize,
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-    let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-    blob.write(&mut tx, &content[..]).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    blob.seek(&mut tx, seek_from).await.unwrap();
+    blob.seek(seek_from);
 
     let mut read_buffer = vec![0; content.len()];
-    let len = blob.read(&mut tx, &mut read_buffer[..]).await.unwrap();
+    let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
     assert_eq!(read_buffer[..len], content[expected_pos..]);
 
     drop(tx);
@@ -183,22 +179,20 @@ fn seek_from_current(
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
-        let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-        blob.write(&mut tx, &content[..]).await.unwrap();
+        let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+        blob.write_all(&mut tx, &content[..]).await.unwrap();
         blob.flush(&mut tx).await.unwrap();
 
-        blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
+        blob.seek(SeekFrom::Start(0));
 
         let mut prev_pos = 0;
         for pos in positions {
-            blob.seek(&mut tx, SeekFrom::Current(pos as i64 - prev_pos as i64))
-                .await
-                .unwrap();
+            blob.seek(SeekFrom::Current(pos as i64 - prev_pos as i64));
             prev_pos = pos;
         }
 
         let mut read_buffer = vec![0; content.len()];
-        let len = blob.read(&mut tx, &mut read_buffer[..]).await.unwrap();
+        let len = blob.read_all(&mut tx, &mut read_buffer[..]).await.unwrap();
         assert_eq!(read_buffer[..len], content[prev_pos..]);
 
         drop(tx);
@@ -213,18 +207,16 @@ async fn seek_after_end() {
 
     let content = b"content";
 
-    let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-    blob.write(&mut tx, &content[..]).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
     let mut read_buffer = [0];
 
     for &offset in &[0, 1, 2] {
-        blob.seek(&mut tx, SeekFrom::Start(content.len() as u64 + offset))
-            .await
-            .unwrap();
+        blob.seek(SeekFrom::Start(content.len() as u64 + offset));
 
-        assert_eq!(blob.read(&mut tx, &mut read_buffer).await.unwrap(), 0);
+        assert_eq!(blob.read_all(&mut tx, &mut read_buffer).await.unwrap(), 0);
     }
 
     drop(tx);
@@ -238,17 +230,15 @@ async fn seek_before_start() {
 
     let content = b"content";
 
-    let mut blob = Blob::create(branch.clone(), Locator::ROOT);
-    blob.write(&mut tx, &content[..]).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
+    blob.write_all(&mut tx, &content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
     let mut read_buffer = vec![0; content.len()];
 
     for &offset in &[0, 1, 2] {
-        blob.seek(&mut tx, SeekFrom::End(-(content.len() as i64) - offset))
-            .await
-            .unwrap();
-        blob.read(&mut tx, &mut read_buffer).await.unwrap();
+        blob.seek(SeekFrom::End(-(content.len() as i64) - offset));
+        blob.read_all(&mut tx, &mut read_buffer).await.unwrap();
         assert_eq!(read_buffer, content);
     }
 
@@ -261,25 +251,25 @@ async fn truncate_to_empty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = random_head_locator(&mut rng);
+    let id = rng.gen();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
         .take(2 * BLOCK_SIZE)
         .collect();
 
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.write(&mut tx, &content).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
     assert_eq!(blob.len(), content.len() as u64);
 
-    blob.truncate(&mut tx, 0).await.unwrap();
+    blob.truncate(0).unwrap();
     blob.flush(&mut tx).await.unwrap();
     assert_eq!(blob.len(), 0);
 
     let mut buffer = [0; 1];
-    blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
-    assert_eq!(blob.read(&mut tx, &mut buffer).await.unwrap(), 0);
+    blob.seek(SeekFrom::Start(0));
+    assert_eq!(blob.read_all(&mut tx, &mut buffer).await.unwrap(), 0);
 
     drop(tx);
     store.close().await.unwrap();
@@ -290,27 +280,27 @@ async fn truncate_to_shorter() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = random_head_locator(&mut rng);
+    let id = rng.gen();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
         .take(3 * BLOCK_SIZE)
         .collect();
 
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.write(&mut tx, &content).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
     assert_eq!(blob.len(), content.len() as u64);
 
     let new_len = BLOCK_SIZE / 2;
 
-    blob.truncate(&mut tx, new_len as u64).await.unwrap();
+    blob.truncate(new_len as u64).unwrap();
     blob.flush(&mut tx).await.unwrap();
     assert_eq!(blob.len(), new_len as u64);
 
     let mut buffer = vec![0; content.len()];
-    blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
-    assert_eq!(blob.read(&mut tx, &mut buffer).await.unwrap(), new_len);
+    blob.seek(SeekFrom::Start(0));
+    assert_eq!(blob.read_all(&mut tx, &mut buffer).await.unwrap(), new_len);
     assert_eq!(buffer[..new_len], content[..new_len]);
 
     drop(tx);
@@ -322,18 +312,18 @@ async fn truncate_marks_as_dirty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = random_head_locator(&mut rng);
+    let id = rng.gen();
 
     let content: Vec<_> = (&mut rng)
         .sample_iter(Standard)
         .take(2 * BLOCK_SIZE)
         .collect();
 
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.write(&mut tx, &content).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    blob.truncate(&mut tx, 0).await.unwrap();
+    blob.truncate(0).unwrap();
     assert!(blob.is_dirty());
 
     drop(tx);
@@ -345,12 +335,13 @@ async fn modify_blob() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator0 = random_head_locator(&mut rng);
+    let id = rng.gen();
+    let locator0 = Locator::head(id);
     let locator1 = locator0.next();
 
     let content = vec![0; 2 * BLOCK_SIZE];
-    let mut blob = Blob::create(branch.clone(), locator0);
-    blob.write(&mut tx, &content).await.unwrap();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
     let locator0 = locator0.encode(branch.keys().read());
@@ -363,8 +354,8 @@ async fn modify_blob() {
     };
 
     let buffer = vec![1; 3 * BLOCK_SIZE / 2];
-    blob.seek(&mut tx, SeekFrom::Start(0)).await.unwrap();
-    blob.write(&mut tx, &buffer).await.unwrap();
+    blob.seek(SeekFrom::Start(0));
+    blob.write_all(&mut tx, &buffer).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
     let (new_block_id0, _) = tx.find_block(branch.id(), &locator0).await.unwrap();
@@ -386,18 +377,18 @@ async fn append() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = random_head_locator(&mut rng);
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.write(&mut tx, b"foo").await.unwrap();
+    let id = rng.gen();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, b"foo").await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let mut blob = Blob::open(&mut tx, branch.clone(), locator).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch.clone(), id).await.unwrap();
 
-    blob.seek(&mut tx, SeekFrom::End(0)).await.unwrap();
-    blob.write(&mut tx, b"bar").await.unwrap();
+    blob.seek(SeekFrom::End(0));
+    blob.write_all(&mut tx, b"bar").await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let mut blob = Blob::open(&mut tx, branch, locator).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch, id).await.unwrap();
 
     let content = blob.read_to_end(&mut tx).await.unwrap();
     assert_eq!(content, b"foobar");
@@ -411,13 +402,13 @@ async fn write_reopen_and_read() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let locator = random_head_locator(&mut rng);
+    let id = rng.gen();
 
-    let mut blob = Blob::create(branch.clone(), locator);
-    blob.write(&mut tx, b"foo").await.unwrap();
+    let mut blob = Blob::create(branch.clone(), id);
+    blob.write_all(&mut tx, b"foo").await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let mut blob = Blob::open(&mut tx, branch, locator).await.unwrap();
+    let mut blob = Blob::open(&mut tx, branch, id).await.unwrap();
 
     let content = blob.read_to_end(&mut tx).await.unwrap();
     assert_eq!(content, b"foo");
@@ -447,59 +438,55 @@ async fn fork_and_write_case(
     src_len: usize,
     seek_pos: usize,
     write_len: usize,
-    src_locator_is_root: bool,
+    src_id_is_root: bool,
     rng_seed: u64,
 ) {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(rng_seed).await;
 
-    let src_locator = if src_locator_is_root {
-        Locator::ROOT
+    let src_id = if src_id_is_root {
+        BlobId::ROOT
     } else {
-        Locator::head(rng.gen())
+        rng.gen()
     };
 
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
     let mut tx = store.begin_write().await.unwrap();
-    let mut blob = Blob::create(src_branch.clone(), src_locator);
-    blob.write(&mut tx, &src_content[..]).await.unwrap();
+    let mut blob = Blob::create(src_branch.clone(), src_id);
+    blob.write_all(&mut tx, &src_content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
     tx.commit().await.unwrap();
 
-    fork(*src_locator.blob_id(), &src_branch, &dst_branch)
-        .await
-        .unwrap();
+    fork(src_id, &src_branch, &dst_branch).await.unwrap();
 
     let mut tx = store.begin_write().await.unwrap();
-    let mut blob = Blob::open(&mut tx, dst_branch.clone(), src_locator)
+    let mut blob = Blob::open(&mut tx, dst_branch.clone(), src_id)
         .await
         .unwrap();
 
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
-    blob.seek(&mut tx, SeekFrom::Start(seek_pos as u64))
-        .await
-        .unwrap();
-    blob.write(&mut tx, &write_content[..]).await.unwrap();
+    blob.seek(SeekFrom::Start(seek_pos as u64));
+    blob.write_all(&mut tx, &write_content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
     // Re-open the orig and verify the content is unchanged
-    let mut orig = Blob::open(&mut tx, src_branch, src_locator).await.unwrap();
+    let mut orig = Blob::open(&mut tx, src_branch, src_id).await.unwrap();
 
     let buffer = orig.read_to_end(&mut tx).await.unwrap();
     assert_eq!(buffer.len(), src_content.len());
     assert!(buffer == src_content);
 
     // Re-open the fork and verify the content is changed
-    let mut fork = Blob::open(&mut tx, dst_branch, src_locator).await.unwrap();
+    let mut fork = Blob::open(&mut tx, dst_branch, src_id).await.unwrap();
 
     let mut buffer = vec![0; seek_pos];
-    let len = fork.read(&mut tx, &mut buffer[..]).await.unwrap();
+    let len = fork.read_all(&mut tx, &mut buffer[..]).await.unwrap();
     assert_eq!(len, buffer.len());
     assert!(buffer == src_content[..seek_pos]);
 
     let mut buffer = vec![0; write_len];
-    let len = fork.read(&mut tx, &mut buffer[..]).await.unwrap();
+    let len = fork.read_all(&mut tx, &mut buffer[..]).await.unwrap();
     assert_eq!(len, buffer.len());
     assert!(buffer == write_content);
 
@@ -513,17 +500,17 @@ async fn fork_and_write_case(
 async fn fork_is_idempotent() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let locator = Locator::head(rng.gen());
+    let id = rng.gen();
     let content: Vec<u8> = (&mut rng).sample_iter(Standard).take(512 * 1024).collect();
 
     let mut tx = store.begin_write().await.unwrap();
-    let mut blob = Blob::create(src_branch.clone(), locator);
-    blob.write(&mut tx, &content[..]).await.unwrap();
+    let mut blob = Blob::create(src_branch.clone(), id);
+    blob.write_all(&mut tx, &content[..]).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
     tx.commit().await.unwrap();
 
     for i in 0..2 {
-        fork(*locator.blob_id(), &src_branch, &dst_branch)
+        fork(id, &src_branch, &dst_branch)
             .await
             .unwrap_or_else(|error| panic!("fork failed in iteration {}: {:?}", i, error));
     }
@@ -533,22 +520,20 @@ async fn fork_is_idempotent() {
 async fn fork_then_remove_src_branch() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let locator_0 = Locator::head(rng.gen());
-    let locator_1 = Locator::head(rng.gen());
+    let id_0 = rng.gen();
+    let id_1 = rng.gen();
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let mut blob_0 = Blob::create(src_branch.clone(), locator_0);
+    let mut blob_0 = Blob::create(src_branch.clone(), id_0);
     blob_0.flush(&mut tx).await.unwrap();
 
-    let mut blob_1 = Blob::create(src_branch.clone(), locator_1);
+    let mut blob_1 = Blob::create(src_branch.clone(), id_1);
     blob_1.flush(&mut tx).await.unwrap();
 
     tx.commit().await.unwrap();
 
-    fork(*locator_0.blob_id(), &src_branch, &dst_branch)
-        .await
-        .unwrap();
+    fork(id_0, &src_branch, &dst_branch).await.unwrap();
 
     drop(blob_0);
     drop(blob_1);
@@ -560,10 +545,10 @@ async fn fork_then_remove_src_branch() {
     tx.remove_branch(&root_node).await.unwrap();
 
     // The forked blob still exists
-    Blob::open(&mut tx, dst_branch, locator_0).await.unwrap();
+    Blob::open(&mut tx, dst_branch, id_0).await.unwrap();
 
     // The unforked is gone
-    match Blob::open(&mut tx, src_branch, locator_1).await {
+    match Blob::open(&mut tx, src_branch, id_1).await {
         Err(Error::Store(store::Error::BranchNotFound)) => (),
         Err(error) => panic!("unexpected error {:?}", error),
         Ok(_) => panic!("unexpected success"),
@@ -575,15 +560,14 @@ async fn block_ids_test() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
     let blob_id: BlobId = rng.gen();
-    let head_locator = Locator::head(blob_id);
-    let mut blob = Blob::create(branch.clone(), head_locator);
+    let mut blob = Blob::create(branch.clone(), blob_id);
 
     let content: Vec<_> = rng
         .sample_iter(Standard)
         .take(BLOCK_SIZE * 3 - HEADER_SIZE)
         .collect();
     let mut tx = store.begin_write().await.unwrap();
-    blob.write(&mut tx, &content).await.unwrap();
+    blob.write_all(&mut tx, &content).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
     tx.commit().await.unwrap();
 
@@ -620,8 +604,4 @@ async fn setup<const N: usize>(rng_seed: u64) -> (StdRng, TempDir, Store, [Branc
     });
 
     (rng, base_dir, store, branches)
-}
-
-fn random_head_locator<R: Rng>(rng: &mut R) -> Locator {
-    Locator::head(rng.gen())
 }

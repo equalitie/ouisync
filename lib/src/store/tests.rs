@@ -292,7 +292,7 @@ async fn fallback() {
     let root_node = tx.load_prev_root_node(&root_node).await.unwrap().unwrap();
 
     assert_eq!(
-        tx.find_block_in(&root_node, &locator).await.unwrap(),
+        tx.find_block_at(&root_node, &locator).await.unwrap(),
         (id1, SingleBlockPresence::Present)
     );
 

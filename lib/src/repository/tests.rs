@@ -48,7 +48,7 @@ async fn count_leaf_nodes_sanity_checks() {
     // Create a small file in the root.
 
     let mut file = repo.create_file(file_name).await.unwrap();
-    file.write(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
+    file.write_all(&random_bytes(BLOCK_SIZE - blob::HEADER_SIZE))
         .await
         .unwrap();
     file.flush().await.unwrap();
@@ -59,7 +59,7 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
     // Make the file bigger to expand to two blocks
 
-    file.write(&random_bytes(1)).await.unwrap();
+    file.write_all(&random_bytes(1)).await.unwrap();
     file.flush().await.unwrap();
 
     // 3 = one for the root + two for the file.
@@ -120,7 +120,7 @@ async fn recreate_previously_deleted_file() {
 
     // Create file
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"foo").await.unwrap();
+    file.write_all(b"foo").await.unwrap();
     file.flush().await.unwrap();
     drop(file);
 
@@ -134,7 +134,7 @@ async fn recreate_previously_deleted_file() {
 
     // Create a file with the same name but different content
     let mut file = repo.create_file("test.txt").await.unwrap();
-    file.write(b"bar").await.unwrap();
+    file.write_all(b"bar").await.unwrap();
     file.flush().await.unwrap();
     drop(file);
 
@@ -221,7 +221,7 @@ async fn concurrent_write_and_read_file() {
 
             for _ in 0..chunk_count {
                 rand::thread_rng().fill(&mut buffer[..]);
-                file.write(&buffer).await.unwrap();
+                file.write_all(&buffer).await.unwrap();
             }
 
             file.flush().await.unwrap();
@@ -262,7 +262,7 @@ async fn append_to_file() {
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("foo.txt").await.unwrap();
-    file.write(b"foo").await.unwrap();
+    file.write_all(b"foo").await.unwrap();
     file.flush().await.unwrap();
 
     // Concurrent file writes are currently not allowed so we need to drop the file before opening
@@ -270,8 +270,8 @@ async fn append_to_file() {
     drop(file);
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
-    file.seek(SeekFrom::End(0)).await.unwrap();
-    file.write(b"bar").await.unwrap();
+    file.seek(SeekFrom::End(0));
+    file.write_all(b"bar").await.unwrap();
     file.flush().await.unwrap();
 
     let mut file = repo.open_file("foo.txt").await.unwrap();
@@ -301,7 +301,7 @@ async fn blind_access_non_empty_repo() {
     .unwrap();
 
     let mut file = repo.create_file("secret.txt").await.unwrap();
-    file.write(b"redacted").await.unwrap();
+    file.write_all(b"redacted").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -393,7 +393,7 @@ async fn read_access_same_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world").await.unwrap();
+    file.write_all(b"hello world").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -411,10 +411,10 @@ async fn read_access_same_replica() {
     assert_eq!(content, b"hello world");
 
     // Writing is not allowed.
-    file.seek(SeekFrom::Start(0)).await.unwrap();
+    file.seek(SeekFrom::Start(0));
     // short writes that don't cross block boundaries don't trigger the permission check which is
     // why the following works...
-    file.write(b"hello universe").await.unwrap();
+    file.write_all(b"hello universe").await.unwrap();
     // ...but flushing the file is not allowed.
     assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
@@ -450,7 +450,7 @@ async fn read_access_different_replica() {
     .unwrap();
 
     let mut file = repo.create_file("public.txt").await.unwrap();
-    file.write(b"hello world").await.unwrap();
+    file.write_all(b"hello world").await.unwrap();
     file.flush().await.unwrap();
 
     drop(file);
@@ -479,7 +479,7 @@ async fn truncate_forked_remote_file() {
     let local_branch = repo.local_branch().unwrap();
     let mut file = repo.open_file("test.txt").await.unwrap();
     file.fork(local_branch).await.unwrap();
-    file.truncate(0).await.unwrap();
+    file.truncate(0).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -508,7 +508,7 @@ async fn version_vector_create_file() {
 
     assert!(root_vv_1 > root_vv_0);
 
-    file.write(b"blah").await.unwrap();
+    file.write_all(b"blah").await.unwrap();
     file.flush().await.unwrap();
 
     let root_vv_2 = file
@@ -635,7 +635,7 @@ async fn version_vector_fork() {
             .open()
             .await
             .unwrap();
-        file.write(b"hello").await.unwrap();
+        file.write_all(b"hello").await.unwrap();
         file.flush().await.unwrap();
 
         remote_parent.refresh().await.unwrap();
@@ -717,7 +717,7 @@ async fn version_vector_file_moved_over_tombstone() {
     let (_base_dir, repo) = setup().await;
 
     let mut file = repo.create_file("old.txt").await.unwrap();
-    file.write(b"a").await.unwrap();
+    file.write_all(b"a").await.unwrap();
     file.flush().await.unwrap();
 
     let vv_0 = file.version_vector().await.unwrap();
@@ -780,7 +780,7 @@ async fn file_conflict_modify_local() {
 
     // Modify the local version.
     let mut local_file = repo.open_file_version("test.txt", &local_id).await.unwrap();
-    local_file.write(b"local v2").await.unwrap();
+    local_file.write_all(b"local v2").await.unwrap();
     local_file.flush().await.unwrap();
     drop(local_file);
 
@@ -845,7 +845,7 @@ async fn size() {
 
     // 1 block size + 1 byte == 2 blocks
     let content = random_bytes(BLOCK_SIZE - blob::HEADER_SIZE + 1);
-    file.write(&content).await.unwrap();
+    file.write_all(&content).await.unwrap();
     file.flush().await.unwrap();
 
     // 3 blocks: 2 for the file and 1 for the root dir
@@ -895,7 +895,7 @@ async fn create_file_in_branch(branch: &Branch, name: &str, content: &[u8]) -> F
 
 async fn create_file_in_directory(dir: &mut Directory, name: &str, content: &[u8]) -> File {
     let mut file = dir.create_file(name.into()).await.unwrap();
-    file.write(content).await.unwrap();
+    file.write_all(content).await.unwrap();
     file.flush().await.unwrap();
     file
 }

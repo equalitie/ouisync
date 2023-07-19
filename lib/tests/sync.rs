@@ -141,15 +141,15 @@ fn relink_repository() {
 
         // Create the file
         let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write(b"first").await.unwrap();
+        file.write_all(b"first").await.unwrap();
         file.flush().await.unwrap();
 
         // Wait for the reader to see the file and then unlink its repo
         reader_rx.recv().await;
 
         // Modify the file while reader is unlinked
-        file.truncate(0).await.unwrap();
-        file.write(b"second").await.unwrap();
+        file.truncate(0).unwrap();
+        file.write_all(b"second").await.unwrap();
         file.flush().await.unwrap();
 
         // Notify the reader the file is updated
@@ -394,7 +394,7 @@ fn sync_during_file_write() {
             // than Alice's.
             async {
                 let mut file = repo.create_file("bar.txt").await.unwrap();
-                file.write(b"bar").await.unwrap();
+                file.write_all(b"bar").await.unwrap();
                 file.flush().await.unwrap();
             }
             .instrument(tracing::info_span!("write", name = "bar.txt"))
@@ -493,7 +493,7 @@ fn recreate_local_branch() {
 
         // 2. Create a file
         let mut file = repo.create_file("foo.txt").await.unwrap();
-        file.write(b"hello from Alice\n").await.unwrap();
+        file.write_all(b"hello from Alice\n").await.unwrap();
         file.flush().await.unwrap();
         drop(file);
 
@@ -554,8 +554,8 @@ fn recreate_local_branch() {
 
         // 6. Modify the repo. This makes Bob's branch newer than Alice's
         let mut file = repo.open_file("foo.txt").await.unwrap();
-        file.seek(SeekFrom::End(0)).await.unwrap();
-        file.write(b"hello from Bob\n").await.unwrap();
+        file.seek(SeekFrom::End(0));
+        file.write_all(b"hello from Bob\n").await.unwrap();
         file.flush().await.unwrap();
         drop(file);
 
@@ -869,7 +869,7 @@ fn concurrent_update_and_delete_during_conflict() {
             // 2. Create the file and wait until alice sees it
             let mut file = repo.create_file("data.txt").await.unwrap();
             async {
-                file.write(&content_v0).await.unwrap();
+                file.write_all(&content_v0).await.unwrap();
                 file.flush().await.unwrap();
             }
             .instrument(tracing::info_span!("write", name = "data.txt", step = 1))
@@ -882,10 +882,8 @@ fn concurrent_update_and_delete_during_conflict() {
 
             // 5b. Writes to the file in such a way that the first block remains unchanged
             async {
-                file.seek(SeekFrom::End(-(chunk.len() as i64)))
-                    .await
-                    .unwrap();
-                file.write(&chunk).await.unwrap();
+                file.seek(SeekFrom::End(-(chunk.len() as i64)));
+                file.write_all(&chunk).await.unwrap();
                 file.flush().await.unwrap();
             }
             .instrument(tracing::info_span!("write", name = "data.txt", step = 2))
@@ -917,14 +915,14 @@ fn content_stays_available_during_sync() {
 
             // 1. Create "b/c.dat" and wait for Bob to see it.
             let mut file = repo.create_file("b/c.dat").await.unwrap();
-            file.write(&content0).await.unwrap();
+            file.write_all(&content0).await.unwrap();
             file.flush().await.unwrap();
 
             rx.recv().await.unwrap();
 
             // 3. Then create "a.dat" and "b/d.dat".
             let mut file = repo.create_file("a.dat").await.unwrap();
-            file.write(&content1).await.unwrap();
+            file.write_all(&content1).await.unwrap();
             file.flush().await.unwrap();
 
             repo.create_file("b/d.dat").await.unwrap();

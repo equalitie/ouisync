@@ -19,7 +19,7 @@ use self::content::Content;
 use crate::{
     blob::{
         lock::{ReadLock, UniqueLock},
-        Blob,
+        Blob, BlobId,
     },
     branch::Branch,
     crypto::sign::PublicKey,
@@ -230,7 +230,7 @@ impl Directory {
 
     fn create_parent_context(&self, entry_name: String) -> ParentContext {
         ParentContext::new(
-            *self.locator().blob_id(),
+            *self.blob_id(),
             self.lock.clone(),
             entry_name,
             self.parent.clone(),
@@ -377,7 +377,7 @@ impl Directory {
         parent: Option<ParentContext>,
         fallback: DirectoryFallback,
     ) -> Result<Self> {
-        let (blob, content) = load(tx, branch, locator, fallback).await?;
+        let (blob, content) = load(tx, branch, *locator.blob_id(), fallback).await?;
 
         Ok(Self {
             blob,
@@ -393,7 +393,7 @@ impl Directory {
         locator: Locator,
         fallback: DirectoryFallback,
     ) -> Result<Content> {
-        let (_, content) = load(tx, branch, locator, fallback).await?;
+        let (_, content) = load(tx, branch, *locator.blob_id(), fallback).await?;
         Ok(content)
     }
 
@@ -419,7 +419,7 @@ impl Directory {
             .try_read(*locator.blob_id())
             .ok()
             .expect("blob_id collision");
-        let blob = Blob::create(branch, locator);
+        let blob = Blob::create(branch, *locator.blob_id());
 
         Directory {
             blob,
@@ -502,9 +502,9 @@ impl Directory {
         self.blob.branch()
     }
 
-    /// Locator of this directory
-    pub(crate) fn locator(&self) -> &Locator {
-        self.blob.locator()
+    /// Blob id of this directory
+    pub(crate) fn blob_id(&self) -> &BlobId {
+        self.blob.id()
     }
 
     /// Length of this directory in bytes. Does not include the content, only the size of directory
@@ -595,7 +595,7 @@ impl Directory {
             let (blob, content) = load(
                 tx,
                 self.branch().clone(),
-                *self.locator(),
+                *self.blob_id(),
                 DirectoryFallback::Disabled,
             )
             .await?;
@@ -609,8 +609,8 @@ impl Directory {
     async fn save(&mut self, tx: &mut WriteTransaction, content: &Content) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
-        self.blob.truncate(tx, 0).await?;
-        self.blob.write(tx, &buffer).await?;
+        self.blob.truncate(0)?;
+        self.blob.write_all(tx, &buffer).await?;
         self.blob.flush(tx).await?;
 
         Ok(())
@@ -664,7 +664,7 @@ impl fmt::Debug for Directory {
                     .unwrap_or("/"),
             )
             .field("branch", self.branch().id())
-            .field("blob_id", self.locator().blob_id())
+            .field("blob_id", self.blob_id())
             .finish()
     }
 }
@@ -687,13 +687,13 @@ pub(crate) enum DirectoryLocking {
 async fn load(
     tx: &mut ReadTransaction,
     branch: Branch,
-    locator: Locator,
+    blob_id: BlobId,
     fallback: DirectoryFallback,
 ) -> Result<(Blob, Content)> {
     let mut root_node = tx.load_root_node(branch.id()).await?;
 
     loop {
-        let error = match load_in(tx, &root_node, branch.clone(), locator).await {
+        let error = match load_at(tx, &root_node, branch.clone(), blob_id).await {
             Ok((blob, content)) => return Ok((blob, content)),
             Err(error @ Error::Store(store::Error::BlockNotFound)) => error,
             Err(error) => return Err(error),
@@ -712,14 +712,14 @@ async fn load(
     }
 }
 
-async fn load_in(
+async fn load_at(
     tx: &mut ReadTransaction,
     root_node: &RootNode,
     branch: Branch,
-    locator: Locator,
+    blob_id: BlobId,
 ) -> Result<(Blob, Content)> {
-    let mut blob = Blob::open_in(tx, root_node, branch, locator).await?;
-    let buffer = blob.read_to_end_in(tx, root_node).await?;
+    let mut blob = Blob::open_at(tx, root_node, branch, blob_id).await?;
+    let buffer = blob.read_to_end_at(tx, root_node).await?;
     let content = Content::deserialize(&buffer)?;
 
     Ok((blob, content))

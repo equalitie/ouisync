@@ -205,7 +205,7 @@ impl BranchEventSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access_control::WriteSecrets, db, event::EventSender, locator::Locator};
+    use crate::{access_control::WriteSecrets, blob::BlobId, db, event::EventSender};
     use assert_matches::assert_matches;
     use tempfile::TempDir;
 
@@ -213,7 +213,7 @@ mod tests {
     async fn ensure_root_directory_exists() {
         let (_base_dir, branch) = setup().await;
         let dir = branch.ensure_directory_exists("/".into()).await.unwrap();
-        assert_eq!(dir.locator(), &Locator::ROOT);
+        assert_eq!(dir.blob_id(), &BlobId::ROOT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -242,7 +242,7 @@ mod tests {
             .create_file("test.txt".into())
             .await
             .unwrap();
-        file.write(b"foo").await.unwrap();
+        file.write_all(b"foo").await.unwrap();
         file.flush().await.unwrap();
         drop(file);
 
@@ -261,10 +261,10 @@ mod tests {
             .await
             .unwrap();
 
-        file.truncate(0).await.unwrap();
+        file.truncate(0).unwrap();
         assert_matches!(file.flush().await, Err(Error::PermissionDenied));
 
-        file.write(b"bar").await.unwrap();
+        file.write_all(b"bar").await.unwrap();
         assert_matches!(file.flush().await, Err(Error::PermissionDenied));
     }
 

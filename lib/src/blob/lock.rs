@@ -57,7 +57,7 @@ pub(crate) struct BranchLocker {
 }
 
 impl BranchLocker {
-    /// Try to acquire a read lock. Fails only is a unique lock is currently being held by the
+    /// Try to acquire a read lock. Fails only if a unique lock is currently being held by the
     /// given blob. The error contains a notifier so the caller can decide whether to wait for the
     /// lock to be released or fail immediately.
     pub fn try_read(&self, blob_id: BlobId) -> Result<ReadLock, AwaitDrop> {
