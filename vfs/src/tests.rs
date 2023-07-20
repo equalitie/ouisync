@@ -2,7 +2,15 @@ use super::*;
 use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
 use proptest::prelude::*;
 use rand::{self, distributions::Standard, rngs::StdRng, Rng, SeedableRng};
-use std::{collections::HashMap, ffi::OsString, fs::Metadata, future::Future, io::ErrorKind};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    fs::Metadata,
+    future::Future,
+    io::{ErrorKind, SeekFrom},
+    path::Path,
+    sync::Arc,
+};
 use tempfile::TempDir;
 use test_strategy::proptest;
 use tokio::{

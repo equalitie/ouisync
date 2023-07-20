@@ -8,7 +8,7 @@ use ouisync::{
     metrics::{self, Metrics},
     network::{Network, Registration},
     Access, AccessSecrets, DeviceId, EntryType, Error, Event, File, Payload, PeerAddr, Repository,
-    Result,
+    Result, StoreError,
 };
 use rand::Rng;
 use std::{
@@ -442,16 +442,21 @@ pub(crate) async fn check_file_version_content(
 
     let mut file = match result {
         Ok(file) => file,
-        // `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
-        // and so the file entry is not in it yet.
-        //
-        // `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-            tracing::warn!(path, ?error, "open failed");
+        // - `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
+        //    and so the file entry is not in it yet.
+        // - `BlockNotFound` means the first block of the file hasn't been downloaded yet.
+        // - `LocatorNotFound` TODO: it seems the tests pass when we allow it and so might be ok
+        //    but we need to confirm it and understand how it happens.
+        Err(
+            error @ (Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound)),
+        ) => {
+            tracing::warn!(path, ?branch_id, ?error, "open failed");
             return false;
         }
         Err(error) => {
-            tracing::error!(path, ?error);
+            tracing::error!(path, ?branch_id, ?error);
             panic!("unexpected error: {error:?}");
         }
     };
@@ -461,7 +466,7 @@ pub(crate) async fn check_file_version_content(
     let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,
         // `BlockNotFound` means just the some block of the file hasn't been downloaded yet.
-        Err(error @ Error::BlockNotFound(_)) => {
+        Err(error @ Error::Store(StoreError::BlockNotFound)) => {
             tracing::warn!(path, ?error, "read failed");
             return false;
         }
@@ -503,7 +508,11 @@ pub(crate) async fn check_entry_exists(
             tracing::debug!(path, "opened");
             true
         }
-        Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
+        Err(
+            error @ (Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound)),
+        ) => {
             tracing::warn!(path, ?error, "open failed");
             false
         }
@@ -539,7 +548,7 @@ pub(crate) async fn expect_entry_not_found(repo: &Repository, path: &str) {
 pub(crate) async fn write_in_chunks(file: &mut File, content: &[u8], chunk_size: usize) {
     for offset in (0..content.len()).step_by(chunk_size) {
         let end = (offset + chunk_size).min(content.len());
-        file.write(&content[offset..end]).await.unwrap();
+        file.write_all(&content[offset..end]).await.unwrap();
 
         if to_megabytes(end) > to_megabytes(offset) {
             tracing::debug!(

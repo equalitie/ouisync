@@ -538,7 +538,7 @@ impl Inner {
 
         if let Some(size) = size {
             file.fork(local_branch).await?;
-            file.truncate(size).await?;
+            file.truncate(size)?;
             file.flush().await?;
         }
 
@@ -714,7 +714,7 @@ impl Inner {
             let local_branch = self.repository.local_branch()?;
 
             file.fork(local_branch).await?;
-            file.truncate(0).await?;
+            file.truncate(0)?;
             file.flush().await?;
         }
 
@@ -765,11 +765,17 @@ impl Inner {
         let file = self.entries.get_file_mut(handle)?;
 
         let offset: u64 = offset.try_into().map_err(|_| Error::OffsetOutOfRange)?;
-        file.seek(SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset));
 
         // TODO: consider reusing these buffers
         let mut buffer = vec![0; size as usize];
-        let len = file.read(&mut buffer).await?;
+
+        // https://libfuse.github.io/doxygen/structfuse__operations.html#a2a1c6b4ce1845de56863f8b7939501b5
+        //
+        //     Read should return exactly the number of bytes requested except on EOF or error...
+        //
+        // so we need to do `read_all` not just `read`.
+        let len = file.read_all(&mut buffer).await?;
         buffer.truncate(len);
 
         Ok(buffer)
@@ -794,9 +800,15 @@ impl Inner {
         let local_branch = self.repository.local_branch()?;
 
         let file = self.entries.get_file_mut(handle)?;
-        file.seek(SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset));
         file.fork(local_branch).await?;
-        file.write(data).await?;
+
+        // https://libfuse.github.io/doxygen/structfuse__operations.html#a897d1ece4b8b04c92d97b97b2dbf9768
+        //
+        //     Write should return exactly the number of bytes requested except on error.
+        //
+        // so we need to do `write_all` not just `write`.
+        file.write_all(data).await?;
 
         Ok(data.len().try_into().unwrap_or(u32::MAX))
     }
@@ -940,11 +952,9 @@ fn make_file_attr(inode: Inode, entry_type: EntryType, len: u64) -> FileAttr {
 fn to_error_code(error: &Error) -> libc::c_int {
     match error {
         Error::Db(_)
-        | Error::BlockNotFound(_)
-        | Error::BlockNotReferenced
+        | Error::Store(_)
         | Error::MalformedData
         | Error::MalformedDirectory
-        | Error::WrongBlockLength(_)
         | Error::Writer(_)
         | Error::StorageVersionMismatch => libc::EIO,
         Error::EntryNotFound | Error::AmbiguousEntry => libc::ENOENT,

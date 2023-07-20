@@ -41,7 +41,7 @@ fn local_delete_remote_file() {
             let (_network, repo, _reg) = actor::setup().await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
-            file.write(&content).await.unwrap();
+            file.write_all(&content).await.unwrap();
             file.flush().await.unwrap();
 
             rx.recv().await.unwrap();
@@ -118,7 +118,7 @@ fn local_truncate_local_file() {
         // 2 blocks for the file + 1 block for the root directory
         assert_eq!(repo.count_blocks().await.unwrap(), 3);
 
-        file.truncate(0).await.unwrap();
+        file.truncate(0).unwrap();
         file.flush().await.unwrap();
 
         // 1 block for the file + 1 block for the root directory
@@ -140,7 +140,7 @@ fn local_truncate_remote_file() {
             let (_network, repo, _reg) = actor::setup().await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
-            file.write(&content).await.unwrap();
+            file.write_all(&content).await.unwrap();
             file.flush().await.unwrap();
 
             rx.recv().await.unwrap();
@@ -161,7 +161,7 @@ fn local_truncate_remote_file() {
 
             let mut file = repo.open_file("test.dat").await.unwrap();
             file.fork(repo.local_branch().unwrap()).await.unwrap();
-            file.truncate(0).await.unwrap();
+            file.truncate(0).unwrap();
             file.flush().await.unwrap();
 
             //   1 block for the file (the original 2 blocks were removed)
@@ -186,12 +186,12 @@ fn remote_truncate_remote_file() {
             let (_network, repo, _reg) = actor::setup().await;
 
             let mut file = repo.create_file("test.dat").await.unwrap();
-            file.write(&content).await.unwrap();
+            file.write_all(&content).await.unwrap();
             file.flush().await.unwrap();
 
             rx.recv().await.unwrap();
 
-            file.truncate(0).await.unwrap();
+            file.truncate(0).unwrap();
             file.flush().await.unwrap();
 
             rx.recv().await.unwrap();
@@ -221,12 +221,19 @@ fn remote_truncate_remote_file() {
 }
 
 async fn write_to_file(file: &mut File, size: usize) {
-    file.write(&common::random_content(size)).await.unwrap();
+    file.write_all(&common::random_content(size)).await.unwrap();
 }
 
-async fn expect_block_count(repo: &Repository, expected_block_count: usize) {
+async fn expect_block_count(repo: &Repository, expected: u64) {
     common::eventually(repo, || async {
-        repo.count_blocks().await.unwrap() == expected_block_count
+        let actual = repo.count_blocks().await.unwrap();
+
+        if actual == expected {
+            true
+        } else {
+            tracing::warn!(actual, expected, "block count");
+            false
+        }
     })
     .await
 }

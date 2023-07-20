@@ -13,8 +13,7 @@ use super::{
 };
 use crate::{
     collections::{hash_map::Entry, HashMap},
-    index::Index,
-    repository::{LocalId, RepositoryState},
+    repository::{LocalId, Vault},
     state_monitor::StateMonitor,
 };
 use backoff::{backoff::Backoff, ExponentialBackoffBuilder};
@@ -86,19 +85,19 @@ impl MessageBroker {
     /// Try to establish a link between a local repository and a remote repository. The remote
     /// counterpart needs to call this too with matching repository id for the link to actually be
     /// created.
-    pub fn create_link(&mut self, repo: RepositoryState, pex: &PexController) {
-        let monitor = self.monitor.make_child(repo.monitor.name());
+    pub fn create_link(&mut self, vault: Vault, pex: &PexController) {
+        let monitor = self.monitor.make_child(vault.monitor.name());
         let span = tracing::info_span!(
             parent: &self.span,
             "link",
-            repo = repo.monitor.name(),
+            repo = vault.monitor.name(),
         );
 
         let span_enter = span.enter();
 
         let (abort_tx, abort_rx) = oneshot::channel();
 
-        match self.links.entry(repo.local_id) {
+        match self.links.entry(vault.local_id) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
@@ -113,13 +112,13 @@ impl MessageBroker {
         }
 
         let role = Role::determine(
-            repo.index.repository_id(),
+            vault.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
         );
 
         let channel_id = MessageChannel::new(
-            repo.index.repository_id(),
+            vault.repository_id(),
             &self.this_runtime_id,
             &self.that_runtime_id,
             role,
@@ -142,7 +141,7 @@ impl MessageBroker {
                     role,
                     stream,
                     sink,
-                    repo,
+                    vault,
                     request_limiter,
                     pex_discovery_tx,
                     pex_announcer,
@@ -182,7 +181,7 @@ async fn maintain_link(
     role: Role,
     mut stream: ContentStream,
     mut sink: ContentSink,
-    repo: RepositoryState,
+    vault: Vault,
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     mut pex_announcer: PexAnnouncer,
@@ -225,7 +224,7 @@ async fn maintain_link(
         *state.get() = State::EstablishingChannel;
 
         let (crypto_stream, crypto_sink) =
-            match establish_channel(role, &mut stream, &mut sink, &repo.index).await {
+            match establish_channel(role, &mut stream, &mut sink, &vault).await {
                 Ok(io) => io,
                 Err(EstablishError::Crypto) => continue,
                 Err(EstablishError::Closed) => break,
@@ -237,7 +236,7 @@ async fn maintain_link(
         match run_link(
             crypto_stream,
             crypto_sink,
-            &repo,
+            &vault,
             request_limiter.clone(),
             pex_discovery_tx.clone(),
             &mut pex_announcer,
@@ -254,9 +253,9 @@ async fn establish_channel<'a>(
     role: Role,
     stream: &'a mut ContentStream,
     sink: &'a mut ContentSink,
-    index: &Index,
+    vault: &Vault,
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
-    match crypto::establish_channel(role, index.repository_id(), stream, sink).await {
+    match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
         Ok(io) => {
             tracing::debug!("established encrypted channel");
             Ok(io)
@@ -272,7 +271,7 @@ async fn establish_channel<'a>(
 async fn run_link(
     stream: DecryptingStream<'_>,
     sink: EncryptingSink<'_>,
-    repo: &RepositoryState,
+    repo: &Vault,
     request_limiter: Arc<Semaphore>,
     pex_discovery_tx: PexDiscoverySender,
     pex_announcer: &mut PexAnnouncer,
@@ -367,7 +366,7 @@ async fn send_messages(
 
 // Create and run client. Returns only on error.
 async fn run_client(
-    repo: RepositoryState,
+    repo: Vault,
     content_tx: mpsc::Sender<Content>,
     mut response_rx: mpsc::Receiver<Response>,
     request_limiter: Arc<Semaphore>,
@@ -386,7 +385,7 @@ async fn run_client(
 
 // Create and run server. Returns only on error.
 async fn run_server(
-    repo: RepositoryState,
+    repo: Vault,
     content_tx: mpsc::Sender<Content>,
     request_rx: mpsc::Receiver<Request>,
 ) -> ControlFlow {

@@ -15,8 +15,7 @@ pub mod path;
 
 mod access_control;
 mod blob;
-mod blob_id;
-mod block;
+mod block_tracker;
 mod branch;
 mod collections;
 mod conflict;
@@ -28,15 +27,17 @@ mod error;
 mod event;
 mod file;
 mod format;
-mod index;
+mod future;
 mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod locator;
 mod progress;
+mod protocol;
 mod repository;
 mod state_monitor;
 mod storage_size;
+mod store;
 mod sync;
 #[cfg(test)]
 mod test_utils;
@@ -47,7 +48,6 @@ mod versioned;
 pub use self::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret, ShareToken, WriteSecrets},
     blob::HEADER_SIZE as BLOB_HEADER_SIZE,
-    block::BLOCK_SIZE,
     branch::Branch,
     debug::DebugPrinter,
     device_id::DeviceId,
@@ -59,11 +59,13 @@ pub use self::{
     joint_entry::JointEntry,
     network::{peer_addr::PeerAddr, PeerInfo},
     progress::Progress,
+    protocol::BLOCK_SIZE,
     repository::{
         delete as delete_repository, Metadata, ReopenToken, Repository, RepositoryHandle,
         RepositoryId, RepositoryParams,
     },
     state_monitor::{MonitorId, MonitoredValue, StateMonitor},
     storage_size::StorageSize,
+    store::Error as StoreError,
     version_vector::VersionVector,
 };

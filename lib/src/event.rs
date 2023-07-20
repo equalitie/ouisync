@@ -1,7 +1,7 @@
 // Probably false positive triggered by `task_local`
 #![allow(clippy::declare_interior_mutable_const)]
 
-use crate::{block::BlockId, crypto::sign::PublicKey};
+use crate::{crypto::sign::PublicKey, protocol::BlockId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::broadcast;
 

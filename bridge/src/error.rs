@@ -42,7 +42,7 @@ impl ToErrorCode for Error {
                 use ouisync_lib::Error::*;
 
                 match error {
-                    Db(_) => ErrorCode::Db,
+                    Db(_) | Store(_) => ErrorCode::Store,
                     PermissionDenied => ErrorCode::PermissionDenied,
                     MalformedData | MalformedDirectory => ErrorCode::MalformedData,
                     EntryExists => ErrorCode::EntryExists,
@@ -52,8 +52,7 @@ impl ToErrorCode for Error {
                     OperationNotSupported => ErrorCode::OperationNotSupported,
                     NonUtf8FileName | OffsetOutOfRange => ErrorCode::InvalidArgument,
                     StorageVersionMismatch => ErrorCode::StorageVersionMismatch,
-                    BlockNotFound(_) | BlockNotReferenced | WrongBlockLength(_) | EntryIsFile
-                    | EntryIsDirectory | Writer(_) | Locked => ErrorCode::Other,
+                    EntryIsFile | EntryIsDirectory | Writer(_) | Locked => ErrorCode::Other,
                 }
             }
             Self::InitializeLogger(_) | Self::InitializeRuntime(_) | Self::Io(_) => {
@@ -77,8 +76,8 @@ impl ToErrorCode for Error {
 pub enum ErrorCode {
     /// No error
     Ok = 0,
-    /// Database error
-    Db = 1,
+    /// Store error
+    Store = 1,
     /// Insuficient permission to perform the intended operation
     PermissionDenied = 2,
     /// Malformed data
@@ -144,7 +143,7 @@ mod tests {
     fn error_code_serialize_deserialize() {
         let origs = [
             ErrorCode::Ok,
-            ErrorCode::Db,
+            ErrorCode::Store,
             ErrorCode::PermissionDenied,
             ErrorCode::MalformedData,
             ErrorCode::EntryExists,

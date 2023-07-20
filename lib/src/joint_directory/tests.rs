@@ -6,7 +6,7 @@ use crate::{
     db,
     directory::{DirectoryFallback, DirectoryLocking},
     event::EventSender,
-    index::BranchData,
+    store::Store,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
@@ -112,13 +112,13 @@ async fn conflict_forked_files() {
     let mut file1 = open_file(&root0, "file.txt").await;
 
     file1.fork(branch1.clone()).await.unwrap();
-    file1.write(b"two").await.unwrap();
+    file1.write_all(b"two").await.unwrap();
     file1.flush().await.unwrap();
     drop(file1);
 
     // Modify the file by branch 0 as well, to create concurrent versions
     let mut file0 = open_file(&root0, "file.txt").await;
-    file0.write(b"three").await.unwrap();
+    file0.write_all(b"three").await.unwrap();
     file0.flush().await.unwrap();
 
     // Refresh branch 0's root to reflect the changes
@@ -1000,12 +1000,12 @@ async fn setup_with_rng<const N: usize>(mut rng: StdRng) -> (TempDir, [Branch; N
     let shared = BranchShared::new();
 
     let branches = [(); N].map(|_| {
+        let store = Store::new(pool.clone());
         let id = PublicKey::generate(&mut rng);
-        let event_tx = event_tx.clone();
         let secrets = secrets.clone();
         let shared = shared.clone();
-        let data = BranchData::new(id);
-        Branch::new(pool.clone(), data, secrets.into(), shared, event_tx)
+        let event_tx = event_tx.clone();
+        Branch::new(id, store, secrets.into(), shared, event_tx)
     });
 
     (base_dir, branches)
@@ -1038,7 +1038,7 @@ async fn create_file(parent: &mut Directory, name: &str, content: &[u8]) -> File
     let mut file = parent.create_file(name.to_owned()).await.unwrap();
 
     if !content.is_empty() {
-        file.write(content).await.unwrap();
+        file.write_all(content).await.unwrap();
     }
 
     file.flush().await.unwrap();
@@ -1056,8 +1056,8 @@ async fn update_file(
 
     file.fork(local_branch.clone()).await.unwrap();
 
-    file.truncate(0).await.unwrap();
-    file.write(content).await.unwrap();
+    file.truncate(0).unwrap();
+    file.write_all(content).await.unwrap();
     file.flush().await.unwrap();
 
     file

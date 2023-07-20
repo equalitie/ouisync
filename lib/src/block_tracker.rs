@@ -1,7 +1,7 @@
-use super::BlockId;
 use crate::{
     collections::{HashMap, HashSet},
     deadlock::BlockingMutex,
+    protocol::BlockId,
 };
 use slab::Slab;
 use std::{fmt, sync::Arc};
@@ -353,11 +353,12 @@ type ClientId = usize;
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::{BlockData, BLOCK_SIZE},
-        *,
+    use super::*;
+    use crate::{
+        collections::HashSet,
+        protocol::{BlockData, BLOCK_SIZE},
+        test_utils,
     };
-    use crate::{collections::HashSet, test_utils};
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use std::{pin::pin, time::Duration};

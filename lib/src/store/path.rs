@@ -1,10 +1,9 @@
-use super::node::{
-    self, InnerNode, InnerNodeMap, LeafNodeSet, ModifyStatus, NodeState, SingleBlockPresence,
-    Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
-};
 use crate::{
-    block::BlockId,
     crypto::{Hash, Hashable},
+    protocol::{
+        self, BlockId, InnerNode, InnerNodeMap, LeafNodeModifyStatus, LeafNodeSet, NodeState,
+        SingleBlockPresence, Summary, EMPTY_INNER_HASH, INNER_LAYER_COUNT,
+    },
 };
 
 ///
@@ -24,7 +23,7 @@ use crate::{
 /// and/or remove the leaf) and then recalculate all hashes.
 ///
 #[derive(Debug)]
-pub(super) struct Path {
+pub(crate) struct Path {
     locator: Hash,
     pub root_hash: Hash,
     pub root_summary: Summary,
@@ -77,15 +76,15 @@ impl Path {
         block_presence: SingleBlockPresence,
     ) -> Option<BlockId> {
         match self.leaves.modify(&self.locator, block_id, block_presence) {
-            ModifyStatus::Updated(old_block_id) => {
+            LeafNodeModifyStatus::Updated(old_block_id) => {
                 self.recalculate(INNER_LAYER_COUNT);
                 Some(old_block_id)
             }
-            ModifyStatus::Inserted => {
+            LeafNodeModifyStatus::Inserted => {
                 self.recalculate(INNER_LAYER_COUNT);
                 None
             }
-            ModifyStatus::Unchanged => None,
+            LeafNodeModifyStatus::Unchanged => None,
         }
     }
 
@@ -96,7 +95,7 @@ impl Path {
     }
 
     pub fn get_bucket(&self, inner_layer: usize) -> u8 {
-        node::get_bucket(&self.locator, inner_layer)
+        protocol::get_bucket(&self.locator, inner_layer)
     }
 
     /// Recalculate layers from start_layer all the way to the root.

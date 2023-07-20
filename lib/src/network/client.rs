@@ -5,16 +5,14 @@ use super::{
     pending::{PendingRequest, PendingRequests, PendingResponse},
 };
 use crate::{
-    block::{
-        tracker::{BlockPromise, OfferState},
-        BlockData, BlockNonce, BlockTrackerClient,
-    },
+    block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    index::{
-        InnerNodeMap, LeafNodeSet, MultiBlockPresence, ReceiveError, ReceiveFilter, UntrustedProof,
+    protocol::{
+        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof,
     },
-    repository::{BlockRequestMode, RepositoryMonitor, RepositoryState},
+    repository::{BlockRequestMode, RepositoryMonitor, Vault},
+    store::{self, ReceiveFilter},
 };
 use scoped_task::ScopedJoinHandle;
 use std::{future, pin::pin, sync::Arc, time::Instant};
@@ -25,7 +23,7 @@ use tokio::{
 use tracing::{instrument, instrument::Instrument, Span};
 
 pub(super) struct Client {
-    repository: RepositoryState,
+    vault: Vault,
     pending_requests: Arc<PendingRequests>,
     request_tx: mpsc::UnboundedSender<(PendingRequest, Instant)>,
     receive_filter: ReceiveFilter,
@@ -35,14 +33,14 @@ pub(super) struct Client {
 
 impl Client {
     pub fn new(
-        repo: RepositoryState,
+        vault: Vault,
         tx: mpsc::Sender<Content>,
         peer_request_limiter: Arc<Semaphore>,
     ) -> Self {
-        let db = repo.db().clone();
-        let block_tracker = repo.block_tracker.client();
+        let receive_filter = vault.store().receive_filter();
+        let block_tracker = vault.block_tracker.client();
 
-        let pending_requests = Arc::new(PendingRequests::new(repo.monitor.clone()));
+        let pending_requests = Arc::new(PendingRequests::new(vault.monitor.clone()));
 
         // We run the sender in a separate task so we can keep sending requests while we're
         // processing responses (which sometimes takes a while).
@@ -50,14 +48,14 @@ impl Client {
             tx,
             pending_requests.clone(),
             peer_request_limiter,
-            repo.monitor.clone(),
+            vault.monitor.clone(),
         );
 
         Self {
-            repository: repo,
+            vault,
             pending_requests,
             request_tx,
-            receive_filter: ReceiveFilter::new(db),
+            receive_filter,
             block_tracker,
             _request_sender: request_sender,
         }
@@ -128,7 +126,7 @@ impl Client {
         loop {
             match queued_responses_rx.recv().await {
                 Some(response) => {
-                    self.repository
+                    self.vault
                         .monitor
                         .handle_response_metric
                         .measure_ok(self.handle_response(response))
@@ -140,14 +138,14 @@ impl Client {
     }
 
     async fn handle_response(&self, response: PendingResponse) -> Result<()> {
-        let result = match response {
+        match response {
             PendingResponse::RootNode {
                 proof,
                 block_presence,
                 permit: _permit,
                 debug,
             } => {
-                self.repository
+                self.vault
                     .monitor
                     .handle_root_node_metric
                     .measure_ok(self.handle_root_node(proof, block_presence, debug))
@@ -158,7 +156,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.repository
+                self.vault
                     .monitor
                     .handle_inner_nodes_metric
                     .measure_ok(self.handle_inner_nodes(hash, debug))
@@ -169,7 +167,7 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.repository
+                self.vault
                     .monitor
                     .handle_leaf_nodes_metric
                     .measure_ok(self.handle_leaf_nodes(hash, debug))
@@ -182,17 +180,12 @@ impl Client {
                 permit: _permit,
                 debug,
             } => {
-                self.repository
+                self.vault
                     .monitor
                     .handle_block_metric
                     .measure_ok(self.handle_block(data, nonce, block_promise, debug))
                     .await
             }
-        };
-
-        match result {
-            Ok(()) | Err(ReceiveError::InvalidProof | ReceiveError::ParentNodeNotFound) => Ok(()),
-            Err(ReceiveError::Fatal(error)) => Err(error),
         }
     }
 
@@ -211,15 +204,11 @@ impl Client {
         proof: UntrustedProof,
         block_presence: MultiBlockPresence,
         _debug: DebugReceivedResponse,
-    ) -> Result<(), ReceiveError> {
+    ) -> Result<()> {
         let hash = proof.hash;
-        let updated = self
-            .repository
-            .index
-            .receive_root_node(proof, block_presence)
-            .await?;
+        let status = self.vault.receive_root_node(proof, block_presence).await?;
 
-        if updated {
+        if status.request_children {
             tracing::trace!("received updated root node");
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
@@ -238,13 +227,12 @@ impl Client {
         &self,
         nodes: CacheHash<InnerNodeMap>,
         _debug: DebugReceivedResponse,
-    ) -> Result<(), ReceiveError> {
+    ) -> Result<()> {
         let total = nodes.len();
 
-        let quota = self.repository.quota().await?.map(Into::into);
-        let (updated_nodes, status) = self
-            .repository
-            .index
+        let quota = self.vault.quota().await?.map(Into::into);
+        let status = self
+            .vault
             .receive_inner_nodes(nodes, &self.receive_filter, quota)
             .await?;
 
@@ -252,15 +240,16 @@ impl Client {
 
         tracing::trace!(
             "received {}/{} inner nodes: {:?}",
-            updated_nodes.len(),
+            status.request_children.len(),
             total,
-            updated_nodes
+            status
+                .request_children
                 .iter()
                 .map(|node| &node.hash)
                 .collect::<Vec<_>>()
         );
 
-        for node in updated_nodes {
+        for node in status.request_children {
             self.enqueue_request(PendingRequest::ChildNodes(
                 node.hash,
                 ResponseDisambiguator::new(node.summary.block_presence),
@@ -270,7 +259,7 @@ impl Client {
 
         if quota.is_some() {
             for branch_id in &status.new_approved {
-                self.repository.approve_offers(branch_id).await?;
+                self.vault.approve_offers(branch_id).await?;
             }
         }
 
@@ -284,20 +273,20 @@ impl Client {
         &self,
         nodes: CacheHash<LeafNodeSet>,
         _debug: DebugReceivedResponse,
-    ) -> Result<(), ReceiveError> {
+    ) -> Result<()> {
         let total = nodes.len();
-        let quota = self.repository.quota().await?.map(Into::into);
-        let (updated_blocks, status) = self
-            .repository
-            .index
-            .receive_leaf_nodes(nodes, quota)
-            .await?;
+        let quota = self.vault.quota().await?.map(Into::into);
+        let status = self.vault.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
             "received {}/{} leaf nodes: {:?}",
-            updated_blocks.len(),
+            status.request_blocks.len(),
             total,
-            updated_blocks
+            status
+                .request_blocks
+                .iter()
+                .map(|node| &node.block_id)
+                .collect::<Vec<_>>(),
         );
 
         let offer_state =
@@ -307,16 +296,16 @@ impl Client {
                 OfferState::Pending
             };
 
-        match self.repository.block_request_mode {
+        match self.vault.block_request_mode {
             BlockRequestMode::Lazy => {
-                for block_id in updated_blocks {
-                    self.block_tracker.offer(block_id, offer_state);
+                for node in status.request_blocks {
+                    self.block_tracker.offer(node.block_id, offer_state);
                 }
             }
             BlockRequestMode::Greedy => {
-                for block_id in updated_blocks {
-                    if self.block_tracker.offer(block_id, offer_state) {
-                        self.repository.block_tracker.require(block_id);
+                for node in status.request_blocks {
+                    if self.block_tracker.offer(node.block_id, offer_state) {
+                        self.vault.block_tracker.require(node.block_id);
                     }
                 }
             }
@@ -324,7 +313,7 @@ impl Client {
 
         if quota.is_some() {
             for branch_id in &status.new_approved {
-                self.repository.approve_offers(branch_id).await?;
+                self.vault.approve_offers(branch_id).await?;
             }
         }
 
@@ -340,16 +329,12 @@ impl Client {
         nonce: BlockNonce,
         block_promise: Option<BlockPromise>,
         _debug: DebugReceivedResponse,
-    ) -> Result<(), ReceiveError> {
-        match self
-            .repository
-            .write_received_block(&data, &nonce, block_promise)
-            .await
-        {
+    ) -> Result<()> {
+        match self.vault.receive_block(&data, &nonce, block_promise).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
-            Ok(()) | Err(Error::BlockNotReferenced) => Ok(()),
-            Err(error) => Err(error.into()),
+            Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),
+            Err(error) => Err(error),
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::{
-    blob_id::BlobId,
+    blob::BlobId,
     crypto::{cipher::SecretKey, Digest, Hash, Hashable},
 };
 

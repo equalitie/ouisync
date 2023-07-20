@@ -3,23 +3,17 @@ mod progress_cache;
 pub(crate) use progress_cache::FileProgressCache;
 
 use crate::{
-    blob::{lock::UpgradableLock, Blob},
-    block::BLOCK_SIZE,
+    blob::{lock::UpgradableLock, Blob, ReadWriteError},
     branch::Branch,
-    db,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    index::VersionVectorOp,
     locator::Locator,
+    protocol::{VersionVectorOp, BLOCK_SIZE},
+    store::WriteTransaction,
     version_vector::VersionVector,
 };
 use std::{fmt, future::Future, io::SeekFrom};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tracing::instrument;
-
-// When this many blocks are written, the shared transaction is forcefully commited. This prevents
-// the shared transaction from becoming too big.
-const MAX_UNCOMMITTED_BLOCKS: u32 = 64;
 
 pub struct File {
     blob: Blob,
@@ -45,10 +39,10 @@ impl File {
         })?;
         let lock = UpgradableLock::Read(lock);
 
-        let mut tx = branch.db().begin_read().await?;
+        let mut tx = branch.store().begin_read().await?;
 
         Ok(Self {
-            blob: Blob::open(&mut tx, branch, locator).await?,
+            blob: Blob::open(&mut tx, branch, *locator.blob_id()).await?,
             parent,
             lock,
         })
@@ -68,7 +62,7 @@ impl File {
         let lock = UpgradableLock::Read(lock);
 
         Self {
-            blob: Blob::create(branch, locator),
+            blob: Blob::create(branch, *locator.blob_id()),
             parent,
             lock,
         }
@@ -94,21 +88,19 @@ impl File {
     /// while awaiting the result.
     pub fn progress(&self) -> impl Future<Output = Result<u64>> {
         let branch = self.branch().clone();
-        let locator = *self.blob.locator();
+        let locator = Locator::head(*self.blob.id());
         let block_count = self.blob.block_count();
 
         async move {
             let permit = branch.file_progress_cache().acquire().await;
 
-            let mut tx = branch.db().begin_read().await?;
-            let snapshot = branch.data().load_snapshot(&mut tx).await?;
-
+            let mut tx = branch.store().begin_read().await?;
             let mut entry = permit.get(*locator.blob_id());
             let mut count = *entry;
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let (_, presence) = snapshot.get_block(&mut tx, &encoded_locator).await?;
+                let (_, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
 
                 if presence.is_present() {
                     count = count.saturating_add(1);
@@ -123,59 +115,98 @@ impl File {
         }
     }
 
-    /// Reads data from this file. See [`Blob::read`] for more info.
+    /// Reads data from this file. Returns the number of bytes actually read.
     pub async fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
-        let mut tx = self.branch().db().begin_read().await?;
-        self.blob.read(&mut tx, buffer).await
+        loop {
+            match self.blob.read(buffer) {
+                Ok(len) => return Ok(len),
+                Err(ReadWriteError::CacheMiss) => {
+                    let mut tx = self.branch().store().begin_read().await?;
+                    self.blob.warmup(&mut tx).await?;
+                }
+                Err(ReadWriteError::CacheFull) => {
+                    self.flush().await?;
+                }
+            }
+        }
+    }
+
+    pub async fn read_all(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        let mut offset = 0;
+
+        loop {
+            match self.read(&mut buffer[offset..]).await? {
+                0 => return Ok(offset),
+                n => {
+                    offset += n;
+                }
+            }
+        }
     }
 
     /// Read all data from this file from the current seek position until the end and return then
     /// in a `Vec`.
     pub async fn read_to_end(&mut self) -> Result<Vec<u8>> {
-        let mut tx = self.branch().db().begin_read().await?;
-        self.blob.read_to_end(&mut tx).await
+        let mut buffer = vec![
+            0;
+            (self.blob.len() - self.blob.seek_position())
+                .try_into()
+                .unwrap_or(usize::MAX)
+        ];
+        self.read_all(&mut buffer[..]).await?;
+        Ok(buffer)
     }
 
-    /// Writes `buffer` into this file.
-    #[instrument(skip_all, fields(buffer.len = buffer.len()))]
-    pub async fn write(&mut self, buffer: &[u8]) -> Result<()> {
-        let mut tx = self.branch().db().begin_shared_write().await?;
+    /// Writes `buffer` into this file. Returns the number of bytes actually written.
+    pub async fn write(&mut self, buffer: &[u8]) -> Result<usize> {
         self.acquire_write_lock()?;
-        let block_written = self.blob.write(&mut tx, buffer).await?;
 
-        if block_written
-            && self.branch().uncommitted_block_counter().increment() == MAX_UNCOMMITTED_BLOCKS
-        {
-            tx.commit().await?;
-            self.branch().uncommitted_block_counter().reset();
+        loop {
+            match self.blob.write(buffer) {
+                Ok(len) => return Ok(len),
+                Err(ReadWriteError::CacheMiss) => {
+                    let mut tx = self.branch().store().begin_read().await?;
+                    self.blob.warmup(&mut tx).await?;
+                }
+                Err(ReadWriteError::CacheFull) => {
+                    self.flush().await?;
+                }
+            }
         }
+    }
 
-        Ok(())
+    pub async fn write_all(&mut self, buffer: &[u8]) -> Result<()> {
+        let mut offset = 0;
+
+        loop {
+            match self.write(&buffer[offset..]).await? {
+                0 => return Ok(()),
+                n => {
+                    offset += n;
+                }
+            }
+        }
     }
 
     /// Seeks to an offset in the file.
-    pub async fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        let mut tx = self.branch().db().begin_read().await?;
-        self.blob.seek(&mut tx, pos).await
+    pub fn seek(&mut self, pos: SeekFrom) -> u64 {
+        self.blob.seek(pos)
     }
 
     /// Truncates the file to the given length.
-    #[instrument(skip(self))]
-    pub async fn truncate(&mut self, len: u64) -> Result<()> {
-        let mut tx = self.branch().db().begin_read().await?;
+    pub fn truncate(&mut self, len: u64) -> Result<()> {
         self.acquire_write_lock()?;
-        self.blob.truncate(&mut tx, len).await
+        self.blob.truncate(len)
     }
 
     /// Atomically saves any pending modifications and updates the version vectors of this file and
     /// all its ancestors.
-    #[instrument(skip_all)]
     pub async fn flush(&mut self) -> Result<()> {
         if !self.blob.is_dirty() {
             return Ok(());
         }
 
-        let mut tx = self.branch().db().begin_shared_write().await?;
+        let mut tx = self.branch().store().begin_write().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
@@ -185,21 +216,15 @@ impl File {
             )
             .await?;
 
-        let uncommitted_block_counter = self.branch().uncommitted_block_counter().clone();
         let event_tx = self.branch().notify();
-
-        tx.commit_and_then(move || {
-            uncommitted_block_counter.reset();
-            event_tx.send();
-        })
-        .await?;
+        tx.commit_and_then(move || event_tx.send()).await?;
 
         Ok(())
     }
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut db::WriteTransaction) -> Result<()> {
+    pub(crate) async fn save(&mut self, tx: &mut WriteTransaction) -> Result<()> {
         self.blob.flush(tx).await?;
         Ok(())
     }
@@ -232,15 +257,12 @@ impl File {
 
         let parent = self.parent.fork(self.branch(), &dst_branch).await?;
 
-        let lock = dst_branch
-            .locker()
-            .read(*self.blob.locator().blob_id())
-            .await;
+        let lock = dst_branch.locker().read(*self.blob.id()).await;
         let lock = UpgradableLock::Read(lock);
 
         let blob = {
-            let mut tx = dst_branch.db().begin_read().await?;
-            Blob::open(&mut tx, dst_branch, *self.blob.locator()).await?
+            let mut tx = dst_branch.store().begin_read().await?;
+            Blob::open(&mut tx, dst_branch, *self.blob.id()).await?
         };
 
         *self = Self { blob, parent, lock };
@@ -254,10 +276,10 @@ impl File {
             .await
     }
 
-    /// Locator of this file.
+    /// BlobId of this file.
     #[cfg(test)]
-    pub(crate) fn locator(&self) -> &Locator {
-        self.blob.locator()
+    pub(crate) fn blob_id(&self) -> &crate::blob::BlobId {
+        self.blob.id()
     }
 
     fn acquire_write_lock(&mut self) -> Result<()> {
@@ -275,7 +297,7 @@ mod tests {
         db,
         directory::{DirectoryFallback, DirectoryLocking},
         event::EventSender,
-        index::BranchData,
+        store::Store,
         test_utils,
     };
     use assert_matches::assert_matches;
@@ -288,7 +310,7 @@ mod tests {
 
         // Create a file owned by branch 0
         let mut file0 = branch0.ensure_file_exists("dog.jpg".into()).await.unwrap();
-        file0.write(b"small").await.unwrap();
+        file0.write_all(b"small").await.unwrap();
         file0.flush().await.unwrap();
         drop(file0);
 
@@ -306,7 +328,7 @@ mod tests {
             .unwrap();
 
         file1.fork(branch1.clone()).await.unwrap();
-        file1.write(b"large").await.unwrap();
+        file1.write_all(b"large").await.unwrap();
         file1.flush().await.unwrap();
 
         // Reopen orig file and verify it's unchanged
@@ -365,7 +387,7 @@ mod tests {
         file1.fork(branch1).await.unwrap();
 
         for _ in 0..2 {
-            file1.write(b"oink").await.unwrap();
+            file1.write_all(b"oink").await.unwrap();
             file1.flush().await.unwrap();
         }
     }
@@ -390,9 +412,9 @@ mod tests {
             .await
             .unwrap();
 
-        file0.write(b"yip-yap").await.unwrap();
-        assert_matches!(file1.write(b"ring-ding-ding").await, Err(Error::Locked));
-        assert_matches!(file1.truncate(0).await, Err(Error::Locked));
+        file0.write_all(b"yip-yap").await.unwrap();
+        assert_matches!(file1.write_all(b"ring-ding-ding").await, Err(Error::Locked));
+        assert_matches!(file1.truncate(0), Err(Error::Locked));
     }
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
@@ -413,16 +435,16 @@ mod tests {
         keys: AccessKeys,
         shared: BranchShared,
     ) -> Branch {
+        let store = Store::new(pool);
         let id = PublicKey::random();
-        let branch_data = BranchData::new(id);
-        Branch::new(pool, branch_data, keys, shared, event_tx)
+        Branch::new(id, store, keys, shared, event_tx)
     }
 }
 
 impl fmt::Debug for File {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("File")
-            .field("blob_id", &self.blob.locator().blob_id())
+            .field("blob_id", &self.blob.id())
             .field("branch", &self.blob.branch().id())
             .finish()
     }

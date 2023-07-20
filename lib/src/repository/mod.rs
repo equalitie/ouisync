@@ -3,10 +3,13 @@ mod metadata;
 mod monitor;
 mod params;
 mod reopen_token;
-mod state;
+mod vault;
+mod worker;
+
 #[cfg(test)]
 mod tests;
-mod worker;
+#[cfg(test)]
+mod vault_tests;
 
 pub use self::{
     id::RepositoryId, metadata::Metadata, params::RepositoryParams, reopen_token::ReopenToken,
@@ -16,12 +19,12 @@ pub(crate) use self::{
     id::LocalId,
     metadata::quota,
     monitor::RepositoryMonitor,
-    state::{BlockRequestMode, RepositoryState},
+    vault::{BlockRequestMode, Vault},
 };
 
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
-    block::{BlockTracker, BLOCK_SIZE},
+    block_tracker::BlockTracker,
     branch::{Branch, BranchShared},
     crypto::{
         cipher,
@@ -35,16 +38,17 @@ use crate::{
     error::{Error, Result},
     event::{Event, EventSender},
     file::File,
-    index::{BranchData, Index},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
     path,
     progress::Progress,
+    protocol::BLOCK_SIZE,
     state_monitor::StateMonitor,
     storage_size::StorageSize,
+    store::{self, Store},
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
-use futures_util::future;
+use futures_util::{future, TryStreamExt};
 use scoped_task::ScopedJoinHandle;
 use std::{io, path::Path, sync::Arc};
 use tokio::{
@@ -164,7 +168,7 @@ impl Repository {
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-        let index = Index::new(pool, *secrets.id(), event_tx);
+        let store = Store::new(pool);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -172,8 +176,10 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        let state = RepositoryState {
-            index,
+        let vault = Vault {
+            repository_id: *secrets.id(),
+            store,
+            event_tx,
             block_tracker: BlockTracker::new(),
             block_request_mode,
             local_id: LocalId::new(),
@@ -181,13 +187,13 @@ impl Repository {
         };
 
         tracing::debug!(
-            parent: state.monitor.span(),
+            parent: vault.monitor.span(),
             access = ?secrets.access_mode(),
             writer_id = ?this_writer_id
         );
 
         let shared = Arc::new(Shared {
-            state,
+            vault,
             this_writer_id,
             secrets,
             branch_shared: BranchShared::new(),
@@ -201,13 +207,13 @@ impl Repository {
 
         let worker_handle = scoped_task::spawn(
             worker::run(shared.clone(), local_branch)
-                .instrument(shared.state.monitor.span().clone()),
+                .instrument(shared.vault.monitor.span().clone()),
         );
         let worker_handle = BlockingMutex::new(Some(worker_handle));
 
         let progress_reporter_handle = scoped_task::spawn(
-            report_sync_progress(shared.state.clone())
-                .instrument(shared.state.monitor.span().clone()),
+            report_sync_progress(shared.vault.clone())
+                .instrument(shared.vault.monitor.span().clone()),
         );
         let progress_reporter_handle = BlockingMutex::new(Some(progress_reporter_handle));
 
@@ -413,37 +419,33 @@ impl Repository {
     /// Get accessor for repository metadata. The metadata are arbitrary key-value entries that are
     /// stored inside the repository but not synced to other replicas.
     pub fn metadata(&self) -> Metadata {
-        self.shared.state.metadata()
+        self.shared.vault.metadata()
     }
 
     /// Set the storage quota in bytes. Use `None` to disable quota. Default is `None`.
     pub async fn set_quota(&self, quota: Option<StorageSize>) -> Result<()> {
-        self.shared.state.set_quota(quota).await
+        self.shared.vault.set_quota(quota).await
     }
 
     /// Get the storage quota in bytes or `None` if no quota is set.
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
-        self.shared.state.quota().await
+        self.shared.vault.quota().await
     }
 
     /// Get the total size of the data stored in this repository.
     pub async fn size(&self) -> Result<StorageSize> {
-        self.shared.state.size().await
+        self.shared.vault.size().await
     }
 
     pub fn handle(&self) -> RepositoryHandle {
         RepositoryHandle {
-            state: self.shared.state.clone(),
+            vault: self.shared.vault.clone(),
         }
-    }
-
-    pub(crate) fn db(&self) -> &db::Pool {
-        self.shared.state.db()
     }
 
     /// Get the state monitor node of this repository.
     pub fn monitor(&self) -> &StateMonitor {
-        self.shared.state.monitor.node()
+        self.shared.vault.monitor.node()
     }
 
     /// Looks up an entry by its path. The path must be relative to the repository root.
@@ -615,7 +617,7 @@ impl Repository {
 
     /// Subscribe to event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.shared.state.index.subscribe()
+        self.shared.vault.event_tx.subscribe()
     }
 
     /// Gets the access mode this repository is opened in.
@@ -626,7 +628,7 @@ impl Repository {
     /// Gets the syncing progress of this repository (number of downloaded blocks / number of
     /// all blocks)
     pub async fn sync_progress(&self) -> Result<Progress> {
-        self.shared.state.sync_progress().await
+        Ok(self.shared.vault.store().sync_progress().await?)
     }
 
     // Opens the root directory across all branches as JointDirectory.
@@ -658,14 +660,24 @@ impl Repository {
                 .await
             {
                 Ok(dir) => dir,
-                Err(error @ (Error::EntryNotFound | Error::BlockNotFound(_))) => {
-                    tracing::warn!(
+                Err(error @ Error::Store(store::Error::BranchNotFound)) => {
+                    tracing::trace!(
                         branch_id = ?branch.id(),
                         ?error,
                         "failed to open root directory"
                     );
-                    // Some branch roots may not have been loaded across the network yet. We'll
-                    // ignore those.
+                    // Either this is the local branch which doesn't exist yet in the store or a
+                    // remote branch which has been pruned in the meantime. This is safe to ignore.
+                    continue;
+                }
+                Err(error @ Error::Store(store::Error::BlockNotFound)) => {
+                    tracing::trace!(
+                        branch_id = ?branch.id(),
+                        ?error,
+                        "failed to open root directory"
+                    );
+                    // Some branch root blocks may not have been loaded across the network yet.
+                    // This is safe to ignore.
                     continue;
                 }
                 Err(error) => {
@@ -701,7 +713,7 @@ impl Repository {
             }
         }
 
-        self.shared.state.db().close().await?;
+        self.shared.vault.store().close().await?;
 
         Ok(())
     }
@@ -744,22 +756,26 @@ impl Repository {
 
         print.display(&"Index");
         let print = print.indent();
-        self.shared.state.index.debug_print(print).await;
+        self.shared.vault.debug_print(print).await;
     }
 
     /// Returns the total number of blocks in this repository. This is useful for diagnostics and
     /// tests.
-    pub async fn count_blocks(&self) -> Result<usize> {
-        self.shared.state.count_blocks().await
+    pub async fn count_blocks(&self) -> Result<u64> {
+        Ok(self.shared.vault.store().count_blocks().await?)
+    }
+
+    fn db(&self) -> &db::Pool {
+        self.shared.vault.store().db()
     }
 }
 
 pub struct RepositoryHandle {
-    pub(crate) state: RepositoryState,
+    pub(crate) vault: Vault,
 }
 
 struct Shared {
-    state: RepositoryState,
+    vault: Vault,
     this_writer_id: PublicKey,
     secrets: AccessSecrets,
     branch_shared: BranchShared,
@@ -771,37 +787,34 @@ impl Shared {
     }
 
     pub fn get_branch(&self, id: PublicKey) -> Result<Branch> {
-        self.inflate(BranchData::new(id))
-    }
-
-    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
-        self.state
-            .index
-            .load_branches()
-            .await?
-            .into_iter()
-            .map(|data| self.inflate(data))
-            .collect()
-    }
-
-    // Create `Branch` wrapping the given `data`.
-    fn inflate(&self, data: BranchData) -> Result<Branch> {
         let keys = self.secrets.keys().ok_or(Error::PermissionDenied)?;
 
         // Only the local branch is writable.
-        let keys = if *data.id() == self.this_writer_id {
+        let keys = if id == self.this_writer_id {
             keys
         } else {
             keys.read_only()
         };
 
         Ok(Branch::new(
-            self.state.db().clone(),
-            data,
+            id,
+            self.vault.store().clone(),
             keys,
             self.branch_shared.clone(),
-            self.state.index.notify().clone(),
+            self.vault.event_tx.clone(),
         ))
+    }
+
+    pub async fn load_branches(&self) -> Result<Vec<Branch>> {
+        self.vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_nodes()
+            .err_into()
+            .and_then(|root_node| future::ready(self.get_branch(root_node.proof.writer_id)))
+            .try_collect()
+            .await
     }
 }
 
@@ -823,9 +836,9 @@ async fn generate_and_store_writer_id(
     Ok(writer_id)
 }
 
-async fn report_sync_progress(state: RepositoryState) {
+async fn report_sync_progress(vault: Vault) {
     let mut prev_progress = Progress { value: 0, total: 0 };
-    let mut event_rx = ThrottleReceiver::new(state.index.subscribe(), Duration::from_secs(1));
+    let mut event_rx = ThrottleReceiver::new(vault.event_tx.subscribe(), Duration::from_secs(1));
 
     loop {
         match event_rx.recv().await {
@@ -833,7 +846,7 @@ async fn report_sync_progress(state: RepositoryState) {
             Err(RecvError::Closed) => break,
         }
 
-        let next_progress = match state.sync_progress().await {
+        let next_progress = match vault.store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 tracing::error!("failed to retrieve sync progress: {:?}", error);

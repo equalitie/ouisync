@@ -12,6 +12,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
+    store,
     version_vector::VersionVector,
     versioned::{self, PreferBranch},
 };
@@ -569,7 +570,7 @@ impl<'a> JointDirectoryRef<'a> {
                 {
                     return Err(e)
                 }
-                Err(Error::EntryNotFound | Error::BlockNotFound(_))
+                Err(Error::Store(store::Error::BlockNotFound))
                     if matches!(missing_version_strategy, MissingVersionStrategy::Skip) =>
                 {
                     // Some of the directories on remote branches may fail due to them not yet

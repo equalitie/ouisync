@@ -1,4 +1,4 @@
-use crate::{blob_id::BlobId, collections::HashMap, deadlock::BlockingMutex};
+use crate::{blob::BlobId, collections::HashMap, deadlock::BlockingMutex};
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,

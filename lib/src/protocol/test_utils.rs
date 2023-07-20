@@ -1,17 +1,17 @@
-use super::{
-    super::{proof::Proof, Index},
-    get_bucket, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet, MultiBlockPresence, NodeState,
-    SingleBlockPresence, Summary, INNER_LAYER_COUNT,
-};
+use super::{proof::Proof, MultiBlockPresence, NodeState, SingleBlockPresence, Summary};
 use crate::{
-    block::{tracker::OfferState, BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    block_tracker::OfferState,
     collections::HashMap,
     crypto::{
         sign::{Keypair, PublicKey},
         Hash, Hashable,
     },
-    index::ReceiveFilter,
-    repository::RepositoryState,
+    protocol::{
+        get_bucket, BlockData, BlockId, BlockNonce, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        INNER_LAYER_COUNT,
+    },
+    repository::Vault,
+    store::ReceiveFilter,
     version_vector::VersionVector,
 };
 use rand::{
@@ -147,21 +147,16 @@ impl Block {
 
 impl Distribution<Block> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        let mut content = vec![0; BLOCK_SIZE];
-        rng.fill(&mut content[..]);
-
-        let nonce = rng.gen();
-
         Block {
-            data: BlockData::from(content.into_boxed_slice()),
-            nonce,
+            data: rng.gen(),
+            nonce: rng.gen(),
         }
     }
 }
 
 // Receive all nodes in `snapshot` into `index`.
 pub(crate) async fn receive_nodes(
-    index: &Index,
+    vault: &Vault,
     write_keys: &Keypair,
     branch_id: PublicKey,
     version_vector: VersionVector,
@@ -169,14 +164,14 @@ pub(crate) async fn receive_nodes(
     snapshot: &Snapshot,
 ) {
     let proof = Proof::new(branch_id, version_vector, *snapshot.root_hash(), write_keys);
-    index
+    vault
         .receive_root_node(proof.into(), MultiBlockPresence::Full)
         .await
         .unwrap();
 
     for layer in snapshot.inner_layers() {
         for (_, nodes) in layer.inner_maps() {
-            index
+            vault
                 .receive_inner_nodes(nodes.clone().into(), receive_filter, None)
                 .await
                 .unwrap();
@@ -184,14 +179,14 @@ pub(crate) async fn receive_nodes(
     }
 
     for (_, nodes) in snapshot.leaf_sets() {
-        index
+        vault
             .receive_leaf_nodes(nodes.clone().into(), None)
             .await
             .unwrap();
     }
 }
 
-pub(crate) async fn receive_blocks(repo: &RepositoryState, snapshot: &Snapshot) {
+pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
     let client = repo.block_tracker.client();
     let acceptor = client.acceptor();
 
@@ -200,7 +195,7 @@ pub(crate) async fn receive_blocks(repo: &RepositoryState, snapshot: &Snapshot) 
         client.offer(*block.id(), OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 
-        repo.write_received_block(&block.data, &block.nonce, Some(promise))
+        repo.receive_block(&block.data, &block.nonce, Some(promise))
             .await
             .unwrap();
     }

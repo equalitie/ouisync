@@ -3,10 +3,10 @@
 use super::entry_data::EntryData;
 use crate::{
     blob::lock::UniqueLock,
-    blob_id::BlobId,
+    blob::BlobId,
     branch::Branch,
     error::{Error, Result},
-    index::VersionVectorOp,
+    protocol::VersionVectorOp,
     version_vector::VersionVector,
 };
 use serde::Deserialize;

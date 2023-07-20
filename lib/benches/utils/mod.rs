@@ -80,7 +80,7 @@ pub async fn write_file(
         let len = buffer_size.min(remaining);
 
         rng.fill(&mut buffer[..len]);
-        file.write(&buffer[..len]).await.unwrap();
+        file.write_all(&buffer[..len]).await.unwrap();
 
         remaining -= len;
     }

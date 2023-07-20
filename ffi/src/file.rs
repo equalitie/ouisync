@@ -86,9 +86,10 @@ pub(crate) async fn read(
     let holder = state.files.get(handle);
     let mut file = holder.file.lock().await;
 
-    file.seek(SeekFrom::Start(offset)).await?;
+    file.seek(SeekFrom::Start(offset));
 
-    let len = file.read(&mut buffer).await?;
+    // TODO: consider using just `read`
+    let len = file.read_all(&mut buffer).await?;
     buffer.truncate(len);
 
     Ok(buffer)
@@ -110,9 +111,11 @@ pub(crate) async fn write(
         .ok_or(ouisync_lib::Error::PermissionDenied)?
         .clone();
 
-    file.seek(SeekFrom::Start(offset)).await?;
+    file.seek(SeekFrom::Start(offset));
     file.fork(local_branch).await?;
-    file.write(&buffer).await?;
+
+    // TODO: consider using just `write` and returning the number of bytes written
+    file.write_all(&buffer).await?;
 
     Ok(())
 }
@@ -130,7 +133,7 @@ pub(crate) async fn truncate(state: &State, handle: Handle<FileHolder>, len: u64
         .clone();
 
     file.fork(local_branch).await?;
-    file.truncate(len).await?;
+    file.truncate(len)?;
 
     Ok(())
 }

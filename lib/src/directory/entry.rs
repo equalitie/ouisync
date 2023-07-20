@@ -5,13 +5,13 @@ use super::{
     Directory, DirectoryFallback, DirectoryLocking,
 };
 use crate::{
-    blob_id::BlobId,
+    blob::BlobId,
     branch::Branch,
     crypto::sign::PublicKey,
-    db,
     error::{Error, Result},
     file::File,
     locator::Locator,
+    store::ReadTransaction,
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},
 };
@@ -222,7 +222,7 @@ impl<'a> DirectoryRef<'a> {
 
     pub(super) async fn open_snapshot(
         &self,
-        tx: &mut db::ReadTransaction,
+        tx: &mut ReadTransaction,
         fallback: DirectoryFallback,
     ) -> Result<Content> {
         Directory::open_snapshot(tx, self.branch().clone(), self.locator(), fallback).await
@@ -304,7 +304,7 @@ impl<'a> RefInner<'a> {
 impl PartialEq for RefInner<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.parent.blob.branch().id() == other.parent.blob.branch().id()
-            && self.parent.blob.locator() == other.parent.blob.locator()
+            && self.parent.blob.id() == other.parent.blob.id()
             && self.name == other.name
     }
 }

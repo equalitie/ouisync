@@ -5,10 +5,11 @@ use super::{
     runtime_id::PublicRuntimeId,
 };
 use crate::{
-    block::{BlockId, BlockNonce},
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
-    index::{InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
+    protocol::{
+        BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof,
+    },
     repository::RepositoryId,
 };
 use serde::{Deserialize, Serialize};

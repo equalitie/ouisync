@@ -1,44 +1,84 @@
-use super::{BlockId, BLOCK_SIZE};
-use crate::{
-    db,
-    error::{Error, Result},
+use super::{
+    error::Error,
+    index::{self, UpdateSummaryReason},
+    leaf_node, root_node,
 };
-use sqlx::{sqlite::SqliteRow, Row};
+use crate::{
+    collections::HashSet,
+    crypto::sign::PublicKey,
+    db,
+    future::try_collect_into,
+    protocol::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+};
+use futures_util::TryStreamExt;
+use sqlx::Row;
 
-pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
-pub(crate) type BlockNonce = [u8; BLOCK_NONCE_SIZE];
+#[derive(Default)]
+pub(crate) struct ReceiveStatus {
+    /// List of branches that reference the received block.
+    pub branches: HashSet<PublicKey>,
+}
+
+/// Write a block received from a remote replica.
+pub(super) async fn receive(
+    tx: &mut db::WriteTransaction,
+    block: &BlockData,
+    nonce: &BlockNonce,
+) -> Result<ReceiveStatus, Error> {
+    if !leaf_node::set_present(tx, &block.id).await? {
+        return Ok(ReceiveStatus::default());
+    }
+
+    let nodes = leaf_node::load_parent_hashes(tx, &block.id)
+        .try_collect()
+        .await?;
+    let mut branches = HashSet::default();
+
+    for (hash, state) in index::update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {
+        if !state.is_approved() {
+            continue;
+        }
+
+        try_collect_into(root_node::load_writer_ids(tx, &hash), &mut branches).await?;
+    }
+
+    write(tx, &block.id, &block.content, nonce).await?;
+
+    Ok(ReceiveStatus { branches })
+}
 
 /// Reads a block from the store into a buffer.
 ///
 /// # Panics
 ///
 /// Panics if `buffer` length is less than [`BLOCK_SIZE`].
-pub(crate) async fn read(
+pub(super) async fn read(
     conn: &mut db::Connection,
     id: &BlockId,
     buffer: &mut [u8],
-) -> Result<BlockNonce> {
-    let row = sqlx::query("SELECT nonce, content FROM blocks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(conn)
-        .await?
-        .ok_or(Error::BlockNotFound(*id))?;
-
-    from_row(row, buffer)
-}
-
-fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
+) -> Result<BlockNonce, Error> {
     assert!(
         buffer.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
     );
 
+    let row = sqlx::query("SELECT nonce, content FROM blocks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(conn)
+        .await?
+        .ok_or(Error::BlockNotFound)?;
+
     let nonce: &[u8] = row.get(0);
-    let nonce = BlockNonce::try_from(nonce)?;
+    let nonce = BlockNonce::try_from(nonce).map_err(|_| Error::MalformedData)?;
 
     let content: &[u8] = row.get(1);
     if content.len() != BLOCK_SIZE {
-        return Err(Error::WrongBlockLength(content.len()));
+        tracing::error!(
+            expected = BLOCK_SIZE,
+            actual = content.len(),
+            "wrong block length"
+        );
+        return Err(Error::MalformedData);
     }
 
     buffer.copy_from_slice(content);
@@ -54,12 +94,12 @@ fn from_row(row: SqliteRow, buffer: &mut [u8]) -> Result<BlockNonce> {
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
-pub(crate) async fn write(
+pub(super) async fn write(
     tx: &mut db::WriteTransaction,
     id: &BlockId,
     buffer: &[u8],
     nonce: &BlockNonce,
-) -> Result<()> {
+) -> Result<(), Error> {
     assert_eq!(
         buffer.len(),
         BLOCK_SIZE,
@@ -80,34 +120,33 @@ pub(crate) async fn write(
     Ok(())
 }
 
-/// Checks whether the block exists in the store.
-#[cfg(test)]
-pub(crate) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool> {
-    Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
-        .bind(id)
-        .fetch_optional(conn)
-        .await?
-        .is_some())
-}
-
-/// Returns the total number of blocks in the store.
-pub(crate) async fn count(conn: &mut db::Connection) -> Result<usize> {
-    Ok(db::decode_u64(
-        sqlx::query("SELECT COUNT(*) FROM blocks")
-            .fetch_one(conn)
-            .await?
-            .get(0),
-    ) as usize)
-}
-
-/// Removes the specified block from the store.
-pub(crate) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Result<()> {
+pub(super) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Result<(), Error> {
     sqlx::query("DELETE FROM blocks WHERE id = ?")
         .bind(id)
         .execute(tx)
         .await?;
 
     Ok(())
+}
+
+/// Returns the total number of blocks in the store.
+pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
+    Ok(db::decode_u64(
+        sqlx::query("SELECT COUNT(*) FROM blocks")
+            .fetch_one(conn)
+            .await?
+            .get(0),
+    ))
+}
+
+/// Checks whether the block exists in the store.
+#[cfg(test)]
+pub(super) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool, Error> {
+    Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(conn)
+        .await?
+        .is_some())
 }
 
 #[cfg(test)]
@@ -117,7 +156,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn write_and_read() {
+    async fn write_and_read_block() {
         let (_base_dir, pool) = setup().await;
 
         let content = random_block_content();
@@ -144,7 +183,7 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         match read(&mut conn, &id, &mut buffer).await {
-            Err(Error::BlockNotFound(missing_id)) => assert_eq!(missing_id, id),
+            Err(Error::BlockNotFound) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
         }

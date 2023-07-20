@@ -3,12 +3,12 @@ use super::{
     message::{Content, Request, Response, ResponseDisambiguator},
 };
 use crate::{
-    block::{self, BlockId, BLOCK_SIZE},
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::{Event, Payload},
-    index::{InnerNode, LeafNode, RootNode},
-    repository::RepositoryState,
+    protocol::{BlockId, RootNode, BLOCK_SIZE},
+    repository::Vault,
+    store,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
 use tokio::{
@@ -18,28 +18,24 @@ use tokio::{
 use tracing::instrument;
 
 pub(crate) struct Server {
-    repository: RepositoryState,
+    vault: Vault,
     tx: Sender,
     rx: Receiver,
 }
 
 impl Server {
-    pub fn new(
-        repository: RepositoryState,
-        tx: mpsc::Sender<Content>,
-        rx: mpsc::Receiver<Request>,
-    ) -> Self {
+    pub fn new(vault: Vault, tx: mpsc::Sender<Content>, rx: mpsc::Receiver<Request>) -> Self {
         Self {
-            repository,
+            vault,
             tx: Sender(tx),
             rx,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let Self { repository, tx, rx } = self;
-        let responder = Responder::new(repository, tx);
-        let monitor = Monitor::new(repository, tx);
+        let Self { vault, tx, rx } = self;
+        let responder = Responder::new(vault, tx);
+        let monitor = Monitor::new(vault, tx);
 
         select! {
             result = responder.run(rx) => result,
@@ -50,13 +46,13 @@ impl Server {
 
 /// Receives requests from the peer and replies with responses.
 struct Responder<'a> {
-    repository: &'a RepositoryState,
+    vault: &'a Vault,
     tx: &'a Sender,
 }
 
 impl<'a> Responder<'a> {
-    fn new(repository: &'a RepositoryState, tx: &'a Sender) -> Self {
-        Self { repository, tx }
+    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
+        Self { vault, tx }
     }
 
     async fn run(self, rx: &'a mut Receiver) -> Result<()> {
@@ -72,7 +68,7 @@ impl<'a> Responder<'a> {
                     match request {
                         Some(request) => {
                             let handler = self
-                                .repository
+                                .vault
                                 .monitor
                                 .handle_request_metric
                                 .measure_ok(self.handle_request(request));
@@ -111,8 +107,13 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.repository.db().acquire().await?;
-        let root_node = RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await;
+        let root_node = self
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_node(&branch_id)
+            .await;
 
         match root_node {
             Ok(node) => {
@@ -127,7 +128,7 @@ impl<'a> Responder<'a> {
                 self.tx.send(response).await;
                 Ok(())
             }
-            Err(Error::EntryNotFound) => {
+            Err(store::Error::BranchNotFound) => {
                 tracing::warn!("root node not found");
                 self.tx
                     .send(Response::RootNodeError(branch_id, debug.send()))
@@ -138,7 +139,7 @@ impl<'a> Responder<'a> {
                 self.tx
                     .send(Response::RootNodeError(branch_id, debug.send()))
                     .await;
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -152,13 +153,13 @@ impl<'a> Responder<'a> {
     ) -> Result<()> {
         let debug = debug.begin_reply();
 
-        let mut conn = self.repository.db().acquire().await?;
+        let mut reader = self.vault.store().acquire_read().await?;
 
         // At most one of these will be non-empty.
-        let inner_nodes = InnerNode::load_children(&mut conn, &parent_hash).await?;
-        let leaf_nodes = LeafNode::load_children(&mut conn, &parent_hash).await?;
+        let inner_nodes = reader.load_inner_nodes(&parent_hash).await?;
+        let leaf_nodes = reader.load_leaf_nodes(&parent_hash).await?;
 
-        drop(conn);
+        drop(reader);
 
         if !inner_nodes.is_empty() || !leaf_nodes.is_empty() {
             if !inner_nodes.is_empty() {
@@ -196,9 +197,13 @@ impl<'a> Responder<'a> {
     async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
         let debug = debug.begin_reply();
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        let mut conn = self.repository.db().acquire().await?;
-        let result = block::read(&mut conn, &id, &mut content).await;
-        drop(conn); // don't hold the connection while sending is in progress
+        let result = self
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .read_block(&id, &mut content)
+            .await;
 
         match result {
             Ok(nonce) => {
@@ -212,14 +217,14 @@ impl<'a> Responder<'a> {
                     .await;
                 Ok(())
             }
-            Err(Error::BlockNotFound(_)) => {
+            Err(store::Error::BlockNotFound) => {
                 tracing::warn!("block not found");
                 self.tx.send(Response::BlockError(id, debug.send())).await;
                 Ok(())
             }
             Err(error) => {
                 self.tx.send(Response::BlockError(id, debug.send())).await;
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -227,17 +232,17 @@ impl<'a> Responder<'a> {
 
 /// Monitors the repository for changes and notifies the peer.
 struct Monitor<'a> {
-    repository: &'a RepositoryState,
+    vault: &'a Vault,
     tx: &'a Sender,
 }
 
 impl<'a> Monitor<'a> {
-    fn new(repository: &'a RepositoryState, tx: &'a Sender) -> Self {
-        Self { repository, tx }
+    fn new(vault: &'a Vault, tx: &'a Sender) -> Self {
+        Self { vault, tx }
     }
 
     async fn run(self) -> Result<()> {
-        let mut subscription = self.repository.index.subscribe();
+        let mut subscription = self.vault.event_tx.subscribe();
 
         // send initial branches
         self.handle_all_branches_changed().await?;
@@ -261,7 +266,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_all_branches_changed(&self) -> Result<()> {
-        let root_nodes = self.load_all_root_nodes().await?;
+        let root_nodes = self.load_root_nodes().await?;
         for root_node in root_nodes {
             self.handle_root_node_changed(root_node).await?;
         }
@@ -270,7 +275,7 @@ impl<'a> Monitor<'a> {
     }
 
     async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
-        let root_node = match self.load_root_node(branch_id).await {
+        let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
             Err(Error::EntryNotFound) => {
                 // branch was removed after the notification was fired.
@@ -312,16 +317,25 @@ impl<'a> Monitor<'a> {
         Ok(())
     }
 
-    async fn load_all_root_nodes(&self) -> Result<Vec<RootNode>> {
-        let mut conn = self.repository.db().acquire().await?;
-        RootNode::load_all_latest_approved(&mut conn)
+    async fn load_root_nodes(&self) -> Result<Vec<RootNode>> {
+        self.vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_nodes()
+            .err_into()
             .try_collect()
             .await
     }
 
-    async fn load_root_node(&self, branch_id: PublicKey) -> Result<RootNode> {
-        let mut conn = self.repository.db().acquire().await?;
-        RootNode::load_latest_approved_by_writer(&mut conn, branch_id).await
+    async fn load_root_node(&self, branch_id: &PublicKey) -> Result<RootNode> {
+        Ok(self
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_node(branch_id)
+            .await?)
     }
 }
 

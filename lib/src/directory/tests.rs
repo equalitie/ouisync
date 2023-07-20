@@ -4,7 +4,7 @@ use crate::{
     branch::BranchShared,
     db,
     event::EventSender,
-    index::BranchData,
+    store::Store,
 };
 use assert_matches::assert_matches;
 use std::collections::BTreeSet;
@@ -18,11 +18,11 @@ async fn create_and_list_entries() {
     let mut dir = branch.open_or_create_root().await.unwrap();
 
     let mut file_dog = dir.create_file("dog.txt".into()).await.unwrap();
-    file_dog.write(b"woof").await.unwrap();
+    file_dog.write_all(b"woof").await.unwrap();
     file_dog.flush().await.unwrap();
 
     let mut file_cat = dir.create_file("cat.txt".into()).await.unwrap();
-    file_cat.write(b"meow").await.unwrap();
+    file_cat.write_all(b"meow").await.unwrap();
     file_cat.flush().await.unwrap();
 
     // Reopen the dir and try to read the files.
@@ -129,10 +129,10 @@ async fn rename_file() {
     // Create a directory with a single file.
     let mut parent_dir = branch.open_or_create_root().await.unwrap();
     let mut file = parent_dir.create_file(src_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
+    file.write_all(content).await.unwrap();
     file.flush().await.unwrap();
 
-    let file_locator = *file.locator();
+    let file_id = *file.blob_id();
 
     drop(file);
 
@@ -171,7 +171,7 @@ async fn rename_file() {
         .await
         .unwrap();
 
-    assert_eq!(&file_locator, dst_file.locator());
+    assert_eq!(&file_id, dst_file.blob_id());
     assert_eq!(&content[..], &dst_file.read_to_end().await.unwrap()[..]);
 
     let src_entry = parent_dir.lookup(src_name).unwrap();
@@ -191,11 +191,11 @@ async fn move_file_within_branch() {
     let mut aux_dir = root_dir.create_directory("aux".into()).await.unwrap();
 
     let mut file = root_dir.create_file(file_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
+    file.write_all(content).await.unwrap();
     file.flush().await.unwrap();
     root_dir.refresh().await.unwrap();
 
-    let file_locator = *file.locator();
+    let file_id = *file.blob_id();
 
     drop(file);
 
@@ -235,7 +235,7 @@ async fn move_file_within_branch() {
         .await
         .unwrap();
 
-    assert_eq!(&file_locator, file.locator());
+    assert_eq!(&file_id, file.blob_id());
     assert_eq!(&content[..], &file.read_to_end().await.unwrap()[..]);
 
     drop(file);
@@ -292,9 +292,9 @@ async fn move_non_empty_directory() {
     let mut dir = root_dir.create_directory(dir_name.into()).await.unwrap();
 
     let mut file = dir.create_file(file_name.into()).await.unwrap();
-    file.write(content).await.unwrap();
+    file.write_all(content).await.unwrap();
     file.flush().await.unwrap();
-    let file_locator = *file.locator();
+    let file_id = *file.blob_id();
 
     drop(file);
     drop(dir);
@@ -343,7 +343,7 @@ async fn move_non_empty_directory() {
         .await
         .unwrap();
 
-    assert_eq!(&file_locator, file.locator());
+    assert_eq!(&file_id, file.blob_id());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -503,7 +503,7 @@ async fn modify_directory_concurrently() {
         .unwrap();
 
     let mut file0 = dir0.create_file("file.txt".to_owned()).await.unwrap();
-    file0.write(b"hello").await.unwrap();
+    file0.write_all(b"hello").await.unwrap();
     file0.flush().await.unwrap();
 
     dir1.refresh().await.unwrap();
@@ -591,9 +591,9 @@ async fn setup_multiple<const N: usize>() -> (TempDir, [Branch; N]) {
 }
 
 fn create_branch(pool: db::Pool, keys: AccessKeys) -> Branch {
-    let event_tx = EventSender::new(1);
-    let shared = BranchShared::new();
+    let store = Store::new(pool);
     let id = PublicKey::random();
-    let branch_data = BranchData::new(id);
-    Branch::new(pool, branch_data, keys, shared, event_tx)
+    let shared = BranchShared::new();
+    let event_tx = EventSender::new(1);
+    Branch::new(id, store, keys, shared, event_tx)
 }

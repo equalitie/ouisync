@@ -1,8 +1,7 @@
 use self::utils::{unlock, Command};
 use super::Shared;
 use crate::{
-    blob::BlockIds,
-    blob_id::BlobId,
+    blob::{BlobId, BlockIds},
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
@@ -31,7 +30,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
         let commands = stream::select(
-            from_events(shared.state.index.subscribe(), event_scope),
+            from_events(shared.vault.event_tx.subscribe(), event_scope),
             from_unlocks(unlock_rx),
         );
 
@@ -44,7 +43,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
 
     // Scan
     let scan = async {
-        let commands = from_events(shared.state.index.subscribe(), event_scope);
+        let commands = from_events(shared.vault.event_tx.subscribe(), event_scope);
         utils::run(|| scan(&shared), commands).await;
     };
 
@@ -98,7 +97,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     // Merge branches
     if let Some(local_branch) = local_branch {
         shared
-            .state
+            .vault
             .monitor
             .merge_job
             .run(merge::run(shared, local_branch))
@@ -107,7 +106,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
 
     // Prune outdated branches and snapshots
     shared
-        .state
+        .vault
         .monitor
         .prune_job
         .run(prune::run(shared, unlock_tx))
@@ -116,7 +115,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     // Collect unreachable blocks
     if shared.secrets.can_read() {
         shared
-            .state
+            .vault
             .monitor
             .trash_job
             .run(trash::run(shared, local_branch, unlock_tx))
@@ -126,7 +125,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
 
 async fn scan(shared: &Shared) {
     // Find missing blocks
-    shared.state.monitor.scan_job.run(scan::run(shared)).await
+    shared.vault.monitor.scan_job.run(scan::run(shared)).await
 }
 
 /// Find missing blocks and mark them as required.
@@ -220,7 +219,7 @@ mod scan {
 
         while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
             if !presence.is_present() {
-                shared.state.block_tracker.require(block_id);
+                shared.vault.block_tracker.require(block_id);
 
                 if !file_progress_cache_reset {
                     file_progress_cache_reset = true;
@@ -238,6 +237,7 @@ mod scan {
 /// Merge remote branches into the local one.
 mod merge {
     use super::*;
+    use crate::store;
 
     pub(super) async fn run(shared: &Shared, local_branch: &Branch) -> Result<()> {
         let branches: Vec<_> = shared.load_branches().await?;
@@ -249,7 +249,7 @@ mod merge {
                 .await
             {
                 Ok(dir) => roots.push(dir),
-                Err(Error::EntryNotFound | Error::BlockNotFound(_)) => continue,
+                Err(Error::Store(store::Error::BlockNotFound)) => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -267,9 +267,17 @@ mod merge {
 /// Remove outdated branches and snapshots.
 mod prune {
     use super::*;
+    use futures_util::TryStreamExt;
 
     pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
-        let all = shared.state.index.load_snapshots().await?;
+        let all: Vec<_> = shared
+            .vault
+            .store()
+            .acquire_read()
+            .await?
+            .load_root_nodes()
+            .try_collect()
+            .await?;
 
         // Currently it's possible that multiple branches have the same vv but different hash.
         // There is no good and simple way to pick one over the other so we currently keep all.
@@ -278,9 +286,9 @@ mod prune {
         let (uptodate, outdated): (Vec<_>, Vec<_>) = versioned::partition(all, ());
 
         // Remove outdated branches
-        for snapshot in outdated {
+        for node in outdated {
             // Never remove local branch
-            if snapshot.branch_id() == &shared.this_writer_id {
+            if node.proof.writer_id == shared.this_writer_id {
                 continue;
             }
 
@@ -290,33 +298,36 @@ mod prune {
             let _lock = match shared
                 .branch_shared
                 .locker
-                .branch(*snapshot.branch_id())
+                .branch(node.proof.writer_id)
                 .try_unique(BlobId::ROOT)
             {
                 Ok(lock) => lock,
                 Err((notify, _)) => {
-                    tracing::trace!(id = ?snapshot.branch_id(), "outdated branch not removed - in use");
+                    tracing::trace!(id = ?node.proof.writer_id, "outdated branch not removed - in use");
                     unlock_tx.send(notify).await;
                     continue;
                 }
             };
 
-            let mut tx = shared.state.db().begin_write().await?;
-            snapshot.remove_all_older(&mut tx).await?;
-            snapshot.remove(&mut tx).await?;
+            let mut tx = shared.vault.store().begin_write().await?;
+            tx.remove_branch(&node).await?;
             tx.commit().await?;
 
             tracing::trace!(
-                branch_id = ?snapshot.branch_id(),
-                vv = ?snapshot.version_vector(),
-                hash = ?snapshot.root_hash(),
+                branch_id = ?node.proof.writer_id,
+                vv = ?node.proof.version_vector,
+                hash = ?node.proof.hash,
                 "outdated branch removed"
             );
         }
 
         // Remove outdated snapshots.
-        for snapshot in uptodate {
-            snapshot.prune(shared.state.db()).await?;
+        for node in uptodate {
+            shared
+                .vault
+                .store()
+                .remove_outdated_snapshots(&node)
+                .await?;
         }
 
         Ok(())
@@ -327,10 +338,9 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        block::{self, BlockId},
-        crypto::sign::Keypair,
-        db,
-        index::{self, LeafNode, SnapshotData, UpdateSummaryReason},
+        crypto::sign::{Keypair, PublicKey},
+        protocol::BlockId,
+        store::{self, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -346,7 +356,8 @@ mod trash {
         // blocks. The subsequent passes (if any) for collecting only.
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
-        let mut unreachable_block_ids_page = shared.state.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+        let mut unreachable_block_ids_page =
+            shared.vault.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;
@@ -519,13 +530,12 @@ mod trash {
                 break;
             }
 
-            let mut tx = shared.state.db().begin_write().await?;
+            let mut tx = shared.vault.store().begin_write().await?;
 
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                let mut snapshot = local_branch.data().load_snapshot(&mut tx).await?;
-                remove_local_nodes(&mut tx, &mut snapshot, write_keys, &batch).await?;
+                remove_local_nodes(&mut tx, local_branch.id(), write_keys, &batch).await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -551,45 +561,34 @@ mod trash {
     }
 
     async fn remove_local_nodes(
-        tx: &mut db::WriteTransaction,
-        snapshot: &mut SnapshotData,
+        tx: &mut WriteTransaction,
+        branch_id: &PublicKey,
         write_keys: &Keypair,
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
-            let locators: Vec<_> = LeafNode::load_locators(tx, block_id).try_collect().await?;
+            let locators: Vec<_> = tx.load_locators(block_id).try_collect().await?;
             let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {
-                match snapshot
-                    .remove_block(tx, &locator, Some(block_id), write_keys)
+                match tx
+                    .unlink_block(branch_id, &locator, Some(block_id), write_keys)
                     .instrument(span.clone())
                     .await
                 {
-                    Ok(()) | Err(Error::EntryNotFound) => (),
-                    Err(error) => return Err(error),
+                    Ok(()) | Err(store::Error::LocatorNotFound) => (),
+                    Err(error) => return Err(error.into()),
                 }
             }
         }
 
-        snapshot.remove_all_older(tx).await?;
-
         Ok(())
     }
 
-    async fn remove_blocks(tx: &mut db::WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
+    async fn remove_blocks(tx: &mut WriteTransaction, block_ids: &[BlockId]) -> Result<()> {
         for block_id in block_ids {
+            tx.remove_block(block_id).await?;
             tracing::trace!(?block_id, "unreachable block removed");
-
-            block::remove(tx, block_id).await?;
-
-            LeafNode::set_missing(tx, block_id).await?;
-
-            let parent_hashes: Vec<_> = LeafNode::load_parent_hashes(tx, block_id)
-                .try_collect()
-                .await?;
-
-            index::update_summaries(tx, parent_hashes, UpdateSummaryReason::BlockRemoved).await?;
         }
 
         Ok(())

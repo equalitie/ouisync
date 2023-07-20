@@ -1,4 +1,4 @@
-use crate::{blob_id::BlobId, version_vector::VersionVector};
+use crate::{blob::BlobId, version_vector::VersionVector};
 use serde::{Deserialize, Serialize};
 
 //--------------------------------------------------------------------

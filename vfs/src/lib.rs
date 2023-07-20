@@ -13,6 +13,9 @@ mod fuse;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod dummy_multi_repo_mount;
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(target_os = "linux")]
 pub use fuse::{mount, MountGuard};
 
