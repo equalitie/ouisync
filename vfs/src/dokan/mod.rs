@@ -12,7 +12,7 @@ use dokan_sys::win32::{
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
 use ouisync_lib::{
-    deadlock::{AsyncMutex, AsyncMutexGuard, BlockingMutex},
+    deadlock::{AsyncMutex, AsyncMutexGuard},
     path, File, JointDirectory, JointEntryRef, Repository,
 };
 use std::{
@@ -458,7 +458,7 @@ impl VirtualFilesystem {
         let offset: u64 = offset
             .try_into()
             .map_err(|_| ouisync_lib::Error::OffsetOutOfRange)?;
-        file.seek(SeekFrom::Start(offset)).await?;
+        file.seek(SeekFrom::Start(offset));
         let size = file.read(buffer).await?;
 
         Ok(size as u32)
@@ -501,7 +501,7 @@ impl VirtualFilesystem {
 
         if offset != file.len() {
             file.flush().await?;
-            file.seek(SeekFrom::Start(offset)).await?;
+            file.seek(SeekFrom::Start(offset));
         }
 
         tracing::trace!("L{} async_write_file", line!());
@@ -908,11 +908,11 @@ impl VirtualFilesystem {
         file.fork(local_branch).await?;
 
         if start_len > desired_len {
-            file.truncate(desired_len).await?;
+            file.truncate(desired_len)?;
         } else {
-            let start_pos = file.seek(SeekFrom::Current(0)).await?;
+            let start_pos = file.seek(SeekFrom::Current(0));
 
-            file.seek(SeekFrom::End(0)).await?;
+            file.seek(SeekFrom::End(0));
 
             let mut remaining: usize = (desired_len - start_len)
                 .try_into()
@@ -926,7 +926,7 @@ impl VirtualFilesystem {
                 remaining -= to_write;
             }
 
-            file.seek(SeekFrom::Start(start_pos)).await?;
+            file.seek(SeekFrom::Start(start_pos));
         }
 
         file.flush().await?;
@@ -1106,12 +1106,9 @@ impl From<Error> for i32 {
                 use ouisync_lib::Error as E;
 
                 match error {
-                    E::Db(_) => STATUS_INTERNAL_DB_ERROR,
+                    E::Db(_) | E::Store(_) => STATUS_INTERNAL_DB_ERROR,
                     E::PermissionDenied => STATUS_ACCESS_DENIED,
                     E::MalformedData => STATUS_DATA_ERROR,
-                    E::BlockNotFound(_) => STATUS_RESOURCE_DATA_NOT_FOUND,
-                    E::BlockNotReferenced => STATUS_RESOURCE_DATA_NOT_FOUND,
-                    E::WrongBlockLength(_) => STATUS_DATA_ERROR,
                     E::MalformedDirectory => STATUS_DATA_ERROR,
                     E::EntryExists => STATUS_OBJECT_NAME_EXISTS,
                     E::EntryNotFound => STATUS_OBJECT_NAME_NOT_FOUND,

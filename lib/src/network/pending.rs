@@ -264,7 +264,7 @@ fn run_tracker(
                     }
                     _ = time::sleep_until((timestamp + REQUEST_TIMEOUT).into()) => {
                         // Check it hasn't been removed in a meanwhile for cancel safety.
-                        if let Some(mut data) = request_map.lock().unwrap().get_mut(&key) {
+                        if let Some(data) = request_map.lock().unwrap().get_mut(&key) {
                             *monitor.request_timeouts.get() += 1;
                             data.block_promise = None;
                         }
