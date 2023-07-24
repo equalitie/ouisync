@@ -22,7 +22,11 @@ pub(crate) use {
     root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
-use self::{cache::Cache, index::UpdateSummaryReason, path::Path};
+use self::{
+    cache::{Cache, CacheTransaction},
+    index::UpdateSummaryReason,
+    path::Path,
+};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -64,7 +68,7 @@ impl Store {
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
-            cache: self.cache.clone(),
+            cache: self.cache.begin(),
         })
     }
 
@@ -73,7 +77,7 @@ impl Store {
         Ok(ReadTransaction {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
-                cache: self.cache.clone(),
+                cache: self.cache.begin(),
             },
         })
     }
@@ -84,7 +88,7 @@ impl Store {
             inner: ReadTransaction {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
-                    cache: self.cache.clone(),
+                    cache: self.cache.begin(),
                 },
             },
         })
@@ -185,7 +189,7 @@ impl Store {
 /// Read-only operations. This is an up-to-date view of the data.
 pub(crate) struct Reader {
     inner: Handle,
-    cache: Arc<Cache>,
+    cache: CacheTransaction,
 }
 
 impl Reader {
@@ -228,6 +232,10 @@ impl Reader {
 
     /// Load the latest approved root node of the given branch.
     pub async fn load_root_node(&mut self, branch_id: &PublicKey) -> Result<RootNode, Error> {
+        if let Some(node) = self.cache.get_root(branch_id) {
+            return Ok(node);
+        }
+
         root_node::load(self.db(), branch_id).await
     }
 
@@ -382,7 +390,7 @@ impl WriteTransaction {
         block_presence: SingleBlockPresence,
         write_keys: &Keypair,
     ) -> Result<bool, Error> {
-        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
+        let root_node = self.load_or_create_root_node(branch_id, write_keys).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         if path.has_leaf(block_id) {
@@ -406,7 +414,7 @@ impl WriteTransaction {
         expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load(self.db(), branch_id).await?;
+        let root_node = self.load_root_node(branch_id).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         let block_id = path
@@ -463,7 +471,7 @@ impl WriteTransaction {
         op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
+        let root_node = self.load_or_create_root_node(branch_id, write_keys).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
         op.apply(branch_id, &mut new_vv);
@@ -488,6 +496,11 @@ impl WriteTransaction {
     pub async fn remove_branch(&mut self, root_node: &RootNode) -> Result<(), Error> {
         root_node::remove_older(self.db(), root_node).await?;
         root_node::remove(self.db(), root_node).await?;
+
+        self.inner
+            .inner
+            .cache
+            .remove_root(&root_node.proof.writer_id);
 
         Ok(())
     }
@@ -604,10 +617,19 @@ impl WriteTransaction {
     }
 
     pub async fn commit(self) -> Result<(), Error> {
-        match self.inner.inner.inner {
-            Handle::WriteTransaction(tx) => Ok(tx.commit().await?),
+        let inner = match self.inner.inner.inner {
+            Handle::WriteTransaction(tx) => tx,
             Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
+        };
+
+        let cache = self.inner.inner.cache;
+        if cache.is_dirty() {
+            inner.commit_and_then(move || cache.commit()).await?;
+        } else {
+            inner.commit().await?;
         }
+
+        Ok(())
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
@@ -619,9 +641,20 @@ impl WriteTransaction {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        match self.inner.inner.inner {
-            Handle::WriteTransaction(tx) => Ok(tx.commit_and_then(f).await?),
+        let inner = match self.inner.inner.inner {
+            Handle::WriteTransaction(tx) => tx,
             Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
+        };
+
+        let cache = self.inner.inner.cache;
+        if cache.is_dirty() {
+            let f = move || {
+                cache.commit();
+                f()
+            };
+            Ok(inner.commit_and_then(f).await?)
+        } else {
+            Ok(inner.commit_and_then(f).await?)
         }
     }
 
@@ -675,7 +708,21 @@ impl WriteTransaction {
             "create local snapshot"
         );
 
+        self.inner.inner.cache.put_root(root_node);
+
         Ok(())
+    }
+
+    async fn load_or_create_root_node(
+        &mut self,
+        branch_id: &PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<RootNode, Error> {
+        if let Some(node) = self.inner.inner.cache.get_root(branch_id) {
+            return Ok(node);
+        }
+
+        root_node::load_or_create(self.db(), branch_id, write_keys).await
     }
 
     // Access the underlying database transaction.

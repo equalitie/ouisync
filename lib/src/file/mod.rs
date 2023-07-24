@@ -419,23 +419,29 @@ mod tests {
 
     async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
         let (base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
         let keys = AccessKeys::from(WriteSecrets::random());
         let event_tx = EventSender::new(1);
         let shared = BranchShared::new();
 
-        let branches = [(); N]
-            .map(|_| create_branch(pool.clone(), event_tx.clone(), keys.clone(), shared.clone()));
+        let branches = [(); N].map(|_| {
+            create_branch(
+                store.clone(),
+                event_tx.clone(),
+                keys.clone(),
+                shared.clone(),
+            )
+        });
 
         (base_dir, branches)
     }
 
     fn create_branch(
-        pool: db::Pool,
+        store: Store,
         event_tx: EventSender,
         keys: AccessKeys,
         shared: BranchShared,
     ) -> Branch {
-        let store = Store::new(pool);
         let id = PublicKey::random();
         Branch::new(id, store, keys, shared, event_tx)
     }
