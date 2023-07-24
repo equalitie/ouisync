@@ -32,7 +32,7 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
+        self, BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
         RootNode, SingleBlockPresence, Summary, VersionVectorOp, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
@@ -391,7 +391,7 @@ impl WriteTransaction {
 
         path.set_leaf(block_id, block_presence);
 
-        self.save_path(&path, &root_node, write_keys).await?;
+        self.save_path(path, &root_node, write_keys).await?;
 
         Ok(true)
     }
@@ -419,7 +419,7 @@ impl WriteTransaction {
             }
         }
 
-        self.save_path(&path, &root_node, write_keys).await?;
+        self.save_path(path, &root_node, write_keys).await?;
 
         Ok(())
     }
@@ -627,27 +627,26 @@ impl WriteTransaction {
 
     async fn save_path(
         &mut self,
-        path: &Path,
+        path: Path,
         old_root_node: &RootNode,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        for (i, nodes) in path.inner.iter().enumerate() {
-            if let Some(parent_hash) = path.hash_at_layer(i) {
-                inner_node::save_all(self.db(), nodes, &parent_hash).await?;
-                self.inner
-                    .inner
-                    .cache
-                    .put_inners(parent_hash, nodes.clone());
+        let mut parent_hash = Some(path.root_hash);
+        for (i, nodes) in path.inner.into_iter().enumerate() {
+            let bucket = protocol::get_bucket(&path.locator, i);
+            let new_parent_hash = nodes.get(bucket).map(|node| node.hash);
+
+            if let Some(parent_hash) = parent_hash {
+                inner_node::save_all(self.db(), &nodes, &parent_hash).await?;
+                self.inner.inner.cache.put_inners(parent_hash, nodes);
             }
+
+            parent_hash = new_parent_hash;
         }
 
-        let layer = Path::total_layer_count() - 1;
-        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+        if let Some(parent_hash) = parent_hash {
             leaf_node::save_all(self.db(), &path.leaves, &parent_hash).await?;
-            self.inner
-                .inner
-                .cache
-                .put_leaves(parent_hash, path.leaves.clone());
+            self.inner.inner.cache.put_leaves(parent_hash, path.leaves);
         }
 
         let writer_id = old_root_node.proof.writer_id;
