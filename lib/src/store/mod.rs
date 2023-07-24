@@ -1,5 +1,6 @@
 mod block;
 mod block_ids;
+mod cache;
 mod error;
 mod index;
 mod inner_node;
@@ -21,7 +22,7 @@ pub(crate) use {
     root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
-use self::{index::UpdateSummaryReason, path::Path};
+use self::{cache::Cache, index::UpdateSummaryReason, path::Path};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -40,6 +41,7 @@ use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 use tracing::Instrument;
 
@@ -47,17 +49,22 @@ use tracing::Instrument;
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
+    cache: Arc<Cache>,
 }
 
 impl Store {
     pub fn new(db: db::Pool) -> Self {
-        Self { db }
+        Self {
+            db,
+            cache: Arc::new(Cache::new()),
+        }
     }
 
     /// Acquires a `Reader`
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
+            cache: self.cache.clone(),
         })
     }
 
@@ -66,6 +73,7 @@ impl Store {
         Ok(ReadTransaction {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
+                cache: self.cache.clone(),
             },
         })
     }
@@ -76,6 +84,7 @@ impl Store {
             inner: ReadTransaction {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
+                    cache: self.cache.clone(),
                 },
             },
         })
@@ -176,6 +185,7 @@ impl Store {
 /// Read-only operations. This is an up-to-date view of the data.
 pub(crate) struct Reader {
     inner: Handle,
+    cache: Arc<Cache>,
 }
 
 impl Reader {
@@ -307,7 +317,7 @@ impl ReadTransaction {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_node::load_children(self.db(), &parent).await?;
+            path.inner[level] = self.load_inner_nodes_with_cache(&parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -316,18 +326,20 @@ impl ReadTransaction {
             };
         }
 
-        path.leaves = leaf_node::load_children(self.db(), &parent).await?;
+        path.leaves = self.load_leaf_nodes(&parent).await?;
 
         Ok(path)
     }
 
-    // Access the underlying database transaction.
-    fn db(&mut self) -> &mut db::ReadTransaction {
-        match &mut self.inner.inner {
-            Handle::ReadTransaction(tx) => tx,
-            Handle::WriteTransaction(tx) => tx,
-            Handle::Connection(_) => unreachable!(),
+    async fn load_inner_nodes_with_cache(
+        &mut self,
+        parent_hash: &Hash,
+    ) -> Result<InnerNodeMap, Error> {
+        if let Some(nodes) = self.inner.cache.get_inners(parent_hash) {
+            return Ok(nodes);
         }
+
+        self.load_inner_nodes(parent_hash).await
     }
 }
 
@@ -608,9 +620,13 @@ impl WriteTransaction {
         old_root_node: &RootNode,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        for (i, inner_layer) in path.inner.iter().enumerate() {
+        for (i, nodes) in path.inner.iter().enumerate() {
             if let Some(parent_hash) = path.hash_at_layer(i) {
-                inner_node::save_all(self.db(), inner_layer, &parent_hash).await?;
+                inner_node::save_all(self.db(), nodes, &parent_hash).await?;
+                self.inner
+                    .inner
+                    .cache
+                    .put_inners(parent_hash, nodes.clone());
             }
         }
 
