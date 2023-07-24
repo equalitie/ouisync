@@ -326,7 +326,7 @@ impl ReadTransaction {
             };
         }
 
-        path.leaves = self.load_leaf_nodes(&parent).await?;
+        path.leaves = self.load_leaf_nodes_with_cache(&parent).await?;
 
         Ok(path)
     }
@@ -340,6 +340,17 @@ impl ReadTransaction {
         }
 
         self.load_inner_nodes(parent_hash).await
+    }
+
+    async fn load_leaf_nodes_with_cache(
+        &mut self,
+        parent_hash: &Hash,
+    ) -> Result<LeafNodeSet, Error> {
+        if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
+            return Ok(nodes);
+        }
+
+        self.load_leaf_nodes(parent_hash).await
     }
 }
 
@@ -633,6 +644,10 @@ impl WriteTransaction {
         let layer = Path::total_layer_count() - 1;
         if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
             leaf_node::save_all(self.db(), &path.leaves, &parent_hash).await?;
+            self.inner
+                .inner
+                .cache
+                .put_leaves(parent_hash, path.leaves.clone());
         }
 
         let writer_id = old_root_node.proof.writer_id;
