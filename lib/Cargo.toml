@@ -13,6 +13,10 @@ version.workspace = true
 name = "bench_lib"
 harness = false
 
+[[bench]]
+name = "bench_large_file"
+harness = false
+
 [dependencies]
 argon2 = "0.4.0"
 async-recursion = "1.0.0"

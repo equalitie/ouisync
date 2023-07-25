@@ -11,6 +11,7 @@ use tokio::{
     time,
 };
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 const EVENT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `id` is used to generate the access secrets - repos with the same id have the same secrets.
@@ -66,6 +67,7 @@ pub async fn write_file(
     path: &Utf8Path,
     size: usize,
     buffer_size: usize,
+    print_progress: bool,
 ) {
     let mut file = repo.create_file(path).await.unwrap();
 
@@ -83,6 +85,10 @@ pub async fn write_file(
         file.write_all(&buffer[..len]).await.unwrap();
 
         remaining -= len;
+
+        if print_progress {
+            println!("{:.1}%", 100.0 * (size - remaining) as f64 / size as f64);
+        }
     }
 
     file.flush().await.unwrap();
@@ -108,6 +114,7 @@ pub async fn read_file(repo: &Repository, path: &Utf8Path, buffer_size: usize) -
     size
 }
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) struct Actor {
     pub network: Network,
     pub repo: RepositoryGuard,
@@ -115,6 +122,7 @@ pub(crate) struct Actor {
 }
 
 impl Actor {
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) async fn new(rng: &mut StdRng, base_dir: &Path) -> Self {
         let monitor = StateMonitor::make_root();
 
@@ -133,6 +141,7 @@ impl Actor {
         }
     }
 
+    #[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
     pub(crate) fn connect_to(&self, peer: &Actor) {
         let addr = peer
             .network
@@ -145,6 +154,7 @@ impl Actor {
     }
 }
 
+#[allow(unused)] // https://github.com/rust-lang/rust/issues/46379
 pub(crate) async fn wait_for_sync(repo_a: &Repository, repo_b: &Repository) {
     let mut rx = repo_a.subscribe();
 
