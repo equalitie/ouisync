@@ -1,5 +1,6 @@
 mod block;
 mod block_ids;
+mod cache;
 mod error;
 mod index;
 mod inner_node;
@@ -21,7 +22,11 @@ pub(crate) use {
     root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
-use self::{index::UpdateSummaryReason, path::Path};
+use self::{
+    cache::{Cache, CacheTransaction},
+    index::UpdateSummaryReason,
+    path::Path,
+};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -31,7 +36,7 @@ use crate::{
     debug::DebugPrinter,
     progress::Progress,
     protocol::{
-        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
+        self, BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
         RootNode, SingleBlockPresence, Summary, VersionVectorOp, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
@@ -40,6 +45,7 @@ use futures_util::{Stream, TryStreamExt};
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 use tracing::Instrument;
 
@@ -47,17 +53,22 @@ use tracing::Instrument;
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
+    cache: Arc<Cache>,
 }
 
 impl Store {
     pub fn new(db: db::Pool) -> Self {
-        Self { db }
+        Self {
+            db,
+            cache: Arc::new(Cache::new()),
+        }
     }
 
     /// Acquires a `Reader`
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
+            cache: self.cache.begin(),
         })
     }
 
@@ -66,6 +77,7 @@ impl Store {
         Ok(ReadTransaction {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
+                cache: self.cache.begin(),
             },
         })
     }
@@ -76,6 +88,7 @@ impl Store {
             inner: ReadTransaction {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
+                    cache: self.cache.begin(),
                 },
             },
         })
@@ -176,6 +189,7 @@ impl Store {
 /// Read-only operations. This is an up-to-date view of the data.
 pub(crate) struct Reader {
     inner: Handle,
+    cache: CacheTransaction,
 }
 
 impl Reader {
@@ -218,6 +232,10 @@ impl Reader {
 
     /// Load the latest approved root node of the given branch.
     pub async fn load_root_node(&mut self, branch_id: &PublicKey) -> Result<RootNode, Error> {
+        if let Some(node) = self.cache.get_root(branch_id) {
+            return Ok(node);
+        }
+
         root_node::load(self.db(), branch_id).await
     }
 
@@ -307,7 +325,7 @@ impl ReadTransaction {
         let mut parent = path.root_hash;
 
         for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = inner_node::load_children(self.db(), &parent).await?;
+            path.inner[level] = self.load_inner_nodes_with_cache(&parent).await?;
 
             if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
                 parent = node.hash
@@ -316,18 +334,31 @@ impl ReadTransaction {
             };
         }
 
-        path.leaves = leaf_node::load_children(self.db(), &parent).await?;
+        path.leaves = self.load_leaf_nodes_with_cache(&parent).await?;
 
         Ok(path)
     }
 
-    // Access the underlying database transaction.
-    fn db(&mut self) -> &mut db::ReadTransaction {
-        match &mut self.inner.inner {
-            Handle::ReadTransaction(tx) => tx,
-            Handle::WriteTransaction(tx) => tx,
-            Handle::Connection(_) => unreachable!(),
+    async fn load_inner_nodes_with_cache(
+        &mut self,
+        parent_hash: &Hash,
+    ) -> Result<InnerNodeMap, Error> {
+        if let Some(nodes) = self.inner.cache.get_inners(parent_hash) {
+            return Ok(nodes);
         }
+
+        self.load_inner_nodes(parent_hash).await
+    }
+
+    async fn load_leaf_nodes_with_cache(
+        &mut self,
+        parent_hash: &Hash,
+    ) -> Result<LeafNodeSet, Error> {
+        if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
+            return Ok(nodes);
+        }
+
+        self.load_leaf_nodes(parent_hash).await
     }
 }
 
@@ -359,7 +390,7 @@ impl WriteTransaction {
         block_presence: SingleBlockPresence,
         write_keys: &Keypair,
     ) -> Result<bool, Error> {
-        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
+        let root_node = self.load_or_create_root_node(branch_id, write_keys).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         if path.has_leaf(block_id) {
@@ -368,7 +399,7 @@ impl WriteTransaction {
 
         path.set_leaf(block_id, block_presence);
 
-        self.save_path(&path, &root_node, write_keys).await?;
+        self.save_path(path, &root_node, write_keys).await?;
 
         Ok(true)
     }
@@ -383,7 +414,7 @@ impl WriteTransaction {
         expected_block_id: Option<&BlockId>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load(self.db(), branch_id).await?;
+        let root_node = self.load_root_node(branch_id).await?;
         let mut path = self.load_path(&root_node, encoded_locator).await?;
 
         let block_id = path
@@ -396,7 +427,7 @@ impl WriteTransaction {
             }
         }
 
-        self.save_path(&path, &root_node, write_keys).await?;
+        self.save_path(path, &root_node, write_keys).await?;
 
         Ok(())
     }
@@ -440,7 +471,7 @@ impl WriteTransaction {
         op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        let root_node = root_node::load_or_create(self.db(), branch_id, write_keys).await?;
+        let root_node = self.load_or_create_root_node(branch_id, write_keys).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
         op.apply(branch_id, &mut new_vv);
@@ -465,6 +496,11 @@ impl WriteTransaction {
     pub async fn remove_branch(&mut self, root_node: &RootNode) -> Result<(), Error> {
         root_node::remove_older(self.db(), root_node).await?;
         root_node::remove(self.db(), root_node).await?;
+
+        self.inner
+            .inner
+            .cache
+            .remove_root(&root_node.proof.writer_id);
 
         Ok(())
     }
@@ -581,10 +617,19 @@ impl WriteTransaction {
     }
 
     pub async fn commit(self) -> Result<(), Error> {
-        match self.inner.inner.inner {
-            Handle::WriteTransaction(tx) => Ok(tx.commit().await?),
+        let inner = match self.inner.inner.inner {
+            Handle::WriteTransaction(tx) => tx,
             Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
+        };
+
+        let cache = self.inner.inner.cache;
+        if cache.is_dirty() {
+            inner.commit_and_then(move || cache.commit()).await?;
+        } else {
+            inner.commit().await?;
         }
+
+        Ok(())
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
@@ -596,27 +641,45 @@ impl WriteTransaction {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        match self.inner.inner.inner {
-            Handle::WriteTransaction(tx) => Ok(tx.commit_and_then(f).await?),
+        let inner = match self.inner.inner.inner {
+            Handle::WriteTransaction(tx) => tx,
             Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
+        };
+
+        let cache = self.inner.inner.cache;
+        if cache.is_dirty() {
+            let f = move || {
+                cache.commit();
+                f()
+            };
+            Ok(inner.commit_and_then(f).await?)
+        } else {
+            Ok(inner.commit_and_then(f).await?)
         }
     }
 
     async fn save_path(
         &mut self,
-        path: &Path,
+        path: Path,
         old_root_node: &RootNode,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        for (i, inner_layer) in path.inner.iter().enumerate() {
-            if let Some(parent_hash) = path.hash_at_layer(i) {
-                inner_node::save_all(self.db(), inner_layer, &parent_hash).await?;
+        let mut parent_hash = Some(path.root_hash);
+        for (i, nodes) in path.inner.into_iter().enumerate() {
+            let bucket = protocol::get_bucket(&path.locator, i);
+            let new_parent_hash = nodes.get(bucket).map(|node| node.hash);
+
+            if let Some(parent_hash) = parent_hash {
+                inner_node::save_all(self.db(), &nodes, &parent_hash).await?;
+                self.inner.inner.cache.put_inners(parent_hash, nodes);
             }
+
+            parent_hash = new_parent_hash;
         }
 
-        let layer = Path::total_layer_count() - 1;
-        if let Some(parent_hash) = path.hash_at_layer(layer - 1) {
+        if let Some(parent_hash) = parent_hash {
             leaf_node::save_all(self.db(), &path.leaves, &parent_hash).await?;
+            self.inner.inner.cache.put_leaves(parent_hash, path.leaves);
         }
 
         let writer_id = old_root_node.proof.writer_id;
@@ -645,7 +708,21 @@ impl WriteTransaction {
             "create local snapshot"
         );
 
+        self.inner.inner.cache.put_root(root_node);
+
         Ok(())
+    }
+
+    async fn load_or_create_root_node(
+        &mut self,
+        branch_id: &PublicKey,
+        write_keys: &Keypair,
+    ) -> Result<RootNode, Error> {
+        if let Some(node) = self.inner.inner.cache.get_root(branch_id) {
+            return Ok(node);
+        }
+
+        root_node::load_or_create(self.db(), branch_id, write_keys).await
     }
 
     // Access the underlying database transaction.

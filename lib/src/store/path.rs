@@ -24,7 +24,7 @@ use crate::{
 ///
 #[derive(Debug)]
 pub(crate) struct Path {
-    locator: Hash,
+    pub locator: Hash,
     pub root_hash: Hash,
     pub root_summary: Summary,
     pub inner: Vec<InnerNodeMap>,
@@ -52,21 +52,6 @@ impl Path {
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
         self.leaves.iter().any(|l| &l.block_id == block_id)
-    }
-
-    pub const fn total_layer_count() -> usize {
-        1 /* root */ + INNER_LAYER_COUNT + 1 /* leaves */
-    }
-
-    pub fn hash_at_layer(&self, layer: usize) -> Option<Hash> {
-        if layer == 0 {
-            return Some(self.root_hash);
-        }
-
-        let inner_layer = layer - 1;
-        self.inner[inner_layer]
-            .get(self.get_bucket(inner_layer))
-            .map(|node| node.hash)
     }
 
     // Sets the leaf node to the given block id. Returns the previous block id, if any.

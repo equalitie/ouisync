@@ -45,6 +45,7 @@ fn write_file(c: &mut Criterion) {
                         Utf8Path::new("file.dat"),
                         file_size as usize,
                         buffer_size,
+                        false,
                     ))
                 },
                 BatchSize::LargeInput,
@@ -89,6 +90,7 @@ fn read_file(c: &mut Criterion) {
                             file_name,
                             file_size as usize,
                             buffer_size,
+                            false,
                         )
                         .await;
                         repo
@@ -132,8 +134,15 @@ fn remove_file(c: &mut Criterion) {
                             StateMonitor::make_root(),
                         )
                         .await;
-                        utils::write_file(&mut rng, &repo, file_name, file_size as usize, 4096)
-                            .await;
+                        utils::write_file(
+                            &mut rng,
+                            &repo,
+                            file_name,
+                            file_size as usize,
+                            4096,
+                            false,
+                        )
+                        .await;
                         repo
                     });
 
@@ -177,6 +186,7 @@ fn sync(c: &mut Criterion) {
                             file_name,
                             file_size as usize,
                             4096,
+                            false,
                         )
                         .await;
 
