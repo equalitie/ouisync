@@ -265,17 +265,20 @@ impl MonitoredDht {
         contacts_store: Option<Arc<dyn DhtContactsStoreTrait>>,
     ) -> Self {
         // TODO: load the DHT state from a previous save if it exists.
-        let mut builder = MainlineDht::builder()
+        let builder = MainlineDht::builder()
             .add_routers(DHT_ROUTERS.iter().copied())
             .set_read_only(false);
 
-        if let Some(contacts_store) = &contacts_store {
-            let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
+        // TODO: The reuse of initial contacts is incorrectly implemented, once the issue
+        // https://github.com/equalitie/btdht/issues/8
+        // is fixed, this can be uncommented again.
+        //if let Some(contacts_store) = &contacts_store {
+        //    let initial_contacts = Self::load_initial_contacts(is_v4, &**contacts_store).await;
 
-            for contact in initial_contacts {
-                builder = builder.add_node(contact);
-            }
-        }
+        //    for contact in initial_contacts {
+        //        builder = builder.add_node(contact);
+        //    }
+        //}
 
         let dht = builder
             .start(Socket(socket))
@@ -406,28 +409,29 @@ impl MonitoredDht {
         }
     }
 
-    async fn load_initial_contacts(
-        is_v4: bool,
-        contacts_store: &(impl DhtContactsStoreTrait + ?Sized),
-    ) -> HashSet<SocketAddr> {
-        if is_v4 {
-            match contacts_store.load_v4().await {
-                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V4).collect(),
-                Err(error) => {
-                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
-                    Default::default()
-                }
-            }
-        } else {
-            match contacts_store.load_v6().await {
-                Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V6).collect(),
-                Err(error) => {
-                    tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
-                    Default::default()
-                }
-            }
-        }
-    }
+    // TODO: See comment where this function is used (it's also commented out).
+    //async fn load_initial_contacts(
+    //    is_v4: bool,
+    //    contacts_store: &(impl DhtContactsStoreTrait + ?Sized),
+    //) -> HashSet<SocketAddr> {
+    //    if is_v4 {
+    //        match contacts_store.load_v4().await {
+    //            Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V4).collect(),
+    //            Err(error) => {
+    //                tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+    //                Default::default()
+    //            }
+    //        }
+    //    } else {
+    //        match contacts_store.load_v6().await {
+    //            Ok(contacts) => contacts.iter().cloned().map(SocketAddr::V6).collect(),
+    //            Err(error) => {
+    //                tracing::error!("Failed to load DHT IPv4 contacts {:?}", error);
+    //                Default::default()
+    //            }
+    //        }
+    //    }
+    //}
 }
 
 type Lookups = HashMap<InfoHash, Lookup>;
