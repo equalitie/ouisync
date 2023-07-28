@@ -67,11 +67,7 @@ pub(super) fn load_locators<'a>(
 }
 
 /// Saves the node to the db unless it already exists.
-pub(super) async fn save(
-    tx: &mut db::WriteTransaction,
-    node: &LeafNode,
-    parent: &Hash,
-) -> Result<(), Error> {
+async fn save(tx: &mut db::WriteTransaction, node: &LeafNode, parent: &Hash) -> Result<(), Error> {
     sqlx::query(
         "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, block_presence)
          VALUES (?, ?, ?, ?)
@@ -99,8 +95,8 @@ pub(super) async fn save_all(
     Ok(())
 }
 
-/// Checks whether the block with the specified id is present.
-pub(super) async fn is_present(
+/// Checks whether the block with the specified id is present or expired.
+pub(super) async fn is_present_or_expired(
     conn: &mut db::Connection,
     block_id: &BlockId,
 ) -> Result<bool, Error> {
@@ -132,10 +128,11 @@ pub(super) async fn set_present(
 
     // Update only those nodes that have block_presence set to `Missing`.
     let result = sqlx::query(
-        "UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ? AND block_presence = ?",
+        "UPDATE snapshot_leaf_nodes SET block_presence = ? WHERE block_id = ? AND (block_presence = ? OR block_presence = ?)",
         )
         .bind(SingleBlockPresence::Present)
         .bind(block_id)
+        .bind(SingleBlockPresence::Expired)
         .bind(SingleBlockPresence::Missing)
         .execute(tx)
         .await?;
@@ -165,7 +162,7 @@ pub(super) async fn filter_nodes_with_new_blocks(
     let mut output = Vec::new();
 
     for remote_node in remote_nodes.present() {
-        if !is_present(conn, &remote_node.block_id).await? {
+        if !is_present_or_expired(conn, &remote_node.block_id).await? {
             output.push(*remote_node);
         }
     }

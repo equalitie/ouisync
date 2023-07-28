@@ -34,6 +34,15 @@ impl Summary {
                 SingleBlockPresence::Missing => {
                     block_presence_builder.update(MultiBlockPresence::None)
                 }
+                SingleBlockPresence::Expired => {
+                    // If a _peer_ asks if we have a block, we tell them we do even if it's been
+                    // expired.  If they ask for the block we flip its status from `Expired` to
+                    // `Missing` and will try to download it again.
+                    //
+                    // On the other hand, if _we_ want to find out which blocks we need to
+                    // download, `Expired` blocks should not make it into the list.
+                    block_presence_builder.update(MultiBlockPresence::Full)
+                }
                 SingleBlockPresence::Present => {
                     block_presence_builder.update(MultiBlockPresence::Full)
                 }
@@ -142,12 +151,13 @@ pub(crate) struct InvalidValue(u8);
 pub(crate) enum SingleBlockPresence {
     Missing,
     Present,
+    Expired,
 }
 
 impl SingleBlockPresence {
     pub fn is_present(self) -> bool {
         match self {
-            Self::Missing => false,
+            Self::Missing | Self::Expired => false,
             Self::Present => true,
         }
     }
@@ -155,26 +165,33 @@ impl SingleBlockPresence {
 
 impl Type<Sqlite> for SingleBlockPresence {
     fn type_info() -> SqliteTypeInfo {
-        <bool as Type<Sqlite>>::type_info()
+        <u8 as Type<Sqlite>>::type_info()
     }
 
     fn compatible(ty: &SqliteTypeInfo) -> bool {
-        <bool as Type<Sqlite>>::compatible(ty)
+        <u8 as Type<Sqlite>>::compatible(ty)
     }
 }
 
 impl<'q> Encode<'q, Sqlite> for SingleBlockPresence {
     fn encode_by_ref(&self, args: &mut Vec<SqliteArgumentValue<'q>>) -> IsNull {
-        Encode::<Sqlite>::encode(self.is_present(), args)
+        let n = match self {
+            SingleBlockPresence::Missing => 0,
+            SingleBlockPresence::Present => 1,
+            SingleBlockPresence::Expired => 2,
+        };
+
+        Encode::<Sqlite>::encode(n, args)
     }
 }
 
 impl<'r> Decode<'r, Sqlite> for SingleBlockPresence {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, BoxDynError> {
-        if <bool as Decode<'r, Sqlite>>::decode(value)? {
-            Ok(SingleBlockPresence::Present)
-        } else {
-            Ok(SingleBlockPresence::Missing)
+        match <u8 as Decode<'r, Sqlite>>::decode(value)? {
+            0 => Ok(SingleBlockPresence::Missing),
+            1 => Ok(SingleBlockPresence::Present),
+            2 => Ok(SingleBlockPresence::Expired),
+            n => Err(InvalidValue(n).into()),
         }
     }
 }
@@ -184,6 +201,7 @@ impl fmt::Debug for SingleBlockPresence {
         match self {
             Self::Missing => write!(f, "Missing"),
             Self::Present => write!(f, "Present"),
+            Self::Expired => write!(f, "Expired"),
         }
     }
 }

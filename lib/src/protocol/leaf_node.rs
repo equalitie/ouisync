@@ -120,8 +120,7 @@ impl LeafNodeSet {
 
     /// Returns all nodes from this set whose `block_presence` is `Present`.
     pub fn present(&self) -> impl Iterator<Item = &LeafNode> {
-        self.iter()
-            .filter(|node| node.block_presence == SingleBlockPresence::Present)
+        self.iter().filter(|node| node.block_presence.is_present())
     }
 
     fn lookup(&self, locator: &Hash) -> Result<usize, usize> {
