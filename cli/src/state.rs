@@ -83,7 +83,7 @@ impl State {
             |holder| async move {
                 if let Err(error) = holder.repository.close().await {
                     tracing::error!(
-                        name = %holder.name(),
+                        repo = %holder.name(),
                         ?error,
                         "failed to gracefully close repository"
                     );

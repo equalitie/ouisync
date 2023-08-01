@@ -302,7 +302,7 @@ impl JobMonitor {
         }
         .instrument(tracing::info_span!(
             "job",
-            name = self.metric.name().as_ref(),
+            job = self.metric.name().as_ref(),
             id = self.counter.fetch_add(1, Ordering::Relaxed),
         ))
         .await

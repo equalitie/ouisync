@@ -79,7 +79,7 @@ where
             Style::new()
         };
 
-        const SEPARATOR: &str = "•";
+        const SEPARATOR: &str = " :: ";
 
         // Timestamp
         self.format_timestamp(&mut writer)?;
@@ -92,7 +92,7 @@ where
 
         // Spans
         if let Some(scope) = ctx.event_scope() {
-            write!(writer, " {} ", dimmed.paint(SEPARATOR))?;
+            write!(writer, "{}", dimmed.paint(SEPARATOR))?;
 
             let mut seen = false;
 
@@ -116,7 +116,7 @@ where
 
         // File + line number:
         if metadata.file().is_some() || metadata.line().is_some() {
-            write!(writer, " {} ", dimmed.paint(SEPARATOR))?;
+            write!(writer, "{}", dimmed.paint(SEPARATOR))?;
         }
 
         if let Some(filename) = metadata.file() {

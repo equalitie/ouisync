@@ -107,7 +107,7 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
                     .instrument(tracing::info_span!(
                         "write",
                         repo = repo_index,
-                        name = file_name
+                        file = file_name
                     ))
                     .await
                 }
@@ -117,7 +117,7 @@ fn sync_case(num_peers: usize, num_repos: usize, file_size: usize) {
                         .instrument(tracing::info_span!(
                             "read",
                             repo = repo_index,
-                            name = file_name
+                            file = file_name
                         ))
                         .await;
                 }
@@ -352,7 +352,7 @@ fn sync_during_file_write() {
 
             // Write half of the file content but don't flush yet.
             common::write_in_chunks(&mut file, &content[..content.len() / 2], 4096)
-                .instrument(tracing::info_span!("write", name = "foo.txt", step = 1))
+                .instrument(tracing::info_span!("write", file = "foo.txt", step = 1))
                 .await;
 
             // Wait until we see the file created by B
@@ -363,14 +363,14 @@ fn sync_during_file_write() {
                 common::write_in_chunks(&mut file, &content[content.len() / 2..], 4096).await;
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", name = "foo.txt", step = 2))
+            .instrument(tracing::info_span!("write", file = "foo.txt", step = 2))
             .await;
 
             // Reopen the file and verify it has the expected full content
             let mut file = repo.open_file("foo.txt").await.unwrap();
             let actual_content = file
                 .read_to_end()
-                .instrument(tracing::info_span!("read", name = "foo.txt"))
+                .instrument(tracing::info_span!("read", file = "foo.txt"))
                 .await
                 .unwrap();
             common::assert_content_equal(&actual_content, &content);
@@ -397,7 +397,7 @@ fn sync_during_file_write() {
                 file.write_all(b"bar").await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", name = "bar.txt"))
+            .instrument(tracing::info_span!("write", file = "bar.txt"))
             .await;
 
             // Wait until we see the file with the complete content from Alice
@@ -872,7 +872,7 @@ fn concurrent_update_and_delete_during_conflict() {
                 file.write_all(&content_v0).await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", name = "data.txt", step = 1))
+            .instrument(tracing::info_span!("write", file = "data.txt", step = 1))
             .await;
 
             alice_rx.recv().await.unwrap();
@@ -886,7 +886,7 @@ fn concurrent_update_and_delete_during_conflict() {
                 file.write_all(&chunk).await.unwrap();
                 file.flush().await.unwrap();
             }
-            .instrument(tracing::info_span!("write", name = "data.txt", step = 2))
+            .instrument(tracing::info_span!("write", file = "data.txt", step = 2))
             .await;
 
             // 6b. Relink

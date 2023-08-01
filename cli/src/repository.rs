@@ -135,7 +135,7 @@ impl RepositoryHolder {
                 Ok(depth) => depth,
                 Err(error) => {
                     tracing::error!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
                         ?error,
                         "Failed to create mount point"
@@ -152,7 +152,7 @@ impl RepositoryHolder {
             ) {
                 Ok(mount_guard) => {
                     tracing::info!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
                         "Repository mounted"
                     );
@@ -160,7 +160,7 @@ impl RepositoryHolder {
                 }
                 Err(error) => {
                     tracing::error!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
                         ?error,
                         "Failed to mount repository"
@@ -197,7 +197,7 @@ impl RepositoryHolder {
 
             if let Err(error) = remove_mount_point(&point, depth).await {
                 tracing::error!(
-                    name = %self.name,
+                    repo = %self.name,
                     mount_point = %point.display(),
                     ?error,
                     "Failed to remove mount point"
@@ -205,7 +205,7 @@ impl RepositoryHolder {
             }
 
             tracing::info!(
-                name = %self.name,
+                repo = %self.name,
                 mount_point = %point.display(),
                 "Repository unmounted"
             );
@@ -500,7 +500,7 @@ pub(crate) async fn delete_store(store_dir: &Path, repository_name: &str) -> io:
         // error and propagate the rest.
         if let Err(error) = fs::remove_dir(&path).await {
             tracing::error!(
-                name = repository_name,
+                repo = repository_name,
                 path = %path.display(),
                 ?error,
                 "Failed to remove repository store subdirectory"
