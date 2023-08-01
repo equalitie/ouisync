@@ -1,6 +1,10 @@
-use super::common;
-use std::{io, path::Path};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use super::common::{self, Formatter};
+use std::{io, path::Path, sync::Mutex};
+use tracing_subscriber::{
+    fmt::{self, time::SystemTime},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
 pub(super) struct Inner;
 
@@ -14,14 +18,16 @@ impl Inner {
 
         // Log to stdout
         let stdout_layer = fmt::layer()
-            .pretty()
-            .with_ansi(colors)
-            .with_target(false)
-            .with_file(true)
-            .with_line_number(true);
+            .event_format(Formatter::<SystemTime>::default())
+            .with_ansi(colors);
 
         // Log to file
-        let file_layer = log_path.map(common::create_file_log_layer);
+        let file_layer = log_path.map(|path| {
+            fmt::layer()
+                .event_format(Formatter::<SystemTime>::default())
+                .with_ansi(true)
+                .with_writer(Mutex::new(common::create_file_writer(path)))
+        });
 
         tracing_subscriber::registry()
             .with(common::create_log_filter())
