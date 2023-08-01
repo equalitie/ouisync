@@ -57,7 +57,7 @@ impl MessageBroker {
             runtime_id = ?that_runtime_id.as_public_key(),
         );
 
-        tracing::info!(parent: &span, "message broker created");
+        tracing::info!(parent: &span, "Message broker created");
 
         let this = Self {
             this_runtime_id,
@@ -102,7 +102,7 @@ impl MessageBroker {
                 if entry.get().is_closed() {
                     entry.insert(abort_tx);
                 } else {
-                    tracing::warn!("link not created - already exists");
+                    tracing::warn!("Link not created - already exists");
                     return;
                 }
             }
@@ -131,7 +131,7 @@ impl MessageBroker {
         let pex_discovery_tx = pex.discovery_sender();
         let pex_announcer = pex.announcer(self.that_runtime_id, self.dispatcher.connection_infos());
 
-        tracing::info!(?role, "link created");
+        tracing::info!(?role, "Link created");
 
         drop(span_enter);
 
@@ -150,7 +150,7 @@ impl MessageBroker {
                 _ = abort_rx => (),
             }
 
-            tracing::info!("link destroyed")
+            tracing::info!("Link destroyed")
         };
         let task = task.instrument(span);
 
@@ -170,7 +170,7 @@ impl MessageBroker {
 
 impl Drop for MessageBroker {
     fn drop(&mut self) {
-        tracing::info!(parent: &self.span, "message broker destroyed");
+        tracing::info!(parent: &self.span, "Message broker destroyed");
     }
 }
 
@@ -257,11 +257,11 @@ async fn establish_channel<'a>(
 ) -> Result<(DecryptingStream<'a>, EncryptingSink<'a>), EstablishError> {
     match crypto::establish_channel(role, vault.repository_id(), stream, sink).await {
         Ok(io) => {
-            tracing::debug!("established encrypted channel");
+            tracing::debug!("Established encrypted channel");
             Ok(io)
         }
         Err(error) => {
-            tracing::warn!(?error, "failed to establish encrypted channel");
+            tracing::warn!(?error, "Failed to establish encrypted channel");
 
             Err(error)
         }
@@ -301,19 +301,19 @@ async fn recv_messages(
         let content = match stream.recv().await {
             Ok(content) => content,
             Err(RecvError::Crypto) => {
-                tracing::warn!("failed to decrypt incoming message",);
+                tracing::warn!("Failed to decrypt incoming message",);
                 return ControlFlow::Continue;
             }
             Err(RecvError::Exhausted) => {
-                tracing::debug!("incoming message nonce counter exhausted",);
+                tracing::debug!("Incoming message nonce counter exhausted",);
                 return ControlFlow::Continue;
             }
             Err(RecvError::Closed) => {
-                tracing::debug!("message stream closed");
+                tracing::debug!("Message stream closed");
                 return ControlFlow::Break;
             }
             Err(RecvError::TransportChanged) => {
-                tracing::debug!("transport has changed");
+                tracing::debug!("Transport has changed");
                 return ControlFlow::Continue;
             }
         };
@@ -321,7 +321,7 @@ async fn recv_messages(
         let content: Content = match bincode::deserialize(&content) {
             Ok(content) => content,
             Err(error) => {
-                tracing::warn!("failed to deserialize incoming message: {}", error);
+                tracing::warn!(?error, "Failed to deserialize incoming message");
                 continue; // TODO: should we return `ControlFlow::Continue` here as well?
             }
         };
@@ -353,11 +353,11 @@ async fn send_messages(
         match sink.send(content).await {
             Ok(()) => (),
             Err(SendError::Exhausted) => {
-                tracing::debug!("outgoing message nonce counter exhausted",);
+                tracing::debug!("Outgoing message nonce counter exhausted");
                 return ControlFlow::Continue;
             }
             Err(SendError::Closed) => {
-                tracing::debug!("message sink closed");
+                tracing::debug!("Message sink closed");
                 return ControlFlow::Break;
             }
         }

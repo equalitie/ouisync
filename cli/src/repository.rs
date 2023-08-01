@@ -138,7 +138,7 @@ impl RepositoryHolder {
                         name = %self.name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to create mount point"
+                        "Failed to create mount point"
                     );
 
                     return Err(error.into());
@@ -154,7 +154,7 @@ impl RepositoryHolder {
                     tracing::info!(
                         name = %self.name,
                         mount_point = %point.display(),
-                        "repository mounted"
+                        "Repository mounted"
                     );
                     mount_guard
                 }
@@ -163,7 +163,7 @@ impl RepositoryHolder {
                         name = %self.name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to mount repository"
+                        "Failed to mount repository"
                     );
                     return Err(error.into());
                 }
@@ -200,14 +200,14 @@ impl RepositoryHolder {
                     name = %self.name,
                     mount_point = %point.display(),
                     ?error,
-                    "failed to remove mount point"
+                    "Failed to remove mount point"
                 );
             }
 
             tracing::info!(
                 name = %self.name,
                 mount_point = %point.display(),
-                "repository unmounted"
+                "Repository unmounted"
             );
         }
     }
@@ -260,17 +260,17 @@ impl Drop for RepositoryHolder {
                         %name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to remove mount point"
+                        "Failed to remove mount point"
                     );
                 }
             }
 
             match repository.close().await {
                 Ok(()) => {
-                    tracing::info!(%name, "repository closed");
+                    tracing::info!(%name, "Repository closed");
                 }
                 Err(error) => {
-                    tracing::error!(%name, ?error, "failed to close repository");
+                    tracing::error!(%name, ?error, "Failed to close repository");
                 }
             }
         });
@@ -426,7 +426,7 @@ pub(crate) async fn find_all(
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                tracing::error!(%error, "failed to read directory entry");
+                tracing::error!(%error, "Failed to read directory entry");
                 continue;
             }
         };
@@ -438,7 +438,7 @@ pub(crate) async fn find_all(
         let path: &Utf8Path = match entry.path().try_into() {
             Ok(path) => path,
             Err(_) => {
-                tracing::error!(path = ?entry.path(), "invalid repository path - not utf8");
+                tracing::error!(path = ?entry.path(), "Invalid repository path - not utf8");
                 continue;
             }
         };
@@ -452,7 +452,7 @@ pub(crate) async fn find_all(
             {
                 Ok(repository) => repository,
                 Err(error) => {
-                    tracing::error!(?error, ?path, "failed to open repository");
+                    tracing::error!(?error, ?path, "Failed to open repository");
                     continue;
                 }
             };
@@ -473,7 +473,7 @@ pub(crate) async fn find_all(
             // "/" or contain "..", none of which can happen here.
             .unwrap();
 
-        tracing::info!(%name, "repository opened");
+        tracing::info!(%name, "Repository opened");
 
         let holder = RepositoryHolder::new(repository, name, network).await;
         let holder = Arc::new(holder);
@@ -503,7 +503,7 @@ pub(crate) async fn delete_store(store_dir: &Path, repository_name: &str) -> io:
                 name = repository_name,
                 path = %path.display(),
                 ?error,
-                "failed to remove repository store subdirectory"
+                "Failed to remove repository store subdirectory"
             );
             break;
         }

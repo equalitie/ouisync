@@ -189,7 +189,8 @@ impl Repository {
         tracing::debug!(
             parent: vault.monitor.span(),
             access = ?secrets.access_mode(),
-            writer_id = ?this_writer_id
+            writer_id = ?this_writer_id,
+            "Repository opened"
         );
 
         let shared = Arc::new(Shared {
@@ -664,7 +665,7 @@ impl Repository {
                     tracing::trace!(
                         branch_id = ?branch.id(),
                         ?error,
-                        "failed to open root directory"
+                        "Failed to open root directory"
                     );
                     // Either this is the local branch which doesn't exist yet in the store or a
                     // remote branch which has been pruned in the meantime. This is safe to ignore.
@@ -674,7 +675,7 @@ impl Repository {
                     tracing::trace!(
                         branch_id = ?branch.id(),
                         ?error,
-                        "failed to open root directory"
+                        "Failed to open root directory"
                     );
                     // Some branch root blocks may not have been loaded across the network yet.
                     // This is safe to ignore.
@@ -684,7 +685,7 @@ impl Repository {
                     tracing::error!(
                         branch_id = ?branch.id(),
                         ?error,
-                        "failed to open root directory"
+                        "Failed to open root directory"
                     );
                     return Err(error);
                 }
@@ -849,7 +850,7 @@ async fn report_sync_progress(vault: Vault) {
         let next_progress = match vault.store.sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
-                tracing::error!("failed to retrieve sync progress: {:?}", error);
+                tracing::error!("Failed to retrieve sync progress: {:?}", error);
                 continue;
             }
         };
@@ -857,7 +858,7 @@ async fn report_sync_progress(vault: Vault) {
         if next_progress != prev_progress {
             prev_progress = next_progress;
             tracing::debug!(
-                "sync progress: {} bytes ({:.1})",
+                "Sync progress: {} bytes ({:.1})",
                 prev_progress * BLOCK_SIZE as u64,
                 prev_progress.percent()
             );

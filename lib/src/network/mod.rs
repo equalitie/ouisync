@@ -110,7 +110,7 @@ impl Network {
         let user_provided_peers = SeenPeers::new();
 
         let this_runtime_id = SecretRuntimeId::generate();
-        tracing::debug!(this_runtime_id = ?this_runtime_id.public().as_public_key());
+        let this_runtime_id_public = this_runtime_id.public();
 
         let connections_monitor = monitor.make_child("Connections");
         let peers_monitor = monitor.make_child("Peers");
@@ -147,6 +147,8 @@ impl Network {
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
+
+        tracing::debug!(this_runtime_id = ?this_runtime_id_public.as_public_key(), "Network created");
 
         Self {
             inner,
@@ -670,7 +672,7 @@ impl Inner {
             }
 
             if let Some(sleep) = next_sleep {
-                tracing::debug!(parent: monitor.span(), "next connection attempt in {:?}", sleep);
+                tracing::debug!(parent: monitor.span(), "Next connection attempt in {:?}", sleep);
                 tokio::time::sleep(sleep).await;
             }
 
@@ -690,7 +692,7 @@ impl Inner {
                     tracing::debug!(
                         parent: monitor.span(),
                         permit_id,
-                        "duplicate from different source - awaiting permit"
+                        "Duplicate from different source - awaiting permit"
                     );
 
                     on_release.await;
@@ -700,7 +702,7 @@ impl Inner {
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
-            tracing::debug!(parent: monitor.span(), "connecting");
+            tracing::debug!(parent: monitor.span(), "Connecting");
 
             let socket = match self
                 .gateway
@@ -725,7 +727,7 @@ impl Inner {
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
-        tracing::debug!(parent: monitor.span(), "handshaking");
+        tracing::debug!(parent: monitor.span(), "Handshaking");
 
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
@@ -733,7 +735,7 @@ impl Inner {
         let handshake_result = perform_handshake(&mut stream, VERSION, &self.this_runtime_id).await;
 
         if let Err(error) = &handshake_result {
-            tracing::warn!(parent: monitor.span(), ?error, "handshake failed");
+            tracing::debug!(parent: monitor.span(), ?error, "Handshake failed");
         }
 
         let that_runtime_id = match handshake_result {
@@ -749,14 +751,14 @@ impl Inner {
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            tracing::debug!(parent: monitor.span(), "connection from self, discarding");
+            tracing::debug!(parent: monitor.span(), "Connection from self, discarding");
             self.our_addresses.lock().unwrap().insert(permit.addr());
             return false;
         }
 
         permit.mark_as_active(that_runtime_id);
         monitor.mark_as_active(that_runtime_id);
-        tracing::info!(parent: monitor.span(), "connected");
+        tracing::info!(parent: monitor.span(), "Connected");
 
         let released = permit.released();
 
@@ -896,7 +898,7 @@ struct MessageBrokerEntryGuard<'a> {
 
 impl Drop for MessageBrokerEntryGuard<'_> {
     fn drop(&mut self) {
-        tracing::info!(parent: self.monitor.span(), "disconnected");
+        tracing::info!(parent: self.monitor.span(), "Disconnected");
 
         let mut state = self.state.lock().unwrap();
         if let Some(brokers) = &mut state.message_brokers {
