@@ -700,7 +700,7 @@ impl Inner {
 
             permit.mark_as_connecting();
             monitor.mark_as_connecting(permit.id());
-            tracing::info!(parent: monitor.span(), "connecting");
+            tracing::debug!(parent: monitor.span(), "connecting");
 
             let socket = match self
                 .gateway
@@ -725,7 +725,7 @@ impl Inner {
         permit: ConnectionPermit,
         monitor: &ConnectionMonitor,
     ) -> bool {
-        tracing::info!(parent: monitor.span(), "connected");
+        tracing::debug!(parent: monitor.span(), "handshaking");
 
         permit.mark_as_handshaking();
         monitor.mark_as_handshaking();
@@ -749,14 +749,14 @@ impl Inner {
 
         // prevent self-connections.
         if that_runtime_id == self.this_runtime_id.public() {
-            tracing::info!(parent: monitor.span(), "connection from self, discarding");
+            tracing::debug!(parent: monitor.span(), "connection from self, discarding");
             self.our_addresses.lock().unwrap().insert(permit.addr());
             return false;
         }
 
         permit.mark_as_active(that_runtime_id);
         monitor.mark_as_active(that_runtime_id);
-        tracing::info!(parent: monitor.span(), "handshake complete");
+        tracing::info!(parent: monitor.span(), "connected");
 
         let released = permit.released();
 

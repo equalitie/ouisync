@@ -105,7 +105,7 @@ impl Gateway {
         source: PeerSource,
     ) -> Option<raw::Stream> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
-            tracing::warn!("invalid peer address - discarding");
+            tracing::debug!("invalid peer address - discarding");
             return None;
         }
 
@@ -137,7 +137,7 @@ impl Gateway {
                     return Some(socket);
                 }
                 Err(error) => {
-                    tracing::warn!("connection failed: {:?}", error);
+                    tracing::debug!("connection failed: {:?}", error);
 
                     if error.is_localy_closed() {
                         // Connector locally closed - no point in retrying.
@@ -312,7 +312,7 @@ impl Stacks {
         let stack = if let Some(stack) = self.quic_stack_for(&addr.ip()) {
             stack
         } else {
-            tracing::warn!("hole punching not started - no QUIC stack");
+            tracing::debug!("hole punching not started - no QUIC stack");
             return None;
         };
 
@@ -400,11 +400,12 @@ impl QuicStack {
 
                 (connector, listener, side_channel_maker)
             }
-            Err(e) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Quic(bind_addr),
-                    "Failed to start listener: {:?}", e
+                    ?error,
+                    "Failed to start listener"
                 );
                 return None;
             }
@@ -446,11 +447,12 @@ impl TcpStack {
 
         let listener = match TcpListener::bind(bind_addr).await {
             Ok(listener) => listener,
-            Err(err) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Tcp(bind_addr),
-                    "Failed to start listener: {:?}", err
+                    ?error,
+                    "Failed to start listener",
                 );
                 return None;
             }
@@ -463,12 +465,12 @@ impl TcpStack {
 
                 addr
             }
-            Err(err) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Tcp(bind_addr),
-                    "Failed to get listener local address: {:?}",
-                    err
+                    ?error,
+                    "Failed to get listener local address",
                 );
                 return None;
             }
@@ -498,7 +500,7 @@ async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, 
                     .ok();
             }
             Err(error) => {
-                tracing::error!("Failed to accept incoming connection: {}", error);
+                tracing::error!(?error, "Failed to accept connection");
                 break;
             }
         }
@@ -543,7 +545,7 @@ async fn run_quic_listener(
                                         .ok();
                                 }
                                 Err(error) => {
-                                    tracing::info!("Failed to accept connection {error:?}");
+                                    tracing::error!(?error, "Failed to accept connection");
                                 }
                             };
                         }
