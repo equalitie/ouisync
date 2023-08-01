@@ -38,7 +38,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         _notification_tx: &NotificationSender,
     ) -> Result<Self::Response> {
         match request {
-            Request::Start => Err(Error::ForbiddenRequest),
+            Request::Start { .. } => Err(Error::ForbiddenRequest),
             Request::BindRpc { addrs } => Ok(self
                 .state
                 .servers

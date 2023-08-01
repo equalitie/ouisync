@@ -34,7 +34,7 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(log_path: Option<&Path>) -> io::Result<Self> {
+    pub fn new(path: Option<&Path>, _format: LogFormat) -> io::Result<Self> {
         let android_log_layer = fmt::layer()
             .event_format(Formatter::<()>::default())
             .with_ansi(false)

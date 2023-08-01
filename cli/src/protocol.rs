@@ -1,4 +1,5 @@
 use clap::{builder::BoolishValueParser, Subcommand};
+use ouisync_bridge::logger::LogFormat;
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
 use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, path::PathBuf};
@@ -7,7 +8,11 @@ use std::{fmt, net::SocketAddr, path::PathBuf};
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Request {
     /// Start the server
-    Start,
+    Start {
+        /// Log format ("human" or "json")
+        #[arg(long, default_value_t = LogFormat::Human)]
+        log_format: LogFormat,
+    },
     /// Bind the remote API to the specified addresses.
     ///
     /// Overwrites any previously specified addresses.
