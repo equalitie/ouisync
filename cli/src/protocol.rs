@@ -23,6 +23,14 @@ pub(crate) enum Request {
         #[arg(value_name = "IP:PORT")]
         addrs: Vec<SocketAddr>,
     },
+    /// Bind the metrics endpoint to the specified address.
+    BindMetrics {
+        /// Address to bind the metrics endpoint to. If specified, metrics collection is enabled
+        /// and the collected metrics are served from this endpoint. If not specified, metrics
+        /// collection is disabled.
+        #[arg(value_name = "IP:PORT")]
+        addr: Option<SocketAddr>,
+    },
     /// Create a new repository
     Create {
         /// Name of the repository

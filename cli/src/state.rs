@@ -1,4 +1,5 @@
 use crate::{
+    metrics::MetricsServer,
     options::Dirs,
     repository::{self, RepositoryMap},
     server::ServerContainer,
@@ -28,7 +29,8 @@ pub(crate) struct State {
     pub network: Network,
     pub repositories: RepositoryMap,
     pub repositories_monitor: StateMonitor,
-    pub servers: ServerContainer,
+    pub rpc_servers: ServerContainer,
+    pub metrics_server: MetricsServer,
     pub server_config: OnceCell<ServerConfig>,
     pub client_config: OnceCell<ClientConfig>,
 }
@@ -63,20 +65,25 @@ impl State {
             network,
             repositories,
             repositories_monitor,
-            servers: ServerContainer::new(),
+            rpc_servers: ServerContainer::new(),
+            metrics_server: MetricsServer::new(),
             server_config: OnceCell::new(),
             client_config: OnceCell::new(),
         };
         let state = Arc::new(state);
 
-        state.servers.init(state.clone()).await?;
+        state.rpc_servers.init(state.clone()).await?;
+        state.metrics_server.init(&state).await?;
 
         Ok(state)
     }
 
     pub async fn close(&self) {
-        // Kill remote servers
-        self.servers.close();
+        // Kill RPC servers
+        self.rpc_servers.close();
+
+        // Kill metrics server
+        self.metrics_server.close();
 
         // Close repos
         let close_repositories = future::join_all(self.repositories.remove_all().into_iter().map(

@@ -1,5 +1,6 @@
 mod client;
 mod handler;
+mod metrics;
 mod options;
 mod protocol;
 mod repository;
