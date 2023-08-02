@@ -1,10 +1,13 @@
-use crate::state::State;
+use crate::{
+    geo_ip::{CountryCode, GeoIp},
+    state::State,
+};
 use hyper::{
     server::Server,
     service::{make_service_fn, service_fn},
     Body, Response,
 };
-use metrics::{Key, KeyName, Recorder, Unit};
+use metrics::{Gauge, Key, KeyName, Label, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey},
@@ -13,7 +16,8 @@ use ouisync_bridge::{
 use ouisync_lib::{network::PeerState, PeerInfoCollector, PublicRuntimeId};
 use scoped_task::ScopedAbortHandle;
 use std::{
-    collections::HashSet, convert::Infallible, io, net::SocketAddr, sync::Mutex, time::Duration,
+    collections::HashMap, convert::Infallible, io, net::SocketAddr, path::PathBuf, sync::Mutex,
+    time::Duration,
 };
 use tokio::{
     task,
@@ -22,6 +26,9 @@ use tokio::{
 
 const BIND_METRICS_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("bind_metrics", "Addresses to bind the metrics endpoint to");
+
+// Path to the geo ip database, relative to the config store root.
+const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -91,7 +98,8 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     let server =
         Server::try_bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
 
-    let collect = collect(recorder, state.network.peer_info_collector());
+    let geo_ip_path = state.config.dir().join(GEO_IP_PATH);
+    let collect = collect(recorder, state.network.peer_info_collector(), geo_ip_path);
 
     let handle = task::spawn(async move {
         let _collect_handle = scoped_task::spawn(collect);
@@ -106,36 +114,83 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     Ok(handle)
 }
 
-async fn collect(recorder: PrometheusRecorder, peer_info_collector: PeerInfoCollector) {
-    let peers_count = {
-        let key_name = KeyName::from("peers_count");
-        let key = Key::from_name(key_name.clone());
+async fn collect(
+    recorder: PrometheusRecorder,
+    peer_info_collector: PeerInfoCollector,
+    geo_ip_path: PathBuf,
+) {
+    let peer_count_key_name = KeyName::from("ouisync_peers_count");
+    recorder.describe_gauge(
+        peer_count_key_name.clone(),
+        Some(Unit::Count),
+        "number of active peers".into(),
+    );
 
-        recorder.describe_gauge(key_name, Some(Unit::Count), "number of active peers".into());
-        recorder.register_gauge(&key)
-    };
+    let mut peer_count_gauges = GaugeMap::default();
+
+    let mut geo_ip = GeoIp::new(geo_ip_path);
 
     // TODO: do this on request instead of peridically, but aggregate simultaneous requests
     let mut interval = time::interval(COLLECT_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    let mut peers: HashSet<PublicRuntimeId> = HashSet::new();
+    let mut active_peers = HashMap::<PublicRuntimeId, CountryCode>::default();
 
     loop {
         interval.tick().await;
 
-        peers.clear();
+        if let Err(error) = geo_ip.refresh().await {
+            tracing::error!(
+                ?error,
+                "Failed to load GeoIP database from {}",
+                geo_ip.path().display()
+            );
+        }
+
+        active_peers.clear();
 
         for peer in peer_info_collector.collect() {
             let PeerState::Active(id) = peer.state else {
                 continue;
             };
 
-            // TODO: geoip lookup
-
-            peers.insert(id);
+            let country = active_peers.entry(id).or_insert(CountryCode::UNKNOWN);
+            if *country == CountryCode::UNKNOWN {
+                *country = geo_ip.lookup(peer.ip).unwrap_or(CountryCode::UNKNOWN);
+            }
         }
 
-        peers_count.set(peers.len() as f64);
+        peer_count_gauges.reset();
+
+        for country in active_peers.values().copied() {
+            peer_count_gauges
+                .fetch(country, &recorder, &peer_count_key_name)
+                .increment(1.0);
+        }
+    }
+}
+
+#[derive(Default)]
+struct GaugeMap(HashMap<CountryCode, Gauge>);
+
+impl GaugeMap {
+    fn fetch(
+        &mut self,
+        country: CountryCode,
+        recorder: &PrometheusRecorder,
+        key_name: &KeyName,
+    ) -> &Gauge {
+        self.0.entry(country).or_insert_with(|| {
+            let label = Label::new("country", country.to_string());
+            let key = Key::from_parts(key_name.clone(), vec![label]);
+
+            recorder.register_gauge(&key)
+        })
+    }
+
+    fn reset(&self) {
+        for gauge in self.0.values() {
+            gauge.set(0.0);
+        }
     }
 }
