@@ -38,12 +38,13 @@ use self::{
     peer_addr::{PeerAddr, PeerPort},
     peer_exchange::{PexController, PexDiscovery, PexPayload},
     protocol::{Version, MAGIC, VERSION},
-    runtime_id::{PublicRuntimeId, SecretRuntimeId},
+    runtime_id::SecretRuntimeId,
     seen_peers::{SeenPeer, SeenPeers},
 };
 pub use self::{
-    connection::{PeerInfo, PeerState},
+    connection::{PeerInfo, PeerInfoCollector, PeerState},
     peer_source::PeerSource,
+    runtime_id::PublicRuntimeId,
 };
 use crate::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -220,11 +221,11 @@ impl Network {
         self.inner.this_runtime_id.public()
     }
 
-    pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
-        self.inner.connection_deduplicator.collect_peer_info()
+    pub fn peer_info_collector(&self) -> PeerInfoCollector {
+        self.inner.connection_deduplicator.peer_info_collector()
     }
 
-    pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
+    pub fn peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
         self.inner.connection_deduplicator.get_peer_info(addr)
     }
 

@@ -312,7 +312,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .await;
                 Ok(().into())
             }
-            Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
+            Request::ListPeers => Ok(self.state.network.peer_info_collector().collect().into()),
             Request::Dht { name, enabled } => {
                 let holder = self.state.repositories.find(&name)?;
 
