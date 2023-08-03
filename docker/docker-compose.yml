@@ -5,9 +5,10 @@ services:
     image: equalitie/ouisync:latest
     container_name: ouisync
     ports:
-      - "443:443/tcp"
-      - "20209:20209/tcp"
-      - "20209:20209/udp"
+      - "443:443/tcp"     # RPC
+      - "444:444/tcp"     # Prometheus metrics
+      - "20209:20209/tcp" # Sync protocol
+      - "20209:20209/udp" # Sync protocol
     volumes:
       - "config:/config"
       - "store:/store"
