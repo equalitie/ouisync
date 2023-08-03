@@ -1,17 +1,17 @@
-# OuiSync CLI
+# Ouisync CLI
 
-This directory contains code for OuiSync command line interface (CLI) application. The app can be
-build as a standalone binary or as a docker image.
+This directory contains code for the Ouisync command line interface (CLI) application which can be
+built as a standalone binary or as a Docker image.
 
 ## Building (standalone binary)
 
-Install dependencies
+1. Install dependencies:
 
     $ sudo apt install pkg-config libfuse-dev
 
-Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
+2. Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
 
-Build the app
+3. Build the app:
 
     $ cargo build --release --bin ouisync
 
