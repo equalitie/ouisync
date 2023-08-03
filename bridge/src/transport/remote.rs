@@ -108,16 +108,16 @@ pub struct RemoteServer {
 impl RemoteServer {
     pub async fn bind(addr: SocketAddr, config: Arc<rustls::ServerConfig>) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(|error| {
-            tracing::error!(?error, "failed to bind to {}", addr);
+            tracing::error!(?error, "Failed to bind to {}", addr);
             error
         })?;
 
         let local_addr = listener.local_addr().map_err(|error| {
-            tracing::error!(?error, "failed to retrieve local address");
+            tracing::error!(?error, "Failed to retrieve local address");
             error
         })?;
 
-        tracing::info!("remote API server listening on {}", local_addr);
+        tracing::info!("Remote API server listening on {}", local_addr);
 
         Ok(Self {
             listener,
@@ -142,7 +142,7 @@ impl RemoteServer {
                     );
                 }
                 Err(error) => {
-                    tracing::error!(?error, "failed to accept client");
+                    tracing::error!(?error, "Failed to accept client");
                     break;
                 }
             }
@@ -155,7 +155,7 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
     let stream = match tls_acceptor.accept(stream).await {
         Ok(stream) => stream,
         Err(error) => {
-            tracing::error!(?error, "failed to upgrade to tls");
+            tracing::error!(?error, "Failed to upgrade to tls");
             return;
         }
     };
@@ -164,12 +164,12 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
     let stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(stream) => stream,
         Err(error) => {
-            tracing::error!(?error, "failed to upgrade to websocket");
+            tracing::error!(?error, "Failed to upgrade to websocket");
             return;
         }
     };
 
-    tracing::debug!("accepted");
+    tracing::debug!("Accepted");
 
     socket_server_connection::run(Socket(stream), handler).await;
 }
@@ -225,7 +225,7 @@ where
                     | Message::Pong(_)
                     | Message::Frame(_)),
                 )) => {
-                    tracing::debug!(?message, "unexpected message type");
+                    tracing::debug!(?message, "Unexpected message type");
                     continue;
                 }
                 Some(Err(error)) => {

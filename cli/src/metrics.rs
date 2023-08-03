@@ -114,6 +114,8 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
 
     let incoming =
         AddrIncoming::bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    tracing::info!("Metrics server listening on {}", incoming.local_addr());
+
     let acceptor = TlsAcceptor::new(state.get_server_config().await?, incoming);
     let server = Server::builder(acceptor);
 
