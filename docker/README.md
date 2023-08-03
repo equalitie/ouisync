@@ -6,13 +6,9 @@
 
         docker build -t equalitie/ouisync:latest . -f docker/Dockerfile
 
-2. Upload it to the server:
+2. Publish it to dockerhub:
 
-        docker save equalitie/ouisync:latest | bzip2 | pv | ssh <HOST> docker load
-
-    NOTE: `<HOST>` is the hostname of the server to deploy to, `bzip2` is used to compress the
-    image during transfer to reduce bandwidth (optional) and `pv` to report transfer progress (also
-    optional).
+        docker push equalitie/ouisync:latest
 
 3. Upload `docker-compose.yml` to the server:
 
@@ -30,7 +26,7 @@ container using docker compose:
 
 ## Update
 
-Build and upload the new image as described in the previous section. Then log in to the server and
+Build and publish the new image as described in the previous section. Then log in to the server and
 do:
 
     docker compose up -d
@@ -56,3 +52,15 @@ To setup a storage server, enable the RPC endpoint:
 
     ouisync bind-rpc 0.0.0.0:443
 
+## Analytics
+
+To setup analytics, copy the `update-geo-ip-db.sh` script to the server and edit to to fill in the
+maxmind.com license key. Then run it to download the latest GeoIp database. It's recommended to
+update the database periodically, say once every two weeks.
+
+Enable the prometheus metrics endpint:
+
+    ouisync bind-metrics 0.0.0.0:444
+
+Setup prometheus (or any compatible tool) to scrape the endpoint and Grafana (or similar) to
+visualize the data.
