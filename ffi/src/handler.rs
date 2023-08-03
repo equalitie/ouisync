@@ -280,7 +280,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 .await;
                 ().into()
             }
-            Request::NetworkKnownPeers => self.state.network.collect_peer_info().into(),
+            Request::NetworkKnownPeers => self.state.network.peer_info_collector().collect().into(),
             Request::NetworkThisRuntimeId => network::this_runtime_id(&self.state).into(),
             Request::NetworkCurrentProtocolVersion => {
                 self.state.network.current_protocol_version().into()

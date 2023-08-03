@@ -1,4 +1,4 @@
-use super::common;
+use super::common::{self, Formatter};
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -15,9 +15,14 @@ use std::{
         raw::c_int,
     },
     path::Path,
+    sync::Mutex,
     thread,
 };
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    fmt::{self, time::SystemTime},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 // Android log tag.
 // HACK: if the tag doesn't start with 'flutter' then the logs won't show up in
 // the app if built in release mode.
@@ -29,19 +34,21 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    pub fn new(log_path: Option<&Path>) -> io::Result<Self> {
+    pub fn new(path: Option<&Path>, _format: LogFormat) -> io::Result<Self> {
         let android_log_layer = fmt::layer()
+            .event_format(Formatter::<()>::default())
             .with_ansi(false)
-            .with_target(false)
-            .with_file(true)
-            .with_line_number(true)
-            .without_time()
             .with_writer(AndroidLogMakeWriter::with_buffer(
                 TAG.to_owned(),
                 Buffer::Main,
             )); // android log adds its own timestamp
 
-        let file_layer = log_path.map(common::create_file_log_layer);
+        let file_layer = log_path.map(|path| {
+            fmt::layer()
+                .event_format(Formatter::<SystemTime>::default())
+                .with_ansi(true)
+                .with_writer(Mutex::new(common::create_file_writer(path)))
+        });
 
         tracing_subscriber::registry()
             .with(common::create_log_filter())

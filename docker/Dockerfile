@@ -11,7 +11,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM scratch as runtime
 
-EXPOSE 443/tcp
 EXPOSE 20209/tcp 20209/udp
 
 ENV PATH=/                       \

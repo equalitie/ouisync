@@ -302,7 +302,7 @@ impl JobMonitor {
         }
         .instrument(tracing::info_span!(
             "job",
-            name = self.metric.name().as_ref(),
+            job = self.metric.name().as_ref(),
             id = self.counter.fetch_add(1, Ordering::Relaxed),
         ))
         .await
@@ -319,7 +319,7 @@ impl<'a> JobGuard<'a> {
     fn start(monitor: &'a JobMonitor) -> Self {
         let span = Span::current();
 
-        tracing::debug!(parent: &span, "job started");
+        tracing::trace!(parent: &span, "Job started");
 
         Self {
             monitor,
@@ -330,14 +330,14 @@ impl<'a> JobGuard<'a> {
 
     fn complete<E: fmt::Debug>(mut self, result: Result<(), E>) {
         self.completed = true;
-        tracing::debug!(parent: &self.span, ?result, "job completed");
+        tracing::trace!(parent: &self.span, ?result, "Job completed");
     }
 }
 
 impl Drop for JobGuard<'_> {
     fn drop(&mut self) {
         if !self.completed {
-            tracing::debug!(parent: &self.span, "job interrupted");
+            tracing::trace!(parent: &self.span, "Job interrupted");
         }
 
         self.monitor.tx.send(false).ok();

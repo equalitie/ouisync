@@ -10,6 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+ansi_term = "0.12.1"
 async-trait = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
@@ -24,10 +25,10 @@ serde = { workspace = true }
 serde_json = "1.0.94"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.18.0", features = ["rustls-tls-webpki-roots"] }
-tokio-rustls = "0.23.4"
+tokio-tungstenite = { version = "0.20.0", features = ["rustls-tls-webpki-roots"] }
+tokio-rustls = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 webpki-roots = "0.22.6"
 
 [target.'cfg(target_os = "android")'.dependencies]

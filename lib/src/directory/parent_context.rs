@@ -66,7 +66,7 @@ impl ParentContext {
     #[instrument(
         skip_all,
         fields(
-            name = self.entry_name,
+            entry = self.entry_name,
             parent_id = ?self.directory_id,
             src_branch.id = ?src_branch.id(),
             dst_branch.id = ?dst_branch.id(),

@@ -22,7 +22,12 @@ camino = { workspace = true }
 clap = { version = "4.1.8", features = ["derive"] }
 dirs = "4.0.0"
 futures-util = { workspace = true }
+hyper = { version = "0.14.27", features = ["server", "http1", "http2"] }
+hyper-rustls = { version = "0.24.1", default-features = false, features = ["acceptor"] }
 interprocess = { version = "1.2.1", features = ["tokio_support"] }
+maxminddb = "0.23.0"
+metrics = "0.21.1"
+metrics-exporter-prometheus = { version = "0.12.1", default-features = false }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
 ouisync-vfs = { path = "../vfs" }
@@ -43,7 +48,6 @@ once_cell = { workspace = true }
 rand = "0.8.5"
 rcgen = { workspace = true, features = ["pem"] }
 tempfile = "3.2"
-
 
 [target.'cfg(any(target_os = "linux", target_os = "osx"))'.dev-dependencies]
 libc = "0.2.126"

@@ -105,7 +105,7 @@ impl Gateway {
         source: PeerSource,
     ) -> Option<raw::Stream> {
         if !ok_to_connect(peer.addr_if_seen()?.socket_addr(), source) {
-            tracing::warn!("invalid peer address - discarding");
+            tracing::debug!("Invalid peer address - discarding");
             return None;
         }
 
@@ -137,7 +137,7 @@ impl Gateway {
                     return Some(socket);
                 }
                 Err(error) => {
-                    tracing::warn!("connection failed: {:?}", error);
+                    tracing::debug!(?error, "Connection failed");
 
                     if error.is_localy_closed() {
                         // Connector locally closed - no point in retrying.
@@ -146,7 +146,7 @@ impl Gateway {
 
                     match backoff.next_backoff() {
                         Some(duration) => {
-                            tracing::debug!("next connection attempt in {:?}", duration);
+                            tracing::debug!("Next connection attempt in {:?}", duration);
                             time::sleep(duration).await;
                         }
                         // We set max elapsed time to None above.
@@ -300,19 +300,19 @@ impl Stacks {
 
     fn start_punching_holes(&self, addr: PeerAddr) -> Option<scoped_task::ScopedJoinHandle<()>> {
         if !addr.is_quic() {
-            tracing::debug!("hole punching not started - not QUIC address");
+            tracing::debug!("Hole punching not started - not QUIC address");
             return None;
         }
 
         if !ip::is_global(&addr.ip()) {
-            tracing::debug!("hole punching not started - not global address");
+            tracing::debug!("Hole punching not started - not global address");
             return None;
         }
 
         let stack = if let Some(stack) = self.quic_stack_for(&addr.ip()) {
             stack
         } else {
-            tracing::warn!("hole punching not started - no QUIC stack");
+            tracing::debug!("Hole punching not started - no QUIC stack");
             return None;
         };
 
@@ -321,14 +321,14 @@ impl Stacks {
             async move {
                 use rand::Rng;
 
-                tracing::debug!("hole punching started");
+                tracing::debug!("Hole punching started");
 
                 // Using RAII to log the message even when the task is aborted.
                 struct Guard(Span);
 
                 impl Drop for Guard {
                     fn drop(&mut self) {
-                        tracing::debug!(parent: &self.0, "hole punching stopped");
+                        tracing::debug!(parent: &self.0, "Hole punching stopped");
                     }
                 }
 
@@ -348,7 +348,7 @@ impl Stacks {
                     let msg = b"punch";
                     match sender.send_to(msg, addr).await {
                         Ok(()) => (),
-                        Err(error) => tracing::warn!("hole punch failed: {:?}", error),
+                        Err(error) => tracing::warn!("Hole punch failed: {:?}", error),
                     }
                 }
             }
@@ -400,11 +400,12 @@ impl QuicStack {
 
                 (connector, listener, side_channel_maker)
             }
-            Err(e) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Quic(bind_addr),
-                    "Failed to start listener: {:?}", e
+                    ?error,
+                    "Failed to start listener"
                 );
                 return None;
             }
@@ -446,11 +447,12 @@ impl TcpStack {
 
         let listener = match TcpListener::bind(bind_addr).await {
             Ok(listener) => listener,
-            Err(err) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Tcp(bind_addr),
-                    "Failed to start listener: {:?}", err
+                    ?error,
+                    "Failed to start listener",
                 );
                 return None;
             }
@@ -463,12 +465,12 @@ impl TcpStack {
 
                 addr
             }
-            Err(err) => {
+            Err(error) => {
                 tracing::warn!(
                     parent: &span,
                     bind_addr = %PeerAddr::Tcp(bind_addr),
-                    "Failed to get listener local address: {:?}",
-                    err
+                    ?error,
+                    "Failed to get listener local address",
                 );
                 return None;
             }
@@ -498,7 +500,7 @@ async fn run_tcp_listener(listener: TcpListener, tx: mpsc::Sender<(raw::Stream, 
                     .ok();
             }
             Err(error) => {
-                tracing::error!("Failed to accept incoming connection: {}", error);
+                tracing::error!(?error, "Failed to accept connection");
                 break;
             }
         }
@@ -543,7 +545,7 @@ async fn run_quic_listener(
                                         .ok();
                                 }
                                 Err(error) => {
-                                    tracing::info!("Failed to accept connection {error:?}");
+                                    tracing::error!(?error, "Failed to accept connection");
                                 }
                             };
                         }

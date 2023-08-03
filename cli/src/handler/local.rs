@@ -38,11 +38,17 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
         _notification_tx: &NotificationSender,
     ) -> Result<Self::Response> {
         match request {
-            Request::Start => Err(Error::ForbiddenRequest),
+            Request::Start { .. } => Err(Error::ForbiddenRequest),
             Request::BindRpc { addrs } => Ok(self
                 .state
-                .servers
+                .rpc_servers
                 .set(self.state.clone(), &addrs)
+                .await?
+                .into()),
+            Request::BindMetrics { addr } => Ok(self
+                .state
+                .metrics_server
+                .bind(&self.state, addr)
                 .await?
                 .into()),
             Request::Create {
@@ -306,7 +312,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 .await;
                 Ok(().into())
             }
-            Request::ListPeers => Ok(self.state.network.collect_peer_info().into()),
+            Request::ListPeers => Ok(self.state.network.peer_info_collector().collect().into()),
             Request::Dht { name, enabled } => {
                 let holder = self.state.repositories.find(&name)?;
 

@@ -2,7 +2,7 @@ mod remote;
 mod socket;
 
 pub use self::{
-    remote::{ClientConfig, RemoteClient, RemoteServer, ServerConfig},
+    remote::{make_client_config, make_server_config, RemoteClient, RemoteServer},
     socket::{server_connection as socket_server_connection, SocketClient},
 };
 

@@ -4,7 +4,7 @@ use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     protocol::remote::{Request, Response},
-    transport::{ClientConfig, RemoteClient},
+    transport::RemoteClient,
 };
 use ouisync_lib::{
     network::{Network, Registration},
@@ -135,10 +135,10 @@ impl RepositoryHolder {
                 Ok(depth) => depth,
                 Err(error) => {
                     tracing::error!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to create mount point"
+                        "Failed to create mount point"
                     );
 
                     return Err(error.into());
@@ -152,18 +152,18 @@ impl RepositoryHolder {
             ) {
                 Ok(mount_guard) => {
                     tracing::info!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
-                        "repository mounted"
+                        "Repository mounted"
                     );
                     mount_guard
                 }
                 Err(error) => {
                     tracing::error!(
-                        name = %self.name,
+                        repo = %self.name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to mount repository"
+                        "Failed to mount repository"
                     );
                     return Err(error.into());
                 }
@@ -197,17 +197,17 @@ impl RepositoryHolder {
 
             if let Err(error) = remove_mount_point(&point, depth).await {
                 tracing::error!(
-                    name = %self.name,
+                    repo = %self.name,
                     mount_point = %point.display(),
                     ?error,
-                    "failed to remove mount point"
+                    "Failed to remove mount point"
                 );
             }
 
             tracing::info!(
-                name = %self.name,
+                repo = %self.name,
                 mount_point = %point.display(),
-                "repository unmounted"
+                "Repository unmounted"
             );
         }
     }
@@ -217,7 +217,7 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str, config: ClientConfig) -> Result<()> {
+    pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
         let client = RemoteClient::connect(host, config).await?;
         let request = Request::Mirror {
             share_token: self
@@ -260,17 +260,17 @@ impl Drop for RepositoryHolder {
                         %name,
                         mount_point = %point.display(),
                         ?error,
-                        "failed to remove mount point"
+                        "Failed to remove mount point"
                     );
                 }
             }
 
             match repository.close().await {
                 Ok(()) => {
-                    tracing::info!(%name, "repository closed");
+                    tracing::info!(%name, "Repository closed");
                 }
                 Err(error) => {
-                    tracing::error!(%name, ?error, "failed to close repository");
+                    tracing::error!(%name, ?error, "Failed to close repository");
                 }
             }
         });
@@ -426,7 +426,7 @@ pub(crate) async fn find_all(
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                tracing::error!(%error, "failed to read directory entry");
+                tracing::error!(%error, "Failed to read directory entry");
                 continue;
             }
         };
@@ -438,7 +438,7 @@ pub(crate) async fn find_all(
         let path: &Utf8Path = match entry.path().try_into() {
             Ok(path) => path,
             Err(_) => {
-                tracing::error!(path = ?entry.path(), "invalid repository path - not utf8");
+                tracing::error!(path = ?entry.path(), "Invalid repository path - not utf8");
                 continue;
             }
         };
@@ -452,7 +452,7 @@ pub(crate) async fn find_all(
             {
                 Ok(repository) => repository,
                 Err(error) => {
-                    tracing::error!(?error, ?path, "failed to open repository");
+                    tracing::error!(?error, ?path, "Failed to open repository");
                     continue;
                 }
             };
@@ -473,7 +473,7 @@ pub(crate) async fn find_all(
             // "/" or contain "..", none of which can happen here.
             .unwrap();
 
-        tracing::info!(%name, "repository opened");
+        tracing::info!(%name, "Repository opened");
 
         let holder = RepositoryHolder::new(repository, name, network).await;
         let holder = Arc::new(holder);
@@ -500,10 +500,10 @@ pub(crate) async fn delete_store(store_dir: &Path, repository_name: &str) -> io:
         // error and propagate the rest.
         if let Err(error) = fs::remove_dir(&path).await {
             tracing::error!(
-                name = repository_name,
+                repo = repository_name,
                 path = %path.display(),
                 ?error,
-                "failed to remove repository store subdirectory"
+                "Failed to remove repository store subdirectory"
             );
             break;
         }

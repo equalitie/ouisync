@@ -33,82 +33,70 @@ const MIN_VERSION: u64 = 0;
 const MAX_VERSION: u64 = 0;
 
 /// Shared config for `RemoteServer`
-#[derive(Clone)]
-pub struct ServerConfig {
-    inner: Arc<rustls::ServerConfig>,
+pub fn make_server_config(
+    cert_chain: Vec<rustls::Certificate>,
+    key: rustls::PrivateKey,
+) -> Result<Arc<rustls::ServerConfig>> {
+    make_server_config_with_versions(cert_chain, key, MIN_VERSION..=MAX_VERSION)
 }
 
-impl ServerConfig {
-    pub fn new(cert_chain: Vec<rustls::Certificate>, key: rustls::PrivateKey) -> Result<Self> {
-        Self::with_versions(cert_chain, key, MIN_VERSION..=MAX_VERSION)
-    }
+fn make_server_config_with_versions(
+    cert_chain: Vec<rustls::Certificate>,
+    key: rustls::PrivateKey,
+    versions: RangeInclusive<u64>,
+) -> Result<Arc<rustls::ServerConfig>> {
+    let mut config = rustls::ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
-    fn with_versions(
-        cert_chain: Vec<rustls::Certificate>,
-        key: rustls::PrivateKey,
-        versions: RangeInclusive<u64>,
-    ) -> Result<Self> {
-        let mut inner = rustls::ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, key)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    // (ab)use ALPN (https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation) for
+    // protocol version negotation
+    config.alpn_protocols = [b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()]
+        .into_iter()
+        .chain(to_alpn_protocols(versions))
+        .collect();
 
-        // (ab)use ALPN (https://en.wikipedia.org/wiki/Application-Layer_Protocol_Negotiation) for
-        // protocol version negotation
-        inner.alpn_protocols = to_alpn_protocols(versions);
-
-        Ok(Self {
-            inner: Arc::new(inner),
-        })
-    }
+    Ok(Arc::new(config))
 }
 
 /// Shared config for `RemoteClient`
-#[derive(Clone)]
-pub struct ClientConfig {
-    inner: Arc<rustls::ClientConfig>,
+pub fn make_client_config(
+    additional_root_certs: &[rustls::Certificate],
+) -> Result<Arc<rustls::ClientConfig>> {
+    make_client_config_with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
 }
 
-impl ClientConfig {
-    pub fn new(additional_root_certs: &[rustls::Certificate]) -> Result<Self> {
-        Self::with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
+fn make_client_config_with_versions(
+    additional_root_certs: &[rustls::Certificate],
+    versions: RangeInclusive<u64>,
+) -> Result<Arc<rustls::ClientConfig>> {
+    let mut root_cert_store = rustls::RootCertStore::empty();
+
+    // Add default root certificates
+    root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
+
+    // Add custom root certificates (if any)
+    for cert in additional_root_certs {
+        root_cert_store
+            .add(cert)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     }
 
-    fn with_versions(
-        additional_root_certs: &[rustls::Certificate],
-        versions: RangeInclusive<u64>,
-    ) -> Result<Self> {
-        let mut root_cert_store = rustls::RootCertStore::empty();
+    let mut config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+    config.alpn_protocols = to_alpn_protocols(versions).collect();
 
-        // Add default root certificates
-        root_cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
-            |ta| {
-                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            },
-        ));
-
-        // Add custom root certificates (if any)
-        for cert in additional_root_certs {
-            root_cert_store
-                .add(cert)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        }
-
-        let mut inner = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-        inner.alpn_protocols = to_alpn_protocols(versions);
-
-        Ok(Self {
-            inner: Arc::new(inner),
-        })
-    }
+    Ok(Arc::new(config))
 }
 
 pub struct RemoteServer {
@@ -118,23 +106,23 @@ pub struct RemoteServer {
 }
 
 impl RemoteServer {
-    pub async fn bind(addr: SocketAddr, config: ServerConfig) -> io::Result<Self> {
+    pub async fn bind(addr: SocketAddr, config: Arc<rustls::ServerConfig>) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await.map_err(|error| {
-            tracing::error!(?error, "failed to bind to {}", addr);
+            tracing::error!(?error, "Failed to bind to {}", addr);
             error
         })?;
 
         let local_addr = listener.local_addr().map_err(|error| {
-            tracing::error!(?error, "failed to retrieve local address");
+            tracing::error!(?error, "Failed to retrieve local address");
             error
         })?;
 
-        tracing::info!("remote API server listening on {}", local_addr);
+        tracing::info!("Remote API server listening on {}", local_addr);
 
         Ok(Self {
             listener,
             local_addr,
-            tls_acceptor: TlsAcceptor::from(config.inner),
+            tls_acceptor: TlsAcceptor::from(config),
         })
     }
 
@@ -154,7 +142,7 @@ impl RemoteServer {
                     );
                 }
                 Err(error) => {
-                    tracing::error!(?error, "failed to accept client");
+                    tracing::error!(?error, "Failed to accept client");
                     break;
                 }
             }
@@ -167,7 +155,7 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
     let stream = match tls_acceptor.accept(stream).await {
         Ok(stream) => stream,
         Err(error) => {
-            tracing::error!(?error, "failed to upgrade to tls");
+            tracing::error!(?error, "Failed to upgrade to tls");
             return;
         }
     };
@@ -176,12 +164,12 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
     let stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(stream) => stream,
         Err(error) => {
-            tracing::error!(?error, "failed to upgrade to websocket");
+            tracing::error!(?error, "Failed to upgrade to websocket");
             return;
         }
     };
 
-    tracing::debug!("accepted");
+    tracing::debug!("Accepted");
 
     socket_server_connection::run(Socket(stream), handler).await;
 }
@@ -191,7 +179,7 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    pub async fn connect(host: &str, config: ClientConfig) -> io::Result<Self> {
+    pub async fn connect(host: &str, config: Arc<rustls::ClientConfig>) -> io::Result<Self> {
         let host = if host.contains("://") {
             Cow::Borrowed(host)
         } else {
@@ -201,7 +189,8 @@ impl RemoteClient {
         let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
             host.as_ref(),
             None,
-            Some(Connector::Rustls(config.inner)),
+            false,
+            Some(Connector::Rustls(config)),
         )
         .await
         .map_err(into_io_error)?;
@@ -236,7 +225,7 @@ where
                     | Message::Pong(_)
                     | Message::Frame(_)),
                 )) => {
-                    tracing::debug!(?message, "unexpected message type");
+                    tracing::debug!(?message, "Unexpected message type");
                     continue;
                 }
                 Some(Err(error)) => {
@@ -280,10 +269,8 @@ fn into_io_error(src: tungstenite::Error) -> io::Error {
     }
 }
 
-fn to_alpn_protocols(versions: RangeInclusive<u64>) -> Vec<Vec<u8>> {
-    versions
-        .map(|version| version.to_be_bytes().to_vec())
-        .collect()
+fn to_alpn_protocols(versions: RangeInclusive<u64>) -> impl Iterator<Item = Vec<u8>> {
+    versions.map(|version| version.to_be_bytes().to_vec())
 }
 
 #[cfg(test)]
@@ -400,14 +387,14 @@ mod tests {
     fn make_configs(
         server_versions: RangeInclusive<u64>,
         client_versions: RangeInclusive<u64>,
-    ) -> (ServerConfig, ClientConfig) {
+    ) -> (Arc<rustls::ServerConfig>, Arc<rustls::ClientConfig>) {
         let gen = rcgen::generate_simple_self_signed(["localhost".to_owned()]).unwrap();
         let cert = rustls::Certificate(gen.serialize_der().unwrap());
         let key = rustls::PrivateKey(gen.serialize_private_key_der());
 
         let server_config =
-            ServerConfig::with_versions(vec![cert.clone()], key, server_versions).unwrap();
-        let client_config = ClientConfig::with_versions(&[cert], client_versions).unwrap();
+            make_server_config_with_versions(vec![cert.clone()], key, server_versions).unwrap();
+        let client_config = make_client_config_with_versions(&[cert], client_versions).unwrap();
 
         (server_config, client_config)
     }

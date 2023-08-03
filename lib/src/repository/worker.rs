@@ -191,7 +191,7 @@ mod scan {
                         Err(error) => {
                             // Continue processing the remaining entries
                             tracing::trace!(
-                                name = entry.name(),
+                                entry = entry.name(),
                                 ?error,
                                 "failed to open directory"
                             );

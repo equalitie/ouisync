@@ -27,7 +27,7 @@ use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::{
     error::{Error, ErrorCode, Result, ToErrorCode},
-    logger::Logger,
+    logger::{LogFormat, Logger},
 };
 use ouisync_lib::StateMonitor;
 use ouisync_vfs::MountError;
@@ -303,7 +303,11 @@ impl Session {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
-        let logger = Logger::new(log_path.as_deref(), Some(root_monitor.clone()))?;
+        let logger = Logger::new(
+            log_path.as_deref(),
+            Some(root_monitor.clone()),
+            LogFormat::Human,
+        )?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()

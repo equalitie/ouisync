@@ -33,7 +33,7 @@ impl LocalServer {
         let listener = LocalSocketListener::bind(orig_name).map_err(|error| {
             tracing::error!(
                 ?error,
-                "failed to bind local API server to {}",
+                "Failed to bind local API server to {}",
                 name.inner().to_string_lossy()
             );
 
@@ -47,7 +47,7 @@ impl LocalServer {
         };
 
         tracing::info!(
-            "local API server listening on {}",
+            "Local API server listening on {}",
             name.inner().to_string_lossy()
         );
 
@@ -67,7 +67,7 @@ impl LocalServer {
                     );
                 }
                 Err(error) => {
-                    tracing::error!(?error, "failed to accept client");
+                    tracing::error!(?error, "Failed to accept client");
                     break;
                 }
             }
@@ -79,7 +79,7 @@ impl Drop for LocalServer {
     fn drop(&mut self) {
         if let Some(path) = &self.path {
             if let Err(error) = fs::remove_file(path) {
-                tracing::error!(?error, ?path, "failed to remove socket");
+                tracing::error!(?error, ?path, "Failed to remove socket");
             }
         }
     }

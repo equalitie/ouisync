@@ -94,14 +94,8 @@ impl ConnectionDeduplicator {
         }
     }
 
-    // Sorted by the IP, so the user sees similar IPs together.
-    pub fn collect_peer_info(&self) -> Vec<PeerInfo> {
-        self.connections
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(key, peer)| PeerInfo::new(&key.addr, peer))
-            .collect()
+    pub fn peer_info_collector(&self) -> PeerInfoCollector {
+        PeerInfoCollector(self.connections.clone())
     }
 
     pub fn get_peer_info(&self, addr: PeerAddr) -> Option<PeerInfo> {
@@ -151,6 +145,20 @@ impl PeerInfo {
             source: peer.source,
             state: peer.state,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct PeerInfoCollector(Arc<BlockingMutex<HashMap<ConnectionInfo, Peer>>>);
+
+impl PeerInfoCollector {
+    pub fn collect(&self) -> Vec<PeerInfo> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, peer)| PeerInfo::new(&key.addr, peer))
+            .collect()
     }
 }
 

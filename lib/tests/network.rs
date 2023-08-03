@@ -163,7 +163,7 @@ where
         let peer_addr = actor::lookup_addr(peer_name).await;
 
         loop {
-            if let Some(info) = network.get_peer_info(peer_addr) {
+            if let Some(info) = network.peer_info(peer_addr) {
                 if expected_state_fn(&info.state) {
                     break;
                 }
@@ -177,14 +177,13 @@ where
 }
 
 async fn expect_knows_port(network: &Network, peer_port: u16) {
+    let collector = network.peer_info_collector();
+
     time::timeout(*TEST_TIMEOUT, async move {
         let mut rx = network.on_peer_set_change();
 
         loop {
-            let mut peer_ports = network
-                .collect_peer_info()
-                .into_iter()
-                .map(|info| info.port);
+            let mut peer_ports = collector.collect().into_iter().map(|info| info.port);
 
             if peer_ports.any(|port| port == peer_port) {
                 break;
