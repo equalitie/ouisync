@@ -16,13 +16,15 @@ use ouisync_bridge::{
 use ouisync_lib::{network::PeerState, PeerInfoCollector, PublicRuntimeId};
 use scoped_task::ScopedAbortHandle;
 use std::{
-    collections::HashMap, convert::Infallible, io, net::SocketAddr, path::PathBuf, sync::Mutex,
-    time::Duration,
+    collections::HashMap,
+    convert::Infallible,
+    io,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Mutex,
+    time::{Duration, Instant},
 };
-use tokio::{
-    task,
-    time::{self, MissedTickBehavior},
-};
+use tokio::task;
 
 const BIND_METRICS_KEY: ConfigKey<SocketAddr> =
     ConfigKey::new("bind_metrics", "Addresses to bind the metrics endpoint to");
@@ -84,13 +86,26 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 
+    let (requester, acceptor) = sync::new(COLLECT_INTERVAL);
+
     let make_service = make_service_fn(move |_| {
         let recorder_handle = recorder_handle.clone();
+        let requester = requester.clone();
 
         async move {
             Ok::<_, Infallible>(service_fn(move |_| {
                 let recorder_handle = recorder_handle.clone();
-                async move { Ok::<_, Infallible>(Response::new(Body::from(recorder_handle.render()))) }
+                let requester = requester.clone();
+
+                async move {
+                    requester.request().await;
+                    tracing::trace!("Serving metrics");
+
+                    let content = recorder_handle.render();
+                    let content = Body::from(content);
+
+                    Ok::<_, Infallible>(Response::new(content))
+                }
             }))
         }
     });
@@ -98,12 +113,14 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     let server =
         Server::try_bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
 
-    let geo_ip_path = state.config.dir().join(GEO_IP_PATH);
-    let collect = collect(recorder, state.network.peer_info_collector(), geo_ip_path);
+    task::spawn(collect(
+        acceptor,
+        recorder,
+        state.network.peer_info_collector(),
+        state.config.dir().join(GEO_IP_PATH),
+    ));
 
     let handle = task::spawn(async move {
-        let _collect_handle = scoped_task::spawn(collect);
-
         if let Err(error) = server.serve(make_service).await {
             tracing::error!(?error, "Metrics server failed");
         }
@@ -115,6 +132,7 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
 }
 
 async fn collect(
+    mut acceptor: sync::Acceptor,
     recorder: PrometheusRecorder,
     peer_info_collector: PeerInfoCollector,
     geo_ip_path: PathBuf,
@@ -125,19 +143,22 @@ async fn collect(
         Some(Unit::Count),
         "number of active peers".into(),
     );
-
     let mut peer_count_gauges = GaugeMap::default();
 
-    let mut geo_ip = GeoIp::new(geo_ip_path);
-
-    // TODO: do this on request instead of peridically, but aggregate simultaneous requests
-    let mut interval = time::interval(COLLECT_INTERVAL);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let collect_duration_key_name = KeyName::from("ouisync_metrics_collect_duration_seconds");
+    recorder.describe_gauge(
+        collect_duration_key_name.clone(),
+        Some(Unit::Seconds),
+        "duration of metrics collection".into(),
+    );
+    let collect_duration_gauge =
+        recorder.register_gauge(&Key::from_name(collect_duration_key_name));
 
     let mut active_peers = HashMap::<PublicRuntimeId, CountryCode>::default();
+    let mut geo_ip = GeoIp::new(geo_ip_path);
 
-    loop {
-        interval.tick().await;
+    while let Some(_tx) = acceptor.accept().await {
+        let start = Instant::now();
 
         if let Err(error) = geo_ip.refresh().await {
             tracing::error!(
@@ -167,6 +188,11 @@ async fn collect(
                 .fetch(country, &recorder, &peer_count_key_name)
                 .increment(1.0);
         }
+
+        let duration_s = start.elapsed().as_secs_f64();
+        collect_duration_gauge.set(duration_s);
+
+        tracing::trace!("Metrics collected in {:.2} s", duration_s);
     }
 }
 
@@ -191,6 +217,66 @@ impl GaugeMap {
     fn reset(&self) {
         for gauge in self.0.values() {
             gauge.set(0.0);
+        }
+    }
+}
+
+/// Utilities to coordinate and rate-limit metrics requests and collection.
+mod sync {
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+    use tokio::sync::{mpsc, oneshot};
+
+    pub(super) fn new(interval: Duration) -> (Requester, Acceptor) {
+        let (tx, rx) = mpsc::channel(1);
+
+        let requester = Requester {
+            interval,
+            last: Arc::new(Mutex::new(Instant::now())),
+            tx,
+        };
+
+        let acceptor = Acceptor { rx };
+
+        (requester, acceptor)
+    }
+
+    #[derive(Clone)]
+    pub(super) struct Requester {
+        interval: Duration,
+        last: Arc<Mutex<Instant>>,
+        tx: mpsc::Sender<oneshot::Sender<()>>,
+    }
+
+    impl Requester {
+        /// Requests a metrics collection.
+        pub async fn request(&self) {
+            {
+                let mut last = self.last.lock().unwrap();
+
+                if last.elapsed() < self.interval {
+                    return;
+                } else {
+                    *last = Instant::now();
+                }
+            }
+
+            let (tx, rx) = oneshot::channel();
+            self.tx.send(tx).await.ok();
+            rx.await.ok();
+        }
+    }
+
+    pub(super) struct Acceptor {
+        rx: mpsc::Receiver<oneshot::Sender<()>>,
+    }
+
+    impl Acceptor {
+        /// Requests a metrics collection request.
+        pub async fn accept(&mut self) -> Option<oneshot::Sender<()>> {
+            self.rx.recv().await
         }
     }
 }

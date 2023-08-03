@@ -34,6 +34,7 @@ impl GeoIp {
             .map(|old_timestamp| old_timestamp < new_timestamp)
             .unwrap_or(true)
         {
+            tracing::trace!("Loading GeoIP database");
             let reader = load(&mut file).await?;
             self.reader = Some((reader, new_timestamp));
         }
