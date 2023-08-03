@@ -327,7 +327,7 @@ pub async fn configure(bind_addr: SocketAddr) -> Result<(Connector, Acceptor, Si
         quinn::EndpointConfig::default(),
         Some(server_config),
         custom_socket,
-        quinn::TokioRuntime,
+        Arc::new(quinn::TokioRuntime),
     )?;
 
     endpoint.set_default_client_config(make_client_config());
@@ -450,7 +450,7 @@ struct Packet {
 #[derive(Debug)]
 struct CustomUdpSocket {
     io: Arc<tokio::net::UdpSocket>,
-    quinn_socket_state: quinn_udp::UdpSocketState,
+    quinn_socket_state: quinn::udp::UdpSocketState,
     side_channel_tx: broadcast::Sender<Packet>,
 }
 
@@ -459,11 +459,11 @@ impl CustomUdpSocket {
         let socket = crate::udp::UdpSocket::bind(addr).await?;
         let socket = socket.into_std()?;
 
-        quinn_udp::UdpSocketState::configure((&socket).into())?;
+        quinn::udp::UdpSocketState::configure((&socket).into())?;
 
         Ok(Self {
             io: Arc::new(tokio::net::UdpSocket::from_std(socket)?),
-            quinn_socket_state: quinn_udp::UdpSocketState::new(),
+            quinn_socket_state: quinn::udp::UdpSocketState::new(),
             side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
         })
     }
@@ -478,12 +478,12 @@ impl CustomUdpSocket {
 
 impl quinn::AsyncUdpSocket for CustomUdpSocket {
     fn poll_send(
-        &mut self,
-        state: &quinn_udp::UdpState,
+        &self,
+        state: &quinn::udp::UdpState,
         cx: &mut Context,
-        transmits: &[quinn_proto::Transmit],
+        transmits: &[quinn::udp::Transmit],
     ) -> Poll<io::Result<usize>> {
-        let quinn_socket_state = &mut self.quinn_socket_state;
+        let quinn_socket_state = &self.quinn_socket_state;
         let io = &*self.io;
         loop {
             ready!(io.poll_send_ready(cx))?;
@@ -499,7 +499,7 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
         &self,
         cx: &mut Context,
         bufs: &mut [std::io::IoSliceMut<'_>],
-        metas: &mut [quinn_udp::RecvMeta],
+        metas: &mut [quinn::udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
@@ -527,7 +527,7 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 fn send_to_side_channels(
     channel: &broadcast::Sender<Packet>,
     bufs: &[std::io::IoSliceMut<'_>],
-    metas: &[quinn_udp::RecvMeta],
+    metas: &[quinn::udp::RecvMeta],
     msg_count: usize,
 ) {
     for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {

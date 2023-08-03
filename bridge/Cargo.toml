@@ -25,8 +25,8 @@ serde = { workspace = true }
 serde_json = "1.0.94"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.18.0", features = ["rustls-tls-webpki-roots"] }
-tokio-rustls = "0.23.4"
+tokio-tungstenite = { version = "0.20.0", features = ["rustls-tls-webpki-roots"] }
+tokio-rustls = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 webpki-roots = "0.22.6"

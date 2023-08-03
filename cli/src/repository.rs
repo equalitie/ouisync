@@ -4,7 +4,7 @@ use ouisync_bridge::{
     config::ConfigStore,
     error::{Error, Result},
     protocol::remote::{Request, Response},
-    transport::{ClientConfig, RemoteClient},
+    transport::RemoteClient,
 };
 use ouisync_lib::{
     network::{Network, Registration},
@@ -217,7 +217,7 @@ impl RepositoryHolder {
     }
 
     /// Create a mirror of the repository on the given remote host.
-    pub async fn mirror(&self, host: &str, config: ClientConfig) -> Result<()> {
+    pub async fn mirror(&self, host: &str, config: Arc<rustls::ClientConfig>) -> Result<()> {
         let client = RemoteClient::connect(host, config).await?;
         let request = Request::Mirror {
             share_token: self

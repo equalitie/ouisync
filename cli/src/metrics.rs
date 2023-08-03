@@ -3,10 +3,11 @@ use crate::{
     state::State,
 };
 use hyper::{
-    server::Server,
+    server::{conn::AddrIncoming, Server},
     service::{make_service_fn, service_fn},
     Body, Response,
 };
+use hyper_rustls::TlsAcceptor;
 use metrics::{Gauge, Key, KeyName, Label, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync_bridge::{
@@ -32,6 +33,7 @@ const BIND_METRICS_KEY: ConfigKey<SocketAddr> =
 // Path to the geo ip database, relative to the config store root.
 const GEO_IP_PATH: &str = "GeoLite2-Country.mmdb";
 
+// Rate limit for metrics collection (at most once per this interval)
 const COLLECT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub(crate) struct MetricsServer {
@@ -86,19 +88,19 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 
-    let (requester, acceptor) = sync::new(COLLECT_INTERVAL);
+    let (collect_requester, collect_acceptor) = sync::new(COLLECT_INTERVAL);
 
     let make_service = make_service_fn(move |_| {
         let recorder_handle = recorder_handle.clone();
-        let requester = requester.clone();
+        let collect_requester = collect_requester.clone();
 
         async move {
             Ok::<_, Infallible>(service_fn(move |_| {
                 let recorder_handle = recorder_handle.clone();
-                let requester = requester.clone();
+                let collect_requester = collect_requester.clone();
 
                 async move {
-                    requester.request().await;
+                    collect_requester.request().await;
                     tracing::trace!("Serving metrics");
 
                     let content = recorder_handle.render();
@@ -110,11 +112,13 @@ async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Err
         }
     });
 
-    let server =
-        Server::try_bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let incoming =
+        AddrIncoming::bind(&addr).map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let acceptor = TlsAcceptor::new(state.get_server_config().await?, incoming);
+    let server = Server::builder(acceptor);
 
     task::spawn(collect(
-        acceptor,
+        collect_acceptor,
         recorder,
         state.network.peer_info_collector(),
         state.config.dir().join(GEO_IP_PATH),
@@ -221,7 +225,7 @@ impl GaugeMap {
     }
 }
 
-/// Utilities to coordinate and rate-limit metrics requests and collection.
+/// Utilities to request and rate-limit metrics collection.
 mod sync {
     use std::{
         sync::{Arc, Mutex},

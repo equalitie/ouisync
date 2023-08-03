@@ -3,7 +3,7 @@ use crate::{
     device_id,
     error::Result,
     protocol::remote::{Request, Response},
-    transport::{ClientConfig, RemoteClient},
+    transport::RemoteClient,
 };
 use camino::Utf8PathBuf;
 use futures_util::future;
@@ -11,7 +11,8 @@ use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
     RepositoryParams, ShareToken, StateMonitor, StorageSize,
 };
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
+use tokio_rustls::rustls;
 
 const DEFAULT_QUOTA_KEY: ConfigKey<u64> = ConfigKey::new("default_quota", "Default storage quota");
 
@@ -220,7 +221,7 @@ pub async fn get_default_quota(config: &ConfigStore) -> Result<Option<StorageSiz
 /// Mirror the repository to the storage servers
 pub async fn mirror(
     repository: &Repository,
-    client_config: ClientConfig,
+    client_config: Arc<rustls::ClientConfig>,
     hosts: &[String],
 ) -> Result<()> {
     let share_token = repository.secrets().with_mode(AccessMode::Blind);

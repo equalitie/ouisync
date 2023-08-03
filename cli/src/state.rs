@@ -10,7 +10,7 @@ use ouisync_bridge::{
     config::ConfigStore,
     error::Result,
     network::{self, NetworkDefaults},
-    transport::{ClientConfig, ServerConfig},
+    transport,
 };
 use ouisync_lib::{network::Network, StateMonitor};
 use rustls::Certificate;
@@ -31,8 +31,8 @@ pub(crate) struct State {
     pub repositories_monitor: StateMonitor,
     pub rpc_servers: ServerContainer,
     pub metrics_server: MetricsServer,
-    pub server_config: OnceCell<ServerConfig>,
-    pub client_config: OnceCell<ClientConfig>,
+    pub server_config: OnceCell<Arc<rustls::ServerConfig>>,
+    pub client_config: OnceCell<Arc<rustls::ClientConfig>>,
 }
 
 impl State {
@@ -111,14 +111,14 @@ impl State {
         repository::store_path(&self.store_dir, name)
     }
 
-    pub async fn get_server_config(&self) -> Result<ServerConfig> {
+    pub async fn get_server_config(&self) -> Result<Arc<rustls::ServerConfig>> {
         self.server_config
             .get_or_try_init(|| make_server_config(self.config.dir()))
             .await
             .cloned()
     }
 
-    pub async fn get_client_config(&self) -> Result<ClientConfig> {
+    pub async fn get_client_config(&self) -> Result<Arc<rustls::ClientConfig>> {
         self.client_config
             .get_or_try_init(|| make_client_config(self.config.dir()))
             .await
@@ -126,7 +126,7 @@ impl State {
     }
 }
 
-async fn make_server_config(config_dir: &Path) -> Result<ServerConfig> {
+async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfig>> {
     let cert_path = config_dir.join("cert.pem");
     let key_path = config_dir.join("key.pem");
 
@@ -173,13 +173,13 @@ async fn make_server_config(config_dir: &Path) -> Result<ServerConfig> {
         )
     })?;
 
-    ServerConfig::new(certs, key)
+    transport::make_server_config(certs, key)
 }
 
-async fn make_client_config(config_dir: &Path) -> Result<ClientConfig> {
+async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>> {
     // Load custom root certificates (if any)
     let additional_root_certs = load_certificates(&config_dir.join("root_certs")).await?;
-    ClientConfig::new(&additional_root_certs)
+    transport::make_client_config(&additional_root_certs)
 }
 
 async fn load_certificates(root_dir: &Path) -> Result<Vec<Certificate>> {
