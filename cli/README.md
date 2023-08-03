@@ -6,14 +6,14 @@ built as a standalone binary or as a Docker image.
 ## Building (standalone binary)
 
 1. Install dependencies:
+   
+`sudo apt install pkg-config libfuse-dev`
 
-    $ sudo apt install pkg-config libfuse-dev
+3. Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
 
-2. Install Rust using instructions from [rust-lang.org](https://www.rust-lang.org/tools/install).
-
-3. Build the app:
-
-    $ cargo build --release --bin ouisync
+4. Build the app:
+   
+`cargo build --release --bin ouisync`
 
 ## Building (docker)
 
