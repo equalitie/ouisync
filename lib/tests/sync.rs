@@ -487,7 +487,7 @@ fn recreate_local_branch() {
 
         // 1. Create the repo but don't link it yet.
         let (params, secrets) = actor::get_repo_params_and_secrets(DEFAULT_REPO);
-        let repo = Repository::create(&params, Access::new(None, None, secrets))
+        let repo = Repository::create(&params, Access::new(None, None, secrets), None)
             .await
             .unwrap();
 
@@ -503,7 +503,7 @@ fn recreate_local_branch() {
         repo.close().await.unwrap();
         drop(repo);
 
-        let repo = Repository::open(&params, None, AccessMode::Read)
+        let repo = Repository::open(&params, None, AccessMode::Read, None)
             .await
             .unwrap();
 
@@ -518,7 +518,7 @@ fn recreate_local_branch() {
 
         repo.close().await.unwrap();
         drop(repo);
-        let repo = Repository::open(&params, None, AccessMode::Write)
+        let repo = Repository::open(&params, None, AccessMode::Write, None)
             .await
             .unwrap();
 

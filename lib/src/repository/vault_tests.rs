@@ -324,7 +324,7 @@ mod receive_and_create_root_node {
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
         let mut tx = vault.store().begin_write().await.unwrap();
-        tx.receive_block(&block_1.data, &block_1.nonce)
+        tx.receive_block(block_1.id(), &block_1.data, &block_1.nonce)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -1212,7 +1212,9 @@ async fn receive_snapshot(
 
 async fn receive_block(vault: &Vault, block: &Block) {
     let mut tx = vault.store().begin_write().await.unwrap();
-    tx.receive_block(&block.data, &block.nonce).await.unwrap();
+    tx.receive_block(block.id(), &block.data, &block.nonce)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 

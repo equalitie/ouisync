@@ -52,7 +52,7 @@ pub async fn create(
     let local_write_secret = local_write_password.map(LocalSecret::Password);
     let access = Access::new(local_read_secret, local_write_secret, access_secrets);
 
-    let repository = Repository::create(&params, access).await?;
+    let repository = Repository::create(&params, access, None).await?;
 
     let quota = get_default_quota(config).await?;
     repository.set_quota(quota).await?;
@@ -75,7 +75,7 @@ pub async fn open(
         .map(Password::from)
         .map(LocalSecret::Password);
 
-    let repository = Repository::open(&params, local_password, AccessMode::Write).await?;
+    let repository = Repository::open(&params, local_password, AccessMode::Write, None).await?;
 
     Ok(repository)
 }
@@ -88,7 +88,7 @@ pub async fn reopen(
     let params =
         RepositoryParams::new(store.into_std_path_buf()).with_parent_monitor(repos_monitor.clone());
     let token = ReopenToken::decode(&token)?;
-    let repository = Repository::reopen(&params, token).await?;
+    let repository = Repository::reopen(&params, token, None).await?;
 
     Ok(repository)
 }

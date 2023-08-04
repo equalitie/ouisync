@@ -24,6 +24,7 @@ pub(crate) use {
 };
 
 use self::{
+    block_expiration_tracker::BlockExpirationTracker,
     cache::{Cache, CacheTransaction},
     index::UpdateSummaryReason,
     path::Path,
@@ -47,6 +48,7 @@ use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
     sync::Arc,
+    time::Duration,
 };
 use tracing::Instrument;
 
@@ -55,6 +57,7 @@ use tracing::Instrument;
 pub(crate) struct Store {
     db: db::Pool,
     cache: Arc<Cache>,
+    block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
 impl Store {
@@ -62,7 +65,24 @@ impl Store {
         Self {
             db,
             cache: Arc::new(Cache::new()),
+            block_expiration_tracker: None,
         }
+    }
+
+    pub async fn enable_block_expiration(
+        &mut self,
+        expiration_time: Duration,
+    ) -> Result<(), Error> {
+        if self.block_expiration_tracker.is_some() {
+            return Ok(());
+        }
+
+        let tracker =
+            BlockExpirationTracker::enable_expiration(self.db.clone(), expiration_time).await?;
+
+        self.block_expiration_tracker = Some(Arc::new(tracker));
+
+        Ok(())
     }
 
     /// Acquires a `Reader`
@@ -70,6 +90,7 @@ impl Store {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
             cache: self.cache.begin(),
+            block_expiration_tracker: self.block_expiration_tracker.clone(),
         })
     }
 
@@ -79,6 +100,7 @@ impl Store {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
                 cache: self.cache.begin(),
+                block_expiration_tracker: self.block_expiration_tracker.clone(),
             },
         })
     }
@@ -90,6 +112,7 @@ impl Store {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
                     cache: self.cache.begin(),
+                    block_expiration_tracker: self.block_expiration_tracker.clone(),
                 },
             },
         })
@@ -191,6 +214,7 @@ impl Store {
 pub(crate) struct Reader {
     inner: Handle,
     cache: CacheTransaction,
+    block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
 impl Reader {
@@ -446,6 +470,10 @@ impl WriteTransaction {
         buffer: &[u8],
         nonce: &BlockNonce,
     ) -> Result<(), Error> {
+        if let Some(tracker) = &self.block_expiration_tracker {
+            tracker.handle_block_update(id);
+        }
+
         block::write(self.db(), id, buffer, nonce).await
     }
 
@@ -460,6 +488,10 @@ impl WriteTransaction {
 
         index::update_summaries(db, cache, parent_hashes, UpdateSummaryReason::BlockRemoved)
             .await?;
+
+        if let Some(tracker) = &self.block_expiration_tracker {
+            tracker.handle_block_removed(id);
+        }
 
         Ok(())
     }
@@ -608,9 +640,13 @@ impl WriteTransaction {
     /// is returned.
     pub(crate) async fn receive_block(
         &mut self,
+        block_id: &BlockId,
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<BlockReceiveStatus, Error> {
+        if let Some(tracker) = &self.block_expiration_tracker {
+            tracker.handle_block_update(block_id);
+        }
         let (db, cache) = self.db_and_cache();
         block::receive(db, cache, data, nonce).await
     }

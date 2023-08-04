@@ -111,7 +111,7 @@ impl Vault {
         let event_tx = self.event_tx.clone();
 
         let mut tx = self.store().begin_write().await?;
-        let status = match tx.receive_block(data, nonce).await {
+        let status = match tx.receive_block(&block_id, data, nonce).await {
             Ok(status) => status,
             Err(error) => {
                 if matches!(error, store::Error::BlockNotReferenced) {
