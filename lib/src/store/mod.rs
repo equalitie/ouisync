@@ -248,7 +248,19 @@ impl Reader {
         id: &BlockId,
         buffer: &mut [u8],
     ) -> Result<BlockNonce, Error> {
-        block::read(self.db(), id, buffer).await
+        if let Some(tracker) = &self.block_expiration_tracker {
+            tracker.handle_block_update(id);
+        }
+
+        let result = block::read(self.db(), id, buffer).await;
+
+        if let Some(tracker) = &self.block_expiration_tracker {
+            if matches!(result, Err(Error::BlockNotFound)) {
+                tracker.set_as_missing_if_expired(id).await?;
+            }
+        }
+
+        result
     }
 
     /// Checks whether the block exists in the store.

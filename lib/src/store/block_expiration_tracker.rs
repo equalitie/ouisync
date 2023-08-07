@@ -17,6 +17,7 @@ use std::{
 use tokio::{select, sync::watch, time::sleep};
 
 pub(crate) struct BlockExpirationTracker {
+    pool: db::Pool,
     shared: Arc<BlockingMutex<Shared>>,
     watch_tx: uninitialized_watch::Sender<()>,
     expiration_time_tx: watch::Sender<Duration>,
@@ -54,6 +55,7 @@ impl BlockExpirationTracker {
 
         let _task = scoped_task::spawn({
             let shared = shared.clone();
+            let pool = pool.clone();
 
             async move {
                 if let Err(err) = run_task(shared, pool, watch_rx, expiration_time_rx).await {
@@ -63,6 +65,7 @@ impl BlockExpirationTracker {
         });
 
         Ok(Self {
+            pool,
             shared,
             watch_tx,
             expiration_time_tx,
@@ -76,6 +79,23 @@ impl BlockExpirationTracker {
         lock.handle_block_update(block, SystemTime::now());
         drop(lock);
         self.watch_tx.send(()).unwrap_or(());
+    }
+
+    pub async fn set_as_missing_if_expired(&self, block: &BlockId) -> Result<(), Error> {
+        let mut tx = self.pool.begin_write().await?;
+
+        sqlx::query(
+            "UPDATE snapshot_leaf_nodes
+             SET block_presence = ?
+             WHERE block_id = ? AND block_presence = ?",
+        )
+        .bind(SingleBlockPresence::Present)
+        .bind(&block)
+        .bind(SingleBlockPresence::Expired)
+        .execute(&mut tx)
+        .await?;
+
+        Ok(())
     }
 
     pub fn handle_block_removed(&self, block: &BlockId) {
