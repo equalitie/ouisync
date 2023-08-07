@@ -17,6 +17,8 @@ pub enum Error {
     // TODO: remove
     #[error("data is malformed")]
     MalformedData,
+    #[error("invalid argument")]
+    InvalidArgument,
     #[error("not a directory or directory malformed")]
     MalformedDirectory,
     #[error("entry already exists")]

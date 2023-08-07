@@ -51,13 +51,15 @@ use std::{
     time::Duration,
 };
 use tracing::Instrument;
+// TODO: Consider creating an async `RwLock` in the `deadlock` module and use it here.
+use tokio::sync::RwLock;
 
 /// Data store
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
     cache: Arc<Cache>,
-    block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
+    block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
 }
 
 impl Store {
@@ -65,24 +67,42 @@ impl Store {
         Self {
             db,
             cache: Arc::new(Cache::new()),
-            block_expiration_tracker: None,
+            block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub async fn enable_block_expiration(
-        &mut self,
-        expiration_time: Duration,
+    pub async fn set_block_expiration(
+        &self,
+        expiration_time: Option<Duration>,
     ) -> Result<(), Error> {
-        if self.block_expiration_tracker.is_some() {
+        let mut tracker_lock = self.block_expiration_tracker.write().await;
+
+        if let Some(tracker) = &*tracker_lock {
+            if let Some(expiration_time) = expiration_time {
+                tracker.set_expiration_time(expiration_time);
+            }
             return Ok(());
         }
+
+        let expiration_time = match expiration_time {
+            Some(expiration_time) => expiration_time,
+            // Tracker is `None` so we're good.
+            None => return Ok(()),
+        };
 
         let tracker =
             BlockExpirationTracker::enable_expiration(self.db.clone(), expiration_time).await?;
 
-        self.block_expiration_tracker = Some(Arc::new(tracker));
+        *tracker_lock = Some(Arc::new(tracker));
 
         Ok(())
+    }
+
+    pub async fn block_expiration(&self) -> Option<Duration> {
+        match &*self.block_expiration_tracker.read().await {
+            Some(tracker) => Some(tracker.block_expiration()),
+            None => None,
+        }
     }
 
     /// Acquires a `Reader`
@@ -90,7 +110,7 @@ impl Store {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
             cache: self.cache.begin(),
-            block_expiration_tracker: self.block_expiration_tracker.clone(),
+            block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
     }
 
@@ -100,7 +120,7 @@ impl Store {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
                 cache: self.cache.begin(),
-                block_expiration_tracker: self.block_expiration_tracker.clone(),
+                block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
             },
         })
     }
@@ -112,7 +132,7 @@ impl Store {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
                     cache: self.cache.begin(),
-                    block_expiration_tracker: self.block_expiration_tracker.clone(),
+                    block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             },
         })

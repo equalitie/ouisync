@@ -14,14 +14,12 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use tokio::time::sleep;
-
-const DEFAULT_EXPIRATION_TIME: Duration =
-    Duration::from_secs(60 * 60 * 24 * 7 /* seven days */);
+use tokio::{select, sync::watch, time::sleep};
 
 pub(crate) struct BlockExpirationTracker {
     shared: Arc<BlockingMutex<Shared>>,
     watch_tx: uninitialized_watch::Sender<()>,
+    expiration_time_tx: watch::Sender<Duration>,
     _task: ScopedJoinHandle<()>,
 }
 
@@ -52,11 +50,13 @@ impl BlockExpirationTracker {
         let (watch_tx, watch_rx) = uninitialized_watch::channel();
         let shared = Arc::new(BlockingMutex::new(shared));
 
+        let (expiration_time_tx, expiration_time_rx) = watch::channel(expiration_time);
+
         let _task = scoped_task::spawn({
             let shared = shared.clone();
 
             async move {
-                if let Err(err) = run_task(shared, pool, watch_rx, expiration_time).await {
+                if let Err(err) = run_task(shared, pool, watch_rx, expiration_time_rx).await {
                     tracing::error!("BlockExpirationTracker task has ended with {err:?}");
                 }
             }
@@ -65,6 +65,7 @@ impl BlockExpirationTracker {
         Ok(Self {
             shared,
             watch_tx,
+            expiration_time_tx,
             _task,
         })
     }
@@ -79,6 +80,14 @@ impl BlockExpirationTracker {
 
     pub fn handle_block_removed(&self, block: &BlockId) {
         self.shared.lock().unwrap().handle_block_removed(block);
+    }
+
+    pub fn set_expiration_time(&self, expiration_time: Duration) {
+        self.expiration_time_tx.send(expiration_time).unwrap_or(());
+    }
+
+    pub fn block_expiration(&self) -> Duration {
+        *self.expiration_time_tx.borrow()
     }
 }
 
@@ -187,9 +196,11 @@ async fn run_task(
     shared: Arc<BlockingMutex<Shared>>,
     pool: db::Pool,
     mut watch_rx: uninitialized_watch::Receiver<()>,
-    expiration_time: Duration,
+    mut expiration_time_rx: watch::Receiver<Duration>,
 ) -> Result<(), Error> {
     loop {
+        let expiration_time = *expiration_time_rx.borrow();
+
         let (ts, block) = {
             let oldest_entry = shared
                 .lock()
@@ -215,7 +226,14 @@ async fn run_task(
 
         if expires_at > now {
             match expires_at.duration_since(now) {
-                Ok(duration) => sleep(duration).await,
+                Ok(duration) => {
+                    select! {
+                        _ = sleep(duration) => (),
+                        _ = expiration_time_rx.changed() => {
+                            continue;
+                        }
+                    }
+                }
                 Err(_) => (),
             }
 

@@ -11,7 +11,7 @@ use crate::{
 };
 use rand::{rngs::OsRng, Rng};
 use sqlx::Row;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, time::Duration};
 use tracing::instrument;
 use zeroize::Zeroize;
 
@@ -37,6 +37,7 @@ const DEVICE_ID: &[u8] = b"device_id";
 const READ_KEY_VALIDATOR: &[u8] = b"read_key_validator";
 
 const QUOTA: &[u8] = b"quota";
+const BLOCK_EXPIRATION: &[u8] = b"block_expiration";
 
 // -------------------------------------------------------------------
 // Accessor for user-defined metadata
@@ -521,6 +522,34 @@ pub(crate) mod quota {
 
     pub(crate) async fn remove(tx: &mut db::WriteTransaction) -> Result<()> {
         remove_public(tx, QUOTA).await
+    }
+}
+
+// -------------------------------------------------------------------
+// Storage block expiration
+// -------------------------------------------------------------------
+pub(crate) mod block_expiration {
+    use super::*;
+
+    pub(crate) async fn get(conn: &mut db::Connection) -> Result<Option<Duration>> {
+        match get_public(conn, BLOCK_EXPIRATION).await {
+            Ok(duration_millis) => Ok(Some(Duration::from_millis(duration_millis))),
+            Err(Error::EntryNotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn set(tx: &mut db::WriteTransaction, value: Option<Duration>) -> Result<()> {
+        if let Some(duration) = value {
+            set_public(
+                tx,
+                BLOCK_EXPIRATION,
+                u64::try_from(duration.as_millis()).map_err(|_| Error::InvalidArgument)?,
+            )
+            .await
+        } else {
+            remove_public(tx, BLOCK_EXPIRATION).await
+        }
     }
 }
 

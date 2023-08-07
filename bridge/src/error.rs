@@ -50,7 +50,9 @@ impl ToErrorCode for Error {
                     AmbiguousEntry => ErrorCode::AmbiguousEntry,
                     DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
                     OperationNotSupported => ErrorCode::OperationNotSupported,
-                    NonUtf8FileName | OffsetOutOfRange => ErrorCode::InvalidArgument,
+                    InvalidArgument | NonUtf8FileName | OffsetOutOfRange => {
+                        ErrorCode::InvalidArgument
+                    }
                     StorageVersionMismatch => ErrorCode::StorageVersionMismatch,
                     EntryIsFile | EntryIsDirectory | Writer(_) | Locked => ErrorCode::Other,
                 }

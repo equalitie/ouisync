@@ -20,7 +20,8 @@ use crate::{
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+use tracing::Level;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
@@ -183,6 +184,14 @@ impl Vault {
             Err(Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
+        Ok(self.store.set_block_expiration(duration).await?)
+    }
+
+    pub async fn block_expiration(&self) -> Option<Duration> {
+        self.store.block_expiration().await
     }
 
     pub async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {

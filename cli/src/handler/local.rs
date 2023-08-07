@@ -10,7 +10,7 @@ use ouisync_bridge::{
     transport::NotificationSender,
 };
 use ouisync_lib::{PeerAddr, ShareToken};
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub(crate) struct LocalHandler {
@@ -363,6 +363,40 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     Ok(value.into())
                 } else {
                     Ok(().into())
+                }
+            }
+            Request::BlockExpiration {
+                name,
+                remove,
+                value,
+            } => {
+                let value = value.map(Duration::from_secs);
+                let value = if remove { Some(None) } else { value.map(Some) };
+
+                if let Some(name) = name {
+                    let holder = self.state.repositories.find(&name)?;
+
+                    if let Some(value) = value {
+                        holder.repository.set_block_expiration(value).await?;
+                        Ok(().into())
+                    } else {
+                        let block_expiration = holder.repository.block_expiration().await;
+                        Ok(Response::BlockExpiration(block_expiration))
+                    }
+                } else if let Some(value) = value {
+                    ouisync_bridge::repository::set_default_block_expiration(
+                        &self.state.config,
+                        value,
+                    )
+                    .await?;
+                    Ok(().into())
+                } else {
+                    let block_expiration =
+                        ouisync_bridge::repository::get_default_block_expiration(
+                            &self.state.config,
+                        )
+                        .await?;
+                    Ok(Response::BlockExpiration(block_expiration))
                 }
             }
         }

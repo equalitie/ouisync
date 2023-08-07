@@ -91,11 +91,7 @@ pub async fn delete(store: impl AsRef<Path>) -> io::Result<()> {
 
 impl Repository {
     /// Creates a new repository.
-    pub async fn create(
-        params: &RepositoryParams,
-        access: Access,
-        block_expiration: Option<Duration>,
-    ) -> Result<Self> {
+    pub async fn create(params: &RepositoryParams, access: Access) -> Result<Self> {
         let pool = params.create().await?;
         let device_id = params.device_id();
         let monitor = params.monitor();
@@ -107,14 +103,7 @@ impl Repository {
 
         tx.commit().await?;
 
-        Self::new(
-            pool,
-            this_writer_id,
-            access.secrets(),
-            monitor,
-            block_expiration,
-        )
-        .await
+        Self::new(pool, this_writer_id, access.secrets(), monitor).await
     }
 
     /// Opens an existing repository.
@@ -127,7 +116,6 @@ impl Repository {
         params: &RepositoryParams,
         local_secret: Option<LocalSecret>,
         max_access_mode: AccessMode,
-        block_expiration: Option<Duration>,
     ) -> Result<Self> {
         let pool = params.open().await?;
         let device_id = params.device_id();
@@ -162,33 +150,15 @@ impl Repository {
 
         let access_secrets = access_secrets.with_mode(max_access_mode);
 
-        Self::new(
-            pool,
-            this_writer_id,
-            access_secrets,
-            monitor,
-            block_expiration,
-        )
-        .await
+        Self::new(pool, this_writer_id, access_secrets, monitor).await
     }
 
     /// Reopens an existing repository using a reopen token (see [`Self::reopen_token`]).
-    pub async fn reopen(
-        params: &RepositoryParams,
-        token: ReopenToken,
-        block_expiration: Option<Duration>,
-    ) -> Result<Self> {
+    pub async fn reopen(params: &RepositoryParams, token: ReopenToken) -> Result<Self> {
         let pool = params.open().await?;
         let monitor = params.monitor();
 
-        Self::new(
-            pool,
-            token.writer_id,
-            token.secrets,
-            monitor,
-            block_expiration,
-        )
-        .await
+        Self::new(pool, token.writer_id, token.secrets, monitor).await
     }
 
     async fn new(
@@ -196,14 +166,9 @@ impl Repository {
         this_writer_id: PublicKey,
         secrets: AccessSecrets,
         monitor: RepositoryMonitor,
-        block_expiration: Option<Duration>,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-        let mut store = Store::new(pool);
-
-        if let Some(block_expiration) = block_expiration {
-            store.enable_block_expiration(block_expiration).await?;
-        }
+        let store = Store::new(pool);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -220,6 +185,16 @@ impl Repository {
             local_id: LocalId::new(),
             monitor: Arc::new(monitor),
         };
+
+        {
+            let mut conn = vault.store().db().acquire().await?;
+            if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
+                vault
+                    .store()
+                    .set_block_expiration(Some(block_expiration))
+                    .await?;
+            }
+        }
 
         tracing::debug!(
             parent: vault.monitor.span(),
@@ -466,6 +441,25 @@ impl Repository {
     /// Get the storage quota in bytes or `None` if no quota is set.
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
         self.shared.vault.quota().await
+    }
+
+    /// Set the duration after which blocks start to expire (are deleted) when not used. Use `None`
+    /// to disable expiration. Default is `None`.
+    pub async fn set_block_expiration(&self, block_expiration: Option<Duration>) -> Result<()> {
+        {
+            let mut tx = self.shared.vault.store().db().begin_write().await?;
+            metadata::block_expiration::set(&mut tx, block_expiration).await?;
+            tx.commit().await?;
+        }
+        self.shared
+            .vault
+            .set_block_expiration(block_expiration)
+            .await
+    }
+
+    /// Get the block expiration duration. `None` means block expiration is not set.
+    pub async fn block_expiration(&self) -> Option<Duration> {
+        self.shared.vault.block_expiration().await
     }
 
     /// Get the total size of the data stored in this repository.
