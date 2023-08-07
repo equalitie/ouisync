@@ -231,13 +231,9 @@ pub(crate) mod actor {
     pub(crate) async fn create_repo_with_mode(name: &str, mode: AccessMode) -> Repository {
         let (params, secrets) = get_repo_params_and_secrets(name);
 
-        Repository::create(
-            &params,
-            Access::new(None, None, secrets.with_mode(mode)),
-            None,
-        )
-        .await
-        .unwrap()
+        Repository::create(&params, Access::new(None, None, secrets.with_mode(mode)))
+            .await
+            .unwrap()
     }
 
     pub(crate) async fn create_repo(name: &str) -> Repository {

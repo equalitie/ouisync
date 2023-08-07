@@ -296,7 +296,6 @@ async fn blind_access_non_empty_repo() {
             local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
-        None,
     )
     .await
     .unwrap();
@@ -315,7 +314,7 @@ async fn blind_access_non_empty_repo() {
         (Some(LocalSecret::random()), AccessMode::Write),
     ] {
         // Reopen the repo in blind mode.
-        let repo = Repository::open(&params, local_secret.clone(), access_mode, None)
+        let repo = Repository::open(&params, local_secret.clone(), access_mode)
             .await
             .unwrap_or_else(|_| {
                 panic!(
@@ -364,13 +363,12 @@ async fn blind_access_empty_repo() {
             local_write_secret: local_secret,
             secrets: WriteSecrets::random(),
         },
-        None,
     )
     .await
     .unwrap();
 
     // Reopen the repo in blind mode.
-    let repo = Repository::open(&params, Some(LocalSecret::random()), AccessMode::Read, None)
+    let repo = Repository::open(&params, Some(LocalSecret::random()), AccessMode::Read)
         .await
         .unwrap();
 
@@ -390,7 +388,6 @@ async fn read_access_same_replica() {
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        None,
     )
     .await
     .unwrap();
@@ -403,7 +400,7 @@ async fn read_access_same_replica() {
     drop(repo);
 
     // Reopen the repo in read-only mode.
-    let repo = Repository::open(&params, None, AccessMode::Read, None)
+    let repo = Repository::open(&params, None, AccessMode::Read)
         .await
         .unwrap();
 
@@ -448,7 +445,6 @@ async fn read_access_different_replica() {
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        None,
     )
     .await
     .unwrap();
@@ -461,7 +457,7 @@ async fn read_access_different_replica() {
     drop(repo);
 
     let params_b = RepositoryParams::with_pool(pool, "test").with_device_id(rand::random());
-    let repo = Repository::open(&params_b, None, AccessMode::Read, None)
+    let repo = Repository::open(&params_b, None, AccessMode::Read)
         .await
         .unwrap();
 
@@ -866,7 +862,6 @@ async fn setup() -> (TempDir, Repository) {
         Access::WriteUnlocked {
             secrets: WriteSecrets::random(),
         },
-        None,
     )
     .await
     .unwrap();
