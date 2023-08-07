@@ -14,8 +14,11 @@ use ouisync::{
     BLOB_HEADER_SIZE, BLOCK_SIZE,
 };
 use rand::Rng;
-use std::{cmp::Ordering, io::SeekFrom, sync::Arc};
-use tokio::sync::{broadcast, mpsc, Barrier};
+use std::{cmp::Ordering, io::SeekFrom, sync::Arc, time::Duration};
+use tokio::{
+    sync::{broadcast, mpsc, Barrier},
+    time::sleep,
+};
 use tracing::{instrument, Instrument};
 
 const SMALL_SIZE: usize = 1024;
@@ -968,6 +971,63 @@ fn content_stays_available_during_sync() {
 
             tx.send(()).await.unwrap();
         }
+    });
+}
+
+#[test]
+fn redownload_expired_blocks() {
+    let mut env = Env::new();
+    let (origin_has_it_tx, mut origin_has_it_rx) = mpsc::channel(1);
+    let (cache_had_it_tx, mut cache_had_it_rx) = mpsc::channel(1);
+    let (finish_origin_tx, mut finish_origin_rx) = mpsc::channel(1);
+    let (finish_cache_tx, mut finish_cache_rx) = mpsc::channel(1);
+
+    env.actor("origin", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        // Create a file
+        let mut file = repo.create_file("test.txt").await.unwrap();
+        file.write_all(b"test content").await.unwrap();
+        file.flush().await.unwrap();
+
+        origin_has_it_tx.send(()).await.unwrap();
+
+        finish_origin_rx.recv().await;
+    });
+
+    env.actor("cache", async move {
+        let (network, repo, _reg) = actor::setup().await;
+
+        repo.set_block_expiration(Some(Duration::from_secs(1)))
+            .await
+            .unwrap();
+
+        origin_has_it_rx.recv().await;
+
+        network.add_user_provided_peer(&actor::lookup_addr("origin").await);
+
+        common::expect_entry_exists(&repo, "test.txt", EntryType::File).await;
+        common::expect_file_content(&repo, "test.txt", b"test content").await;
+
+        sleep(Duration::from_secs(2)).await;
+
+        cache_had_it_tx.send(()).await.unwrap();
+
+        finish_cache_rx.recv().await;
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+
+        cache_had_it_rx.recv().await;
+
+        network.add_user_provided_peer(&actor::lookup_addr("cache").await);
+
+        common::expect_entry_exists(&repo, "test.txt", EntryType::File).await;
+        common::expect_file_content(&repo, "test.txt", b"test content").await;
+
+        finish_origin_tx.send(()).await.unwrap();
+        finish_cache_tx.send(()).await.unwrap();
     });
 }
 
