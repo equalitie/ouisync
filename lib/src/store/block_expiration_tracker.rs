@@ -89,11 +89,13 @@ impl BlockExpirationTracker {
              SET block_presence = ?
              WHERE block_id = ? AND block_presence = ?",
         )
-        .bind(SingleBlockPresence::Present)
+        .bind(SingleBlockPresence::Missing)
         .bind(&block)
         .bind(SingleBlockPresence::Expired)
         .execute(&mut tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }

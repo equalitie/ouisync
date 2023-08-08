@@ -161,6 +161,14 @@ impl SingleBlockPresence {
             Self::Present => true,
         }
     }
+
+    pub fn is_missing(self) -> bool {
+        match self {
+            Self::Missing => true,
+            Self::Present => false,
+            Self::Expired => false,
+        }
+    }
 }
 
 impl Type<Sqlite> for SingleBlockPresence {

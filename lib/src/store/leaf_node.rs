@@ -161,7 +161,7 @@ pub(super) async fn filter_nodes_with_new_blocks(
 ) -> Result<Vec<LeafNode>, Error> {
     let mut output = Vec::new();
 
-    for remote_node in remote_nodes.present() {
+    for remote_node in remote_nodes.non_missing() {
         if !is_present_or_expired(conn, &remote_node.block_id).await? {
             output.push(*remote_node);
         }
