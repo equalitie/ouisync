@@ -990,26 +990,33 @@ fn redownload_expired_blocks() {
         file.write_all(b"test content").await.unwrap();
         file.flush().await.unwrap();
 
-        origin_has_it_tx.send(()).await.unwrap();
+        let block_count = repo.count_blocks().await.unwrap();
+
+        origin_has_it_tx.send(block_count).await.unwrap();
 
         finish_origin_rx.recv().await;
     });
 
     env.actor("cache", async move {
-        let (network, repo, _reg) = actor::setup().await;
+        let network = actor::create_network(Proto::Tcp).await;
+        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
+        let _reg = network.register(repo.handle()).await;
 
         repo.set_block_expiration(Some(Duration::from_secs(1)))
             .await
             .unwrap();
 
-        origin_has_it_rx.recv().await;
+        let block_count = origin_has_it_rx.recv().await.unwrap();
 
         network.add_user_provided_peer(&actor::lookup_addr("origin").await);
 
-        common::expect_entry_exists(&repo, "test.txt", EntryType::File).await;
-        common::expect_file_content(&repo, "test.txt", b"test content").await;
+        common::eventually(&repo, || {
+            async { repo.count_blocks().await.unwrap() == block_count }
+                .instrument(tracing::Span::current())
+        })
+        .await;
 
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(3)).await;
 
         cache_had_it_tx.send(()).await.unwrap();
 
@@ -1017,7 +1024,9 @@ fn redownload_expired_blocks() {
     });
 
     env.actor("reader", async move {
-        let (network, repo, _reg) = actor::setup().await;
+        let network = actor::create_network(Proto::Tcp).await;
+        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+        let _reg = network.register(repo.handle()).await;
 
         cache_had_it_rx.recv().await;
 
