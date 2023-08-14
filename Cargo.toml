@@ -8,6 +8,7 @@ members = [
     "net",
     "rand",
     "scoped_task",
+    "tracing_fmt",
     "utils/btdht",
     "utils/stress-test",
     "vfs"
