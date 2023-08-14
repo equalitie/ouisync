@@ -1,4 +1,7 @@
-use super::common::{self, Formatter};
+use super::{
+    common::{self, Formatter},
+    LogFormat,
+};
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -43,7 +46,7 @@ impl Inner {
                 Buffer::Main,
             )); // android log adds its own timestamp
 
-        let file_layer = log_path.map(|path| {
+        let file_layer = path.map(|path| {
             fmt::layer()
                 .event_format(Formatter::<SystemTime>::default())
                 .with_ansi(true)
