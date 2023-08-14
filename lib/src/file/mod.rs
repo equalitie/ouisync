@@ -100,11 +100,13 @@ impl File {
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let (_, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
+                let (block_id, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
 
                 if presence.is_present() {
+                    tracing::trace!(index, ?block_id, "progress - present");
                     count = count.saturating_add(1);
                 } else {
+                    tracing::trace!(index, ?block_id, "progress - missing");
                     break;
                 }
             }
