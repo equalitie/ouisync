@@ -639,27 +639,22 @@ pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
 }
 
 pub(crate) fn init_log() {
+    use ouisync_tracing_fmt::Formatter;
     use tracing::metadata::LevelFilter;
+    use tracing_subscriber::fmt::time::SystemTime;
 
-    let builder = tracing_subscriber::fmt()
-        .pretty()
+    let result = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
                 // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
-        .with_target(false)
+        .event_format(Formatter::<SystemTime>::default())
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
-        .with_test_writer();
-
-    let result = if cfg!(feature = "simulation") {
-        // Disable printing time so that logs from the same seed are identical
-        builder.without_time().try_init()
-    } else {
-        builder.try_init()
-    };
+        .with_test_writer()
+        .try_init();
 
     // error here most likely means the logger is already initialized. We can ignore that.
     result.ok();
