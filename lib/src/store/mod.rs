@@ -207,7 +207,6 @@ impl Reader {
     }
 
     /// Checks whether the block exists in the store.
-    #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
         block::exists(self.db(), id).await
     }
@@ -354,9 +353,9 @@ impl ReadTransaction {
         &mut self,
         parent_hash: &Hash,
     ) -> Result<LeafNodeSet, Error> {
-        // if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
-        //     return Ok(nodes);
-        // }
+        if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
+            return Ok(nodes);
+        }
 
         self.load_leaf_nodes(parent_hash).await
     }

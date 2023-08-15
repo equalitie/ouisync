@@ -101,13 +101,13 @@ impl File {
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let (block_id, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
+                let (block_id, _) = tx.find_block(branch.id(), &encoded_locator).await?;
 
-                if presence.is_present() {
-                    tracing::trace!(index, ?block_id, branch_id = ?branch.id(), "progress - present");
+                // NOTE: Don't use the presence returned from `find_block` because it might be
+                // stale.
+                if tx.block_exists(&block_id).await? {
                     count = count.saturating_add(1);
                 } else {
-                    tracing::trace!(index, ?block_id, branch_id = ?branch.id(), "progress - missing");
                     break;
                 }
             }
