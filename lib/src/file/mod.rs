@@ -90,6 +90,7 @@ impl File {
         let branch = self.branch().clone();
         let locator = Locator::head(*self.blob.id());
         let block_count = self.blob.block_count();
+        let len = self.len();
 
         async move {
             let permit = branch.file_progress_cache().acquire().await;
@@ -113,7 +114,7 @@ impl File {
 
             *entry = count;
 
-            Ok(count as u64 * BLOCK_SIZE as u64)
+            Ok((count as u64 * BLOCK_SIZE as u64).min(len))
         }
     }
 
