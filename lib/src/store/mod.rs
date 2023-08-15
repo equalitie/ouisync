@@ -354,9 +354,9 @@ impl ReadTransaction {
         &mut self,
         parent_hash: &Hash,
     ) -> Result<LeafNodeSet, Error> {
-        if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
-            return Ok(nodes);
-        }
+        // if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
+        //     return Ok(nodes);
+        // }
 
         self.load_leaf_nodes(parent_hash).await
     }

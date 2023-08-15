@@ -1107,8 +1107,6 @@ fn quota_concurrent_writes() {
     });
 }
 
-// FIXME:
-#[ignore]
 #[test]
 fn file_progress() {
     let mut env = Env::new();

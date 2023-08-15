@@ -103,10 +103,10 @@ impl File {
                 let (block_id, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
 
                 if presence.is_present() {
-                    tracing::trace!(index, ?block_id, "progress - present");
+                    tracing::trace!(index, ?block_id, branch_id = ?branch.id(), "progress - present");
                     count = count.saturating_add(1);
                 } else {
-                    tracing::trace!(index, ?block_id, "progress - missing");
+                    tracing::trace!(index, ?block_id, branch_id = ?branch.id(), "progress - missing");
                     break;
                 }
             }
