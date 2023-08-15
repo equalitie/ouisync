@@ -1,7 +1,5 @@
-use super::{
-    common::{self, Formatter},
-    LogFormat,
-};
+use super::{common, LogFormat};
+use ouisync_tracing_fmt::Formatter;
 use std::{
     io::{self, IsTerminal},
     path::Path,

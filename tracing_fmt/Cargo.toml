@@ -1,0 +1,15 @@
+[package]
+name = "ouisync-tracing-fmt"
+description = "Tracing formatter for ouisync"
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+ansi_term = "0.12.1"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+

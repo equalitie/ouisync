@@ -432,36 +432,9 @@ pub(crate) async fn check_file_version_content(
     branch_id: Option<&PublicKey>,
     expected_content: &[u8],
 ) -> bool {
-    tracing::debug!(path, "opening");
-
-    let result = if let Some(branch_id) = branch_id {
-        repo.open_file_version(path, branch_id).await
-    } else {
-        repo.open_file(path).await
+    let Some(mut file) = open_file_version(repo, path, branch_id).await else {
+        return false;
     };
-
-    let mut file = match result {
-        Ok(file) => file,
-        // - `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
-        //    and so the file entry is not in it yet.
-        // - `BlockNotFound` means the first block of the file hasn't been downloaded yet.
-        // - `LocatorNotFound` TODO: it seems the tests pass when we allow it and so might be ok
-        //    but we need to confirm it and understand how it happens.
-        Err(
-            error @ (Error::EntryNotFound
-            | Error::Store(StoreError::BlockNotFound)
-            | Error::Store(StoreError::LocatorNotFound)),
-        ) => {
-            tracing::warn!(path, ?branch_id, ?error, "open failed");
-            return false;
-        }
-        Err(error) => {
-            tracing::error!(path, ?branch_id, ?error);
-            panic!("unexpected error: {error:?}");
-        }
-    };
-
-    tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
 
     let actual_content = match read_in_chunks(&mut file, 4096).await {
         Ok(content) => content,
@@ -483,6 +456,45 @@ pub(crate) async fn check_file_version_content(
         tracing::warn!(path, "content does not match");
         false
     }
+}
+
+pub(crate) async fn open_file_version(
+    repo: &Repository,
+    path: &str,
+    branch_id: Option<&PublicKey>,
+) -> Option<File> {
+    tracing::debug!(path, "opening");
+
+    let result = if let Some(branch_id) = branch_id {
+        repo.open_file_version(path, branch_id).await
+    } else {
+        repo.open_file(path).await
+    };
+
+    let file = match result {
+        Ok(file) => file,
+        // - `EntryNotFound` likely means that the parent directory hasn't yet been fully synced
+        //    and so the file entry is not in it yet.
+        // - `BlockNotFound` means the first block of the file hasn't been downloaded yet.
+        // - `LocatorNotFound` TODO: it seems the tests pass when we allow it and so might be ok
+        //    but we need to confirm it and understand how it happens.
+        Err(
+            error @ (Error::EntryNotFound
+            | Error::Store(StoreError::BlockNotFound)
+            | Error::Store(StoreError::LocatorNotFound)),
+        ) => {
+            tracing::warn!(path, ?branch_id, ?error, "open failed");
+            return None;
+        }
+        Err(error) => {
+            tracing::error!(path, ?branch_id, ?error);
+            panic!("unexpected error: {error:?}");
+        }
+    };
+
+    tracing::debug!(path, branch.id = ?file.branch().id(), "opened");
+
+    Some(file)
 }
 
 #[instrument(skip(repo))]
@@ -627,27 +639,22 @@ pub(crate) fn assert_content_equal(lhs: &[u8], rhs: &[u8]) {
 }
 
 pub(crate) fn init_log() {
+    use ouisync_tracing_fmt::Formatter;
     use tracing::metadata::LevelFilter;
+    use tracing_subscriber::fmt::time::SystemTime;
 
-    let builder = tracing_subscriber::fmt()
-        .pretty()
+    let result = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
                 // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
         )
-        .with_target(false)
+        .event_format(Formatter::<SystemTime>::default())
         // log output is captured by default and only shown on failure. Run tests with
         // `--nocapture` to override.
-        .with_test_writer();
-
-    let result = if cfg!(feature = "simulation") {
-        // Disable printing time so that logs from the same seed are identical
-        builder.without_time().try_init()
-    } else {
-        builder.try_init()
-    };
+        .with_test_writer()
+        .try_init();
 
     // error here most likely means the logger is already initialized. We can ignore that.
     result.ok();

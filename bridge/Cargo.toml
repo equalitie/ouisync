@@ -19,6 +19,7 @@ futures-util = { workspace = true }
 indexmap = "1.9.3"
 num_enum = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../lib" }
+ouisync-tracing-fmt = { path = "../tracing_fmt" }
 rand = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true }

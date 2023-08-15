@@ -552,7 +552,8 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             .instrument(tracing::info_span!(
                 "fork_block",
                 num = locator.number(),
-                id = ?block_id
+                id = ?block_id,
+                ?block_presence,
             ))
             .await?;
         }

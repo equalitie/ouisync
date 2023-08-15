@@ -207,7 +207,6 @@ impl Reader {
     }
 
     /// Checks whether the block exists in the store.
-    #[cfg(test)]
     pub async fn block_exists(&mut self, id: &BlockId) -> Result<bool, Error> {
         block::exists(self.db(), id).await
     }

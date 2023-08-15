@@ -90,6 +90,7 @@ impl File {
         let branch = self.branch().clone();
         let locator = Locator::head(*self.blob.id());
         let block_count = self.blob.block_count();
+        let len = self.len();
 
         async move {
             let permit = branch.file_progress_cache().acquire().await;
@@ -100,9 +101,11 @@ impl File {
 
             for index in *entry..block_count {
                 let encoded_locator = locator.nth(index).encode(branch.keys().read());
-                let (_, presence) = tx.find_block(branch.id(), &encoded_locator).await?;
+                let (block_id, _) = tx.find_block(branch.id(), &encoded_locator).await?;
 
-                if presence.is_present() {
+                // NOTE: Don't use the presence returned from `find_block` because it might be
+                // stale.
+                if tx.block_exists(&block_id).await? {
                     count = count.saturating_add(1);
                 } else {
                     break;
@@ -111,7 +114,7 @@ impl File {
 
             *entry = count;
 
-            Ok(count as u64 * BLOCK_SIZE as u64)
+            Ok((count as u64 * BLOCK_SIZE as u64).min(len))
         }
     }
 

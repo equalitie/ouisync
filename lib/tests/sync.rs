@@ -1107,6 +1107,67 @@ fn quota_concurrent_writes() {
     });
 }
 
+#[test]
+fn file_progress() {
+    let mut env = Env::new();
+    let (tx, mut rx) = mpsc::channel(1);
+
+    // make sure some of these are not multiples of BLOCK_SIZE to test edge cases.
+    let sizes = [1024 * 1024, 1024 * 1024 + BLOCK_SIZE / 2];
+
+    env.actor("writer", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+
+        for size in sizes {
+            let mut file = repo.create_file(format!("test-{size}.dat")).await.unwrap();
+            let content = common::random_content(size);
+            common::write_in_chunks(&mut file, &content, 4096).await;
+            file.flush().await.unwrap();
+        }
+
+        rx.recv().await.unwrap();
+    });
+
+    env.actor("reader", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        network.add_user_provided_peer(&actor::lookup_addr("writer").await);
+
+        common::eventually(&repo, || async {
+            let mut complete = 0;
+
+            for size in sizes {
+                let path = format!("test-{size}.dat");
+                let file = match common::open_file_version(&repo, &path, None).await {
+                    Some(file) => file,
+                    None => continue,
+                };
+
+                let progress = file.progress().await.unwrap();
+                let len = file.len();
+
+                tracing::debug!(
+                    path,
+                    "file progress: {}/{} ({:.1}%)",
+                    progress,
+                    len,
+                    100.0 * progress as f64 / len as f64
+                );
+
+                assert!(progress <= len);
+
+                if progress == len {
+                    complete += 1;
+                }
+            }
+
+            complete == sizes.len()
+        })
+        .await;
+
+        tx.send(()).await.unwrap();
+    });
+}
+
 #[instrument(skip(repo))]
 async fn expect_local_directory_exists(repo: &Repository, path: &str) {
     common::eventually(repo, || async {

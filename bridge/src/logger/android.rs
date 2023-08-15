@@ -1,7 +1,4 @@
-use super::{
-    common::{self, Formatter},
-    LogFormat,
-};
+use super::{common, LogFormat};
 use ndk_sys::{
     __android_log_print, android_LogPriority as LogPriority,
     android_LogPriority_ANDROID_LOG_DEBUG as ANDROID_LOG_DEBUG,
@@ -9,6 +6,7 @@ use ndk_sys::{
 };
 use once_cell::sync::Lazy;
 use os_pipe::PipeWriter;
+use ouisync_tracing_fmt::Formatter;
 use paranoid_android::{AndroidLogMakeWriter, Buffer};
 use std::{
     ffi::{CStr, CString},

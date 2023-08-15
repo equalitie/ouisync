@@ -144,7 +144,6 @@ pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
 }
 
 /// Checks whether the block exists in the store.
-#[cfg(test)]
 pub(super) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bool, Error> {
     Ok(sqlx::query("SELECT 0 FROM blocks WHERE id = ?")
         .bind(id)
