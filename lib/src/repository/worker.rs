@@ -217,8 +217,15 @@ mod scan {
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
 
-        while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
-            if !presence.is_present() {
+        while let Some((block_id, _)) = blob_block_ids.try_next().await? {
+            if !shared
+                .vault
+                .store()
+                .acquire_read()
+                .await?
+                .block_exists(&block_id)
+                .await?
+            {
                 shared.vault.block_tracker.require(block_id);
 
                 if !file_progress_cache_reset {

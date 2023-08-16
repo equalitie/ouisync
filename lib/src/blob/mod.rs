@@ -502,63 +502,57 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     // accidentally forking into remote branch (remote branches don't have write access).
     let write_keys = dst_branch.keys().write().ok_or(Error::PermissionDenied)?;
 
-    // To avoid write-blocking the database for too long, we process the blocks in batches. This is
-    // the number of blocks per batch.
-    // TODO: It is currently set to 1 because the previous value (32) was found to have negative
-    // impact on network speed. The Client had to wait a long time to acquire a write transaction
-    // and that caused the incoming response messages to queue up.
-    const BATCH_SIZE: u32 = 1;
+    // FIXME: The src blob can change in the middle of the fork which could cause the dst blob to
+    // become corrupted (part of it will be forked pre-change and part post-change). To prevent
+    // that, we should restart the fork every time the src branch changes, or - better - run the
+    // whole fork in a single transaction (but somehow avoid blocking other tasks).
 
-    let mut rtx = src_branch.store().begin_read().await?;
-    let src_root_node = rtx.load_root_node(src_branch.id()).await?;
+    let end = {
+        let mut tx = src_branch.store().begin_read().await?;
+        let root_node = tx.load_root_node(src_branch.id()).await?;
+        load_block_count_hint(&mut tx, &root_node, blob_id, src_branch.keys().read()).await?
+    };
 
-    let end =
-        load_block_count_hint(&mut rtx, &src_root_node, blob_id, src_branch.keys().read()).await?;
-    let mut locators = Locator::head(blob_id).sequence().take(end as usize);
-    let mut running = true;
+    let locators = Locator::head(blob_id).sequence().take(end as usize);
+    for locator in locators {
+        let mut tx = src_branch.store().begin_write().await?;
 
-    while running {
-        let mut wtx = src_branch.store().begin_write().await?;
+        let encoded_locator = locator.encode(read_key);
 
-        for _ in 0..BATCH_SIZE {
-            let Some(locator) = locators.next() else {
-                running = false;
+        let (block_id, _) = match tx.find_block(src_branch.id(), &encoded_locator).await {
+            Ok(block) => block,
+            Err(store::Error::LocatorNotFound) => {
+                // end of the blob
                 break;
-            };
+            }
+            Err(error) => return Err(error.into()),
+        };
 
-            let encoded_locator = locator.encode(read_key);
+        let block_presence = if tx.block_exists(&block_id).await? {
+            SingleBlockPresence::Present
+        } else {
+            SingleBlockPresence::Missing
+        };
 
-            let (block_id, block_presence) =
-                match rtx.find_block_at(&src_root_node, &encoded_locator).await {
-                    Ok(block) => block,
-                    Err(store::Error::LocatorNotFound) => {
-                        // end of the blob
-                        running = false;
-                        break;
-                    }
-                    Err(error) => return Err(error.into()),
-                };
+        // It can happen that the current and dst branches are different, but the blob has
+        // already been forked by some other task in the meantime. In that case this
+        // `insert` is a no-op. We still proceed normally to maintain idempotency.
+        tx.link_block(
+            dst_branch.id(),
+            &encoded_locator,
+            &block_id,
+            block_presence,
+            write_keys,
+        )
+        .instrument(tracing::info_span!(
+            "fork_block",
+            num = locator.number(),
+            id = ?block_id,
+            ?block_presence,
+        ))
+        .await?;
 
-            // It can happen that the current and dst branches are different, but the blob has
-            // already been forked by some other task in the meantime. In that case this
-            // `insert` is a no-op. We still proceed normally to maintain idempotency.
-            wtx.link_block(
-                dst_branch.id(),
-                &encoded_locator,
-                &block_id,
-                block_presence,
-                write_keys,
-            )
-            .instrument(tracing::info_span!(
-                "fork_block",
-                num = locator.number(),
-                id = ?block_id,
-                ?block_presence,
-            ))
-            .await?;
-        }
-
-        wtx.commit().await?;
+        tx.commit().await?;
     }
 
     Ok(())
