@@ -348,8 +348,8 @@ async fn modify_blob() {
     let locator1 = locator1.encode(branch.keys().read());
 
     let (old_block_id0, old_block_id1) = {
-        let (id0, _) = tx.find_block(branch.id(), &locator0).await.unwrap();
-        let (id1, _) = tx.find_block(branch.id(), &locator1).await.unwrap();
+        let id0 = tx.find_block(branch.id(), &locator0).await.unwrap();
+        let id1 = tx.find_block(branch.id(), &locator1).await.unwrap();
         (id0, id1)
     };
 
@@ -358,8 +358,8 @@ async fn modify_blob() {
     blob.write_all(&mut tx, &buffer).await.unwrap();
     blob.flush(&mut tx).await.unwrap();
 
-    let (new_block_id0, _) = tx.find_block(branch.id(), &locator0).await.unwrap();
-    let (new_block_id1, _) = tx.find_block(branch.id(), &locator1).await.unwrap();
+    let new_block_id0 = tx.find_block(branch.id(), &locator0).await.unwrap();
+    let new_block_id1 = tx.find_block(branch.id(), &locator1).await.unwrap();
 
     assert_ne!(new_block_id0, old_block_id0);
     assert_ne!(new_block_id1, old_block_id1);

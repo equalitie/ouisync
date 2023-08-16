@@ -301,7 +301,7 @@ impl ReadTransaction {
         &mut self,
         branch_id: &PublicKey,
         encoded_locator: &Hash,
-    ) -> Result<(BlockId, SingleBlockPresence), Error> {
+    ) -> Result<BlockId, Error> {
         let root_node = self.load_root_node(branch_id).await?;
         self.find_block_at(&root_node, encoded_locator).await
     }
@@ -310,7 +310,7 @@ impl ReadTransaction {
         &mut self,
         root_node: &RootNode,
         encoded_locator: &Hash,
-    ) -> Result<(BlockId, SingleBlockPresence), Error> {
+    ) -> Result<BlockId, Error> {
         let path = self.load_path(root_node, encoded_locator).await?;
         path.get_leaf().ok_or(Error::LocatorNotFound)
     }

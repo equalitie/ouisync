@@ -217,8 +217,15 @@ mod scan {
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
 
-        while let Some((block_id, presence)) = blob_block_ids.try_next().await? {
-            if !presence.is_present() {
+        while let Some(block_id) = blob_block_ids.try_next().await? {
+            if !shared
+                .vault
+                .store()
+                .acquire_read()
+                .await?
+                .block_exists(&block_id)
+                .await?
+            {
                 shared.vault.block_tracker.require(block_id);
 
                 if !file_progress_cache_reset {
@@ -459,7 +466,7 @@ mod trash {
     ) -> Result<()> {
         let mut blob_block_ids = BlockIds::open(branch, blob_id).await?;
 
-        while let Some((block_id, _)) = blob_block_ids.try_next().await? {
+        while let Some(block_id) = blob_block_ids.try_next().await? {
             unreachable_block_ids.remove(&block_id);
         }
 
@@ -494,7 +501,7 @@ mod trash {
 
                 unlock_tx.send(notify).await;
 
-                while let Some((block_id, _)) = blob_block_ids.try_next().await? {
+                while let Some(block_id) = blob_block_ids.try_next().await? {
                     unreachable_block_ids.remove(&block_id);
                 }
             }

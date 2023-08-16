@@ -44,10 +44,8 @@ impl Path {
         }
     }
 
-    pub fn get_leaf(&self) -> Option<(BlockId, SingleBlockPresence)> {
-        self.leaves
-            .get(&self.locator)
-            .map(|node| (node.block_id, node.block_presence))
+    pub fn get_leaf(&self) -> Option<BlockId> {
+        self.leaves.get(&self.locator).map(|node| node.block_id)
     }
 
     pub fn has_leaf(&self, block_id: &BlockId) -> bool {
