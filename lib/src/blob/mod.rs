@@ -519,8 +519,8 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
         let encoded_locator = locator.encode(read_key);
 
-        let (block_id, _) = match tx.find_block(src_branch.id(), &encoded_locator).await {
-            Ok(block) => block,
+        let block_id = match tx.find_block(src_branch.id(), &encoded_locator).await {
+            Ok(id) => id,
             Err(store::Error::LocatorNotFound) => {
                 // end of the blob
                 break;
@@ -596,7 +596,7 @@ async fn read_block(
     locator: &Locator,
     read_key: &cipher::SecretKey,
 ) -> Result<(BlockId, Buffer)> {
-    let (id, _) = tx
+    let id = tx
         .find_block_at(root_node, &locator.encode(read_key))
         .await?;
 

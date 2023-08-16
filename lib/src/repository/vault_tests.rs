@@ -1162,7 +1162,7 @@ async fn check_all_blocks_exist(
     snapshot: &Snapshot,
 ) {
     for node in snapshot.leaf_sets().flat_map(|(_, nodes)| nodes) {
-        let (block_id, _) = tx.find_block(branch_id, &node.locator).await.unwrap();
+        let block_id = tx.find_block(branch_id, &node.locator).await.unwrap();
         assert!(tx.block_exists(&block_id).await.unwrap());
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     branch::Branch,
     error::{Error, Result},
     locator::Locator,
-    protocol::{BlockId, RootNode, SingleBlockPresence},
+    protocol::{BlockId, RootNode},
     store,
 };
 
@@ -44,7 +44,7 @@ impl BlockIds {
         })
     }
 
-    pub async fn try_next(&mut self) -> Result<Option<(BlockId, SingleBlockPresence)>> {
+    pub async fn try_next(&mut self) -> Result<Option<BlockId>> {
         if let Some(upper_bound) = self.upper_bound {
             if self.locator.number() >= upper_bound {
                 return Ok(None);
@@ -55,9 +55,9 @@ impl BlockIds {
         let mut tx = self.branch.store().begin_read().await?;
 
         match tx.find_block_at(&self.root_node, &encoded).await {
-            Ok(block) => {
+            Ok(block_id) => {
                 self.locator = self.locator.next();
-                Ok(Some(block))
+                Ok(Some(block_id))
             }
             Err(error @ store::Error::LocatorNotFound) => {
                 // There are two reasons why this error can be returned here:
