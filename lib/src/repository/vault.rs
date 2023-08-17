@@ -21,7 +21,6 @@ use crate::{
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use std::sync::Arc;
-use tracing::Level;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
@@ -53,7 +52,7 @@ impl Vault {
         let proof = match proof.verify(self.repository_id()) {
             Ok(proof) => proof,
             Err(ProofError(proof)) => {
-                tracing::trace!(branch_id = ?proof.writer_id, hash = ?proof.hash, "invalid proof");
+                tracing::trace!(branch_id = ?proof.writer_id, hash = ?proof.hash, "Invalid proof");
                 return Ok(RootNodeReceiveStatus::default());
             }
         };
@@ -205,36 +204,14 @@ impl Vault {
     // affected branches.
     async fn finalize_receive(
         &self,
-        mut tx: WriteTransaction,
+        tx: WriteTransaction,
         new_approved: &[PublicKey],
     ) -> Result<()> {
-        // For logging completed snapshots
-        let root_nodes = if tracing::enabled!(Level::DEBUG) {
-            let mut root_nodes = Vec::with_capacity(new_approved.len());
-
-            for branch_id in new_approved {
-                root_nodes.push(tx.load_root_node(branch_id).await?);
-            }
-
-            root_nodes
-        } else {
-            Vec::new()
-        };
-
         tx.commit_and_then({
             let new_approved = new_approved.to_vec();
             let event_tx = self.event_tx.clone();
 
             move || {
-                for root_node in root_nodes {
-                    tracing::debug!(
-                        branch_id = ?root_node.proof.writer_id,
-                        hash = ?root_node.proof.hash,
-                        vv = ?root_node.proof.version_vector,
-                        "snapshot complete"
-                    );
-                }
-
                 for branch_id in new_approved {
                     event_tx.send(Payload::BranchChanged(branch_id));
                 }

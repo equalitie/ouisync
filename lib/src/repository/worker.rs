@@ -58,15 +58,7 @@ fn from_events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream
     let rx = IgnoreScopeReceiver::new(rx, scope);
 
     stream::unfold(rx, |mut rx| async move {
-        let event = rx.recv().await;
-
-        match &event {
-            Ok(payload) => tracing::trace!(?payload, "event received"),
-            Err(RecvError::Lagged(_)) => tracing::trace!("event receiver lagged"),
-            Err(RecvError::Closed) => tracing::trace!("event receiver closed"),
-        }
-
-        match event {
+        match rx.recv().await {
             Ok(Payload::BranchChanged(_)) => {
                 // On `BranchChanged`, interrupt the current job and
                 // immediately start a new one.

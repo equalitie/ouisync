@@ -29,9 +29,10 @@ pub(super) async fn receive(
         return Ok(ReceiveStatus::default());
     }
 
-    let nodes = leaf_node::load_parent_hashes(tx, &block.id)
+    let nodes: Vec<_> = leaf_node::load_parent_hashes(tx, &block.id)
         .try_collect()
         .await?;
+
     let mut branches = HashSet::default();
 
     for (hash, state) in index::update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {

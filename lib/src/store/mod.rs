@@ -523,27 +523,22 @@ impl WriteTransaction {
         let action = root_node::decide_action(self.db(), &proof, &block_presence).await?;
 
         if action.insert {
-            let node = root_node::create(self.db(), proof, Summary::INCOMPLETE).await?;
+            root_node::create(self.db(), proof, Summary::INCOMPLETE).await?;
 
             // Ignoring quota here because if the snapshot became complete by receiving this root
             // node it means that we already have all the other nodes and so the quota validation
             // already took place.
             let status = index::finalize(self.db(), hash, None).await?;
 
-            tracing::debug!(
-                branch_id = ?node.proof.writer_id,
-                hash = ?node.proof.hash,
-                vv = ?node.proof.version_vector,
-                "snapshot started"
-            );
-
             Ok(RootNodeReceiveStatus {
                 new_approved: status.new_approved,
+                new_snapshot: true,
                 request_children: action.request_children,
             })
         } else {
             Ok(RootNodeReceiveStatus {
                 new_approved: Vec::new(),
+                new_snapshot: false,
                 request_children: action.request_children,
             })
         }
@@ -704,6 +699,7 @@ impl WriteTransaction {
             vv = ?root_node.proof.version_vector,
             hash = ?root_node.proof.hash,
             branch_id = ?root_node.proof.writer_id,
+            block_presence = ?root_node.summary.block_presence,
             "create local snapshot"
         );
 

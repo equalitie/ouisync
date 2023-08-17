@@ -129,7 +129,7 @@ impl<'a> Responder<'a> {
                 Ok(())
             }
             Err(store::Error::BranchNotFound) => {
-                tracing::warn!("root node not found");
+                tracing::trace!("root node not found");
                 self.tx
                     .send(Response::RootNodeError(branch_id, debug.send()))
                     .await;
@@ -180,7 +180,7 @@ impl<'a> Responder<'a> {
                     .await;
             }
         } else {
-            tracing::warn!("child nodes not found");
+            tracing::trace!("child nodes not found");
             self.tx
                 .send(Response::ChildNodesError(
                     parent_hash,
@@ -218,7 +218,7 @@ impl<'a> Responder<'a> {
                 Ok(())
             }
             Err(store::Error::BlockNotFound) => {
-                tracing::warn!("block not found");
+                tracing::trace!("block not found");
                 self.tx.send(Response::BlockError(id, debug.send())).await;
                 Ok(())
             }

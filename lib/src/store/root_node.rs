@@ -18,6 +18,8 @@ use std::cmp::Ordering;
 pub(crate) struct ReceiveStatus {
     /// List of branches whose snapshots became approved.
     pub new_approved: Vec<PublicKey>,
+    /// Did the received node create new snapshot?
+    pub new_snapshot: bool,
     /// Should we request the children of the incoming node?
     pub request_children: bool,
 }
