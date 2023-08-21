@@ -5,17 +5,14 @@ use crate::{
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
-    event::{Event, EventScope, IgnoreScopeReceiver, Payload},
+    event::{self, Event, EventScope, Lagged, Payload},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    versioned,
+    store, versioned,
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, Stream};
-use std::sync::Arc;
-use tokio::{
-    select,
-    sync::broadcast::{self, error::RecvError},
-};
+use futures_util::{stream, StreamExt};
+use std::{future, sync::Arc};
+use tokio::select;
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
@@ -29,10 +26,38 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     let maintain = async {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
-        let commands = stream::select(
-            from_events(shared.vault.event_tx.subscribe(), event_scope),
-            from_unlocks(unlock_rx),
-        );
+
+        // - Ignore events from the same scope to prevent infinite loop
+        // - On `BranchChanged` interrupt and restart the current job to avoid unnecessary work on
+        //   potentially outdated branches.
+        // - On any other event (including `Lagged`), let the current job run to completion and
+        //   then restart it.
+        let events =
+            event::into_stream(shared.vault.event_tx.subscribe()).filter_map(move |event| {
+                future::ready(match event {
+                    Ok(Event { scope, .. }) if scope == event_scope => None,
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_),
+                        ..
+                    }) => Some(Command::Interrupt),
+                    Ok(Event {
+                        payload: Payload::BlockReceived { .. },
+                        ..
+                    })
+                    | Err(Lagged) => Some(Command::Wait),
+                })
+            });
+
+        let unlocks = stream::unfold(unlock_rx, |mut rx| async move {
+            if rx.recv().await {
+                tracing::trace!("lock released");
+                Some((Command::Wait, rx))
+            } else {
+                None
+            }
+        });
+
+        let commands = stream::select(events, unlocks);
 
         utils::run(
             || maintain(&shared, local_branch.as_ref(), &unlock_tx),
@@ -43,7 +68,26 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
 
     // Scan
     let scan = async {
-        let commands = from_events(shared.vault.event_tx.subscribe(), event_scope);
+        // - On `BranchChanged` from outside of this scope restart the current job to avoid
+        //   unnecessary traversal of potentially outdated branches.
+        // - On `BranchChanged` from this scope, let the current job run to completion and then
+        //   restart it. This is because such event can only come from `merge` which does not
+        //   change the set of missing and required blocks.
+        // - On any other event (including `Lagged`), let the current job run to completion and
+        //   then restart it.
+        let commands =
+            event::into_stream(shared.vault.event_tx.subscribe()).map(move |event| match event {
+                Ok(Event {
+                    payload: Payload::BranchChanged(_),
+                    scope,
+                }) if scope != event_scope => Command::Interrupt,
+                Ok(Event {
+                    payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                    ..
+                })
+                | Err(Lagged) => Command::Wait,
+            });
+
         utils::run(|| scan(&shared), commands).await;
     };
 
@@ -52,37 +96,6 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         _ = maintain => (),
         _ = scan => (),
     }
-}
-
-fn from_events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
-    let rx = IgnoreScopeReceiver::new(rx, scope);
-
-    stream::unfold(rx, |mut rx| async move {
-        match rx.recv().await {
-            Ok(Payload::BranchChanged(_)) => {
-                // On `BranchChanged`, interrupt the current job and
-                // immediately start a new one.
-                Some((Command::Interrupt, rx))
-            }
-            Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                // On any other event, let the current job run to completion
-                // and then start a new one.
-                Some((Command::Wait, rx))
-            }
-            Err(RecvError::Closed) => None,
-        }
-    })
-}
-
-fn from_unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
-    stream::unfold(rx, |mut rx| async move {
-        if rx.recv().await {
-            tracing::trace!("lock released");
-            Some((Command::Wait, rx))
-        } else {
-            None
-        }
-    })
 }
 
 async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
@@ -122,6 +135,8 @@ async fn scan(shared: &Shared) {
 
 /// Find missing blocks and mark them as required.
 mod scan {
+    use tracing::instrument;
+
     use super::*;
 
     pub(super) async fn run(shared: &Shared) -> Result<()> {
@@ -129,20 +144,18 @@ mod scan {
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            require_missing_blocks(shared, branch.clone(), BlobId::ROOT).await?;
-
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
-                    tracing::trace!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    tracing::trace!(branch_id = ?branch.id(), ?error, "Failed to open root directory");
                     error
                 })
             {
-                Ok(dir) => versions.push(dir),
-                Err(Error::EntryNotFound) => {
-                    // `EntryNotFound` here just means this is a newly created branch with no
-                    // content yet. It is safe to ignore it.
-                    continue;
+                Ok(dir) => {
+                    versions.push(dir);
+                }
+                Err(Error::Store(store::Error::BlockNotFound)) => {
+                    require_missing_blocks(shared, &branch, BlobId::ROOT).await?;
                 }
                 Err(error) => return Err(error),
             }
@@ -160,19 +173,15 @@ mod scan {
                 JointEntryRef::File(entry) => {
                     require_missing_blocks(
                         shared,
-                        entry.inner().branch().clone(),
+                        entry.inner().branch(),
                         *entry.inner().blob_id(),
                     )
                     .await?;
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        require_missing_blocks(
-                            shared,
-                            version.branch().clone(),
-                            *version.blob_id(),
-                        )
-                        .await?;
+                        require_missing_blocks(shared, version.branch(), *version.blob_id())
+                            .await?;
                     }
 
                     match entry
@@ -185,7 +194,7 @@ mod scan {
                             tracing::trace!(
                                 entry = entry.name(),
                                 ?error,
-                                "failed to open directory"
+                                "Failed to open directory"
                             );
                         }
                     }
@@ -200,16 +209,26 @@ mod scan {
         Ok(())
     }
 
+    #[instrument(skip(shared, branch), fields(branch_id = ?branch.id()))]
     async fn require_missing_blocks(
         shared: &Shared,
-        branch: Branch,
+        branch: &Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
+        let mut blob_block_ids =
+            BlockIds::open(branch.clone(), blob_id)
+                .await
+                .map_err(|error| {
+                    tracing::trace!(?error, "BlockIds::open failed");
+                    error
+                })?;
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
+        while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
+            tracing::trace!(block_number, ?error, "BlockIds::try_next failed");
+            error
+        })? {
             if !shared
                 .vault
                 .store()
