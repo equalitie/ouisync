@@ -277,7 +277,7 @@ impl<'a> Monitor<'a> {
     async fn handle_branch_changed(&self, branch_id: PublicKey) -> Result<()> {
         let root_node = match self.load_root_node(&branch_id).await {
             Ok(node) => node,
-            Err(Error::EntryNotFound) => {
+            Err(Error::Store(store::Error::BranchNotFound)) => {
                 // branch was removed after the notification was fired.
                 return Ok(());
             }
