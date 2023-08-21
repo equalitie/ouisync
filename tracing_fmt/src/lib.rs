@@ -75,7 +75,7 @@ where
 
             let mut seen = false;
 
-            for span in scope.from_root() {
+            for span in scope {
                 if seen {
                     write!(writer, "{}", dimmed.paint(":"))?;
                 }
