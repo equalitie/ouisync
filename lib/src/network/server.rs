@@ -258,6 +258,7 @@ impl<'a> Monitor<'a> {
                     tracing::warn!("event receiver lagged");
                     self.handle_all_branches_changed().await?
                 }
+
                 Err(RecvError::Closed) => break,
             }
         }

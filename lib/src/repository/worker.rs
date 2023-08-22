@@ -1,4 +1,4 @@
-use self::utils::{unlock, Command};
+use self::utils::{unlock, Command, Counter};
 use super::Shared;
 use crate::{
     blob::{BlobId, BlockIds},
@@ -21,6 +21,7 @@ use tokio::select;
 /// - find missing blocks
 pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     let event_scope = EventScope::new();
+    let prune_counter = Counter::new();
 
     // Maintain (merge, prune and trash)
     let maintain = async {
@@ -60,7 +61,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         let commands = stream::select(events, unlocks);
 
         utils::run(
-            || maintain(&shared, local_branch.as_ref(), &unlock_tx),
+            || maintain(&shared, local_branch.as_ref(), &unlock_tx, &prune_counter),
             commands,
         )
         .await;
@@ -88,7 +89,7 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
                 | Err(Lagged) => Command::Wait,
             });
 
-        utils::run(|| scan(&shared), commands).await;
+        utils::run(|| scan(&shared, &prune_counter), commands).await;
     };
 
     // Run them in parallel so missing blocks are found as soon as possible
@@ -98,7 +99,12 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     }
 }
 
-async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
+async fn maintain(
+    shared: &Shared,
+    local_branch: Option<&Branch>,
+    unlock_tx: &unlock::Sender,
+    prune_counter: &Counter,
+) {
     // Merge branches
     if let Some(local_branch) = local_branch {
         shared
@@ -114,7 +120,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
         .vault
         .monitor
         .prune_job
-        .run(prune::run(shared, unlock_tx))
+        .run(prune::run(shared, unlock_tx, prune_counter))
         .await;
 
     // Collect unreachable blocks
@@ -128,18 +134,41 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     }
 }
 
-async fn scan(shared: &Shared) {
+async fn scan(shared: &Shared, prune_counter: &Counter) {
     // Find missing blocks
-    shared.vault.monitor.scan_job.run(scan::run(shared)).await
+    shared
+        .vault
+        .monitor
+        .scan_job
+        .run(scan::run(shared, prune_counter))
+        .await
 }
 
 /// Find missing blocks and mark them as required.
 mod scan {
+    use super::*;
     use tracing::instrument;
 
-    use super::*;
+    pub(super) async fn run(shared: &Shared, prune_counter: &Counter) -> Result<()> {
+        loop {
+            let prune_count_before = prune_counter.get();
 
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+            match run_once(shared).await {
+                Ok(()) => return Ok(()),
+                // `BranchNotFound` and `LocatorNotFound` might be caused by a branch being pruned
+                // concurrently as it's being scanned. Check the prune counter to confirm the prune
+                // happened and if so, restart the scan.
+                Err(Error::Store(store::Error::BranchNotFound | store::Error::LocatorNotFound))
+                    if prune_counter.get() != prune_count_before =>
+                {
+                    continue
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn run_once(shared: &Shared) -> Result<()> {
         let branches = shared.load_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
 
@@ -287,7 +316,11 @@ mod prune {
     use super::*;
     use futures_util::TryStreamExt;
 
-    pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        unlock_tx: &unlock::Sender,
+        prune_counter: &Counter,
+    ) -> Result<()> {
         let all: Vec<_> = shared
             .vault
             .store()
@@ -326,6 +359,8 @@ mod prune {
                     continue;
                 }
             };
+
+            prune_counter.increment();
 
             let mut tx = shared.vault.store().begin_write().await?;
             tx.remove_branch(&node).await?;
@@ -615,7 +650,11 @@ mod trash {
 
 mod utils {
     use futures_util::{Stream, StreamExt};
-    use std::{future::Future, pin::pin};
+    use std::{
+        future::Future,
+        pin::pin,
+        sync::atomic::{AtomicU64, Ordering},
+    };
     use tokio::select;
 
     /// Control how the next job should run
@@ -730,6 +769,23 @@ mod utils {
                     rx,
                 },
             )
+        }
+    }
+
+    #[derive(Default)]
+    pub(super) struct Counter(AtomicU64);
+
+    impl Counter {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn get(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+
+        pub fn increment(&self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
