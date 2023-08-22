@@ -2,7 +2,7 @@ use crate::{
     collections::HashMap,
     crypto::{sign::PublicKey, Hash},
     deadlock::BlockingMutex,
-    protocol::{InnerNodeMap, LeafNodeSet, RootNode},
+    protocol::{InnerNodeMap, LeafNodeSet, RootNode, Summary},
 };
 use lru::LruCache;
 use std::{num::NonZeroUsize, sync::Arc};
@@ -32,7 +32,9 @@ impl Cache {
     pub fn begin(self: &Arc<Self>) -> CacheTransaction {
         CacheTransaction {
             cache: self.clone(),
-            roots_patch: HashMap::default(),
+            roots: HashMap::default(),
+            root_summaries: HashMap::default(),
+            inner_summaries: HashMap::default(),
         }
     }
 }
@@ -45,24 +47,45 @@ impl Default for Cache {
 
 pub(super) struct CacheTransaction {
     cache: Arc<Cache>,
-    roots_patch: HashMap<PublicKey, Option<RootNode>>,
+    roots: HashMap<PublicKey, Option<RootNode>>,
+    root_summaries: HashMap<Hash, Summary>,
+    inner_summaries: HashMap<Hash, HashMap<u8, Summary>>,
 }
 
 impl CacheTransaction {
     pub fn put_root(&mut self, node: RootNode) {
-        self.roots_patch.insert(node.proof.writer_id, Some(node));
+        self.roots.insert(node.proof.writer_id, Some(node));
     }
 
     pub fn remove_root(&mut self, branch_id: &PublicKey) {
-        self.roots_patch.insert(*branch_id, None);
+        self.roots.insert(*branch_id, None);
     }
 
     pub fn get_root(&self, branch_id: &PublicKey) -> Option<RootNode> {
-        if let Some(node) = self.roots_patch.get(branch_id) {
+        let node = if let Some(node) = self.roots.get(branch_id) {
             node.as_ref().cloned()
         } else {
             self.cache.roots.lock().unwrap().get(branch_id).cloned()
+        };
+
+        let mut node = node?;
+
+        if let Some(summary) = self.root_summaries.get(&node.proof.hash).copied() {
+            node.summary = summary;
         }
+
+        Some(node)
+    }
+
+    pub fn update_root_summary(&mut self, hash: Hash, summary: Summary) {
+        self.root_summaries.insert(hash, summary);
+    }
+
+    pub fn update_inner_summary(&mut self, parent_hash: Hash, bucket: u8, summary: Summary) {
+        self.inner_summaries
+            .entry(parent_hash)
+            .or_default()
+            .insert(bucket, summary);
     }
 
     pub fn get_inners(&self, parent_hash: &Hash) -> Option<InnerNodeMap> {
@@ -84,17 +107,41 @@ impl CacheTransaction {
     }
 
     pub fn is_dirty(&self) -> bool {
-        !self.roots_patch.is_empty()
+        !self.roots.is_empty()
+            || !self.root_summaries.is_empty()
+            || !self.inner_summaries.is_empty()
     }
 
     pub fn commit(self) {
-        let mut roots = self.cache.roots.lock().unwrap();
+        {
+            let mut roots = self.cache.roots.lock().unwrap();
 
-        for (branch_id, node) in self.roots_patch {
-            if let Some(node) = node {
-                roots.insert(branch_id, node);
-            } else {
-                roots.remove(&branch_id);
+            for (branch_id, node) in self.roots {
+                if let Some(node) = node {
+                    roots.insert(branch_id, node);
+                } else {
+                    roots.remove(&branch_id);
+                }
+            }
+
+            for node in roots.values_mut() {
+                if let Some(summary) = self.root_summaries.get(&node.proof.hash).copied() {
+                    node.summary = summary;
+                }
+            }
+        }
+
+        {
+            let mut inners = self.cache.inners.lock().unwrap();
+
+            for (parent_hash, summaries) in self.inner_summaries {
+                if let Some(nodes) = inners.get_mut(&parent_hash) {
+                    for (bucket, summary) in summaries {
+                        if let Some(node) = nodes.get_mut(bucket) {
+                            node.summary = summary;
+                        }
+                    }
+                }
             }
         }
     }

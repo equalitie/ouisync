@@ -2,6 +2,8 @@
 #![allow(clippy::declare_interior_mutable_const)]
 
 use crate::{crypto::sign::PublicKey, protocol::BlockId};
+use core::fmt;
+use futures_util::{stream, Stream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::broadcast;
 
@@ -84,24 +86,26 @@ impl EventSender {
     }
 }
 
-/// Receiver adapter that skips events from the given scope.
-pub(crate) struct IgnoreScopeReceiver {
-    inner: broadcast::Receiver<Event>,
-    scope: EventScope,
+#[derive(Debug)]
+pub(crate) struct Lagged;
+
+impl fmt::Display for Lagged {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "event channel lagged")
+    }
 }
 
-impl IgnoreScopeReceiver {
-    pub fn new(inner: broadcast::Receiver<Event>, scope: EventScope) -> Self {
-        Self { inner, scope }
-    }
+impl std::error::Error for Lagged {}
 
-    pub async fn recv(&mut self) -> Result<Payload, broadcast::error::RecvError> {
-        loop {
-            match self.inner.recv().await {
-                Ok(Event { payload, scope }) if scope != self.scope => break Ok(payload),
-                Ok(_) => continue,
-                Err(error) => break Err(error),
-            }
+/// Converts event receiver into a `Stream`.
+pub(crate) fn into_stream(
+    rx: broadcast::Receiver<Event>,
+) -> impl Stream<Item = Result<Event, Lagged>> {
+    stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(event) => Some((Ok(event), rx)),
+            Err(broadcast::error::RecvError::Lagged(_)) => Some((Err(Lagged), rx)),
+            Err(broadcast::error::RecvError::Closed) => None,
         }
-    }
+    })
 }

@@ -639,8 +639,6 @@ async fn write_block(
 
     tx.write_block(&id, &buffer, &nonce).await?;
 
-    tracing::trace!("write_block");
-
     Ok(id)
 }
 

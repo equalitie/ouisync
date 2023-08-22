@@ -47,6 +47,10 @@ impl InnerNodeMap {
         self.0.get(&bucket)
     }
 
+    pub fn get_mut(&mut self, bucket: u8) -> Option<&mut InnerNode> {
+        self.0.get_mut(&bucket)
+    }
+
     pub fn iter(&self) -> InnerNodeMapIter {
         InnerNodeMapIter(self.0.iter())
     }

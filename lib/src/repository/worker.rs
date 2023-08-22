@@ -1,21 +1,18 @@
-use self::utils::{unlock, Command};
+use self::utils::{unlock, Command, Counter};
 use super::Shared;
 use crate::{
     blob::{BlobId, BlockIds},
     branch::Branch,
     directory::{DirectoryFallback, DirectoryLocking},
     error::{Error, Result},
-    event::{Event, EventScope, IgnoreScopeReceiver, Payload},
+    event::{self, Event, EventScope, Lagged, Payload},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    versioned,
+    store, versioned,
 };
 use async_recursion::async_recursion;
-use futures_util::{stream, Stream};
-use std::sync::Arc;
-use tokio::{
-    select,
-    sync::broadcast::{self, error::RecvError},
-};
+use futures_util::{stream, StreamExt};
+use std::{future, sync::Arc};
+use tokio::select;
 
 /// Background worker to perform various jobs on the repository:
 /// - merge remote branches into the local one
@@ -24,18 +21,47 @@ use tokio::{
 /// - find missing blocks
 pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     let event_scope = EventScope::new();
+    let prune_counter = Counter::new();
 
     // Maintain (merge, prune and trash)
     let maintain = async {
         let local_branch = local_branch.map(|branch| branch.with_event_scope(event_scope));
         let (unlock_tx, unlock_rx) = unlock::channel();
-        let commands = stream::select(
-            from_events(shared.vault.event_tx.subscribe(), event_scope),
-            from_unlocks(unlock_rx),
-        );
+
+        // - Ignore events from the same scope to prevent infinite loop
+        // - On `BranchChanged` interrupt and restart the current job to avoid unnecessary work on
+        //   potentially outdated branches.
+        // - On any other event (including `Lagged`), let the current job run to completion and
+        //   then restart it.
+        let events =
+            event::into_stream(shared.vault.event_tx.subscribe()).filter_map(move |event| {
+                future::ready(match event {
+                    Ok(Event { scope, .. }) if scope == event_scope => None,
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_),
+                        ..
+                    }) => Some(Command::Interrupt),
+                    Ok(Event {
+                        payload: Payload::BlockReceived { .. },
+                        ..
+                    })
+                    | Err(Lagged) => Some(Command::Wait),
+                })
+            });
+
+        let unlocks = stream::unfold(unlock_rx, |mut rx| async move {
+            if rx.recv().await {
+                tracing::trace!("lock released");
+                Some((Command::Wait, rx))
+            } else {
+                None
+            }
+        });
+
+        let commands = stream::select(events, unlocks);
 
         utils::run(
-            || maintain(&shared, local_branch.as_ref(), &unlock_tx),
+            || maintain(&shared, local_branch.as_ref(), &unlock_tx, &prune_counter),
             commands,
         )
         .await;
@@ -43,8 +69,27 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
 
     // Scan
     let scan = async {
-        let commands = from_events(shared.vault.event_tx.subscribe(), event_scope);
-        utils::run(|| scan(&shared), commands).await;
+        // - On `BranchChanged` from outside of this scope restart the current job to avoid
+        //   unnecessary traversal of potentially outdated branches.
+        // - On `BranchChanged` from this scope, let the current job run to completion and then
+        //   restart it. This is because such event can only come from `merge` which does not
+        //   change the set of missing and required blocks.
+        // - On any other event (including `Lagged`), let the current job run to completion and
+        //   then restart it.
+        let commands =
+            event::into_stream(shared.vault.event_tx.subscribe()).map(move |event| match event {
+                Ok(Event {
+                    payload: Payload::BranchChanged(_),
+                    scope,
+                }) if scope != event_scope => Command::Interrupt,
+                Ok(Event {
+                    payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                    ..
+                })
+                | Err(Lagged) => Command::Wait,
+            });
+
+        utils::run(|| scan(&shared, &prune_counter), commands).await;
     };
 
     // Run them in parallel so missing blocks are found as soon as possible
@@ -54,46 +99,12 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
     }
 }
 
-fn from_events(rx: broadcast::Receiver<Event>, scope: EventScope) -> impl Stream<Item = Command> {
-    let rx = IgnoreScopeReceiver::new(rx, scope);
-
-    stream::unfold(rx, |mut rx| async move {
-        let event = rx.recv().await;
-
-        match &event {
-            Ok(payload) => tracing::trace!(?payload, "event received"),
-            Err(RecvError::Lagged(_)) => tracing::trace!("event receiver lagged"),
-            Err(RecvError::Closed) => tracing::trace!("event receiver closed"),
-        }
-
-        match event {
-            Ok(Payload::BranchChanged(_)) => {
-                // On `BranchChanged`, interrupt the current job and
-                // immediately start a new one.
-                Some((Command::Interrupt, rx))
-            }
-            Ok(Payload::BlockReceived { .. }) | Err(RecvError::Lagged(_)) => {
-                // On any other event, let the current job run to completion
-                // and then start a new one.
-                Some((Command::Wait, rx))
-            }
-            Err(RecvError::Closed) => None,
-        }
-    })
-}
-
-fn from_unlocks(rx: unlock::Receiver) -> impl Stream<Item = Command> {
-    stream::unfold(rx, |mut rx| async move {
-        if rx.recv().await {
-            tracing::trace!("lock released");
-            Some((Command::Wait, rx))
-        } else {
-            None
-        }
-    })
-}
-
-async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
+async fn maintain(
+    shared: &Shared,
+    local_branch: Option<&Branch>,
+    unlock_tx: &unlock::Sender,
+    prune_counter: &Counter,
+) {
     // Merge branches
     if let Some(local_branch) = local_branch {
         shared
@@ -109,7 +120,7 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
         .vault
         .monitor
         .prune_job
-        .run(prune::run(shared, unlock_tx))
+        .run(prune::run(shared, unlock_tx, prune_counter))
         .await;
 
     // Collect unreachable blocks
@@ -123,34 +134,57 @@ async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &un
     }
 }
 
-async fn scan(shared: &Shared) {
+async fn scan(shared: &Shared, prune_counter: &Counter) {
     // Find missing blocks
-    shared.vault.monitor.scan_job.run(scan::run(shared)).await
+    shared
+        .vault
+        .monitor
+        .scan_job
+        .run(scan::run(shared, prune_counter))
+        .await
 }
 
 /// Find missing blocks and mark them as required.
 mod scan {
     use super::*;
+    use tracing::instrument;
 
-    pub(super) async fn run(shared: &Shared) -> Result<()> {
+    pub(super) async fn run(shared: &Shared, prune_counter: &Counter) -> Result<()> {
+        loop {
+            let prune_count_before = prune_counter.get();
+
+            match run_once(shared).await {
+                Ok(()) => return Ok(()),
+                // `BranchNotFound` and `LocatorNotFound` might be caused by a branch being pruned
+                // concurrently as it's being scanned. Check the prune counter to confirm the prune
+                // happened and if so, restart the scan.
+                Err(Error::Store(store::Error::BranchNotFound | store::Error::LocatorNotFound))
+                    if prune_counter.get() != prune_count_before =>
+                {
+                    continue
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn run_once(shared: &Shared) -> Result<()> {
         let branches = shared.load_branches().await?;
         let mut versions = Vec::with_capacity(branches.len());
 
         for branch in branches {
-            require_missing_blocks(shared, branch.clone(), BlobId::ROOT).await?;
-
             match branch
                 .open_root(DirectoryLocking::Disabled, DirectoryFallback::Disabled)
                 .await.map_err(|error| {
-                    tracing::trace!(branch_id = ?branch.id(), ?error, "failed to open root directory");
+                    tracing::trace!(branch_id = ?branch.id(), ?error, "Failed to open root directory");
                     error
                 })
             {
-                Ok(dir) => versions.push(dir),
-                Err(Error::EntryNotFound) => {
-                    // `EntryNotFound` here just means this is a newly created branch with no
-                    // content yet. It is safe to ignore it.
-                    continue;
+                Ok(dir) => {
+                    versions.push(dir);
+                }
+                Err(Error::Store(store::Error::BlockNotFound)) => {
+                    require_missing_blocks(shared, &branch, BlobId::ROOT).await?;
                 }
                 Err(error) => return Err(error),
             }
@@ -168,19 +202,15 @@ mod scan {
                 JointEntryRef::File(entry) => {
                     require_missing_blocks(
                         shared,
-                        entry.inner().branch().clone(),
+                        entry.inner().branch(),
                         *entry.inner().blob_id(),
                     )
                     .await?;
                 }
                 JointEntryRef::Directory(entry) => {
                     for version in entry.versions() {
-                        require_missing_blocks(
-                            shared,
-                            version.branch().clone(),
-                            *version.blob_id(),
-                        )
-                        .await?;
+                        require_missing_blocks(shared, version.branch(), *version.blob_id())
+                            .await?;
                     }
 
                     match entry
@@ -193,7 +223,7 @@ mod scan {
                             tracing::trace!(
                                 entry = entry.name(),
                                 ?error,
-                                "failed to open directory"
+                                "Failed to open directory"
                             );
                         }
                     }
@@ -208,16 +238,26 @@ mod scan {
         Ok(())
     }
 
+    #[instrument(skip(shared, branch), fields(branch_id = ?branch.id()))]
     async fn require_missing_blocks(
         shared: &Shared,
-        branch: Branch,
+        branch: &Branch,
         blob_id: BlobId,
     ) -> Result<()> {
-        let mut blob_block_ids = BlockIds::open(branch.clone(), blob_id).await?;
+        let mut blob_block_ids =
+            BlockIds::open(branch.clone(), blob_id)
+                .await
+                .map_err(|error| {
+                    tracing::trace!(?error, "open failed");
+                    error
+                })?;
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
 
-        while let Some(block_id) = blob_block_ids.try_next().await? {
+        while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
+            tracing::trace!(block_number, ?error, "try_next failed");
+            error
+        })? {
             if !shared
                 .vault
                 .store()
@@ -276,7 +316,11 @@ mod prune {
     use super::*;
     use futures_util::TryStreamExt;
 
-    pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<()> {
+    pub(super) async fn run(
+        shared: &Shared,
+        unlock_tx: &unlock::Sender,
+        prune_counter: &Counter,
+    ) -> Result<()> {
         let all: Vec<_> = shared
             .vault
             .store()
@@ -315,6 +359,8 @@ mod prune {
                     continue;
                 }
             };
+
+            prune_counter.increment();
 
             let mut tx = shared.vault.store().begin_write().await?;
             tx.remove_branch(&node).await?;
@@ -604,7 +650,11 @@ mod trash {
 
 mod utils {
     use futures_util::{Stream, StreamExt};
-    use std::{future::Future, pin::pin};
+    use std::{
+        future::Future,
+        pin::pin,
+        sync::atomic::{AtomicU64, Ordering},
+    };
     use tokio::select;
 
     /// Control how the next job should run
@@ -719,6 +769,23 @@ mod utils {
                     rx,
                 },
             )
+        }
+    }
+
+    #[derive(Default)]
+    pub(super) struct Counter(AtomicU64);
+
+    impl Counter {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn get(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+
+        pub fn increment(&self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

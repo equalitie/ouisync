@@ -4,7 +4,7 @@ use crate::{
     db,
     protocol::{InnerNode, InnerNodeMap, LeafNodeSet, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
-use futures_util::{future, Stream, TryStreamExt};
+use futures_util::{future, TryStreamExt};
 use sqlx::Row;
 use std::convert::TryInto;
 
@@ -78,18 +78,6 @@ pub(super) async fn load(
     });
 
     Ok(node)
-}
-
-/// Loads parent hashes of all inner nodes with the specifed hash.
-pub(super) fn load_parent_hashes<'a>(
-    conn: &'a mut db::Connection,
-    hash: &'a Hash,
-) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-    sqlx::query("SELECT DISTINCT parent FROM snapshot_inner_nodes WHERE hash = ?")
-        .bind(hash)
-        .fetch(conn)
-        .map_ok(|row| row.get(0))
-        .err_into()
 }
 
 /// Saves this inner node into the db unless it already exists.
@@ -175,21 +163,22 @@ pub(super) async fn compute_summary(
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     hash: &Hash,
-) -> Result<(), Error> {
-    let summary = compute_summary(tx, hash).await?;
-
+    summary: Summary,
+) -> Result<Vec<(Hash, u8)>, Error> {
     sqlx::query(
         "UPDATE snapshot_inner_nodes
          SET state = ?, block_presence = ?
-         WHERE hash = ?",
+         WHERE hash = ?
+         RETURNING parent, bucket",
     )
     .bind(summary.state)
     .bind(&summary.block_presence)
     .bind(hash)
-    .execute(tx)
-    .await?;
-
-    Ok(())
+    .fetch(tx)
+    .map_ok(|row| (row.get(0), row.get(1)))
+    .err_into()
+    .try_collect()
+    .await
 }
 
 pub(super) async fn inherit_summaries(

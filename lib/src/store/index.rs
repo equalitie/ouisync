@@ -1,6 +1,7 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
 use super::{
+    cache::CacheTransaction,
     error::Error,
     inner_node,
     quota::{self, QuotaError},
@@ -14,7 +15,6 @@ use crate::{
     protocol::NodeState,
     storage_size::StorageSize,
 };
-use futures_util::TryStreamExt;
 use sqlx::Row;
 
 /// Status of receiving nodes from remote replica.
@@ -51,39 +51,45 @@ pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
 /// Returns the affected snapshots and their states.
 pub(super) async fn update_summaries(
-    tx: &mut db::WriteTransaction,
+    write_tx: &mut db::WriteTransaction,
+    cache_tx: &mut CacheTransaction,
     mut nodes: Vec<Hash>,
     reason: UpdateSummaryReason,
 ) -> Result<HashMap<Hash, NodeState>, Error> {
     let mut states = HashMap::default();
 
     while let Some(hash) = nodes.pop() {
-        let mut has_parent = false;
+        let summary = inner_node::compute_summary(write_tx, &hash).await?;
 
-        // NOTE: There are no orphaned nodes so when `load_parent_hashes` returns nothing it can
-        // only mean that the node is a root.
+        // First try inner nodes ...
+        let node_infos = inner_node::update_summaries(write_tx, &hash, summary).await?;
+        if !node_infos.is_empty() {
+            // ... success.
 
-        try_collect_into(
-            inner_node::load_parent_hashes(tx, &hash).map_ok(|hash| {
-                has_parent = true;
-                hash
-            }),
-            &mut nodes,
-        )
-        .await?;
-
-        if has_parent {
-            inner_node::update_summaries(tx, &hash).await?;
+            for (parent_hash, bucket) in node_infos {
+                cache_tx.update_inner_summary(parent_hash, bucket, summary);
+                nodes.push(parent_hash);
+            }
 
             match reason {
                 // If block was removed we need to remove the corresponding receive filter entries
                 // so if the block becomes needed again we can request it again.
-                UpdateSummaryReason::BlockRemoved => receive_filter::remove(tx, &hash).await?,
+                UpdateSummaryReason::BlockRemoved => {
+                    receive_filter::remove(write_tx, &hash).await?
+                }
                 UpdateSummaryReason::Other => (),
             }
         } else {
-            let state = root_node::update_summaries(tx, &hash).await?;
-            states.entry(hash).or_insert(state).update(state);
+            // ... no hits. Let's try root nodes.
+            let state = root_node::update_summaries(write_tx, &hash, summary).await?;
+            let summary = summary.with_state(state);
+
+            cache_tx.update_root_summary(hash, summary);
+
+            states
+                .entry(hash)
+                .or_insert(summary.state)
+                .update(summary.state);
         }
     }
 
@@ -91,7 +97,8 @@ pub(super) async fn update_summaries(
 }
 
 pub(super) async fn finalize(
-    tx: &mut db::WriteTransaction,
+    write_tx: &mut db::WriteTransaction,
+    cache_tx: &mut CacheTransaction,
     hash: Hash,
     quota: Option<StorageSize>,
 ) -> Result<ReceiveStatus, Error> {
@@ -101,7 +108,8 @@ pub(super) async fn finalize(
     // CAVEAT: the quota check would need some kind of unique lock to prevent multiple
     // concurrent checks to succeed where they would otherwise fail if ran sequentially.
 
-    let states = update_summaries(tx, vec![hash], UpdateSummaryReason::Other).await?;
+    let states =
+        update_summaries(write_tx, cache_tx, vec![hash], UpdateSummaryReason::Other).await?;
 
     let mut old_approved = false;
     let mut new_approved = Vec::new();
@@ -117,7 +125,7 @@ pub(super) async fn finalize(
         }
 
         let approve = if let Some(quota) = quota {
-            match quota::check(tx, &hash, quota).await {
+            match quota::check(write_tx, &hash, quota).await {
                 Ok(()) => true,
                 Err(QuotaError::Exceeded(size)) => {
                     tracing::warn!(?hash, quota = %quota, size = %size, "snapshot rejected - quota exceeded");
@@ -134,10 +142,16 @@ pub(super) async fn finalize(
         };
 
         if approve {
-            root_node::approve(tx, &hash).await?;
-            try_collect_into(root_node::load_writer_ids(tx, &hash), &mut new_approved).await?;
+            // TODO: put node to cache?
+
+            root_node::approve(write_tx, &hash).await?;
+            try_collect_into(
+                root_node::load_writer_ids(write_tx, &hash),
+                &mut new_approved,
+            )
+            .await?;
         } else {
-            root_node::reject(tx, &hash).await?;
+            root_node::reject(write_tx, &hash).await?;
         }
     }
 
@@ -149,7 +163,7 @@ pub(super) async fn finalize(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{block, inner_node, leaf_node, root_node};
+    use super::super::{block, cache::Cache, inner_node, leaf_node, root_node};
     use super::*;
     use crate::{
         crypto::{
@@ -166,6 +180,7 @@ mod tests {
     use assert_matches::assert_matches;
     use rand::{rngs::StdRng, SeedableRng};
     use std::iter;
+    use std::sync::Arc;
     use tempfile::TempDir;
     use test_strategy::proptest;
 
@@ -390,14 +405,17 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
         let (_base_dir, pool) = db::create_temp().await.unwrap();
-        let mut tx = pool.begin_write().await.unwrap();
+        let cache = Arc::new(Cache::new());
+
+        let mut write_tx = pool.begin_write().await.unwrap();
+        let mut cache_tx = cache.begin();
 
         let writer_id = PublicKey::generate(&mut rng);
         let write_keys = Keypair::generate(&mut rng);
         let snapshot = Snapshot::generate(&mut rng, leaf_count);
 
         let mut root_node = root_node::create(
-            &mut tx,
+            &mut write_tx,
             Proof::new(
                 writer_id,
                 VersionVector::first(writer_id),
@@ -409,8 +427,10 @@ mod tests {
         .await
         .unwrap();
 
-        update_summaries_and_approve(&mut tx, root_node.proof.hash).await;
-        reload_root_node(&mut tx, &mut root_node).await.unwrap();
+        update_summaries_and_approve(&mut write_tx, &mut cache_tx, root_node.proof.hash).await;
+        reload_root_node(&mut write_tx, &mut root_node)
+            .await
+            .unwrap();
         assert_eq!(root_node.summary.state.is_approved(), leaf_count == 0);
 
         // TODO: consider randomizing the order the nodes are saved so it's not always
@@ -418,13 +438,15 @@ mod tests {
 
         for layer in snapshot.inner_layers() {
             for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                inner_node::save_all(&mut write_tx, &nodes.clone().into_incomplete(), parent_hash)
                     .await
                     .unwrap();
 
-                update_summaries_and_approve(&mut tx, *parent_hash).await;
+                update_summaries_and_approve(&mut write_tx, &mut cache_tx, *parent_hash).await;
 
-                reload_root_node(&mut tx, &mut root_node).await.unwrap();
+                reload_root_node(&mut write_tx, &mut root_node)
+                    .await
+                    .unwrap();
                 assert!(!root_node.summary.state.is_approved());
             }
         }
@@ -432,13 +454,15 @@ mod tests {
         let mut unsaved_leaves = snapshot.leaf_count();
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
+            leaf_node::save_all(&mut write_tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
             unsaved_leaves -= nodes.len();
 
-            update_summaries_and_approve(&mut tx, *parent_hash).await;
-            reload_root_node(&mut tx, &mut root_node).await.unwrap();
+            update_summaries_and_approve(&mut write_tx, &mut cache_tx, *parent_hash).await;
+            reload_root_node(&mut write_tx, &mut root_node)
+                .await
+                .unwrap();
 
             if unsaved_leaves > 0 {
                 assert!(!root_node.summary.state.is_approved());
@@ -448,17 +472,22 @@ mod tests {
         assert!(root_node.summary.state.is_approved());
 
         // HACK: prevent "too many open files" error.
-        drop(tx);
+        drop(write_tx);
         pool.close().await.unwrap();
 
-        async fn update_summaries_and_approve(tx: &mut db::WriteTransaction, hash: Hash) {
-            for (hash, state) in update_summaries(tx, vec![hash], UpdateSummaryReason::Other)
-                .await
-                .unwrap()
+        async fn update_summaries_and_approve(
+            write_tx: &mut db::WriteTransaction,
+            cache_tx: &mut CacheTransaction,
+            hash: Hash,
+        ) {
+            for (hash, state) in
+                update_summaries(write_tx, cache_tx, vec![hash], UpdateSummaryReason::Other)
+                    .await
+                    .unwrap()
             {
                 match state {
                     NodeState::Complete => {
-                        root_node::approve(tx, &hash).await.unwrap();
+                        root_node::approve(write_tx, &hash).await.unwrap();
                     }
                     NodeState::Incomplete | NodeState::Approved => (),
                     NodeState::Rejected => unreachable!(),
@@ -478,7 +507,10 @@ mod tests {
     async fn summary_case(leaf_count: usize, rng_seed: u64) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let (_base_dir, pool) = db::create_temp().await.unwrap();
-        let mut tx = pool.begin_write().await.unwrap();
+        let cache = Arc::new(Cache::new());
+
+        let mut write_tx = pool.begin_write().await.unwrap();
+        let mut cache_tx = cache.begin();
 
         let writer_id = PublicKey::generate(&mut rng);
         let write_keys = Keypair::generate(&mut rng);
@@ -486,7 +518,7 @@ mod tests {
 
         // Save the snapshot initially with all nodes missing.
         let mut root_node = root_node::create(
-            &mut tx,
+            &mut write_tx,
             Proof::new(
                 writer_id,
                 VersionVector::first(writer_id),
@@ -499,8 +531,9 @@ mod tests {
         .unwrap();
 
         if snapshot.leaf_count() == 0 {
-            super::update_summaries(
-                &mut tx,
+            update_summaries(
+                &mut write_tx,
+                &mut cache_tx,
                 vec![root_node.proof.hash],
                 UpdateSummaryReason::Other,
             )
@@ -510,35 +543,44 @@ mod tests {
 
         for layer in snapshot.inner_layers() {
             for (parent_hash, nodes) in layer.inner_maps() {
-                inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
+                inner_node::save_all(&mut write_tx, &nodes.clone().into_incomplete(), parent_hash)
                     .await
                     .unwrap();
             }
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
+            leaf_node::save_all(&mut write_tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
-            update_summaries(&mut tx, vec![*parent_hash], UpdateSummaryReason::Other)
-                .await
-                .unwrap();
+            update_summaries(
+                &mut write_tx,
+                &mut cache_tx,
+                vec![*parent_hash],
+                UpdateSummaryReason::Other,
+            )
+            .await
+            .unwrap();
         }
 
         // Check that initially all blocks are missing
-        reload_root_node(&mut tx, &mut root_node).await.unwrap();
+        reload_root_node(&mut write_tx, &mut root_node)
+            .await
+            .unwrap();
 
         assert_eq!(root_node.summary.block_presence, MultiBlockPresence::None);
 
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::receive(&mut tx, &block.data, &block.nonce)
+            block::receive(&mut write_tx, &mut cache_tx, &block.data, &block.nonce)
                 .await
                 .unwrap();
             received_blocks += 1;
 
-            reload_root_node(&mut tx, &mut root_node).await.unwrap();
+            reload_root_node(&mut write_tx, &mut root_node)
+                .await
+                .unwrap();
 
             if received_blocks < snapshot.blocks().len() {
                 assert_matches!(
@@ -553,7 +595,7 @@ mod tests {
         }
 
         // HACK: prevent "too many open files" error.
-        drop(tx);
+        drop(write_tx);
         pool.close().await.unwrap();
     }
 

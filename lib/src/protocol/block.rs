@@ -14,7 +14,7 @@ pub(crate) const BLOCK_NONCE_SIZE: usize = 32;
 pub(crate) type BlockNonce = [u8; BLOCK_NONCE_SIZE];
 
 /// Unique id of a block.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct BlockId(Hash);
 
@@ -42,6 +42,12 @@ impl TryFrom<&'_ [u8]> for BlockId {
 
 impl fmt::Display for BlockId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl fmt::Debug for BlockId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }

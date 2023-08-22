@@ -20,7 +20,7 @@ use tokio::{
     select,
     sync::{mpsc, Semaphore},
 };
-use tracing::{instrument, instrument::Instrument, Span};
+use tracing::{instrument, instrument::Instrument, Level, Span};
 
 pub(super) struct Client {
     vault: Vault,
@@ -209,20 +209,27 @@ impl Client {
         let status = self.vault.receive_root_node(proof, block_presence).await?;
 
         if status.request_children {
-            tracing::trace!("received updated root node");
             self.enqueue_request(PendingRequest::ChildNodes(
                 hash,
                 ResponseDisambiguator::new(block_presence),
                 DebugRequest::start(),
             ));
-        } else {
-            tracing::trace!("received outdated root node");
         }
+
+        if status.new_snapshot {
+            tracing::debug!("Received root node - new snapshot");
+        } else if status.request_children {
+            tracing::debug!("Received root node - new blocks");
+        } else {
+            tracing::trace!("Received root node - outdated");
+        }
+
+        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
 
-    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
+    #[instrument(skip_all, fields(hash = ?nodes.hash()), err(Debug))]
     async fn handle_inner_nodes(
         &self,
         nodes: CacheHash<InnerNodeMap>,
@@ -239,7 +246,7 @@ impl Client {
         let debug = DebugRequest::start();
 
         tracing::trace!(
-            "received {}/{} inner nodes: {:?}",
+            "Received {}/{} inner nodes: {:?}",
             status.request_children.len(),
             total,
             status
@@ -264,11 +271,12 @@ impl Client {
         }
 
         self.refresh_branches(&status.new_approved);
+        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
 
-    #[instrument(skip_all, fields(nodes.hash = ?nodes.hash()), err(Debug))]
+    #[instrument(skip_all, fields(hash = ?nodes.hash()), err(Debug))]
     async fn handle_leaf_nodes(
         &self,
         nodes: CacheHash<LeafNodeSet>,
@@ -279,7 +287,7 @@ impl Client {
         let status = self.vault.receive_leaf_nodes(nodes, quota).await?;
 
         tracing::trace!(
-            "received {}/{} leaf nodes: {:?}",
+            "Received {}/{} leaf nodes: {:?}",
             status.request_blocks.len(),
             total,
             status
@@ -318,6 +326,7 @@ impl Client {
         }
 
         self.refresh_branches(&status.new_approved);
+        self.log_approved(&status.new_approved).await;
 
         Ok(())
     }
@@ -358,6 +367,43 @@ impl Client {
     fn refresh_branches(&self, branches: &[PublicKey]) {
         for branch_id in branches {
             self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
+        }
+    }
+
+    /// Log new approved snapshots
+    async fn log_approved(&self, branches: &[PublicKey]) {
+        if !tracing::enabled!(Level::DEBUG) {
+            return;
+        }
+
+        if branches.is_empty() {
+            return;
+        }
+
+        let mut reader = match self.vault.store().acquire_read().await {
+            Ok(reader) => reader,
+            Err(error) => {
+                tracing::error!(?error, "Failed to acquire reader");
+                return;
+            }
+        };
+
+        for branch_id in branches {
+            let root_node = match reader.load_root_node(branch_id).await {
+                Ok(root_node) => root_node,
+                Err(error) => {
+                    tracing::error!(?branch_id, ?error, "Failed to load root node");
+                    continue;
+                }
+            };
+
+            tracing::debug!(
+                writer_id = ?root_node.proof.writer_id,
+                hash = ?root_node.proof.hash,
+                vv = ?root_node.proof.version_vector,
+                block_presence = ?root_node.summary.block_presence,
+                "Snapshot complete"
+            );
         }
     }
 }
