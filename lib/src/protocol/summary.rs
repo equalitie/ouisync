@@ -15,6 +15,8 @@ use twox_hash::xxh3::{Hash128, HasherExt};
 /// and the number of missing blocks in the subtree.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub(crate) struct Summary {
+    // TODO: The `state` field is not used by the peer after deserialization. Consider using
+    // `#[serde(skip)]` on it.
     pub state: NodeState,
     pub block_presence: MultiBlockPresence,
 }
@@ -94,10 +96,10 @@ impl Summary {
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
 pub(crate) enum NodeState {
-    Incomplete = 0,
-    Complete = 1,
-    Approved = 2,
-    Rejected = 3,
+    Incomplete = 0, // Some nodes are missing
+    Complete = 1,   // All nodes are present, but the quota check wasn't performed yet
+    Approved = 2,   // Quota check passed
+    Rejected = 3,   // Quota check failed
 }
 
 impl NodeState {
