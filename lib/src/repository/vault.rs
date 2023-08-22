@@ -8,14 +8,15 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     event::{EventSender, Payload},
+    progress::Progress,
     protocol::{
-        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError,
+        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, RootNode,
         UntrustedProof,
     },
     storage_size::StorageSize,
     store::{
-        self, InnerNodeReceiveStatus, LeafNodeReceiveStatus, ReceiveFilter, RootNodeReceiveStatus,
-        Store, WriteTransaction,
+        self, BlockIdsPage, InnerNodeReceiveStatus, LeafNodeReceiveStatus, ReceiveFilter,
+        RootNodeReceiveStatus, Store, WriteTransaction,
     },
 };
 use futures_util::TryStreamExt;
@@ -25,8 +26,8 @@ use tracing::Level;
 
 #[derive(Clone)]
 pub(crate) struct Vault {
-    pub repository_id: RepositoryId,
-    pub store: Store,
+    repository_id: RepositoryId,
+    store: Store,
     pub event_tx: EventSender,
     pub block_tracker: BlockTracker,
     pub block_request_mode: BlockRequestMode,
@@ -35,6 +36,26 @@ pub(crate) struct Vault {
 }
 
 impl Vault {
+    pub fn new(
+        repository_id: RepositoryId,
+        event_tx: EventSender,
+        pool: db::Pool,
+        block_request_mode: BlockRequestMode,
+        monitor: RepositoryMonitor,
+    ) -> Self {
+        let store = Store::new(pool);
+
+        Self {
+            repository_id,
+            store,
+            event_tx,
+            block_tracker: BlockTracker::new(),
+            block_request_mode,
+            local_id: LocalId::new(),
+            monitor: Arc::new(monitor),
+        }
+    }
+
     pub fn repository_id(&self) -> &RepositoryId {
         &self.repository_id
     }

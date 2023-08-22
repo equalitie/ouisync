@@ -429,7 +429,7 @@ mod trash {
         const UNREACHABLE_BLOCKS_PAGE_SIZE: u32 = 1_000_000;
 
         let mut unreachable_block_ids_page =
-            shared.vault.store.block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
+            shared.vault.store().block_ids(UNREACHABLE_BLOCKS_PAGE_SIZE);
 
         loop {
             let mut unreachable_block_ids = unreachable_block_ids_page.next().await?;

@@ -24,7 +24,6 @@ pub(crate) use self::{
 
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
-    block_tracker::BlockTracker,
     branch::{Branch, BranchShared},
     crypto::{
         cipher,
@@ -44,7 +43,7 @@ use crate::{
     protocol::BLOCK_SIZE,
     state_monitor::StateMonitor,
     storage_size::StorageSize,
-    store::{self, Store},
+    store,
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
@@ -168,7 +167,6 @@ impl Repository {
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-        let store = Store::new(pool);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -176,15 +174,14 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        let vault = Vault {
-            repository_id: *secrets.id(),
-            store,
+
+        let vault = Vault::new(
+            *secrets.id(),
             event_tx,
-            block_tracker: BlockTracker::new(),
+            pool,
             block_request_mode,
-            local_id: LocalId::new(),
-            monitor: Arc::new(monitor),
-        };
+            monitor,
+        );
 
         {
             let mut conn = vault.store().db().acquire().await?;
@@ -876,7 +873,7 @@ async fn report_sync_progress(vault: Vault) {
             Err(RecvError::Closed) => break,
         }
 
-        let next_progress = match vault.store.sync_progress().await {
+        let next_progress = match vault.store().sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 tracing::error!("Failed to retrieve sync progress: {:?}", error);
