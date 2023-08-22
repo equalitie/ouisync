@@ -1,4 +1,5 @@
 use super::{
+    cache::CacheTransaction,
     error::Error,
     index::{self, UpdateSummaryReason},
     leaf_node, root_node,
@@ -21,29 +22,32 @@ pub(crate) struct ReceiveStatus {
 
 /// Write a block received from a remote replica.
 pub(super) async fn receive(
-    tx: &mut db::WriteTransaction,
+    write_tx: &mut db::WriteTransaction,
+    cache_tx: &mut CacheTransaction,
     block: &BlockData,
     nonce: &BlockNonce,
 ) -> Result<ReceiveStatus, Error> {
-    if !leaf_node::set_present(tx, &block.id).await? {
+    if !leaf_node::set_present(write_tx, &block.id).await? {
         return Ok(ReceiveStatus::default());
     }
 
-    let nodes: Vec<_> = leaf_node::load_parent_hashes(tx, &block.id)
+    let nodes: Vec<_> = leaf_node::load_parent_hashes(write_tx, &block.id)
         .try_collect()
         .await?;
 
     let mut branches = HashSet::default();
 
-    for (hash, state) in index::update_summaries(tx, nodes, UpdateSummaryReason::Other).await? {
+    for (hash, state) in
+        index::update_summaries(write_tx, cache_tx, nodes, UpdateSummaryReason::Other).await?
+    {
         if !state.is_approved() {
             continue;
         }
 
-        try_collect_into(root_node::load_writer_ids(tx, &hash), &mut branches).await?;
+        try_collect_into(root_node::load_writer_ids(write_tx, &hash), &mut branches).await?;
     }
 
-    write(tx, &block.id, &block.content, nonce).await?;
+    write(write_tx, &block.id, &block.content, nonce).await?;
 
     Ok(ReceiveStatus { branches })
 }

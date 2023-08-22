@@ -450,14 +450,14 @@ impl WriteTransaction {
 
     /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
-        block::remove(self.db(), id).await?;
-        leaf_node::set_missing(self.db(), id).await?;
+        let (db, cache) = self.db_and_cache();
 
-        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(self.db(), id)
-            .try_collect()
-            .await?;
+        block::remove(db, id).await?;
+        leaf_node::set_missing(db, id).await?;
 
-        index::update_summaries(self.db(), parent_hashes, UpdateSummaryReason::BlockRemoved)
+        let parent_hashes: Vec<_> = leaf_node::load_parent_hashes(db, id).try_collect().await?;
+
+        index::update_summaries(db, cache, parent_hashes, UpdateSummaryReason::BlockRemoved)
             .await?;
 
         Ok(())
@@ -510,6 +510,7 @@ impl WriteTransaction {
         proof: Proof,
         block_presence: MultiBlockPresence,
     ) -> Result<RootNodeReceiveStatus, Error> {
+        let (db, cache) = self.db_and_cache();
         let hash = proof.hash;
 
         // Make sure the loading of the existing nodes and the potential creation of the new node
@@ -520,15 +521,15 @@ impl WriteTransaction {
         // be happens-after any node inserted earlier in the same branch.
 
         // Determine further actions by comparing the incoming node against the existing nodes:
-        let action = root_node::decide_action(self.db(), &proof, &block_presence).await?;
+        let action = root_node::decide_action(db, &proof, &block_presence).await?;
 
         if action.insert {
-            root_node::create(self.db(), proof, Summary::INCOMPLETE).await?;
+            root_node::create(db, proof, Summary::INCOMPLETE).await?;
 
             // Ignoring quota here because if the snapshot became complete by receiving this root
             // node it means that we already have all the other nodes and so the quota validation
             // already took place.
-            let status = index::finalize(self.db(), hash, None).await?;
+            let status = index::finalize(db, cache, hash, None).await?;
 
             Ok(RootNodeReceiveStatus {
                 new_approved: status.new_approved,
@@ -551,20 +552,21 @@ impl WriteTransaction {
         receive_filter: &ReceiveFilter,
         quota: Option<StorageSize>,
     ) -> Result<InnerNodeReceiveStatus, Error> {
+        let (db, cache) = self.db_and_cache();
         let parent_hash = nodes.hash();
 
-        if !index::parent_exists(self.db(), &parent_hash).await? {
+        if !index::parent_exists(db, &parent_hash).await? {
             return Ok(InnerNodeReceiveStatus::default());
         }
 
         let request_children =
-            inner_node::filter_nodes_with_new_blocks(self.db(), &nodes, receive_filter).await?;
+            inner_node::filter_nodes_with_new_blocks(db, &nodes, receive_filter).await?;
 
         let mut nodes = nodes.into_inner().into_incomplete();
-        inner_node::inherit_summaries(self.db(), &mut nodes).await?;
-        inner_node::save_all(self.db(), &nodes, &parent_hash).await?;
+        inner_node::inherit_summaries(db, &mut nodes).await?;
+        inner_node::save_all(db, &nodes, &parent_hash).await?;
 
-        let status = index::finalize(self.db(), parent_hash, quota).await?;
+        let status = index::finalize(db, cache, parent_hash, quota).await?;
 
         Ok(InnerNodeReceiveStatus {
             new_approved: status.new_approved,
@@ -580,17 +582,18 @@ impl WriteTransaction {
         nodes: CacheHash<LeafNodeSet>,
         quota: Option<StorageSize>,
     ) -> Result<LeafNodeReceiveStatus, Error> {
+        let (db, cache) = self.db_and_cache();
         let parent_hash = nodes.hash();
 
-        if !index::parent_exists(self.db(), &parent_hash).await? {
+        if !index::parent_exists(db, &parent_hash).await? {
             return Ok(LeafNodeReceiveStatus::default());
         }
 
-        let request_blocks = leaf_node::filter_nodes_with_new_blocks(self.db(), &nodes).await?;
+        let request_blocks = leaf_node::filter_nodes_with_new_blocks(db, &nodes).await?;
 
-        leaf_node::save_all(self.db(), &nodes.into_inner().into_missing(), &parent_hash).await?;
+        leaf_node::save_all(db, &nodes.into_inner().into_missing(), &parent_hash).await?;
 
-        let status = index::finalize(self.db(), parent_hash, quota).await?;
+        let status = index::finalize(db, cache, parent_hash, quota).await?;
 
         Ok(LeafNodeReceiveStatus {
             old_approved: status.old_approved,
@@ -607,7 +610,8 @@ impl WriteTransaction {
         data: &BlockData,
         nonce: &BlockNonce,
     ) -> Result<BlockReceiveStatus, Error> {
-        block::receive(self.db(), data, nonce).await
+        let (db, cache) = self.db_and_cache();
+        block::receive(db, cache, data, nonce).await
     }
 
     pub async fn commit(self) -> Result<(), Error> {
@@ -700,7 +704,7 @@ impl WriteTransaction {
             hash = ?root_node.proof.hash,
             branch_id = ?root_node.proof.writer_id,
             block_presence = ?root_node.summary.block_presence,
-            "create local snapshot"
+            "Local snapshot created"
         );
 
         self.inner.inner.cache.put_root(root_node);
@@ -722,10 +726,14 @@ impl WriteTransaction {
 
     // Access the underlying database transaction.
     fn db(&mut self) -> &mut db::WriteTransaction {
-        match &mut self.inner.inner.inner {
-            Handle::WriteTransaction(tx) => tx,
-            Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
-        }
+        self.inner.inner.inner.as_write()
+    }
+
+    fn db_and_cache(&mut self) -> (&mut db::WriteTransaction, &mut CacheTransaction) {
+        (
+            self.inner.inner.inner.as_write(),
+            &mut self.inner.inner.cache,
+        )
     }
 }
 
@@ -747,6 +755,15 @@ enum Handle {
     Connection(db::PoolConnection),
     ReadTransaction(db::ReadTransaction),
     WriteTransaction(db::WriteTransaction),
+}
+
+impl Handle {
+    fn as_write(&mut self) -> &mut db::WriteTransaction {
+        match self {
+            Handle::WriteTransaction(tx) => tx,
+            Handle::Connection(_) | Handle::ReadTransaction(_) => unreachable!(),
+        }
+    }
 }
 
 impl Deref for Handle {

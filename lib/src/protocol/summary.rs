@@ -76,6 +76,10 @@ impl Summary {
     pub fn is_outdated(&self, other: &Self) -> bool {
         self.block_presence.is_outdated(&other.block_presence)
     }
+
+    pub fn with_state(self, state: NodeState) -> Self {
+        Self { state, ..self }
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]

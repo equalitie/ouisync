@@ -1,4 +1,4 @@
-use super::{error::Error, inner_node};
+use super::error::Error;
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -341,9 +341,8 @@ pub(super) async fn remove_older_incomplete(
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     hash: &Hash,
+    summary: Summary,
 ) -> Result<NodeState, Error> {
-    let summary = inner_node::compute_summary(tx, hash).await?;
-
     let state = sqlx::query(
         "UPDATE snapshot_root_nodes
          SET block_presence = ?,

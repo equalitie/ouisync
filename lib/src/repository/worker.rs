@@ -219,14 +219,14 @@ mod scan {
             BlockIds::open(branch.clone(), blob_id)
                 .await
                 .map_err(|error| {
-                    tracing::trace!(?error, "BlockIds::open failed");
+                    tracing::trace!(?error, "open failed");
                     error
                 })?;
         let mut block_number = 0;
         let mut file_progress_cache_reset = false;
 
         while let Some(block_id) = blob_block_ids.try_next().await.map_err(|error| {
-            tracing::trace!(block_number, ?error, "BlockIds::try_next failed");
+            tracing::trace!(block_number, ?error, "try_next failed");
             error
         })? {
             if !shared
