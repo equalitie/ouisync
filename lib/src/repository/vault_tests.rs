@@ -15,7 +15,8 @@ use crate::{
     progress::Progress,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-        BlockId, MultiBlockPresence, Proof, SingleBlockPresence, BLOCK_SIZE, EMPTY_INNER_HASH,
+        BlockId, MultiBlockPresence, NodeState, Proof, SingleBlockPresence, BLOCK_SIZE,
+        EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,
     store::{self, ReadTransaction, Store},
@@ -401,6 +402,65 @@ mod receive_and_create_root_node {
         //   up-to-date.
         assert!(root_node_1.proof.version_vector > root_node_0.proof.version_vector);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receive_bumped_root_node() {
+    let (_base_dir, vault, secrets) = setup().await;
+
+    let branch_id = PublicKey::random();
+    let receive_filter = vault.store().receive_filter();
+
+    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+    let vv0 = VersionVector::first(branch_id);
+
+    receive_nodes(
+        &vault,
+        &secrets.write_keys,
+        branch_id,
+        vv0.clone(),
+        &receive_filter,
+        &snapshot,
+    )
+    .await;
+
+    let node = vault
+        .store
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_root_node(&branch_id)
+        .await
+        .unwrap();
+    assert_eq!(node.proof.version_vector, vv0);
+    assert_eq!(node.summary.state, NodeState::Approved);
+
+    // Receive root node with the same hash as before but greater vv.
+    let vv1 = vv0.incremented(branch_id);
+    vault
+        .receive_root_node(
+            Proof::new(
+                branch_id,
+                vv1.clone(),
+                *snapshot.root_hash(),
+                &secrets.write_keys,
+            )
+            .into(),
+            MultiBlockPresence::None,
+        )
+        .await
+        .unwrap();
+
+    let node = vault
+        .store
+        .acquire_read()
+        .await
+        .unwrap()
+        .load_root_node(&branch_id)
+        .await
+        .unwrap();
+    assert_eq!(node.proof.version_vector, vv1);
+    assert_eq!(node.summary.state, NodeState::Approved);
 }
 
 #[tokio::test(flavor = "multi_thread")]
