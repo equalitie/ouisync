@@ -283,7 +283,7 @@ impl JobMonitor {
         }
     }
 
-    pub(crate) async fn run<F, E>(&self, f: F)
+    pub(crate) async fn run<F, E>(&self, f: F) -> bool
     where
         F: Future<Output = Result<(), E>>,
         E: fmt::Debug,
@@ -297,8 +297,11 @@ impl JobMonitor {
             let _timing = self.metric.start();
 
             let result = f.await;
+            let is_ok = result.is_ok();
 
             guard.complete(result);
+
+            is_ok
         }
         .instrument(tracing::info_span!(
             "job",

@@ -46,6 +46,10 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
                         ..
                     })
                     | Err(Lagged) => Some(Command::Wait),
+                    Ok(Event {
+                        payload: Payload::MaintenanceCompleted,
+                        ..
+                    }) => None,
                 })
             });
 
@@ -77,16 +81,22 @@ pub(super) async fn run(shared: Arc<Shared>, local_branch: Option<Branch>) {
         // - On any other event (including `Lagged`), let the current job run to completion and
         //   then restart it.
         let commands =
-            event::into_stream(shared.vault.event_tx.subscribe()).map(move |event| match event {
-                Ok(Event {
-                    payload: Payload::BranchChanged(_),
-                    scope,
-                }) if scope != event_scope => Command::Interrupt,
-                Ok(Event {
-                    payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
-                    ..
+            event::into_stream(shared.vault.event_tx.subscribe()).filter_map(move |event| {
+                future::ready(match event {
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_),
+                        scope,
+                    }) if scope != event_scope => Some(Command::Interrupt),
+                    Ok(Event {
+                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        ..
+                    })
+                    | Err(Lagged) => Some(Command::Wait),
+                    Ok(Event {
+                        payload: Payload::MaintenanceCompleted,
+                        ..
+                    }) => None,
                 })
-                | Err(Lagged) => Command::Wait,
             });
 
         utils::run(|| scan(&shared, &prune_counter), commands).await;
@@ -105,32 +115,41 @@ async fn maintain(
     unlock_tx: &unlock::Sender,
     prune_counter: &Counter,
 ) {
+    let mut success = true;
+
     // Merge branches
     if let Some(local_branch) = local_branch {
-        shared
-            .vault
-            .monitor
-            .merge_job
-            .run(merge::run(shared, local_branch))
-            .await;
+        success = success
+            && shared
+                .vault
+                .monitor
+                .merge_job
+                .run(merge::run(shared, local_branch))
+                .await;
     }
 
     // Prune outdated branches and snapshots
-    shared
-        .vault
-        .monitor
-        .prune_job
-        .run(prune::run(shared, unlock_tx, prune_counter))
-        .await;
+    success = success
+        && shared
+            .vault
+            .monitor
+            .prune_job
+            .run(prune::run(shared, unlock_tx, prune_counter))
+            .await;
 
     // Collect unreachable blocks
     if shared.secrets.can_read() {
-        shared
-            .vault
-            .monitor
-            .trash_job
-            .run(trash::run(shared, local_branch, unlock_tx))
-            .await;
+        success = success
+            && shared
+                .vault
+                .monitor
+                .trash_job
+                .run(trash::run(shared, local_branch, unlock_tx))
+                .await;
+    }
+
+    if success {
+        shared.vault.event_tx.send(Payload::MaintenanceCompleted);
     }
 }
 
@@ -141,7 +160,7 @@ async fn scan(shared: &Shared, prune_counter: &Counter) {
         .monitor
         .scan_job
         .run(scan::run(shared, prune_counter))
-        .await
+        .await;
 }
 
 /// Find missing blocks and mark them as required.

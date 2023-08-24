@@ -5,7 +5,7 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    event::{Event, Payload},
+    event::Payload,
     protocol::{BlockId, RootNode, BLOCK_SIZE},
     repository::Vault,
     store,
@@ -248,12 +248,11 @@ impl<'a> Monitor<'a> {
         self.handle_all_branches_changed().await?;
 
         loop {
-            match subscription.recv().await {
-                Ok(Event {
-                    payload:
-                        Payload::BranchChanged(branch_id) | Payload::BlockReceived { branch_id, .. },
-                    ..
-                }) => self.handle_branch_changed(branch_id).await?,
+            match subscription.recv().await.map(|event| event.payload) {
+                Ok(
+                    Payload::BranchChanged(branch_id) | Payload::BlockReceived { branch_id, .. },
+                ) => self.handle_branch_changed(branch_id).await?,
+                Ok(Payload::MaintenanceCompleted) => continue,
                 Err(RecvError::Lagged(_)) => {
                     tracing::warn!("event receiver lagged");
                     self.handle_all_branches_changed().await?
