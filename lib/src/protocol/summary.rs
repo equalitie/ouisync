@@ -107,10 +107,6 @@ impl NodeState {
         matches!(self, Self::Approved)
     }
 
-    pub fn is_incomplete(self) -> bool {
-        matches!(self, Self::Incomplete)
-    }
-
     pub fn update(&mut self, other: Self) {
         *self = match (*self, other) {
             (Self::Incomplete, _) | (_, Self::Incomplete) => Self::Incomplete,
@@ -161,13 +157,6 @@ pub(crate) enum SingleBlockPresence {
 }
 
 impl SingleBlockPresence {
-    pub fn is_present(self) -> bool {
-        match self {
-            Self::Missing | Self::Expired => false,
-            Self::Present => true,
-        }
-    }
-
     pub fn is_missing(self) -> bool {
         match self {
             Self::Missing => true,

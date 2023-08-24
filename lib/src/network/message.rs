@@ -8,7 +8,8 @@ use crate::{
     crypto::{sign::PublicKey, Hash, Hashable},
     format::Hex,
     protocol::{
-        BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof,
+        BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
+        UntrustedProof,
     },
     repository::RepositoryId,
 };
@@ -54,7 +55,7 @@ pub(crate) enum Response {
     ChildNodesError(Hash, ResponseDisambiguator, DebugResponsePayload),
     /// Send a requested block.
     Block {
-        content: Box<[u8]>,
+        content: BlockContent,
         nonce: BlockNonce,
         debug: DebugResponsePayload,
     },

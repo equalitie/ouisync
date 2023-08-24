@@ -7,17 +7,14 @@ use crate::{
         Hash, Hashable,
     },
     protocol::{
-        get_bucket, BlockData, BlockId, BlockNonce, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
+        get_bucket, Block, BlockId, InnerNode, InnerNodeMap, LeafNode, LeafNodeSet,
         INNER_LAYER_COUNT,
     },
     repository::Vault,
     store::ReceiveFilter,
     version_vector::VersionVector,
 };
-use rand::{
-    distributions::{Distribution, Standard},
-    Rng,
-};
+use rand::{distributions::Standard, Rng};
 use std::mem;
 
 // In-memory snapshot for testing purposes.
@@ -41,7 +38,7 @@ impl Snapshot {
         let mut leaves = HashMap::default();
 
         for (locator, block) in locators_and_blocks {
-            let id = block.data.id;
+            let id = block.id;
             blocks.insert(id, block);
 
             let node = LeafNode::present(locator, id);
@@ -133,27 +130,6 @@ impl<'a> InnerLayer<'a> {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct Block {
-    pub data: BlockData,
-    pub nonce: BlockNonce,
-}
-
-impl Block {
-    pub fn id(&self) -> &BlockId {
-        &self.data.id
-    }
-}
-
-impl Distribution<Block> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        Block {
-            data: rng.gen(),
-            nonce: rng.gen(),
-        }
-    }
-}
-
 // Receive all nodes in `snapshot` into `index`.
 pub(crate) async fn receive_nodes(
     vault: &Vault,
@@ -191,13 +167,11 @@ pub(crate) async fn receive_blocks(repo: &Vault, snapshot: &Snapshot) {
     let acceptor = client.acceptor();
 
     for block in snapshot.blocks().values() {
-        repo.block_tracker.require(*block.id());
-        client.offer(*block.id(), OfferState::Approved);
+        repo.block_tracker.require(block.id);
+        client.offer(block.id, OfferState::Approved);
         let promise = acceptor.try_accept().unwrap();
 
-        repo.receive_block(&block.data, &block.nonce, Some(promise))
-            .await
-            .unwrap();
+        repo.receive_block(block, Some(promise)).await.unwrap();
     }
 }
 

@@ -9,7 +9,7 @@ use crate::{
     crypto::sign::PublicKey,
     db,
     future::try_collect_into,
-    protocol::{BlockData, BlockId, BlockNonce, BLOCK_SIZE},
+    protocol::{Block, BlockContent, BlockId, BlockNonce, BLOCK_SIZE},
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
@@ -24,8 +24,7 @@ pub(crate) struct ReceiveStatus {
 pub(super) async fn receive(
     write_tx: &mut db::WriteTransaction,
     cache_tx: &mut CacheTransaction,
-    block: &BlockData,
-    nonce: &BlockNonce,
+    block: &Block,
 ) -> Result<ReceiveStatus, Error> {
     if !leaf_node::set_present(write_tx, &block.id).await? {
         return Ok(ReceiveStatus::default());
@@ -47,7 +46,7 @@ pub(super) async fn receive(
         try_collect_into(root_node::load_writer_ids(write_tx, &hash), &mut branches).await?;
     }
 
-    write(write_tx, &block.id, &block.content, nonce).await?;
+    write(write_tx, block).await?;
 
     Ok(ReceiveStatus { branches })
 }
@@ -60,10 +59,10 @@ pub(super) async fn receive(
 pub(super) async fn read(
     conn: &mut db::Connection,
     id: &BlockId,
-    buffer: &mut [u8],
+    content: &mut BlockContent,
 ) -> Result<BlockNonce, Error> {
     assert!(
-        buffer.len() >= BLOCK_SIZE,
+        content.len() >= BLOCK_SIZE,
         "insufficient buffer length for block read"
     );
 
@@ -80,17 +79,17 @@ pub(super) async fn read(
     let nonce: &[u8] = row.get(0);
     let nonce = BlockNonce::try_from(nonce).map_err(|_| Error::MalformedData)?;
 
-    let content: &[u8] = row.get(1);
-    if content.len() != BLOCK_SIZE {
+    let src_content: &[u8] = row.get(1);
+    if src_content.len() != BLOCK_SIZE {
         tracing::error!(
             expected = BLOCK_SIZE,
-            actual = content.len(),
+            actual = src_content.len(),
             "wrong block length"
         );
         return Err(Error::MalformedData);
     }
 
-    buffer.copy_from_slice(content);
+    content.copy_from_slice(src_content);
 
     Ok(nonce)
 }
@@ -103,14 +102,9 @@ pub(super) async fn read(
 ///
 /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
 ///
-pub(super) async fn write(
-    tx: &mut db::WriteTransaction,
-    id: &BlockId,
-    buffer: &[u8],
-    nonce: &BlockNonce,
-) -> Result<(), Error> {
+pub(super) async fn write(tx: &mut db::WriteTransaction, block: &Block) -> Result<(), Error> {
     assert_eq!(
-        buffer.len(),
+        block.content.len(),
         BLOCK_SIZE,
         "incorrect buffer length for block write"
     );
@@ -120,9 +114,9 @@ pub(super) async fn write(
          VALUES (?, ?, ?)
          ON CONFLICT (id) DO NOTHING",
     )
-    .bind(id)
-    .bind(nonce.as_slice())
-    .bind(buffer)
+    .bind(&block.id)
+    .bind(&block.nonce[..])
+    .bind(&block.content[..])
     .execute(tx)
     .await?;
 
@@ -160,37 +154,34 @@ pub(super) async fn exists(conn: &mut db::Connection, id: &BlockId) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
     use tempfile::TempDir;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn write_and_read_block() {
         let (_base_dir, pool) = setup().await;
 
-        let content = random_block_content();
-        let id = BlockId::from_content(&content);
-        let nonce = BlockNonce::default();
+        let block: Block = rand::random();
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        write(&mut tx, &id, &content, &nonce).await.unwrap();
+        write(&mut tx, &block).await.unwrap();
 
-        let mut buffer = vec![0; BLOCK_SIZE];
-        read(&mut tx, &id, &mut buffer).await.unwrap();
+        let mut content = BlockContent::new();
+        read(&mut tx, &block.id, &mut content).await.unwrap();
 
-        assert_eq!(buffer, content);
+        assert_eq!(&content[..], &block.content[..]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn try_read_missing_block() {
         let (_base_dir, pool) = setup().await;
 
-        let mut buffer = vec![0; BLOCK_SIZE];
-        let id = BlockId::from_content(&buffer);
+        let mut content = BlockContent::new();
+        let id = BlockId::from_content(&content);
 
         let mut conn = pool.acquire().await.unwrap();
 
-        match read(&mut conn, &id, &mut buffer).await {
+        match read(&mut conn, &id, &mut content).await {
             Err(Error::BlockNotFound) => (),
             Err(error) => panic!("unexpected error: {:?}", error),
             Ok(_) => panic!("unexpected success"),
@@ -201,23 +192,15 @@ mod tests {
     async fn try_write_existing_block() {
         let (_base_dir, pool) = setup().await;
 
-        let content0 = random_block_content();
-        let id = BlockId::from_content(&content0);
-        let nonce = BlockNonce::default();
+        let block: Block = rand::random();
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        write(&mut tx, &id, &content0, &nonce).await.unwrap();
-        write(&mut tx, &id, &content0, &nonce).await.unwrap();
+        write(&mut tx, &block).await.unwrap();
+        write(&mut tx, &block).await.unwrap();
     }
 
     async fn setup() -> (TempDir, db::Pool) {
         db::create_temp().await.unwrap()
-    }
-
-    fn random_block_content() -> Vec<u8> {
-        let mut content = vec![0; BLOCK_SIZE];
-        rand::thread_rng().fill(&mut content[..]);
-        content
     }
 }

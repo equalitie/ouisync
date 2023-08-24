@@ -16,7 +16,7 @@ pub(crate) mod test_utils;
 pub use self::block::BLOCK_SIZE;
 
 pub(crate) use self::{
-    block::{BlockData, BlockId, BlockNonce, BLOCK_RECORD_SIZE},
+    block::{Block, BlockContent, BlockId, BlockNonce, BLOCK_RECORD_SIZE},
     inner_node::{get_bucket, InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf_node::{LeafNode, LeafNodeModifyStatus, LeafNodeSet, EMPTY_LEAF_HASH},
     locator::Locator,

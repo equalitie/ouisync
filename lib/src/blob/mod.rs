@@ -1,7 +1,6 @@
 pub(crate) mod lock;
 
 mod block_ids;
-mod buffer;
 mod id;
 mod position;
 
@@ -19,10 +18,12 @@ use crate::{
         sign::{self, PublicKey},
     },
     error::{Error, Result},
-    protocol::{BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence, BLOCK_SIZE},
+    protocol::{
+        Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
+        BLOCK_SIZE,
+    },
     store::{self, ReadTransaction, WriteTransaction},
 };
-use buffer::Buffer;
 use std::{io::SeekFrom, iter, mem};
 use thiserror::Error;
 use tracing::{field, instrument, Instrument, Span};
@@ -462,7 +463,7 @@ impl Clone for Blob {
 
 #[derive(Default)]
 struct CachedBlock {
-    content: Buffer,
+    content: BlockContent,
     dirty: bool,
 }
 
@@ -476,8 +477,8 @@ impl CachedBlock {
     }
 }
 
-impl From<Buffer> for CachedBlock {
-    fn from(content: Buffer) -> Self {
+impl From<BlockContent> for CachedBlock {
+    fn from(content: BlockContent) -> Self {
         Self {
             content,
             dirty: false,
@@ -594,39 +595,40 @@ async fn read_block(
     root_node: &RootNode,
     locator: &Locator,
     read_key: &cipher::SecretKey,
-) -> Result<(BlockId, Buffer)> {
+) -> Result<(BlockId, BlockContent)> {
     let id = tx
         .find_block_at(root_node, &locator.encode(read_key))
         .await?;
 
-    let mut buffer = Buffer::new();
-    let nonce = tx.read_block(&id, &mut buffer).await?;
+    let mut content = BlockContent::new();
+    let nonce = tx.read_block(&id, &mut content).await?;
 
-    decrypt_block(read_key, &nonce, &mut buffer);
+    decrypt_block(read_key, &nonce, &mut content);
 
-    Ok((id, buffer))
+    Ok((id, content))
 }
 
-#[instrument(skip(tx, buffer, read_key, write_keys), fields(id))]
+#[instrument(skip(tx, content, read_key, write_keys), fields(id))]
 async fn write_block(
     tx: &mut WriteTransaction,
     branch_id: &PublicKey,
     locator: &Locator,
-    mut buffer: Buffer,
+    mut content: BlockContent,
     read_key: &cipher::SecretKey,
     write_keys: &sign::Keypair,
 ) -> Result<BlockId> {
     let nonce = rand::random();
-    encrypt_block(read_key, &nonce, &mut buffer);
-    let id = BlockId::from_content(&buffer);
+    encrypt_block(read_key, &nonce, &mut content);
 
-    Span::current().record("id", field::debug(&id));
+    let block = Block::new(content, nonce);
+
+    Span::current().record("id", field::debug(&block.id));
 
     let inserted = tx
         .link_block(
             branch_id,
             &locator.encode(read_key),
-            &id,
+            &block.id,
             SingleBlockPresence::Present,
             write_keys,
         )
@@ -636,9 +638,9 @@ async fn write_block(
     // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
     assert!(inserted);
 
-    tx.write_block(&id, &buffer, &nonce).await?;
+    tx.write_block(&block).await?;
 
-    Ok(id)
+    Ok(block.id)
 }
 
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {

@@ -40,8 +40,9 @@ use crate::{
     future::try_collect_into,
     progress::Progress,
     protocol::{
-        self, BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
-        RootNode, SingleBlockPresence, Summary, VersionVectorOp, INNER_LAYER_COUNT,
+        self, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
+        MultiBlockPresence, Proof, RootNode, SingleBlockPresence, Summary, VersionVectorOp,
+        INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
 };
@@ -105,7 +106,11 @@ impl Store {
     }
 
     pub async fn block_expiration(&self) -> Option<Duration> {
-        (*self.block_expiration_tracker.read().await).as_ref().map(|tracker| tracker.block_expiration())
+        self.block_expiration_tracker
+            .read()
+            .await
+            .as_ref()
+            .map(|tracker| tracker.block_expiration())
     }
 
     /// Acquires a `Reader`
@@ -253,13 +258,13 @@ impl Reader {
     pub async fn read_block(
         &mut self,
         id: &BlockId,
-        buffer: &mut [u8],
+        content: &mut BlockContent,
     ) -> Result<BlockNonce, Error> {
         if let Some(expiration_tracker) = &self.block_expiration_tracker {
             expiration_tracker.handle_block_update(id);
         }
 
-        let result = block::read(self.db(), id, buffer).await;
+        let result = block::read(self.db(), id, content).await;
 
         if matches!(result, Err(Error::BlockNotFound)) {
             self.set_as_missing_if_expired(id).await?;
@@ -271,14 +276,14 @@ impl Reader {
     pub async fn read_block_on_peer_request(
         &mut self,
         id: &BlockId,
-        buffer: &mut [u8],
+        content: &mut BlockContent,
         block_tracker: &crate::block_tracker::BlockTracker,
     ) -> Result<BlockNonce, Error> {
         if let Some(expiration_tracker) = &self.block_expiration_tracker {
             expiration_tracker.handle_block_update(id);
         }
 
-        let result = block::read(self.db(), id, buffer).await;
+        let result = block::read(self.db(), id, content).await;
 
         if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await? {
             block_tracker.require(*id);
@@ -559,17 +564,12 @@ impl WriteTransaction {
     ///
     /// Panics if buffer length is not equal to [`BLOCK_SIZE`].
     ///
-    pub async fn write_block(
-        &mut self,
-        id: &BlockId,
-        buffer: &[u8],
-        nonce: &BlockNonce,
-    ) -> Result<(), Error> {
+    pub async fn write_block(&mut self, block: &Block) -> Result<(), Error> {
         if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(id);
+            tracker.handle_block_update(&block.id);
         }
 
-        block::write(self.db(), id, buffer, nonce).await
+        block::write(self.db(), block).await
     }
 
     /// Removes the specified block from the store and marks it as missing in the index.
@@ -735,15 +735,13 @@ impl WriteTransaction {
     /// is returned.
     pub(crate) async fn receive_block(
         &mut self,
-        block_id: &BlockId,
-        data: &BlockData,
-        nonce: &BlockNonce,
+        block: &Block,
     ) -> Result<BlockReceiveStatus, Error> {
         if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(block_id);
+            tracker.handle_block_update(&block.id);
         }
         let (db, cache) = self.db_and_cache();
-        block::receive(db, cache, data, nonce).await
+        block::receive(db, cache, block).await
     }
 
     pub async fn commit(self) -> Result<(), Error> {

@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     crypto::cipher::SecretKey,
     protocol::{Locator, EMPTY_INNER_HASH},
-    test_utils, BLOCK_SIZE,
+    test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
@@ -143,21 +143,18 @@ async fn remove_block() {
     let branch_id_0 = PublicKey::random();
     let branch_id_1 = PublicKey::random();
 
-    let block_id = rand::random();
-    let buffer = vec![0; BLOCK_SIZE];
+    let block: Block = rand::random();
 
     let mut tx = store.begin_write().await.unwrap();
 
-    tx.write_block(&block_id, &buffer, &BlockNonce::default())
-        .await
-        .unwrap();
+    tx.write_block(&block).await.unwrap();
 
     let locator0 = Locator::head(rand::random());
     let locator0 = locator0.encode(&read_key);
     tx.link_block(
         &branch_id_0,
         &locator0,
-        &block_id,
+        &block.id,
         SingleBlockPresence::Present,
         &write_keys,
     )
@@ -169,24 +166,24 @@ async fn remove_block() {
     tx.link_block(
         &branch_id_1,
         &locator1,
-        &block_id,
+        &block.id,
         SingleBlockPresence::Present,
         &write_keys,
     )
     .await
     .unwrap();
 
-    assert!(tx.block_exists(&block_id).await.unwrap());
+    assert!(tx.block_exists(&block.id).await.unwrap());
 
     tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
         .await
         .unwrap();
-    assert!(tx.block_exists(&block_id).await.unwrap());
+    assert!(tx.block_exists(&block.id).await.unwrap());
 
     tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
         .await
         .unwrap();
-    assert!(!tx.block_exists(&block_id).await.unwrap(),);
+    assert!(!tx.block_exists(&block.id).await.unwrap(),);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -202,44 +199,40 @@ async fn overwrite_block() {
     let locator = Locator::head(rng.gen());
     let locator = locator.encode(&read_key);
 
-    let mut buffer = vec![0; BLOCK_SIZE];
-
-    rng.fill(&mut buffer[..]);
-    let id0 = BlockId::from_content(&buffer);
+    let block0: Block = rng.gen();
 
     let mut tx = store.begin_write().await.unwrap();
 
     tx.link_block(
         &branch_id,
         &locator,
-        &id0,
+        &block0.id,
         SingleBlockPresence::Present,
         &write_keys,
     )
     .await
     .unwrap();
-    tx.write_block(&id0, &buffer, &rng.gen()).await.unwrap();
+    tx.write_block(&block0).await.unwrap();
 
-    assert!(tx.block_exists(&id0).await.unwrap());
+    assert!(tx.block_exists(&block0.id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 
-    rng.fill(&mut buffer[..]);
-    let id1 = BlockId::from_content(&buffer);
+    let block1: Block = rng.gen();
 
-    tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
+    tx.write_block(&block1).await.unwrap();
 
     tx.link_block(
         &branch_id,
         &locator,
-        &id1,
+        &block1.id,
         SingleBlockPresence::Present,
         &write_keys,
     )
     .await
     .unwrap();
 
-    assert!(!tx.block_exists(&id0).await.unwrap());
-    assert!(tx.block_exists(&id1).await.unwrap());
+    assert!(!tx.block_exists(&block0.id).await.unwrap());
+    assert!(tx.block_exists(&block1.id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 }
 
