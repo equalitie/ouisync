@@ -8,8 +8,7 @@ use crate::{
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,
-    locator::Locator,
-    protocol::VersionVectorOp,
+    protocol::{Locator, VersionVectorOp},
     store::{ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };

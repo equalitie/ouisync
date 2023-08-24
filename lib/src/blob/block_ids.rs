@@ -3,8 +3,7 @@ use crate::{
     blob::BlobId,
     branch::Branch,
     error::{Error, Result},
-    locator::Locator,
-    protocol::{BlockId, RootNode},
+    protocol::{BlockId, Locator, RootNode},
     store,
 };
 

@@ -10,12 +10,11 @@ use crate::{
     db,
     error::Error,
     event::EventSender,
-    locator::Locator,
     metrics::Metrics,
     progress::Progress,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Block, Snapshot},
-        BlockId, MultiBlockPresence, NodeState, Proof, SingleBlockPresence, BLOCK_SIZE,
+        BlockId, Locator, MultiBlockPresence, NodeState, Proof, SingleBlockPresence, BLOCK_SIZE,
         EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,

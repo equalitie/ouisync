@@ -19,8 +19,7 @@ use crate::{
         sign::{self, PublicKey},
     },
     error::{Error, Result},
-    locator::Locator,
-    protocol::{BlockId, BlockNonce, RootNode, SingleBlockPresence, BLOCK_SIZE},
+    protocol::{BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence, BLOCK_SIZE},
     store::{self, ReadTransaction, WriteTransaction},
 };
 use buffer::Buffer;

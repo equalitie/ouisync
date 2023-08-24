@@ -26,8 +26,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    locator::Locator,
-    protocol::{RootNode, VersionVectorOp},
+    protocol::{Locator, RootNode, VersionVectorOp},
     store::{self, ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };

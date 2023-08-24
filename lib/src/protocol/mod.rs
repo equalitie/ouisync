@@ -4,6 +4,7 @@
 mod block;
 mod inner_node;
 mod leaf_node;
+mod locator;
 mod proof;
 mod root_node;
 mod summary;
@@ -18,6 +19,7 @@ pub(crate) use self::{
     block::{BlockData, BlockId, BlockNonce, BLOCK_RECORD_SIZE},
     inner_node::{get_bucket, InnerNode, InnerNodeMap, EMPTY_INNER_HASH, INNER_LAYER_COUNT},
     leaf_node::{LeafNode, LeafNodeModifyStatus, LeafNodeSet, EMPTY_LEAF_HASH},
+    locator::Locator,
     proof::{Proof, ProofError, UntrustedProof},
     root_node::RootNode,
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
