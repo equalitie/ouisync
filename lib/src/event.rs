@@ -18,6 +18,11 @@ pub enum Payload {
         block_id: BlockId,
         branch_id: PublicKey,
     },
+    /// The `maintain` worker job successfully completed. It won't perform any more work until
+    /// triggered again by any of the above events.
+    /// This event is useful mostly for diagnostics or testing and can be safely ignored in other
+    /// contexts.
+    MaintenanceCompleted,
 }
 
 /// Notification event

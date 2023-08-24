@@ -39,7 +39,7 @@ pub(super) struct ReceiveAction {
 pub(super) async fn create(
     tx: &mut db::WriteTransaction,
     proof: Proof,
-    summary: Summary,
+    mut summary: Summary,
 ) -> Result<RootNode, Error> {
     // Check that the root node to be created is newer than the latest existing root node in
     // the same branch.
@@ -65,6 +65,23 @@ pub(super) async fn create(
         }
         None => {
             return Err(Error::ConcurrentRootNode);
+        }
+    }
+
+    // Inherit non-incomplete state from existing nodes with the same hash.
+    // (All nodes with the same hash have the same state so it's enough to fetch only the first one)
+    if summary.state == NodeState::Incomplete {
+        let state = sqlx::query(
+            "SELECT state FROM snapshot_root_nodes WHERE hash = ? AND state <> ? LIMIT 1",
+        )
+        .bind(&proof.hash)
+        .bind(NodeState::Incomplete)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|row| row.get(0));
+
+        if let Some(state) = state {
+            summary.state = state;
         }
     }
 

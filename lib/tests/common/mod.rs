@@ -385,7 +385,10 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) {
 
                 match event {
                     Ok(Event {
-                        payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
+                        payload:
+                            Payload::BranchChanged(_)
+                            | Payload::BlockReceived { .. }
+                            | Payload::MaintenanceCompleted,
                         ..
                     })
                     | Err(RecvError::Lagged(_)) => return,
