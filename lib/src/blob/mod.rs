@@ -22,7 +22,7 @@ use crate::{
         Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
         BLOCK_SIZE,
     },
-    store::{self, ReadTransaction, WriteTransaction},
+    store::{self, LocalWriteTransaction, ReadTransaction},
 };
 use std::{io::SeekFrom, iter, mem};
 use thiserror::Error;
@@ -296,7 +296,7 @@ impl Blob {
         Ok(write_len)
     }
 
-    pub async fn write_all(&mut self, tx: &mut WriteTransaction, buffer: &[u8]) -> Result<()> {
+    pub async fn write_all(&mut self, tx: &mut LocalWriteTransaction, buffer: &[u8]) -> Result<()> {
         let mut offset = 0;
 
         loop {
@@ -366,7 +366,7 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub(crate) async fn flush(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    pub(crate) async fn flush(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
         self.write_len(tx).await?;
         self.write_blocks(tx).await?;
 
@@ -393,7 +393,7 @@ impl Blob {
     }
 
     // Write length, if changed
-    async fn write_len(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    async fn write_len(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
         if self.len_modified == self.len_original {
             return Ok(());
         }
@@ -423,7 +423,7 @@ impl Blob {
         Ok(())
     }
 
-    async fn write_blocks(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    async fn write_blocks(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
         // Poor man's `drain_filter`.
         let cache = mem::take(&mut self.cache);
         let (dirty, clean): (HashMap<_, _>, _) =
@@ -515,7 +515,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
     let locators = Locator::head(blob_id).sequence().take(end as usize);
     for locator in locators {
-        let mut tx = src_branch.store().begin_write().await?;
+        let mut tx = src_branch.store().begin_local_write().await?;
 
         let encoded_locator = locator.encode(read_key);
 
@@ -610,7 +610,7 @@ async fn read_block(
 
 #[instrument(skip(tx, content, read_key, write_keys), fields(id))]
 async fn write_block(
-    tx: &mut WriteTransaction,
+    tx: &mut LocalWriteTransaction,
     branch_id: &PublicKey,
     locator: &Locator,
     mut content: BlockContent,

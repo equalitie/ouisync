@@ -296,6 +296,7 @@ async fn run_task(
 mod test {
     use super::super::*;
     use super::*;
+    use crate::crypto::sign::Keypair;
     use tempfile::TempDir;
 
     #[test]
@@ -380,7 +381,7 @@ mod test {
     }
 
     async fn add_block(write_keys: &Keypair, branch_id: &PublicKey, store: &Store) -> BlockId {
-        let mut writer = store.begin_write().await.unwrap();
+        let mut writer = store.begin_local_write().await.unwrap();
 
         let block: Block = rand::random();
         writer.write_block(&block).await.unwrap();

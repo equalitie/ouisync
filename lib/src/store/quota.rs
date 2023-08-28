@@ -128,7 +128,7 @@ mod tests {
         let write_keys = Keypair::random();
         let branch_id = PublicKey::random();
 
-        let mut tx = store.begin_write().await.unwrap();
+        let mut tx = store.begin_local_write().await.unwrap();
 
         assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
 
@@ -160,7 +160,7 @@ mod tests {
         let branch_a_id = PublicKey::random();
         let branch_b_id = PublicKey::random();
 
-        let mut tx = pool.begin_write().await.unwrap();
+        let mut tx = pool.begin_local_write().await.unwrap();
 
         // unique blocks
         for branch_id in [&branch_a_id, &branch_b_id] {

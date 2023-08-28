@@ -486,7 +486,7 @@ async fn create_changeset(
         create_block(rng, vault, writer_id, write_keys).await;
     }
 
-    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
@@ -504,7 +504,7 @@ async fn create_block(
     let encoded_locator = rng.gen();
     let block: Block = rng.gen();
 
-    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.link_block(
         branch_id,
         &encoded_locator,

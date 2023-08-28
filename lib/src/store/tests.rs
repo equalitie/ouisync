@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    crypto::cipher::SecretKey,
-    protocol::{Locator, EMPTY_INNER_HASH},
+    crypto::{cipher::SecretKey, sign::Keypair},
+    protocol::{Locator, SingleBlockPresence, VersionVectorOp, EMPTY_INNER_HASH},
     test_utils,
 };
 use proptest::{arbitrary::any, collection::vec};
@@ -26,7 +26,7 @@ async fn link_and_find_block() {
     let locator = random_head_locator();
     let encoded_locator = locator.encode(&read_key);
 
-    let mut tx = store.begin_write().await.unwrap();
+    let mut tx = store.begin_local_write().await.unwrap();
 
     tx.link_block(
         &branch_id,
@@ -56,7 +56,7 @@ async fn rewrite_locator() {
         let locator = random_head_locator();
         let encoded_locator = locator.encode(&read_key);
 
-        let mut tx = store.begin_write().await.unwrap();
+        let mut tx = store.begin_local_write().await.unwrap();
 
         tx.link_block(
             &branch_id,
@@ -99,7 +99,7 @@ async fn remove_locator() {
     let locator = random_head_locator();
     let encoded_locator = locator.encode(&read_key);
 
-    let mut tx = store.begin_write().await.unwrap();
+    let mut tx = store.begin_local_write().await.unwrap();
 
     assert_eq!(0, count_child_nodes(&mut tx).await.unwrap());
 
@@ -145,7 +145,7 @@ async fn remove_block() {
 
     let block: Block = rand::random();
 
-    let mut tx = store.begin_write().await.unwrap();
+    let mut tx = store.begin_local_write().await.unwrap();
 
     tx.write_block(&block).await.unwrap();
 
@@ -201,7 +201,7 @@ async fn overwrite_block() {
 
     let block0: Block = rng.gen();
 
-    let mut tx = store.begin_write().await.unwrap();
+    let mut tx = store.begin_local_write().await.unwrap();
 
     tx.link_block(
         &branch_id,
@@ -257,7 +257,7 @@ async fn fallback() {
         (id2, SingleBlockPresence::Missing),
         (id3, SingleBlockPresence::Missing),
     ] {
-        let mut tx = store.begin_write().await.unwrap();
+        let mut tx = store.begin_local_write().await.unwrap();
         // TODO: `link_block` auto-prunes so this doesn't work. We need to simulate receiving
         // remote snapshots here instead.
         tx.link_block(&branch_0_id, &locator, &block_id, presence, &write_keys)
@@ -309,7 +309,7 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
     let write_keys = Keypair::generate(&mut rng);
 
     let mut locators = Vec::new();
-    let mut tx = store.begin_write().await.unwrap();
+    let mut tx = store.begin_local_write().await.unwrap();
 
     // Add blocks
     for _ in 0..leaf_count {
@@ -374,7 +374,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 let locator = rng.gen();
                 let block_id = rng.gen();
 
-                let mut tx = store.begin_write().await.unwrap();
+                let mut tx = store.begin_local_write().await.unwrap();
                 tx.link_block(
                     &branch_id,
                     &locator,
@@ -393,7 +393,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                     continue;
                 };
 
-                let mut tx = store.begin_write().await.unwrap();
+                let mut tx = store.begin_local_write().await.unwrap();
                 tx.unlink_block(&branch_id, &locator, None, &write_keys)
                     .await
                     .unwrap();
@@ -402,7 +402,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 expected.remove(&locator);
             }
             PruneTestOp::Bump => {
-                let mut tx = store.begin_write().await.unwrap();
+                let mut tx = store.begin_local_write().await.unwrap();
                 tx.bump(&branch_id, VersionVectorOp::IncrementLocal, &write_keys)
                     .await
                     .unwrap();

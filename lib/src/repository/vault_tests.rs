@@ -191,7 +191,7 @@ async fn receive_root_node_with_existing_hash() {
     let block: Block = rng.gen();
     let locator = rng.gen();
 
-    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.link_block(
         &local_id,
         &locator,
@@ -282,7 +282,7 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = vault.store().begin_write().await.unwrap();
+        let mut tx = vault.store().begin_local_write().await.unwrap();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
@@ -335,7 +335,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = vault.store().begin_write().await.unwrap();
+            let mut tx = vault.store().begin_local_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -898,7 +898,7 @@ async fn block_ids_local() {
     let locator = locator.encode(&secrets.read_key);
     let block_id = rand::random();
 
-    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.link_block(
         &branch_id,
         &locator,

@@ -412,7 +412,7 @@ mod trash {
     use crate::{
         crypto::sign::{Keypair, PublicKey},
         protocol::BlockId,
-        store::{self, WriteTransaction},
+        store::{self, LocalWriteTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -607,7 +607,9 @@ mod trash {
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                remove_local_nodes(&mut tx, local_branch.id(), write_keys, &batch).await?;
+                let mut local_tx = tx.into_local();
+                remove_local_nodes(&mut local_tx, local_branch.id(), write_keys, &batch).await?;
+                tx = local_tx.apply().await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -633,7 +635,7 @@ mod trash {
     }
 
     async fn remove_local_nodes(
-        tx: &mut WriteTransaction,
+        tx: &mut LocalWriteTransaction,
         branch_id: &PublicKey,
         write_keys: &Keypair,
         block_ids: &[BlockId],

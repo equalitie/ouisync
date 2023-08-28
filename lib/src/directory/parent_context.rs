@@ -9,7 +9,7 @@ use crate::{
     directory::{content::EntryExists, Directory},
     error::Result,
     protocol::{Locator, VersionVectorOp},
-    store::{ReadTransaction, WriteTransaction},
+    store::{LocalWriteTransaction, ReadTransaction},
     version_vector::VersionVector,
 };
 use tracing::{field, instrument, Span};
@@ -46,7 +46,7 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors.
     pub async fn bump(
         &self,
-        tx: &mut WriteTransaction,
+        tx: &mut LocalWriteTransaction,
         branch: Branch,
         op: VersionVectorOp<'_>,
     ) -> Result<()> {
@@ -148,7 +148,7 @@ impl ParentContext {
         // this whole function can be cancelled before the insertion is completed. In both of these
         // cases the newly forked blob will be unlocked and eventually garbage-collected. This
         // wastes work but is otherwise harmless. The fork can be retried at any time.
-        let mut tx = directory.branch().store().begin_write().await?;
+        let mut tx = directory.branch().store().begin_local_write().await?;
         directory.refresh_in(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 

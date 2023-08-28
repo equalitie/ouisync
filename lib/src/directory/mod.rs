@@ -27,7 +27,7 @@ use crate::{
     error::{Error, Result},
     file::File,
     protocol::{Locator, RootNode, VersionVectorOp},
-    store::{self, ReadTransaction, WriteTransaction},
+    store::{self, LocalWriteTransaction, ReadTransaction},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -61,7 +61,7 @@ impl Directory {
         let locator = Locator::ROOT;
 
         let lock = branch.locker().read(*locator.blob_id()).await;
-        let mut tx = branch.store().begin_write().await?;
+        let mut tx = branch.store().begin_local_write().await?;
 
         let dir = match Self::open_in(
             Some(lock),
@@ -114,7 +114,7 @@ impl Directory {
 
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -149,7 +149,7 @@ impl Directory {
         name: String,
         op: VersionVectorOp<'_>,
     ) -> Result<Self> {
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -249,7 +249,7 @@ impl Directory {
         branch_id: &PublicKey,
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
 
         let (content, _old_lock) = match self
             .begin_remove_entry(&mut tx, name, branch_id, tombstone)
@@ -298,7 +298,7 @@ impl Directory {
         let mut dst_data = src_data;
         let src_vv = mem::replace(dst_data.version_vector_mut(), dst_vv);
 
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
 
         let (dst_content, _old_dst_lock) = dst_dir
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
@@ -355,7 +355,7 @@ impl Directory {
     /// Updates the version vector of this directory by merging it with `vv`.
     #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
         self.bump(&mut tx, VersionVectorOp::Merge(vv)).await?;
         self.commit(tx).await
     }
@@ -522,7 +522,7 @@ impl Directory {
 
     async fn begin_remove_entry(
         &mut self,
-        tx: &mut WriteTransaction,
+        tx: &mut LocalWriteTransaction,
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
@@ -573,7 +573,7 @@ impl Directory {
 
     async fn begin_insert_entry(
         &mut self,
-        tx: &mut WriteTransaction,
+        tx: &mut LocalWriteTransaction,
         name: String,
         data: EntryData,
     ) -> Result<(Content, Option<UniqueLock>)> {
@@ -605,7 +605,7 @@ impl Directory {
         }
     }
 
-    async fn save(&mut self, tx: &mut WriteTransaction, content: &Content) -> Result<()> {
+    async fn save(&mut self, tx: &mut LocalWriteTransaction, content: &Content) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
         self.blob.truncate(0)?;
@@ -616,7 +616,7 @@ impl Directory {
     }
 
     /// Atomically commits the transaction and sends notification event.
-    async fn commit(&mut self, tx: WriteTransaction) -> Result<()> {
+    async fn commit(&mut self, tx: LocalWriteTransaction) -> Result<()> {
         let event_tx = self.branch().notify();
         tx.commit_and_then(move || event_tx.send()).await?;
         Ok(())
@@ -626,7 +626,7 @@ impl Directory {
     #[async_recursion]
     async fn bump<'a: 'async_recursion>(
         &mut self,
-        tx: &mut WriteTransaction,
+        tx: &mut LocalWriteTransaction,
         op: VersionVectorOp<'a>,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors

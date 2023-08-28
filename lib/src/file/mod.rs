@@ -8,7 +8,7 @@ use crate::{
     directory::{Directory, ParentContext},
     error::{Error, Result},
     protocol::{Locator, VersionVectorOp, BLOCK_SIZE},
-    store::WriteTransaction,
+    store::LocalWriteTransaction,
     version_vector::VersionVector,
 };
 use std::{fmt, future::Future, io::SeekFrom};
@@ -206,7 +206,7 @@ impl File {
             return Ok(());
         }
 
-        let mut tx = self.branch().store().begin_write().await?;
+        let mut tx = self.branch().store().begin_local_write().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
             .bump(
@@ -224,7 +224,7 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    pub(crate) async fn save(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
         self.blob.flush(tx).await?;
         Ok(())
     }
