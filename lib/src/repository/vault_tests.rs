@@ -192,17 +192,14 @@ async fn receive_root_node_with_existing_hash() {
     let locator = rng.gen();
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(
-        &local_id,
-        &locator,
-        &block.id,
-        SingleBlockPresence::Present,
-        &secrets.write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(locator, block.id, SingleBlockPresence::Present);
     tx.write_block(&block).await.unwrap();
-    tx.commit().await.unwrap();
+    tx.finish(&local_id, &secrets.write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
     let root = vault
@@ -289,18 +286,15 @@ mod receive_and_create_root_node {
             (locator_1, block_1.id, SingleBlockPresence::Missing),
             (locator_2, block_id_2, SingleBlockPresence::Missing),
         ] {
-            tx.link_block(
-                &local_id,
-                &locator,
-                &block_id,
-                presence,
-                &secrets.write_keys,
-            )
-            .await
-            .unwrap();
+            tx.link_block(locator, block_id, presence);
         }
 
-        tx.commit().await.unwrap();
+        tx.finish(&local_id, &secrets.write_keys)
+            .await
+            .unwrap()
+            .commit()
+            .await
+            .unwrap();
 
         let root_node_0 = vault
             .store()
@@ -343,17 +337,13 @@ mod receive_and_create_root_node {
                 task::yield_now().await;
             }
 
-            tx.link_block(
-                &local_id,
-                &locator_0,
-                &block_id_0_1,
-                SingleBlockPresence::Present,
-                &secrets.write_keys,
-            )
-            .await
-            .unwrap();
-
-            tx.commit().await.unwrap();
+            tx.link_block(locator_0, block_id_0_1, SingleBlockPresence::Present);
+            tx.finish(&local_id, &secrets.write_keys)
+                .await
+                .unwrap()
+                .commit()
+                .await
+                .unwrap();
         };
 
         match order {
@@ -899,16 +889,13 @@ async fn block_ids_local() {
     let block_id = rand::random();
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(
-        &branch_id,
-        &locator,
-        &block_id,
-        SingleBlockPresence::Present,
-        &secrets.write_keys,
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
+    tx.link_block(locator, block_id, SingleBlockPresence::Present);
+    tx.finish(&branch_id, &secrets.write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = [block_id].into_iter().collect();

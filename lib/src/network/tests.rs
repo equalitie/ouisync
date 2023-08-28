@@ -490,7 +490,12 @@ async fn create_changeset(
     tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
         .await
         .unwrap();
-    tx.commit().await.unwrap();
+    tx.finish(writer_id, write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
     vault.event_tx.send(Payload::BranchChanged(*writer_id));
 }
@@ -505,17 +510,14 @@ async fn create_block(
     let block: Block = rng.gen();
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(
-        branch_id,
-        &encoded_locator,
-        &block.id,
-        SingleBlockPresence::Present,
-        write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
     tx.write_block(&block).await.unwrap();
-    tx.commit().await.unwrap();
+    tx.finish(branch_id, write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 }
 
 async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<RootNode> {

@@ -607,9 +607,9 @@ mod trash {
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                let mut local_tx = tx.into_local();
+                let mut local_tx: LocalWriteTransaction = tx.into();
                 remove_local_nodes(&mut local_tx, local_branch.id(), write_keys, &batch).await?;
-                tx = local_tx.apply().await?;
+                tx = local_tx.finish(local_branch.id(), write_keys).await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;

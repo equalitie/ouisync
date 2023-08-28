@@ -147,7 +147,7 @@ impl Store {
 
     /// Begins a `LocalWriteTransaction`
     pub async fn begin_local_write(&self) -> Result<LocalWriteTransaction, Error> {
-        self.begin_write().await.map(LocalWriteTransaction::new)
+        self.begin_write().await.map(LocalWriteTransaction::from)
     }
 
     pub async fn count_blocks(&self) -> Result<u64, Error> {
@@ -506,12 +506,6 @@ pub(crate) struct WriteTransaction {
 }
 
 impl WriteTransaction {
-    /// Converts this transaction into a `LocalWriteTransaction`.
-    /// See also `LocalWriteTransaction::apply`.
-    pub fn into_local(self) -> LocalWriteTransaction {
-        LocalWriteTransaction::new(self)
-    }
-
     /// Removes the specified block from the store and marks it as missing in the index.
     pub async fn remove_block(&mut self, id: &BlockId) -> Result<(), Error> {
         let (db, cache) = self.db_and_cache();

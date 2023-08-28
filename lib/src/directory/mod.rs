@@ -304,6 +304,17 @@ impl Directory {
             .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
             .await?;
 
+        // Need to apply the changeset because the subsequent operations might try to load the
+        // same blocks we modified above.
+        tx.apply(
+            self.branch().id(),
+            self.branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?,
+        )
+        .await?;
+
         let branch_id = *self.branch().id();
         let (src_content, _old_src_lock) = self
             .begin_remove_entry(
@@ -618,7 +629,16 @@ impl Directory {
     /// Atomically commits the transaction and sends notification event.
     async fn commit(&mut self, tx: LocalWriteTransaction) -> Result<()> {
         let event_tx = self.branch().notify();
-        tx.commit_and_then(move || event_tx.send()).await?;
+        tx.finish(
+            self.branch().id(),
+            self.branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?,
+        )
+        .await?
+        .commit_and_then(move || event_tx.send())
+        .await?;
         Ok(())
     }
 

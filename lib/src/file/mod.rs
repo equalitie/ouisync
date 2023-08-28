@@ -217,7 +217,16 @@ impl File {
             .await?;
 
         let event_tx = self.branch().notify();
-        tx.commit_and_then(move || event_tx.send()).await?;
+        tx.finish(
+            self.branch().id(),
+            self.branch()
+                .keys()
+                .write()
+                .ok_or(Error::PermissionDenied)?,
+        )
+        .await?
+        .commit_and_then(move || event_tx.send())
+        .await?;
 
         Ok(())
     }

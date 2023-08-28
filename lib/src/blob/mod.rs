@@ -13,10 +13,7 @@ use self::position::Position;
 use crate::{
     branch::Branch,
     collections::{hash_map::Entry, HashMap},
-    crypto::{
-        cipher::{self, Nonce, SecretKey},
-        sign::{self, PublicKey},
-    },
+    crypto::cipher::{self, Nonce, SecretKey},
     error::{Error, Result},
     protocol::{
         Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
@@ -26,7 +23,6 @@ use crate::{
 };
 use std::{io::SeekFrom, iter, mem};
 use thiserror::Error;
-use tracing::{field, instrument, Instrument, Span};
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -407,15 +403,7 @@ impl Blob {
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
             content.write_u64(0, self.len_modified);
-            write_block(
-                tx,
-                self.branch.id(),
-                &locator,
-                content,
-                self.branch.keys().read(),
-                self.branch.keys().write().ok_or(Error::PermissionDenied)?,
-            )
-            .await?;
+            write_block(tx, &locator, content, self.branch.keys().read()).await?;
         }
 
         self.len_original = self.len_modified;
@@ -432,15 +420,7 @@ impl Blob {
 
         for (number, block) in dirty {
             let locator = Locator::head(self.id).nth(number);
-            write_block(
-                tx,
-                self.branch.id(),
-                &locator,
-                block.content,
-                self.branch.keys().read(),
-                self.branch.keys().write().ok_or(Error::PermissionDenied)?,
-            )
-            .await?;
+            write_block(tx, &locator, block.content, self.branch.keys().read()).await?;
         }
 
         Ok(())
@@ -534,25 +514,18 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             SingleBlockPresence::Missing
         };
 
-        // It can happen that the current and dst branches are different, but the blob has
-        // already been forked by some other task in the meantime. In that case this
-        // `insert` is a no-op. We still proceed normally to maintain idempotency.
-        tx.link_block(
-            dst_branch.id(),
-            &encoded_locator,
-            &block_id,
-            block_presence,
-            write_keys,
-        )
-        .instrument(tracing::info_span!(
-            "fork_block",
-            num = locator.number(),
-            id = ?block_id,
-            ?block_presence,
-        ))
-        .await?;
+        tx.link_block(encoded_locator, block_id, block_presence);
+        tx.finish(dst_branch.id(), write_keys)
+            .await?
+            .commit()
+            .await?;
 
-        tx.commit().await?;
+        tracing::trace!(
+            num = locator.number(),
+            block_id = ?block_id,
+            ?block_presence,
+            "fork block",
+        );
     }
 
     Ok(())
@@ -608,35 +581,24 @@ async fn read_block(
     Ok((id, content))
 }
 
-#[instrument(skip(tx, content, read_key, write_keys), fields(id))]
 async fn write_block(
     tx: &mut LocalWriteTransaction,
-    branch_id: &PublicKey,
     locator: &Locator,
     mut content: BlockContent,
     read_key: &cipher::SecretKey,
-    write_keys: &sign::Keypair,
 ) -> Result<BlockId> {
     let nonce = rand::random();
     encrypt_block(read_key, &nonce, &mut content);
 
     let block = Block::new(content, nonce);
 
-    Span::current().record("id", field::debug(&block.id));
+    tracing::trace!(?locator, block_id = ?block.id, "write block");
 
-    let inserted = tx
-        .link_block(
-            branch_id,
-            &locator.encode(read_key),
-            &block.id,
-            SingleBlockPresence::Present,
-            write_keys,
-        )
-        .await?;
-
-    // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
-    // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
-    assert!(inserted);
+    tx.link_block(
+        locator.encode(read_key),
+        block.id,
+        SingleBlockPresence::Present,
+    );
 
     tx.write_block(&block).await?;
 

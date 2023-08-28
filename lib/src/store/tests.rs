@@ -27,16 +27,9 @@ async fn link_and_find_block() {
     let encoded_locator = locator.encode(&read_key);
 
     let mut tx = store.begin_local_write().await.unwrap();
+    tx.link_block(encoded_locator, block_id, SingleBlockPresence::Present);
+    tx.apply(&branch_id, &write_keys).await.unwrap();
 
-    tx.link_block(
-        &branch_id,
-        &encoded_locator,
-        &block_id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
 
     assert_eq!(r, block_id);
@@ -58,25 +51,10 @@ async fn rewrite_locator() {
 
         let mut tx = store.begin_local_write().await.unwrap();
 
-        tx.link_block(
-            &branch_id,
-            &encoded_locator,
-            &b1,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        tx.link_block(encoded_locator, b1, SingleBlockPresence::Present);
+        tx.link_block(encoded_locator, b2, SingleBlockPresence::Present);
 
-        tx.link_block(
-            &branch_id,
-            &encoded_locator,
-            &b2,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        tx.apply(&branch_id, &write_keys).await.unwrap();
 
         let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
         assert_eq!(r, b2);
@@ -103,15 +81,9 @@ async fn remove_locator() {
 
     assert_eq!(0, count_child_nodes(&mut tx).await.unwrap());
 
-    tx.link_block(
-        &branch_id,
-        &encoded_locator,
-        &b,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(encoded_locator, b, SingleBlockPresence::Present);
+    tx.apply(&branch_id, &write_keys).await.unwrap();
+
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
     assert_eq!(r, b);
 
@@ -123,6 +95,7 @@ async fn remove_locator() {
     tx.unlink_block(&branch_id, &encoded_locator, None, &write_keys)
         .await
         .unwrap();
+    tx.apply(&branch_id, &write_keys).await.unwrap();
 
     match tx.find_block(&branch_id, &encoded_locator).await {
         Err(Error::LocatorNotFound) => { /* OK */ }
@@ -151,39 +124,70 @@ async fn remove_block() {
 
     let locator0 = Locator::head(rand::random());
     let locator0 = locator0.encode(&read_key);
-    tx.link_block(
-        &branch_id_0,
-        &locator0,
-        &block.id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(locator0, block.id, SingleBlockPresence::Present);
+    tx.finish(&branch_id_0, &write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
+    let mut tx = store.begin_local_write().await.unwrap();
     let locator1 = Locator::head(rand::random());
     let locator1 = locator1.encode(&read_key);
-    tx.link_block(
-        &branch_id_1,
-        &locator1,
-        &block.id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(locator1, block.id, SingleBlockPresence::Present);
+    tx.finish(&branch_id_1, &write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
-    assert!(tx.block_exists(&block.id).await.unwrap());
+    assert!(store
+        .acquire_read()
+        .await
+        .unwrap()
+        .block_exists(&block.id)
+        .await
+        .unwrap());
 
+    let mut tx = store.begin_local_write().await.unwrap();
     tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
         .await
         .unwrap();
-    assert!(tx.block_exists(&block.id).await.unwrap());
+    tx.finish(&branch_id_0, &write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
 
+    assert!(store
+        .acquire_read()
+        .await
+        .unwrap()
+        .block_exists(&block.id)
+        .await
+        .unwrap());
+
+    let mut tx = store.begin_local_write().await.unwrap();
     tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
         .await
         .unwrap();
-    assert!(!tx.block_exists(&block.id).await.unwrap(),);
+    tx.finish(&branch_id_1, &write_keys)
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
+
+    assert!(!store
+        .acquire_read()
+        .await
+        .unwrap()
+        .block_exists(&block.id)
+        .await
+        .unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -202,17 +206,9 @@ async fn overwrite_block() {
     let block0: Block = rng.gen();
 
     let mut tx = store.begin_local_write().await.unwrap();
-
-    tx.link_block(
-        &branch_id,
-        &locator,
-        &block0.id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(locator, block0.id, SingleBlockPresence::Present);
     tx.write_block(&block0).await.unwrap();
+    tx.apply(&branch_id, &write_keys).await.unwrap();
 
     assert!(tx.block_exists(&block0.id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
@@ -220,16 +216,8 @@ async fn overwrite_block() {
     let block1: Block = rng.gen();
 
     tx.write_block(&block1).await.unwrap();
-
-    tx.link_block(
-        &branch_id,
-        &locator,
-        &block1.id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    tx.link_block(locator, block1.id, SingleBlockPresence::Present);
+    tx.apply(&branch_id, &write_keys).await.unwrap();
 
     assert!(!tx.block_exists(&block0.id).await.unwrap());
     assert!(tx.block_exists(&block1.id).await.unwrap());
@@ -260,13 +248,16 @@ async fn fallback() {
         let mut tx = store.begin_local_write().await.unwrap();
         // TODO: `link_block` auto-prunes so this doesn't work. We need to simulate receiving
         // remote snapshots here instead.
-        tx.link_block(&branch_0_id, &locator, &block_id, presence, &write_keys)
-            .await
-            .unwrap();
+        tx.link_block(locator, block_id, presence);
 
         // TODO: actually create the present blocks
 
-        tx.commit().await.unwrap();
+        tx.finish(&branch_0_id, &write_keys)
+            .await
+            .unwrap()
+            .commit()
+            .await
+            .unwrap();
     }
 
     let root_node = store
@@ -316,15 +307,8 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         let locator = rng.gen();
         let block_id = rng.gen();
 
-        tx.link_block(
-            &branch_id,
-            &locator,
-            &block_id,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        tx.link_block(locator, block_id, SingleBlockPresence::Present);
+        tx.apply(&branch_id, &write_keys).await.unwrap();
 
         locators.push(locator);
 
@@ -338,6 +322,7 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         tx.unlink_block(&branch_id, &locator, None, &write_keys)
             .await
             .unwrap();
+        tx.apply(&branch_id, &write_keys).await.unwrap();
 
         assert!(!has_empty_inner_node(&mut tx).await);
     }
@@ -375,16 +360,13 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 let block_id = rng.gen();
 
                 let mut tx = store.begin_local_write().await.unwrap();
-                tx.link_block(
-                    &branch_id,
-                    &locator,
-                    &block_id,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
-                tx.commit().await.unwrap();
+                tx.link_block(locator, block_id, SingleBlockPresence::Present);
+                tx.finish(&branch_id, &write_keys)
+                    .await
+                    .unwrap()
+                    .commit()
+                    .await
+                    .unwrap();
 
                 expected.insert(locator, block_id);
             }
@@ -397,7 +379,12 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.unlink_block(&branch_id, &locator, None, &write_keys)
                     .await
                     .unwrap();
-                tx.commit().await.unwrap();
+                tx.finish(&branch_id, &write_keys)
+                    .await
+                    .unwrap()
+                    .commit()
+                    .await
+                    .unwrap();
 
                 expected.remove(&locator);
             }
@@ -406,7 +393,12 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 tx.bump(&branch_id, VersionVectorOp::IncrementLocal, &write_keys)
                     .await
                     .unwrap();
-                tx.commit().await.unwrap();
+                tx.finish(&branch_id, &write_keys)
+                    .await
+                    .unwrap()
+                    .commit()
+                    .await
+                    .unwrap();
             }
             PruneTestOp::Prune => {
                 let root_node = match store

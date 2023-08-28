@@ -131,23 +131,19 @@ mod tests {
         let mut tx = store.begin_local_write().await.unwrap();
 
         assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
+        tx.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+        tx.finish(&branch_id, &write_keys)
+            .await
+            .unwrap()
+            .commit()
+            .await
+            .unwrap();
 
-        tx.link_block(
-            &branch_id,
-            &rand::random(),
-            &rand::random(),
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
-
-        let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
+        let mut r = store.acquire_read().await.unwrap();
+        let root_hash = r.load_root_node(&branch_id).await.unwrap().proof.hash;
 
         assert_eq!(
-            count_referenced_blocks(tx.db(), &[root_hash])
-                .await
-                .unwrap(),
+            count_referenced_blocks(r.db(), &[root_hash]).await.unwrap(),
             1
         );
     }
@@ -160,35 +156,23 @@ mod tests {
         let branch_a_id = PublicKey::random();
         let branch_b_id = PublicKey::random();
 
-        let mut tx = pool.begin_local_write().await.unwrap();
-
-        // unique blocks
-        for branch_id in [&branch_a_id, &branch_b_id] {
-            tx.link_block(
-                branch_id,
-                &rand::random(),
-                &rand::random(),
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
-        }
-
-        // shared blocks
         let shared_locator = rand::random();
         let shared_block_id = rand::random();
 
+        let mut tx = pool.begin_local_write().await.unwrap();
+
         for branch_id in [&branch_a_id, &branch_b_id] {
+            // unique block
+            tx.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+
+            // shared blocks
             tx.link_block(
-                branch_id,
-                &shared_locator,
-                &shared_block_id,
+                shared_locator,
+                shared_block_id,
                 SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+            );
+
+            tx.apply(branch_id, &write_keys).await.unwrap();
         }
 
         let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;
