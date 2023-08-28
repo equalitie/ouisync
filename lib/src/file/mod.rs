@@ -7,7 +7,7 @@ use crate::{
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    protocol::{Locator, VersionVectorOp, BLOCK_SIZE},
+    protocol::{Locator, BLOCK_SIZE},
     store::LocalWriteTransaction,
     version_vector::VersionVector,
 };
@@ -209,11 +209,7 @@ impl File {
         let mut tx = self.branch().store().begin_local_write().await?;
         self.blob.flush(&mut tx).await?;
         self.parent
-            .bump(
-                &mut tx,
-                self.branch().clone(),
-                VersionVectorOp::IncrementLocal,
-            )
+            .bump(&mut tx, self.branch().clone(), &VersionVector::new())
             .await?;
 
         let event_tx = self.branch().notify();

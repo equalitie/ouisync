@@ -26,7 +26,7 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    protocol::{Locator, RootNode, VersionVectorOp},
+    protocol::{Locator, RootNode},
     store::{self, LocalWriteTransaction, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -83,7 +83,7 @@ impl Directory {
         } else {
             let mut dir = Self::create(branch, locator, None);
             dir.save(&mut tx, &Content::empty()).await?;
-            dir.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
+            dir.bump(&mut tx, &VersionVector::new()).await?;
             dir.commit(tx).await?;
             dir
         };
@@ -131,7 +131,7 @@ impl Directory {
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         file.save(&mut tx).await?;
         self.save(&mut tx, &content).await?;
-        self.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
+        self.bump(&mut tx, &VersionVector::new()).await?;
         self.commit(tx).await?;
         self.finalize(content);
 
@@ -140,14 +140,14 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        self.create_directory_with_version_vector_op(name, VersionVectorOp::IncrementLocal)
+        self.create_directory_with_version_vector(name, &VersionVector::new())
             .await
     }
 
-    async fn create_directory_with_version_vector_op(
+    async fn create_directory_with_version_vector(
         &mut self,
         name: String,
-        op: VersionVectorOp<'_>,
+        merge: &VersionVector,
     ) -> Result<Self> {
         let mut tx = self.branch().store().begin_local_write().await?;
         self.refresh_in(&mut tx).await?;
@@ -155,7 +155,12 @@ impl Directory {
         let blob_id = rand::random();
 
         let mut version_vector = self.content.initial_version_vector(&name);
-        op.apply(self.branch().id(), &mut version_vector);
+
+        if merge.is_empty() {
+            version_vector.increment(*self.branch().id())
+        } else {
+            version_vector.merge(merge)
+        }
 
         let data = EntryData::directory(blob_id, version_vector);
         let parent = self.create_parent_context(name.clone());
@@ -167,7 +172,7 @@ impl Directory {
         let _old_lock = content.insert(self.branch(), name, data, None)?;
         dir.save(&mut tx, &Content::empty()).await?;
         self.save(&mut tx, &content).await?;
-        self.bump(&mut tx, op).await?;
+        self.bump(&mut tx, merge).await?;
         self.commit(tx).await?;
         self.finalize(content);
 
@@ -189,10 +194,7 @@ impl Directory {
             Ok(dir)
         } else {
             match self
-                .create_directory_with_version_vector_op(
-                    name.to_owned(),
-                    VersionVectorOp::Merge(merge_vv),
-                )
+                .create_directory_with_version_vector(name.to_owned(), merge_vv)
                 .await
             {
                 Ok(dir) => Ok(dir),
@@ -367,7 +369,7 @@ impl Directory {
     #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
         let mut tx = self.branch().store().begin_local_write().await?;
-        self.bump(&mut tx, VersionVectorOp::Merge(vv)).await?;
+        self.bump(&mut tx, vv).await?;
         self.commit(tx).await
     }
 
@@ -593,7 +595,7 @@ impl Directory {
         let mut content = self.content.clone();
         let old_lock = content.insert(self.branch(), name, data, None)?;
         self.save(tx, &content).await?;
-        self.bump(tx, VersionVectorOp::IncrementLocal).await?;
+        self.bump(tx, &VersionVector::new()).await?;
 
         Ok((content, old_lock))
     }
@@ -643,15 +645,17 @@ impl Directory {
     }
 
     /// Updates the version vectors of this directory and all its ancestors.
+    /// If `merge` is non-empty, the resulting vv is computed by mergin the original vv with it,
+    /// otherwise by incrementing the local version.
     #[async_recursion]
     async fn bump<'a: 'async_recursion>(
         &mut self,
         tx: &mut LocalWriteTransaction,
-        op: VersionVectorOp<'a>,
+        merge: &'a VersionVector,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
-            parent.bump(tx, self.blob.branch().clone(), op).await
+            parent.bump(tx, self.blob.branch().clone(), merge).await
         } else {
             let write_keys = self
                 .branch()
@@ -659,7 +663,7 @@ impl Directory {
                 .write()
                 .ok_or(Error::PermissionDenied)?;
 
-            tx.bump(self.branch().id(), op, write_keys).await?;
+            tx.bump(merge, self.branch().id(), write_keys).await?;
 
             Ok(())
         }

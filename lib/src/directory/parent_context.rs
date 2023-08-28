@@ -8,7 +8,7 @@ use crate::{
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,
-    protocol::{Locator, VersionVectorOp},
+    protocol::Locator,
     store::{LocalWriteTransaction, ReadTransaction},
     version_vector::VersionVector,
 };
@@ -48,13 +48,13 @@ impl ParentContext {
         &self,
         tx: &mut LocalWriteTransaction,
         branch: Branch,
-        op: VersionVectorOp<'_>,
+        merge: &VersionVector,
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.content.clone();
-        content.bump(directory.branch(), &self.entry_name, op)?;
+        content.bump(directory.branch(), &self.entry_name, merge)?;
         directory.save(tx, &content).await?;
-        directory.bump(tx, op).await?;
+        directory.bump(tx, merge).await?;
 
         Ok(())
     }
@@ -162,9 +162,7 @@ impl ParentContext {
         ) {
             Ok(_lock) => {
                 directory.save(&mut tx, &content).await?;
-                directory
-                    .bump(&mut tx, VersionVectorOp::Merge(&src_vv))
-                    .await?;
+                directory.bump(&mut tx, &src_vv).await?;
                 directory.commit(tx).await?;
                 directory.finalize(content);
                 tracing::trace!("fork complete");

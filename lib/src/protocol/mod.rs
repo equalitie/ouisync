@@ -8,7 +8,6 @@ mod locator;
 mod proof;
 mod root_node;
 mod summary;
-mod version_vector_op;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
@@ -23,7 +22,6 @@ pub(crate) use self::{
     proof::{Proof, ProofError, UntrustedProof},
     root_node::RootNode,
     summary::{MultiBlockPresence, NodeState, SingleBlockPresence, Summary},
-    version_vector_op::VersionVectorOp,
 };
 
 #[cfg(test)]

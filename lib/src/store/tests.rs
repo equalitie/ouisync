@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
     crypto::{cipher::SecretKey, sign::Keypair},
-    protocol::{Locator, SingleBlockPresence, VersionVectorOp, EMPTY_INNER_HASH},
+    protocol::{Locator, SingleBlockPresence, EMPTY_INNER_HASH},
     test_utils,
+    version_vector::VersionVector,
 };
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
@@ -383,7 +384,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
             }
             PruneTestOp::Bump => {
                 let mut tx = store.begin_local_write().await.unwrap();
-                tx.bump(&branch_id, VersionVectorOp::IncrementLocal, &write_keys)
+                tx.bump(&VersionVector::new(), &branch_id, &write_keys)
                     .await
                     .unwrap();
                 tx.finish(&branch_id, &write_keys)

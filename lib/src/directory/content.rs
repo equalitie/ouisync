@@ -6,7 +6,6 @@ use crate::{
     blob::BlobId,
     branch::Branch,
     error::{Error, Result},
-    protocol::VersionVectorOp,
     version_vector::VersionVector,
 };
 use serde::Deserialize;
@@ -114,14 +113,18 @@ impl Content {
     }
 
     /// Updates the version vector of entry at `name`.
-    pub fn bump(&mut self, branch: &Branch, name: &str, op: VersionVectorOp<'_>) -> Result<()> {
-        op.apply(
-            branch.id(),
-            self.entries
-                .get_mut(name)
-                .ok_or(Error::EntryNotFound)?
-                .version_vector_mut(),
-        );
+    pub fn bump(&mut self, branch: &Branch, name: &str, merge: &VersionVector) -> Result<()> {
+        let vv = self
+            .entries
+            .get_mut(name)
+            .ok_or(Error::EntryNotFound)?
+            .version_vector_mut();
+
+        if merge.is_empty() {
+            vv.increment(*branch.id());
+        } else {
+            vv.merge(merge);
+        }
 
         Ok(())
     }

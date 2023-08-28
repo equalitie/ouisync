@@ -12,7 +12,7 @@ use crate::{
     metrics::Metrics,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
-        Block, BlockId, RootNode, SingleBlockPresence, VersionVectorOp,
+        Block, BlockId, RootNode, SingleBlockPresence,
     },
     repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
@@ -487,7 +487,7 @@ async fn create_changeset(
     }
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
+    tx.bump(&VersionVector::new(), writer_id, write_keys)
         .await
         .unwrap();
     tx.finish(writer_id, write_keys)

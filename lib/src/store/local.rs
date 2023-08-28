@@ -7,9 +7,7 @@ use crate::{
         sign::{Keypair, PublicKey},
         Hash,
     },
-    protocol::{
-        self, Block, BlockId, Proof, RootNode, SingleBlockPresence, Summary, VersionVectorOp,
-    },
+    protocol::{self, Block, BlockId, Proof, RootNode, SingleBlockPresence, Summary},
     version_vector::VersionVector,
 };
 use std::ops::{Deref, DerefMut};
@@ -48,16 +46,21 @@ impl LocalWriteTransaction {
     /// Update the root version vector of the given branch.
     pub async fn bump(
         &mut self,
+        merge: &VersionVector,
         branch_id: &PublicKey,
-        op: VersionVectorOp<'_>,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
         let root_node = load_or_create_root_node(&mut self.inner, branch_id, write_keys).await?;
 
         let mut new_vv = root_node.proof.version_vector.clone();
-        op.apply(branch_id, &mut new_vv);
 
-        // Sometimes `op` is a no-op. This is not an error.
+        if merge.is_empty() {
+            new_vv.increment(*branch_id)
+        } else {
+            new_vv.merge(merge)
+        }
+
+        // Sometimes this is a no-op. This is not an error.
         if new_vv == root_node.proof.version_vector {
             return Ok(());
         }
