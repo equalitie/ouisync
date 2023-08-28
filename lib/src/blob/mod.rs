@@ -364,7 +364,7 @@ impl Blob {
     /// store.
     pub(crate) async fn flush(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
         self.write_len(tx).await?;
-        self.write_blocks(tx).await?;
+        self.write_blocks(tx);
 
         Ok(())
     }
@@ -403,7 +403,7 @@ impl Blob {
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
             content.write_u64(0, self.len_modified);
-            write_block(tx, &locator, content, self.branch.keys().read()).await?;
+            write_block(tx, &locator, content, self.branch.keys().read());
         }
 
         self.len_original = self.len_modified;
@@ -411,7 +411,7 @@ impl Blob {
         Ok(())
     }
 
-    async fn write_blocks(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
+    fn write_blocks(&mut self, tx: &mut LocalWriteTransaction) {
         // Poor man's `drain_filter`.
         let cache = mem::take(&mut self.cache);
         let (dirty, clean): (HashMap<_, _>, _) =
@@ -420,10 +420,8 @@ impl Blob {
 
         for (number, block) in dirty {
             let locator = Locator::head(self.id).nth(number);
-            write_block(tx, &locator, block.content, self.branch.keys().read()).await?;
+            write_block(tx, &locator, block.content, self.branch.keys().read());
         }
-
-        Ok(())
     }
 }
 
@@ -581,28 +579,28 @@ async fn read_block(
     Ok((id, content))
 }
 
-async fn write_block(
+fn write_block(
     tx: &mut LocalWriteTransaction,
     locator: &Locator,
     mut content: BlockContent,
     read_key: &cipher::SecretKey,
-) -> Result<BlockId> {
+) -> BlockId {
     let nonce = rand::random();
     encrypt_block(read_key, &nonce, &mut content);
 
     let block = Block::new(content, nonce);
-
-    tracing::trace!(?locator, block_id = ?block.id, "write block");
+    let block_id = block.id;
 
     tx.link_block(
         locator.encode(read_key),
         block.id,
         SingleBlockPresence::Present,
     );
+    tx.write_block(block);
 
-    tx.write_block(&block).await?;
+    tracing::trace!(?locator, ?block_id, "write block");
 
-    Ok(block.id)
+    block_id
 }
 
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {

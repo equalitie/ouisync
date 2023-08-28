@@ -193,7 +193,7 @@ async fn receive_root_node_with_existing_hash() {
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.link_block(locator, block.id, SingleBlockPresence::Present);
-    tx.write_block(&block).await.unwrap();
+    tx.write_block(block);
     tx.finish(&local_id, &secrets.write_keys)
         .await
         .unwrap()

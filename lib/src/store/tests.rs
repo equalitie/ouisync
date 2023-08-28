@@ -115,14 +115,15 @@ async fn remove_block() {
     let branch_id_1 = PublicKey::random();
 
     let block: Block = rand::random();
+    let block_id = block.id;
 
     let mut tx = store.begin_local_write().await.unwrap();
 
-    tx.write_block(&block).await.unwrap();
+    tx.write_block(block);
 
     let locator0 = Locator::head(rand::random());
     let locator0 = locator0.encode(&read_key);
-    tx.link_block(locator0, block.id, SingleBlockPresence::Present);
+    tx.link_block(locator0, block_id, SingleBlockPresence::Present);
     tx.finish(&branch_id_0, &write_keys)
         .await
         .unwrap()
@@ -133,7 +134,7 @@ async fn remove_block() {
     let mut tx = store.begin_local_write().await.unwrap();
     let locator1 = Locator::head(rand::random());
     let locator1 = locator1.encode(&read_key);
-    tx.link_block(locator1, block.id, SingleBlockPresence::Present);
+    tx.link_block(locator1, block_id, SingleBlockPresence::Present);
     tx.finish(&branch_id_1, &write_keys)
         .await
         .unwrap()
@@ -145,7 +146,7 @@ async fn remove_block() {
         .acquire_read()
         .await
         .unwrap()
-        .block_exists(&block.id)
+        .block_exists(&block_id)
         .await
         .unwrap());
 
@@ -162,7 +163,7 @@ async fn remove_block() {
         .acquire_read()
         .await
         .unwrap()
-        .block_exists(&block.id)
+        .block_exists(&block_id)
         .await
         .unwrap());
 
@@ -179,7 +180,7 @@ async fn remove_block() {
         .acquire_read()
         .await
         .unwrap()
-        .block_exists(&block.id)
+        .block_exists(&block_id)
         .await
         .unwrap());
 }
@@ -198,23 +199,25 @@ async fn overwrite_block() {
     let locator = locator.encode(&read_key);
 
     let block0: Block = rng.gen();
+    let block0_id = block0.id;
 
     let mut tx = store.begin_local_write().await.unwrap();
     tx.link_block(locator, block0.id, SingleBlockPresence::Present);
-    tx.write_block(&block0).await.unwrap();
+    tx.write_block(block0);
     tx.apply(&branch_id, &write_keys).await.unwrap();
 
-    assert!(tx.block_exists(&block0.id).await.unwrap());
+    assert!(tx.block_exists(&block0_id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 
     let block1: Block = rng.gen();
+    let block1_id = block1.id;
 
-    tx.write_block(&block1).await.unwrap();
-    tx.link_block(locator, block1.id, SingleBlockPresence::Present);
+    tx.write_block(block1);
+    tx.link_block(locator, block1_id, SingleBlockPresence::Present);
     tx.apply(&branch_id, &write_keys).await.unwrap();
 
-    assert!(!tx.block_exists(&block0.id).await.unwrap());
-    assert!(tx.block_exists(&block1.id).await.unwrap());
+    assert!(!tx.block_exists(&block0_id).await.unwrap());
+    assert!(tx.block_exists(&block1_id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 }
 

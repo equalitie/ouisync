@@ -384,22 +384,19 @@ mod test {
         let mut writer = store.begin_local_write().await.unwrap();
 
         let block: Block = rand::random();
-        writer.write_block(&block).await.unwrap();
+        let block_id = block.id;
 
+        writer.write_block(block);
+        writer.link_block(rand::random(), block_id, SingleBlockPresence::Present);
         writer
-            .link_block(
-                branch_id,
-                &rand::random(),
-                &block.id,
-                SingleBlockPresence::Present,
-                write_keys,
-            )
+            .finish(branch_id, write_keys)
+            .await
+            .unwrap()
+            .commit()
             .await
             .unwrap();
 
-        writer.commit().await.unwrap();
-
-        block.id
+        block_id
     }
 
     async fn count_blocks(pool: &db::Pool) -> u64 {

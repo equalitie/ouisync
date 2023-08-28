@@ -41,14 +41,8 @@ impl LocalWriteTransaction {
     }
 
     /// Writes a block into the store.
-    ///
-    /// If a block with the same id already exists, this is a no-op.
-    pub async fn write_block(&mut self, block: &Block) -> Result<(), Error> {
-        if let Some(tracker) = &self.inner.block_expiration_tracker {
-            tracker.handle_block_update(&block.id);
-        }
-
-        block::write(self.inner.db(), block).await
+    pub fn write_block(&mut self, block: Block) {
+        self.changeset.blocks.push(block);
     }
 
     /// Update the root version vector of the given branch.
@@ -107,6 +101,14 @@ impl LocalWriteTransaction {
                 write_keys,
             )
             .await?;
+        }
+
+        for block in self.changeset.blocks.drain(..) {
+            if let Some(tracker) = &self.inner.block_expiration_tracker {
+                tracker.handle_block_update(&block.id);
+            }
+
+            block::write(self.inner.db(), &block).await?;
         }
 
         Ok(())
@@ -193,9 +195,11 @@ async fn apply_unlink(
     let root_node = tx.load_root_node(branch_id).await?;
     let mut path = tx.load_path(&root_node, &encoded_locator).await?;
 
-    let block_id = path
-        .remove_leaf(&encoded_locator)
-        .ok_or(Error::LocatorNotFound)?;
+    let block_id = if let Some(block_id) = path.remove_leaf(&encoded_locator) {
+        block_id
+    } else {
+        return Ok(());
+    };
 
     if let Some(expected_block_id) = expected_block_id {
         if block_id != expected_block_id {

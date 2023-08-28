@@ -511,7 +511,7 @@ async fn create_block(
 
     let mut tx = vault.store().begin_local_write().await.unwrap();
     tx.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
-    tx.write_block(&block).await.unwrap();
+    tx.write_block(block);
     tx.finish(branch_id, write_keys)
         .await
         .unwrap()
