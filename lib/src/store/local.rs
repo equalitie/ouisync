@@ -34,32 +34,10 @@ impl LocalWriteTransaction {
             .push((encoded_locator, block_id, block_presence));
     }
 
-    /// Unlinks (removes) the given block id from the given branch and locator. If
-    /// `expected_block_id` is `Some`, then the block is unlinked only if its id matches it,
-    /// otherwise it's removed unconditionally.
-    pub async fn unlink_block(
-        &mut self,
-        branch_id: &PublicKey,
-        encoded_locator: &Hash,
-        expected_block_id: Option<&BlockId>,
-        write_keys: &Keypair,
-    ) -> Result<(), Error> {
-        let root_node = self.inner.load_root_node(branch_id).await?;
-        let mut path = self.inner.load_path(&root_node, encoded_locator).await?;
-
-        let block_id = path
-            .remove_leaf(encoded_locator)
-            .ok_or(Error::LocatorNotFound)?;
-
-        if let Some(expected_block_id) = expected_block_id {
-            if &block_id != expected_block_id {
-                return Ok(());
-            }
-        }
-
-        save_path(&mut self.inner, path, &root_node, write_keys).await?;
-
-        Ok(())
+    pub fn unlink_block(&mut self, encoded_locator: Hash, expected_block_id: Option<BlockId>) {
+        self.changeset
+            .unlinks
+            .push((encoded_locator, expected_block_id));
     }
 
     /// Writes a block into the store.
@@ -114,6 +92,17 @@ impl LocalWriteTransaction {
                 encoded_locator,
                 block_id,
                 block_presence,
+                branch_id,
+                write_keys,
+            )
+            .await?;
+        }
+
+        for (encoded_locator, expected_block_id) in self.changeset.unlinks.drain(..) {
+            apply_unlink(
+                &mut self.inner,
+                encoded_locator,
+                expected_block_id,
                 branch_id,
                 write_keys,
             )
@@ -188,6 +177,31 @@ async fn apply_link(
     }
 
     path.set_leaf(&block_id, block_presence);
+
+    save_path(tx, path, &root_node, write_keys).await?;
+
+    Ok(())
+}
+
+async fn apply_unlink(
+    tx: &mut WriteTransaction,
+    encoded_locator: Hash,
+    expected_block_id: Option<BlockId>,
+    branch_id: &PublicKey,
+    write_keys: &Keypair,
+) -> Result<(), Error> {
+    let root_node = tx.load_root_node(branch_id).await?;
+    let mut path = tx.load_path(&root_node, &encoded_locator).await?;
+
+    let block_id = path
+        .remove_leaf(&encoded_locator)
+        .ok_or(Error::LocatorNotFound)?;
+
+    if let Some(expected_block_id) = expected_block_id {
+        if block_id != expected_block_id {
+            return Ok(());
+        }
+    }
 
     save_path(tx, path, &root_node, write_keys).await?;
 

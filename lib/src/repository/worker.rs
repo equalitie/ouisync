@@ -410,13 +410,11 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        crypto::sign::{Keypair, PublicKey},
         protocol::BlockId,
-        store::{self, LocalWriteTransaction, WriteTransaction},
+        store::{LocalWriteTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
-    use tracing::Instrument;
 
     pub(super) async fn run(
         shared: &Shared,
@@ -608,7 +606,7 @@ mod trash {
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
                 let mut local_tx: LocalWriteTransaction = tx.into();
-                remove_local_nodes(&mut local_tx, local_branch.id(), write_keys, &batch).await?;
+                remove_local_nodes(&mut local_tx, &batch).await?;
                 tx = local_tx.finish(local_branch.id(), write_keys).await?;
             }
 
@@ -636,23 +634,14 @@ mod trash {
 
     async fn remove_local_nodes(
         tx: &mut LocalWriteTransaction,
-        branch_id: &PublicKey,
-        write_keys: &Keypair,
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
             let locators: Vec<_> = tx.load_locators(block_id).try_collect().await?;
-            let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {
-                match tx
-                    .unlink_block(branch_id, &locator, Some(block_id), write_keys)
-                    .instrument(span.clone())
-                    .await
-                {
-                    Ok(()) | Err(store::Error::LocatorNotFound) => (),
-                    Err(error) => return Err(error.into()),
-                }
+                tracing::trace!(?block_id, "unreachable local node removed");
+                tx.unlink_block(locator, Some(*block_id));
             }
         }
 

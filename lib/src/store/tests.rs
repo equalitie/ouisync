@@ -92,9 +92,7 @@ async fn remove_locator() {
         count_child_nodes(&mut tx).await.unwrap(),
     );
 
-    tx.unlink_block(&branch_id, &encoded_locator, None, &write_keys)
-        .await
-        .unwrap();
+    tx.unlink_block(encoded_locator, None);
     tx.apply(&branch_id, &write_keys).await.unwrap();
 
     match tx.find_block(&branch_id, &encoded_locator).await {
@@ -152,9 +150,7 @@ async fn remove_block() {
         .unwrap());
 
     let mut tx = store.begin_local_write().await.unwrap();
-    tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
-        .await
-        .unwrap();
+    tx.unlink_block(locator0, None);
     tx.finish(&branch_id_0, &write_keys)
         .await
         .unwrap()
@@ -171,9 +167,7 @@ async fn remove_block() {
         .unwrap());
 
     let mut tx = store.begin_local_write().await.unwrap();
-    tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
-        .await
-        .unwrap();
+    tx.unlink_block(locator1, None);
     tx.finish(&branch_id_1, &write_keys)
         .await
         .unwrap()
@@ -319,9 +313,7 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
     locators.shuffle(&mut rng);
 
     for locator in locators {
-        tx.unlink_block(&branch_id, &locator, None, &write_keys)
-            .await
-            .unwrap();
+        tx.unlink_block(locator, None);
         tx.apply(&branch_id, &write_keys).await.unwrap();
 
         assert!(!has_empty_inner_node(&mut tx).await);
@@ -376,9 +368,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 };
 
                 let mut tx = store.begin_local_write().await.unwrap();
-                tx.unlink_block(&branch_id, &locator, None, &write_keys)
-                    .await
-                    .unwrap();
+                tx.unlink_block(locator, None);
                 tx.finish(&branch_id, &write_keys)
                     .await
                     .unwrap()
