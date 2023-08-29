@@ -301,7 +301,6 @@ async fn seek_before_start() {
 async fn truncate_to_empty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
-    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
@@ -310,13 +309,12 @@ async fn truncate_to_empty() {
         .take(2 * BLOCK_SIZE)
         .collect();
 
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, &content)
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
-
-    // TODO: is this `apply` necessary?
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
@@ -344,7 +342,6 @@ async fn truncate_to_empty() {
 async fn truncate_to_shorter() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
-    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
@@ -353,13 +350,12 @@ async fn truncate_to_shorter() {
         .take(3 * BLOCK_SIZE)
         .collect();
 
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, &content)
         .await
         .unwrap();
     blob.flush(&mut tx, &mut changeset).await.unwrap();
-
-    // TODO: is this `apply` necessary?
     changeset
         .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await

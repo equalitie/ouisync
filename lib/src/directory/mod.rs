@@ -311,10 +311,8 @@ impl Directory {
             .begin_insert_entry(&mut tx, &mut changeset, dst_name.to_owned(), dst_data)
             .await?;
 
-        // Need to apply the changeset because the subsequent operations might try to load the
-        // same blocks we modified above.
-        // TODO: Try to come up with a way to not need this so that the whole move operation
-        // happens in a single snapshot.
+        // TODO: Handle the case when `self` == `dst_dir` separately (call `refresh` and `save`
+        // only once) to avoid having to apply the changeset here.
         changeset
             .apply(
                 &mut tx,
