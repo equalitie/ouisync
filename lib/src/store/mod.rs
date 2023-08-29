@@ -2,11 +2,11 @@ mod block;
 mod block_expiration_tracker;
 mod block_ids;
 mod cache;
+mod changeset;
 mod error;
 mod index;
 mod inner_node;
 mod leaf_node;
-mod local;
 mod path;
 mod quota;
 mod receive_filter;
@@ -18,10 +18,10 @@ mod tests;
 pub use error::Error;
 
 pub(crate) use {
-    block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage,
+    block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage, changeset::Changeset,
     inner_node::ReceiveStatus as InnerNodeReceiveStatus,
-    leaf_node::ReceiveStatus as LeafNodeReceiveStatus, local::Changeset,
-    receive_filter::ReceiveFilter, root_node::ReceiveStatus as RootNodeReceiveStatus,
+    leaf_node::ReceiveStatus as LeafNodeReceiveStatus, receive_filter::ReceiveFilter,
+    root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
 use self::{
