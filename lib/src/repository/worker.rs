@@ -411,7 +411,7 @@ mod trash {
     use super::*;
     use crate::{
         protocol::BlockId,
-        store::{LocalWriteTransaction, WriteTransaction},
+        store::{Changeset, ReadTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
@@ -605,9 +605,11 @@ mod trash {
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                let mut local_tx: LocalWriteTransaction = tx.into();
-                remove_local_nodes(&mut local_tx, &batch).await?;
-                tx = local_tx.finish(local_branch.id(), write_keys).await?;
+                let mut changeset = Changeset::new();
+                remove_local_nodes(&mut tx, &mut changeset, &batch).await?;
+                changeset
+                    .apply(&mut tx, local_branch.id(), write_keys)
+                    .await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -633,7 +635,8 @@ mod trash {
     }
 
     async fn remove_local_nodes(
-        tx: &mut LocalWriteTransaction,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
@@ -641,7 +644,7 @@ mod trash {
 
             for locator in locators {
                 tracing::trace!(?block_id, "unreachable local node removed");
-                tx.unlink_block(locator, Some(*block_id));
+                changeset.unlink_block(locator, Some(*block_id));
             }
         }
 

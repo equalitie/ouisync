@@ -8,7 +8,7 @@ use crate::{
     directory::{Directory, ParentContext},
     error::{Error, Result},
     protocol::{Locator, BLOCK_SIZE},
-    store::LocalWriteTransaction,
+    store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
 use std::{fmt, future::Future, io::SeekFrom};
@@ -206,31 +206,44 @@ impl File {
             return Ok(());
         }
 
-        let mut tx = self.branch().store().begin_local_write().await?;
-        self.blob.flush(&mut tx).await?;
+        let mut tx = self.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
+
+        self.blob.flush(&mut tx, &mut changeset).await?;
         self.parent
-            .bump(&mut tx, self.branch().clone(), &VersionVector::new())
+            .bump(
+                &mut tx,
+                &mut changeset,
+                self.branch().clone(),
+                &VersionVector::new(),
+            )
+            .await?;
+
+        changeset
+            .apply(
+                &mut tx,
+                self.branch().id(),
+                self.branch()
+                    .keys()
+                    .write()
+                    .ok_or(Error::PermissionDenied)?,
+            )
             .await?;
 
         let event_tx = self.branch().notify();
-        tx.finish(
-            self.branch().id(),
-            self.branch()
-                .keys()
-                .write()
-                .ok_or(Error::PermissionDenied)?,
-        )
-        .await?
-        .commit_and_then(move || event_tx.send())
-        .await?;
+        tx.commit_and_then(move || event_tx.send()).await?;
 
         Ok(())
     }
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
-        self.blob.flush(tx).await?;
+    pub(crate) async fn save(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
+        self.blob.flush(tx, changeset).await?;
         Ok(())
     }
 

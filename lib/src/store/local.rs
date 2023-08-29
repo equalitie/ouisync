@@ -1,7 +1,4 @@
-use super::{
-    block, error::Error, inner_node, leaf_node, path::Path, root_node, ReadTransaction,
-    WriteTransaction,
-};
+use super::{block, error::Error, inner_node, leaf_node, path::Path, root_node, WriteTransaction};
 use crate::{
     crypto::{
         sign::{Keypair, PublicKey},
@@ -10,56 +7,32 @@ use crate::{
     protocol::{self, Block, BlockId, Proof, RootNode, SingleBlockPresence, Summary},
     version_vector::VersionVector,
 };
-use std::{
-    mem,
-    ops::{Deref, DerefMut},
-};
 use tracing::Instrument;
 
-/// Write transaction specialized for local operations by a writer replica.
-pub(crate) struct LocalWriteTransaction {
-    inner: WriteTransaction,
-    changeset: Changeset,
+/// Recorded changes to be applied to the store as a single unit.
+#[derive(Default)]
+pub(crate) struct Changeset {
+    links: Vec<(Hash, BlockId, SingleBlockPresence)>,
+    unlinks: Vec<(Hash, Option<BlockId>)>,
+    blocks: Vec<Block>,
+    bump: VersionVector,
 }
 
-impl LocalWriteTransaction {
-    /// Links the given block id into the given branch under the given locator.
-    pub fn link_block(
-        &mut self,
-        encoded_locator: Hash,
-        block_id: BlockId,
-        block_presence: SingleBlockPresence,
-    ) {
-        self.changeset
-            .links
-            .push((encoded_locator, block_id, block_presence));
+impl Changeset {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn unlink_block(&mut self, encoded_locator: Hash, expected_block_id: Option<BlockId>) {
-        self.changeset
-            .unlinks
-            .push((encoded_locator, expected_block_id));
-    }
-
-    /// Writes a block into the store.
-    pub fn write_block(&mut self, block: Block) {
-        self.changeset.blocks.push(block);
-    }
-
-    /// Update the root version vector.
-    pub fn bump(&mut self, merge: &VersionVector) {
-        self.changeset.bump.merge(merge);
-    }
-
-    /// Applies the current changeset to the underlying transaction.
+    /// Applies this changeset to the transaction.
     pub async fn apply(
-        &mut self,
+        mut self,
+        tx: &mut WriteTransaction,
         branch_id: &PublicKey,
         write_keys: &Keypair,
     ) -> Result<(), Error> {
-        for (encoded_locator, block_id, block_presence) in self.changeset.links.drain(..) {
+        for (encoded_locator, block_id, block_presence) in self.links {
             apply_link(
-                &mut self.inner,
+                tx,
                 encoded_locator,
                 block_id,
                 block_presence,
@@ -69,9 +42,9 @@ impl LocalWriteTransaction {
             .await?;
         }
 
-        for (encoded_locator, expected_block_id) in self.changeset.unlinks.drain(..) {
+        for (encoded_locator, expected_block_id) in self.unlinks {
             apply_unlink(
-                &mut self.inner,
+                tx,
                 encoded_locator,
                 expected_block_id,
                 branch_id,
@@ -80,71 +53,41 @@ impl LocalWriteTransaction {
             .await?;
         }
 
-        for block in self.changeset.blocks.drain(..) {
-            if let Some(tracker) = &self.inner.block_expiration_tracker {
+        for block in self.blocks.drain(..) {
+            if let Some(tracker) = &tx.block_expiration_tracker {
                 tracker.handle_block_update(&block.id);
             }
 
-            block::write(self.inner.db(), &block).await?;
+            block::write(tx.db(), &block).await?;
         }
 
-        apply_bump(
-            &mut self.inner,
-            mem::take(&mut self.changeset.bump),
-            branch_id,
-            write_keys,
-        )
-        .await?;
+        apply_bump(tx, self.bump, branch_id, write_keys).await?;
 
         Ok(())
     }
 
-    /// Calls `apply` and returns the underlying transaction.
-    pub async fn finish(
-        mut self,
-        branch_id: &PublicKey,
-        write_keys: &Keypair,
-    ) -> Result<WriteTransaction, Error> {
-        self.apply(branch_id, write_keys).await?;
-        Ok(self.inner)
+    /// Links the given block id into the given branch under the given locator.
+    pub fn link_block(
+        &mut self,
+        encoded_locator: Hash,
+        block_id: BlockId,
+        block_presence: SingleBlockPresence,
+    ) {
+        self.links.push((encoded_locator, block_id, block_presence));
     }
-}
 
-impl From<WriteTransaction> for LocalWriteTransaction {
-    fn from(inner: WriteTransaction) -> Self {
-        Self {
-            inner,
-            changeset: Changeset::new(),
-        }
+    pub fn unlink_block(&mut self, encoded_locator: Hash, expected_block_id: Option<BlockId>) {
+        self.unlinks.push((encoded_locator, expected_block_id));
     }
-}
 
-impl Deref for LocalWriteTransaction {
-    type Target = ReadTransaction;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.deref()
+    /// Writes a block into the store.
+    pub fn write_block(&mut self, block: Block) {
+        self.blocks.push(block);
     }
-}
 
-impl DerefMut for LocalWriteTransaction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.deref_mut()
-    }
-}
-
-/// Recorded changes to be applied to the store as a single unit.
-#[derive(Default)]
-struct Changeset {
-    links: Vec<(Hash, BlockId, SingleBlockPresence)>,
-    unlinks: Vec<(Hash, Option<BlockId>)>,
-    blocks: Vec<Block>,
-    bump: VersionVector,
-}
-
-impl Changeset {
-    fn new() -> Self {
-        Self::default()
+    /// Update the root version vector.
+    pub fn bump(&mut self, merge: &VersionVector) {
+        self.bump.merge(merge);
     }
 }
 

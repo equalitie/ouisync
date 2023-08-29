@@ -111,7 +111,7 @@ mod tests {
     use crate::{
         crypto::sign::{Keypair, PublicKey},
         protocol::SingleBlockPresence,
-        store::Store,
+        store::{Changeset, Store},
     };
     use tempfile::TempDir;
 
@@ -128,16 +128,16 @@ mod tests {
         let write_keys = Keypair::random();
         let branch_id = PublicKey::random();
 
-        let mut tx = store.begin_local_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
-        tx.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
-        tx.finish(&branch_id, &write_keys)
-            .await
-            .unwrap()
-            .commit()
+        changeset.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
             .await
             .unwrap();
+        tx.commit().await.unwrap();
 
         let mut r = store.acquire_read().await.unwrap();
         let root_hash = r.load_root_node(&branch_id).await.unwrap().proof.hash;
@@ -159,20 +159,25 @@ mod tests {
         let shared_locator = rand::random();
         let shared_block_id = rand::random();
 
-        let mut tx = pool.begin_local_write().await.unwrap();
+        let mut tx = pool.begin_write().await.unwrap();
 
         for branch_id in [&branch_a_id, &branch_b_id] {
+            let mut changeset = Changeset::new();
+
             // unique block
-            tx.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+            changeset.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
 
             // shared blocks
-            tx.link_block(
+            changeset.link_block(
                 shared_locator,
                 shared_block_id,
                 SingleBlockPresence::Present,
             );
 
-            tx.apply(branch_id, &write_keys).await.unwrap();
+            changeset
+                .apply(&mut tx, branch_id, &write_keys)
+                .await
+                .unwrap();
         }
 
         let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;

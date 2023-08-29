@@ -19,12 +19,14 @@ use test_strategy::proptest;
 async fn empty_blob() {
     let (_, _base_dir, store, [branch]) = setup(0).await;
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-    blob.flush(&mut tx).await.unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
 
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -59,7 +61,8 @@ async fn write_and_read_case(
     rng_seed: u64,
 ) {
     let (mut rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let block_id = if is_root { BlobId::ROOT } else { rng.gen() };
 
@@ -69,11 +72,14 @@ async fn write_and_read_case(
     let orig_content: Vec<u8> = rng.sample_iter(Standard).take(blob_len).collect();
 
     for chunk in orig_content.chunks(write_len) {
-        blob.write_all(&mut tx, chunk).await.unwrap();
+        blob.write_all(&mut tx, &mut changeset, chunk)
+            .await
+            .unwrap();
     }
 
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -107,16 +113,20 @@ fn len(
 ) {
     test_utils::run(async {
         let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_local_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
         let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &content[..]).await.unwrap();
+        blob.write_all(&mut tx, &mut changeset, &content[..])
+            .await
+            .unwrap();
         assert_eq!(blob.len(), content_len as u64);
 
-        blob.flush(&mut tx).await.unwrap();
-        tx.apply(branch.id(), branch.keys().write().unwrap())
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
             .await
             .unwrap();
 
@@ -161,14 +171,18 @@ fn seek_from_end(
 async fn seek_from(content_len: usize, seek_from: SeekFrom, expected_pos: usize, rng_seed: u64) {
     let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
     let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-    blob.write_all(&mut tx, &content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -190,14 +204,18 @@ fn seek_from_current(
 ) {
     test_utils::run(async {
         let (rng, _base_dir, store, [branch]) = setup(rng_seed).await;
-        let mut tx = store.begin_local_write().await.unwrap();
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         let content: Vec<u8> = rng.sample_iter(Standard).take(content_len).collect();
 
         let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-        blob.write_all(&mut tx, &content[..]).await.unwrap();
-        blob.flush(&mut tx).await.unwrap();
-        tx.apply(branch.id(), branch.keys().write().unwrap())
+        blob.write_all(&mut tx, &mut changeset, &content[..])
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
             .await
             .unwrap();
 
@@ -222,14 +240,18 @@ fn seek_from_current(
 async fn seek_after_end() {
     let (_, _base_dir, store, [branch]) = setup(0).await;
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let content = b"content";
 
     let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-    blob.write_all(&mut tx, &content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -248,14 +270,18 @@ async fn seek_after_end() {
 #[tokio::test(flavor = "multi_thread")]
 async fn seek_before_start() {
     let (_, _base_dir, store, [branch]) = setup(0).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let content = b"content";
 
     let mut blob = Blob::create(branch.clone(), BlobId::ROOT);
-    blob.write_all(&mut tx, &content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -274,7 +300,8 @@ async fn seek_before_start() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_empty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
@@ -284,16 +311,23 @@ async fn truncate_to_empty() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+
+    // TODO: is this `apply` necessary?
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
     assert_eq!(blob.len(), content.len() as u64);
 
+    let mut changeset = Changeset::new();
     blob.truncate(0).unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
     assert_eq!(blob.len(), 0);
@@ -309,7 +343,8 @@ async fn truncate_to_empty() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_to_shorter() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
@@ -319,18 +354,25 @@ async fn truncate_to_shorter() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+
+    // TODO: is this `apply` necessary?
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
     assert_eq!(blob.len(), content.len() as u64);
 
     let new_len = BLOCK_SIZE / 2;
 
+    let mut changeset = Changeset::new();
     blob.truncate(new_len as u64).unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
     assert_eq!(blob.len(), new_len as u64);
@@ -347,7 +389,8 @@ async fn truncate_to_shorter() {
 #[tokio::test(flavor = "multi_thread")]
 async fn truncate_marks_as_dirty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
@@ -357,8 +400,10 @@ async fn truncate_marks_as_dirty() {
         .collect();
 
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
+    blob.write_all(&mut tx, &mut changeset, &content)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
 
     blob.truncate(0).unwrap();
     assert!(blob.is_dirty());
@@ -371,17 +416,21 @@ async fn truncate_marks_as_dirty() {
 async fn modify_blob() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
 
     let id = rng.gen();
     let locator0 = Locator::head(id);
     let locator1 = locator0.next();
 
     let content = vec![0; 2 * BLOCK_SIZE];
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &content)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -395,10 +444,14 @@ async fn modify_blob() {
     };
 
     let buffer = vec![1; 3 * BLOCK_SIZE / 2];
+    let mut changeset = Changeset::new();
     blob.seek(SeekFrom::Start(0));
-    blob.write_all(&mut tx, &buffer).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &buffer)
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -420,22 +473,29 @@ async fn modify_blob() {
 async fn append() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
 
     let id = rng.gen();
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, b"foo").await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, b"foo")
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
+    let mut changeset = Changeset::new();
     let mut blob = Blob::open(&mut tx, branch.clone(), id).await.unwrap();
-
     blob.seek(SeekFrom::End(0));
-    blob.write_all(&mut tx, b"bar").await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, b"bar")
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -451,14 +511,18 @@ async fn append() {
 #[tokio::test(flavor = "multi_thread")]
 async fn write_reopen_and_read() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let id = rng.gen();
 
     let mut blob = Blob::create(branch.clone(), id);
-    blob.write_all(&mut tx, b"foo").await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(branch.id(), branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, b"foo")
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -505,20 +569,23 @@ async fn fork_and_write_case(
 
     let src_content: Vec<u8> = (&mut rng).sample_iter(Standard).take(src_len).collect();
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(src_branch.clone(), src_id);
-    blob.write_all(&mut tx, &src_content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.finish(src_branch.id(), src_branch.keys().write().unwrap())
-        .await
-        .unwrap()
-        .commit()
+    blob.write_all(&mut tx, &mut changeset, &src_content[..])
         .await
         .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, src_branch.id(), src_branch.keys().write().unwrap())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 
     fork(src_id, &src_branch, &dst_branch).await.unwrap();
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
     let mut blob = Blob::open(&mut tx, dst_branch.clone(), src_id)
         .await
         .unwrap();
@@ -526,9 +593,12 @@ async fn fork_and_write_case(
     let write_content: Vec<u8> = rng.sample_iter(Standard).take(write_len).collect();
 
     blob.seek(SeekFrom::Start(seek_pos as u64));
-    blob.write_all(&mut tx, &write_content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.apply(dst_branch.id(), dst_branch.keys().write().unwrap())
+    blob.write_all(&mut tx, &mut changeset, &write_content[..])
+        .await
+        .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, dst_branch.id(), dst_branch.keys().write().unwrap())
         .await
         .unwrap();
 
@@ -565,16 +635,18 @@ async fn fork_is_idempotent() {
     let id = rng.gen();
     let content: Vec<u8> = (&mut rng).sample_iter(Standard).take(512 * 1024).collect();
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
     let mut blob = Blob::create(src_branch.clone(), id);
-    blob.write_all(&mut tx, &content[..]).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.finish(src_branch.id(), src_branch.keys().write().unwrap())
-        .await
-        .unwrap()
-        .commit()
+    blob.write_all(&mut tx, &mut changeset, &content[..])
         .await
         .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, src_branch.id(), src_branch.keys().write().unwrap())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 
     for i in 0..2 {
         fork(id, &src_branch, &dst_branch)
@@ -590,20 +662,20 @@ async fn fork_then_remove_src_branch() {
     let id_0 = rng.gen();
     let id_1 = rng.gen();
 
-    let mut tx = store.begin_local_write().await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     let mut blob_0 = Blob::create(src_branch.clone(), id_0);
-    blob_0.flush(&mut tx).await.unwrap();
+    blob_0.flush(&mut tx, &mut changeset).await.unwrap();
 
     let mut blob_1 = Blob::create(src_branch.clone(), id_1);
-    blob_1.flush(&mut tx).await.unwrap();
+    blob_1.flush(&mut tx, &mut changeset).await.unwrap();
 
-    tx.finish(src_branch.id(), src_branch.keys().write().unwrap())
-        .await
-        .unwrap()
-        .commit()
+    changeset
+        .apply(&mut tx, src_branch.id(), src_branch.keys().write().unwrap())
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 
     fork(id_0, &src_branch, &dst_branch).await.unwrap();
 
@@ -638,15 +710,17 @@ async fn block_ids_test() {
         .sample_iter(Standard)
         .take(BLOCK_SIZE * 3 - HEADER_SIZE)
         .collect();
-    let mut tx = store.begin_local_write().await.unwrap();
-    blob.write_all(&mut tx, &content).await.unwrap();
-    blob.flush(&mut tx).await.unwrap();
-    tx.finish(branch.id(), branch.keys().write().unwrap())
-        .await
-        .unwrap()
-        .commit()
+    let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+    blob.write_all(&mut tx, &mut changeset, &content)
         .await
         .unwrap();
+    blob.flush(&mut tx, &mut changeset).await.unwrap();
+    changeset
+        .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 
     let mut block_ids = BlockIds::open(branch, blob_id).await.unwrap();
     let mut actual_count = 0;

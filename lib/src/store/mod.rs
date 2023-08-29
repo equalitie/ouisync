@@ -20,7 +20,7 @@ pub use error::Error;
 pub(crate) use {
     block::ReceiveStatus as BlockReceiveStatus, block_ids::BlockIdsPage,
     inner_node::ReceiveStatus as InnerNodeReceiveStatus,
-    leaf_node::ReceiveStatus as LeafNodeReceiveStatus, local::LocalWriteTransaction,
+    leaf_node::ReceiveStatus as LeafNodeReceiveStatus, local::Changeset,
     receive_filter::ReceiveFilter, root_node::ReceiveStatus as RootNodeReceiveStatus,
 };
 
@@ -143,11 +143,6 @@ impl Store {
                 },
             },
         })
-    }
-
-    /// Begins a `LocalWriteTransaction`
-    pub async fn begin_local_write(&self) -> Result<LocalWriteTransaction, Error> {
-        self.begin_write().await.map(LocalWriteTransaction::from)
     }
 
     pub async fn count_blocks(&self) -> Result<u64, Error> {

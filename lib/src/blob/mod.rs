@@ -19,7 +19,7 @@ use crate::{
         Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
         BLOCK_SIZE,
     },
-    store::{self, LocalWriteTransaction, ReadTransaction},
+    store::{self, Changeset, ReadTransaction},
 };
 use std::{io::SeekFrom, iter, mem};
 use thiserror::Error;
@@ -292,7 +292,12 @@ impl Blob {
         Ok(write_len)
     }
 
-    pub async fn write_all(&mut self, tx: &mut LocalWriteTransaction, buffer: &[u8]) -> Result<()> {
+    pub async fn write_all(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+        buffer: &[u8],
+    ) -> Result<()> {
         let mut offset = 0;
 
         loop {
@@ -305,7 +310,7 @@ impl Blob {
                     self.warmup(tx).await?;
                 }
                 Err(ReadWriteError::CacheFull) => {
-                    self.flush(tx).await?;
+                    self.flush(tx, changeset).await?;
                 }
             }
         }
@@ -362,9 +367,13 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub(crate) async fn flush(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
-        self.write_len(tx).await?;
-        self.write_blocks(tx);
+    pub(crate) async fn flush(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
+        self.write_len(tx, changeset).await?;
+        self.write_blocks(changeset);
 
         Ok(())
     }
@@ -389,7 +398,11 @@ impl Blob {
     }
 
     // Write length, if changed
-    async fn write_len(&mut self, tx: &mut LocalWriteTransaction) -> Result<()> {
+    async fn write_len(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
         if self.len_modified == self.len_original {
             return Ok(());
         }
@@ -403,7 +416,7 @@ impl Blob {
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
             content.write_u64(0, self.len_modified);
-            write_block(tx, &locator, content, self.branch.keys().read());
+            write_block(changeset, &locator, content, self.branch.keys().read());
         }
 
         self.len_original = self.len_modified;
@@ -411,7 +424,7 @@ impl Blob {
         Ok(())
     }
 
-    fn write_blocks(&mut self, tx: &mut LocalWriteTransaction) {
+    fn write_blocks(&mut self, changeset: &mut Changeset) {
         // Poor man's `drain_filter`.
         let cache = mem::take(&mut self.cache);
         let (dirty, clean): (HashMap<_, _>, _) =
@@ -420,7 +433,12 @@ impl Blob {
 
         for (number, block) in dirty {
             let locator = Locator::head(self.id).nth(number);
-            write_block(tx, &locator, block.content, self.branch.keys().read());
+            write_block(
+                changeset,
+                &locator,
+                block.content,
+                self.branch.keys().read(),
+            );
         }
     }
 }
@@ -493,7 +511,8 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
 
     let locators = Locator::head(blob_id).sequence().take(end as usize);
     for locator in locators {
-        let mut tx = src_branch.store().begin_local_write().await?;
+        let mut tx = src_branch.store().begin_write().await?;
+        let mut changeset = Changeset::new();
 
         let encoded_locator = locator.encode(read_key);
 
@@ -512,11 +531,11 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             SingleBlockPresence::Missing
         };
 
-        tx.link_block(encoded_locator, block_id, block_presence);
-        tx.finish(dst_branch.id(), write_keys)
-            .await?
-            .commit()
+        changeset.link_block(encoded_locator, block_id, block_presence);
+        changeset
+            .apply(&mut tx, dst_branch.id(), write_keys)
             .await?;
+        tx.commit().await?;
 
         tracing::trace!(
             num = locator.number(),
@@ -580,7 +599,7 @@ async fn read_block(
 }
 
 fn write_block(
-    tx: &mut LocalWriteTransaction,
+    changeset: &mut Changeset,
     locator: &Locator,
     mut content: BlockContent,
     read_key: &cipher::SecretKey,
@@ -591,12 +610,12 @@ fn write_block(
     let block = Block::new(content, nonce);
     let block_id = block.id;
 
-    tx.link_block(
+    changeset.link_block(
         locator.encode(read_key),
         block.id,
         SingleBlockPresence::Present,
     );
-    tx.write_block(block);
+    changeset.write_block(block);
 
     tracing::trace!(?locator, ?block_id, "write block");
 

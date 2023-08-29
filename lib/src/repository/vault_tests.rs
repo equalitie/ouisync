@@ -18,7 +18,7 @@ use crate::{
         SingleBlockPresence, EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,
-    store::{self, ReadTransaction},
+    store::{self, Changeset, ReadTransaction},
     test_utils,
     version_vector::VersionVector,
 };
@@ -191,15 +191,16 @@ async fn receive_root_node_with_existing_hash() {
     let block: Block = rng.gen();
     let locator = rng.gen();
 
-    let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(locator, block.id, SingleBlockPresence::Present);
-    tx.write_block(block);
-    tx.finish(&local_id, &secrets.write_keys)
-        .await
-        .unwrap()
-        .commit()
+    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+
+    changeset.link_block(locator, block.id, SingleBlockPresence::Present);
+    changeset.write_block(block);
+    changeset
+        .apply(&mut tx, &local_id, &secrets.write_keys)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 
     // Receive root node with the same hash as the current local one but different writer id.
     let root = vault
@@ -279,22 +280,22 @@ mod receive_and_create_root_node {
         let block_id_2 = rng.gen();
 
         // Insert one present and two missing, so the root block presence is `Some`
-        let mut tx = vault.store().begin_local_write().await.unwrap();
+        let mut tx = vault.store().begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         for (locator, block_id, presence) in [
             (locator_0, block_id_0_0, SingleBlockPresence::Present),
             (locator_1, block_1.id, SingleBlockPresence::Missing),
             (locator_2, block_id_2, SingleBlockPresence::Missing),
         ] {
-            tx.link_block(locator, block_id, presence);
+            changeset.link_block(locator, block_id, presence);
         }
 
-        tx.finish(&local_id, &secrets.write_keys)
-            .await
-            .unwrap()
-            .commit()
+        changeset
+            .apply(&mut tx, &local_id, &secrets.write_keys)
             .await
             .unwrap();
+        tx.commit().await.unwrap();
 
         let root_node_0 = vault
             .store()
@@ -329,7 +330,7 @@ mod receive_and_create_root_node {
         // Create a new snapshot locally
         let local_task = async {
             // This transaction will block `remote_task` until it is committed.
-            let mut tx = vault.store().begin_local_write().await.unwrap();
+            let mut tx = vault.store().begin_write().await.unwrap();
 
             // yield a bit to give `remote_task` chance to run until it needs to begin its own
             // transaction.
@@ -337,13 +338,14 @@ mod receive_and_create_root_node {
                 task::yield_now().await;
             }
 
-            tx.link_block(locator_0, block_id_0_1, SingleBlockPresence::Present);
-            tx.finish(&local_id, &secrets.write_keys)
-                .await
-                .unwrap()
-                .commit()
+            let mut changeset = Changeset::new();
+            changeset.link_block(locator_0, block_id_0_1, SingleBlockPresence::Present);
+            changeset
+                .apply(&mut tx, &local_id, &secrets.write_keys)
                 .await
                 .unwrap();
+
+            tx.commit().await.unwrap();
         };
 
         match order {
@@ -888,14 +890,14 @@ async fn block_ids_local() {
     let locator = locator.encode(&secrets.read_key);
     let block_id = rand::random();
 
-    let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(locator, block_id, SingleBlockPresence::Present);
-    tx.finish(&branch_id, &secrets.write_keys)
-        .await
-        .unwrap()
-        .commit()
+    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+    changeset.link_block(locator, block_id, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id, &secrets.write_keys)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = [block_id].into_iter().collect();

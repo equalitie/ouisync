@@ -381,20 +381,20 @@ mod test {
     }
 
     async fn add_block(write_keys: &Keypair, branch_id: &PublicKey, store: &Store) -> BlockId {
-        let mut writer = store.begin_local_write().await.unwrap();
+        let mut writer = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         let block: Block = rand::random();
         let block_id = block.id;
 
-        writer.write_block(block);
-        writer.link_block(rand::random(), block_id, SingleBlockPresence::Present);
-        writer
-            .finish(branch_id, write_keys)
-            .await
-            .unwrap()
-            .commit()
+        changeset.write_block(block);
+        changeset.link_block(rand::random(), block_id, SingleBlockPresence::Present);
+        changeset
+            .apply(&mut writer, branch_id, write_keys)
             .await
             .unwrap();
+
+        writer.commit().await.unwrap();
 
         block_id
     }

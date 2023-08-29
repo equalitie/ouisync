@@ -16,6 +16,7 @@ use crate::{
     },
     repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
+    store::Changeset,
     test_utils,
     version_vector::VersionVector,
 };
@@ -371,7 +372,6 @@ async fn create_repository<R: Rng + CryptoRng>(
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
 
-
     let state = Vault::new(
         repository_id,
         event_tx,
@@ -500,15 +500,16 @@ async fn create_block(
     let encoded_locator = rng.gen();
     let block: Block = rng.gen();
 
-    let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
-    tx.write_block(block);
-    tx.finish(branch_id, write_keys)
-        .await
-        .unwrap()
-        .commit()
+    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+
+    changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
+    changeset.write_block(block);
+    changeset
+        .apply(&mut tx, branch_id, write_keys)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
 }
 
 async fn load_latest_root_node(vault: &Vault, writer_id: &PublicKey) -> Option<RootNode> {
