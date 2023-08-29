@@ -74,7 +74,12 @@ async fn count_leaf_nodes_sanity_checks() {
     //------------------------------------------------------------------------
     // 1 = one for the root with a tombstone entry
     wait_for(&repo, || async {
-        count_local_index_leaf_nodes(&repo).await == 1
+        let actual = count_local_index_leaf_nodes(&repo).await;
+        let expected = 1;
+
+        tracing::trace!(actual, expected, "local leaf node count");
+
+        actual == expected
     })
     .await;
 }

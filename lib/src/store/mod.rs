@@ -7,7 +7,7 @@ mod error;
 mod index;
 mod inner_node;
 mod leaf_node;
-mod path;
+mod patch;
 mod quota;
 mod receive_filter;
 mod root_node;
@@ -28,7 +28,6 @@ use self::{
     block_expiration_tracker::BlockExpirationTracker,
     cache::{Cache, CacheTransaction},
     index::UpdateSummaryReason,
-    path::Path,
 };
 use crate::{
     collections::HashSet,
@@ -38,8 +37,8 @@ use crate::{
     future::try_collect_into,
     progress::Progress,
     protocol::{
-        Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
-        Proof, RootNode, Summary, INNER_LAYER_COUNT,
+        get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
+        MultiBlockPresence, Proof, RootNode, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
 };
@@ -382,10 +381,12 @@ impl Reader {
         root_node::exists(self.db(), node).await
     }
 
+    // TODO: use cache and remove `ReadTransaction::load_inner_nodes_with_cache`
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodeMap, Error> {
         inner_node::load_children(self.db(), parent_hash).await
     }
 
+    // TODO: use cache and remove `ReadTransaction::load_leaf_nodes_with_cache`
     pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodeSet, Error> {
         leaf_node::load_children(self.db(), parent_hash).await
     }
@@ -432,38 +433,31 @@ impl ReadTransaction {
         root_node: &RootNode,
         encoded_locator: &Hash,
     ) -> Result<BlockId, Error> {
-        let path = self.load_path(root_node, encoded_locator).await?;
-        path.get_leaf().ok_or(Error::LocatorNotFound)
-    }
+        // TODO: On cache miss load only the one node we actually need per layer.
 
-    async fn load_path(
-        &mut self,
-        root_node: &RootNode,
-        encoded_locator: &Hash,
-    ) -> Result<Path, Error> {
-        let mut path = Path::new(root_node.proof.hash, root_node.summary, *encoded_locator);
-        let mut parent = path.root_hash;
+        let mut parent_hash = root_node.proof.hash;
 
-        for level in 0..INNER_LAYER_COUNT {
-            path.inner[level] = self.load_inner_nodes_with_cache(&parent).await?;
-
-            if let Some(node) = path.inner[level].get(path.get_bucket(level)) {
-                parent = node.hash
-            } else {
-                return Ok(path);
-            };
+        for layer in 0..INNER_LAYER_COUNT {
+            parent_hash = self
+                .load_inner_nodes_with_cache(&parent_hash)
+                .await?
+                .get(get_bucket(encoded_locator, layer))
+                .ok_or(Error::LocatorNotFound)?
+                .hash;
         }
 
-        path.leaves = self.load_leaf_nodes_with_cache(&parent).await?;
-
-        Ok(path)
+        self.load_leaf_nodes_with_cache(&parent_hash)
+            .await?
+            .get(encoded_locator)
+            .map(|node| node.block_id)
+            .ok_or(Error::LocatorNotFound)
     }
 
     async fn load_inner_nodes_with_cache(
         &mut self,
         parent_hash: &Hash,
     ) -> Result<InnerNodeMap, Error> {
-        if let Some(nodes) = self.inner.cache.get_inners(parent_hash) {
+        if let Some(nodes) = self.cache.get_inners(parent_hash) {
             return Ok(nodes);
         }
 
@@ -474,7 +468,7 @@ impl ReadTransaction {
         &mut self,
         parent_hash: &Hash,
     ) -> Result<LeafNodeSet, Error> {
-        if let Some(nodes) = self.inner.cache.get_leaves(parent_hash) {
+        if let Some(nodes) = self.cache.get_leaves(parent_hash) {
             return Ok(nodes);
         }
 
