@@ -384,9 +384,7 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
             }
             PruneTestOp::Bump => {
                 let mut tx = store.begin_local_write().await.unwrap();
-                tx.bump(&VersionVector::new(), &branch_id, &write_keys)
-                    .await
-                    .unwrap();
+                tx.bump(&VersionVector::new());
                 tx.finish(&branch_id, &write_keys)
                     .await
                     .unwrap()

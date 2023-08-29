@@ -187,10 +187,8 @@ impl Directory {
         name: &str,
         merge_vv: &VersionVector,
     ) -> Result<Self> {
-        if let Some(dir) = self
-            .try_open_directory_and_merge_version_vector(name, merge_vv)
-            .await?
-        {
+        if let Some(mut dir) = self.try_open_directory(name).await? {
+            dir.merge_version_vector(merge_vv).await?;
             Ok(dir)
         } else {
             match self
@@ -201,21 +199,20 @@ impl Directory {
                 Err(Error::EntryExists) => {
                     // The entry have been created in the meantime by some other task. Try to open
                     // it again (this time it must exist).
-                    self.try_open_directory_and_merge_version_vector(name, merge_vv)
-                        .await
-                        .transpose()
-                        .expect("entry must exist")
+                    let mut dir = self
+                        .try_open_directory(name)
+                        .await?
+                        .expect("entry must exist");
+                    dir.merge_version_vector(merge_vv).await?;
+
+                    Ok(dir)
                 }
                 Err(error) => Err(error),
             }
         }
     }
 
-    async fn try_open_directory_and_merge_version_vector(
-        &self,
-        name: &str,
-        merge_vv: &VersionVector,
-    ) -> Result<Option<Self>> {
+    async fn try_open_directory(&self, name: &str) -> Result<Option<Self>> {
         let entry = match self.lookup(name) {
             Ok(EntryRef::Directory(entry)) => entry,
             Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => return Ok(None),
@@ -223,8 +220,7 @@ impl Directory {
             Err(error) => return Err(error),
         };
 
-        let mut dir = entry.open(DirectoryFallback::Disabled).await?;
-        dir.merge_version_vector(merge_vv).await?;
+        let dir = entry.open(DirectoryFallback::Disabled).await?;
 
         Ok(Some(dir))
     }
@@ -308,6 +304,8 @@ impl Directory {
 
         // Need to apply the changeset because the subsequent operations might try to load the
         // same blocks we modified above.
+        // TODO: Try to come up with a way to not need this so that the whole move operation
+        // happens in a single snapshot.
         tx.apply(
             self.branch().id(),
             self.branch()
@@ -648,23 +646,12 @@ impl Directory {
     /// If `merge` is non-empty, the resulting vv is computed by mergin the original vv with it,
     /// otherwise by incrementing the local version.
     #[async_recursion]
-    async fn bump<'a: 'async_recursion>(
-        &mut self,
-        tx: &mut LocalWriteTransaction,
-        merge: &'a VersionVector,
-    ) -> Result<()> {
+    async fn bump(&mut self, tx: &mut LocalWriteTransaction, merge: &VersionVector) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
             parent.bump(tx, self.blob.branch().clone(), merge).await
         } else {
-            let write_keys = self
-                .branch()
-                .keys()
-                .write()
-                .ok_or(Error::PermissionDenied)?;
-
-            tx.bump(merge, self.branch().id(), write_keys).await?;
-
+            tx.bump(merge);
             Ok(())
         }
     }

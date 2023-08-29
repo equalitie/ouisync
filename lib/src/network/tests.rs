@@ -482,20 +482,11 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
+    assert!(size > 0);
+
     for _ in 0..size {
         create_block(rng, vault, writer_id, write_keys).await;
     }
-
-    let mut tx = vault.store().begin_local_write().await.unwrap();
-    tx.bump(&VersionVector::new(), writer_id, write_keys)
-        .await
-        .unwrap();
-    tx.finish(writer_id, write_keys)
-        .await
-        .unwrap()
-        .commit()
-        .await
-        .unwrap();
 
     vault.event_tx.send(Payload::BranchChanged(*writer_id));
 }

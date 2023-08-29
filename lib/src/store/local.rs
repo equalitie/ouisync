@@ -10,7 +10,10 @@ use crate::{
     protocol::{self, Block, BlockId, Proof, RootNode, SingleBlockPresence, Summary},
     version_vector::VersionVector,
 };
-use std::ops::{Deref, DerefMut};
+use std::{
+    mem,
+    ops::{Deref, DerefMut},
+};
 use tracing::Instrument;
 
 /// Write transaction specialized for local operations by a writer replica.
@@ -43,38 +46,9 @@ impl LocalWriteTransaction {
         self.changeset.blocks.push(block);
     }
 
-    /// Update the root version vector of the given branch.
-    pub async fn bump(
-        &mut self,
-        merge: &VersionVector,
-        branch_id: &PublicKey,
-        write_keys: &Keypair,
-    ) -> Result<(), Error> {
-        let root_node = load_or_create_root_node(&mut self.inner, branch_id, write_keys).await?;
-
-        let mut new_vv = root_node.proof.version_vector.clone();
-
-        if merge.is_empty() {
-            new_vv.increment(*branch_id)
-        } else {
-            new_vv.merge(merge)
-        }
-
-        // Sometimes this is a no-op. This is not an error.
-        if new_vv == root_node.proof.version_vector {
-            return Ok(());
-        }
-
-        let new_proof = Proof::new(
-            root_node.proof.writer_id,
-            new_vv,
-            root_node.proof.hash,
-            write_keys,
-        );
-
-        create_root_node(&mut self.inner, new_proof, root_node.summary)
-            .instrument(tracing::info_span!("bump"))
-            .await
+    /// Update the root version vector.
+    pub fn bump(&mut self, merge: &VersionVector) {
+        self.changeset.bump.merge(merge);
     }
 
     /// Applies the current changeset to the underlying transaction.
@@ -113,6 +87,14 @@ impl LocalWriteTransaction {
 
             block::write(self.inner.db(), &block).await?;
         }
+
+        apply_bump(
+            &mut self.inner,
+            mem::take(&mut self.changeset.bump),
+            branch_id,
+            write_keys,
+        )
+        .await?;
 
         Ok(())
     }
@@ -157,7 +139,7 @@ struct Changeset {
     links: Vec<(Hash, BlockId, SingleBlockPresence)>,
     unlinks: Vec<(Hash, Option<BlockId>)>,
     blocks: Vec<Block>,
-    merge: VersionVector,
+    bump: VersionVector,
 }
 
 impl Changeset {
@@ -213,6 +195,39 @@ async fn apply_unlink(
     save_path(tx, path, &root_node, write_keys).await?;
 
     Ok(())
+}
+
+async fn apply_bump(
+    tx: &mut WriteTransaction,
+    merge: VersionVector,
+    branch_id: &PublicKey,
+    write_keys: &Keypair,
+) -> Result<(), Error> {
+    let root_node = load_or_create_root_node(tx, branch_id, write_keys).await?;
+
+    let mut new_vv = root_node.proof.version_vector.clone();
+
+    if merge.is_empty() {
+        new_vv.increment(*branch_id)
+    } else {
+        new_vv.merge(&merge)
+    }
+
+    // Sometimes this is a no-op. This is not an error.
+    if new_vv == root_node.proof.version_vector {
+        return Ok(());
+    }
+
+    let new_proof = Proof::new(
+        root_node.proof.writer_id,
+        new_vv,
+        root_node.proof.hash,
+        write_keys,
+    );
+
+    create_root_node(tx, new_proof, root_node.summary)
+        .instrument(tracing::info_span!("bump"))
+        .await
 }
 
 async fn save_path(
