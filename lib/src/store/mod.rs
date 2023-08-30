@@ -30,12 +30,14 @@ use self::{
     path::Path,
 };
 use crate::{
+    collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
         CacheHash, Hash, Hashable,
     },
     db,
     debug::DebugPrinter,
+    future::try_collect_into,
     progress::Progress,
     protocol::{
         self, BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, Proof,
@@ -52,13 +54,14 @@ use std::{
 };
 use tracing::Instrument;
 // TODO: Consider creating an async `RwLock` in the `deadlock` module and use it here.
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 /// Data store
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
     cache: Arc<Cache>,
+    pub client_reload_index_tx: broadcast::Sender<PublicKey>,
     block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
 }
 
@@ -67,6 +70,9 @@ impl Store {
         Self {
             db,
             cache: Arc::new(Cache::new()),
+            // TODO: The broadcast channel is not the best structure for this use case. Ideally
+            // we'd have something like the `watch` but that can be edited until it's received.
+            client_reload_index_tx: broadcast::channel(1024).0,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
     }
@@ -110,6 +116,7 @@ impl Store {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
             cache: self.cache.begin(),
+            client_reload_index_tx: self.client_reload_index_tx.clone(),
             block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
     }
@@ -120,6 +127,7 @@ impl Store {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
                 cache: self.cache.begin(),
+                client_reload_index_tx: self.client_reload_index_tx.clone(),
                 block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
             },
         })
@@ -132,6 +140,7 @@ impl Store {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
                     cache: self.cache.begin(),
+                    client_reload_index_tx: self.client_reload_index_tx.clone(),
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             },
@@ -234,6 +243,7 @@ impl Store {
 pub(crate) struct Reader {
     inner: Handle,
     cache: CacheTransaction,
+    client_reload_index_tx: broadcast::Sender<PublicKey>,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
@@ -248,19 +258,77 @@ impl Reader {
         id: &BlockId,
         buffer: &mut [u8],
     ) -> Result<BlockNonce, Error> {
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(id);
+        if let Some(expiration_tracker) = &self.block_expiration_tracker {
+            expiration_tracker.handle_block_update(id);
         }
 
         let result = block::read(self.db(), id, buffer).await;
 
-        if let Some(tracker) = &self.block_expiration_tracker {
-            if matches!(result, Err(Error::BlockNotFound)) {
-                tracker.set_as_missing_if_expired(id).await?;
+        if matches!(result, Err(Error::BlockNotFound)) {
+            self.set_as_missing_if_expired(id).await?;
+        }
+
+        result
+    }
+
+    pub async fn read_block_on_peer_request(
+        &mut self,
+        id: &BlockId,
+        buffer: &mut [u8],
+        block_tracker: &crate::block_tracker::BlockTracker,
+    ) -> Result<BlockNonce, Error> {
+        if let Some(expiration_tracker) = &self.block_expiration_tracker {
+            expiration_tracker.handle_block_update(id);
+        }
+
+        let result = block::read(self.db(), id, buffer).await;
+
+        if matches!(result, Err(Error::BlockNotFound)) {
+            if self.set_as_missing_if_expired(id).await? {
+                block_tracker.require(*id);
             }
         }
 
         result
+    }
+
+    async fn set_as_missing_if_expired(&mut self, block_id: &BlockId) -> Result<bool, Error> {
+        let expiration_tracker = match &self.block_expiration_tracker {
+            Some(expiration_tracker) => expiration_tracker,
+            None => return Ok(false),
+        };
+
+        // TODO: This actually does a DB write operation
+        let mut tx = expiration_tracker.pool().begin_write().await?;
+        let cache = &mut self.cache;
+
+        let changed = leaf_node::set_missing_if_expired(&mut tx, block_id).await?;
+
+        if !changed {
+            return Ok(false);
+        }
+
+        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, &block_id)
+            .try_collect()
+            .await?;
+
+        let mut branches: HashSet<PublicKey> = HashSet::default();
+
+        for (hash, _state) in
+            index::update_summaries(&mut tx, cache, nodes, UpdateSummaryReason::BlockRemoved)
+                .await?
+        {
+            try_collect_into(root_node::load_writer_ids(&mut tx, &hash), &mut branches).await?;
+        }
+
+        // TODO: Use the 'on commit' machinery to ensure the below code is executed.
+        tx.commit().await?;
+
+        for branch_id in branches {
+            self.client_reload_index_tx.send(branch_id).unwrap_or(0);
+        }
+
+        Ok(true)
     }
 
     /// Checks whether the block exists in the store.
@@ -695,6 +763,39 @@ impl WriteTransaction {
         } else {
             inner.commit().await?;
         }
+
+        Ok(())
+    }
+
+    /// Remove all index ancestors nodes of the leaf node corresponding to the `block_id` from the
+    /// `receive_filter`.
+    pub async fn remove_from_receive_filter_index_nodes_for(
+        mut self,
+        block_id: BlockId,
+        receive_filter: &ReceiveFilter,
+    ) -> Result<(), Error> {
+        let mut nodes: HashSet<_> = leaf_node::load_parent_hashes(self.db(), &block_id)
+            .try_collect()
+            .await?;
+
+        let mut next_layer = HashSet::new();
+
+        for _ in 0..INNER_LAYER_COUNT {
+            for node in &nodes {
+                receive_filter.remove(self.db(), &node).await?;
+
+                let mut parents = inner_node::load_parent_hashes(self.db(), &node);
+
+                while let Some(parent) = parents.try_next().await? {
+                    next_layer.insert(parent);
+                }
+            }
+
+            std::mem::swap(&mut next_layer, &mut nodes);
+            next_layer.clear();
+        }
+
+        self.commit().await?;
 
         Ok(())
     }

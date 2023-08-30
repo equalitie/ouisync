@@ -154,6 +154,30 @@ pub(super) async fn set_missing(
     Ok(())
 }
 
+/// Returns true the block changed status from expired to missing
+pub(super) async fn set_missing_if_expired(
+    tx: &mut db::WriteTransaction,
+    block: &BlockId,
+) -> Result<bool, Error> {
+    let result = sqlx::query(
+        "UPDATE snapshot_leaf_nodes
+         SET block_presence = ?
+         WHERE block_id = ? AND block_presence = ?",
+    )
+    .bind(SingleBlockPresence::Missing)
+    .bind(&block)
+    .bind(SingleBlockPresence::Expired)
+    .execute(tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tracing::warn!("Marking 'Expired' block {block:?} as 'Missing'");
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 // Filter nodes that the remote replica has a block for but the local one is missing it.
 pub(super) async fn filter_nodes_with_new_blocks(
     conn: &mut db::Connection,

@@ -34,6 +34,7 @@ pub(crate) struct RepositoryMonitor {
     pub handle_inner_nodes_metric: Metric,
     pub handle_leaf_nodes_metric: Metric,
     pub handle_block_metric: Metric,
+    pub handle_block_not_found_metric: Metric,
     pub request_queued_metric: Metric,
     pub request_inflight_metric: Metric,
     pub handle_request_metric: Metric,
@@ -65,6 +66,7 @@ impl RepositoryMonitor {
         let handle_inner_nodes_metric = metrics.get("handle_inner_node");
         let handle_leaf_nodes_metric = metrics.get("handle_leaf_node");
         let handle_block_metric = metrics.get("handle_block");
+        let handle_block_not_found_metric = metrics.get("handle_block_not_found");
         let request_queued_metric = metrics.get("request queued");
         let request_inflight_metric = metrics.get("request inflight");
         let handle_request_metric = metrics.get("handle_request");
@@ -89,6 +91,7 @@ impl RepositoryMonitor {
             handle_inner_nodes_metric,
             handle_leaf_nodes_metric,
             handle_block_metric,
+            handle_block_not_found_metric,
             request_queued_metric,
             request_inflight_metric,
             handle_request_metric,

@@ -1010,12 +1010,16 @@ fn redownload_expired_blocks() {
 
         network.add_user_provided_peer(&actor::lookup_addr("origin").await);
 
+        // Wait to have the blocks, this is a blind replica, so we can't check the file exists and
+        // has the required content.
         common::eventually(&repo, || {
             async { repo.count_blocks().await.unwrap() == block_count }
                 .instrument(tracing::Span::current())
         })
         .await;
 
+        // Wait for the blocks to expire. TODO: We could also wait for the block count to drop to
+        // zero, but currently the expiration tracker does not trigger a repo change.
         sleep(Duration::from_secs(3)).await;
 
         cache_had_it_tx.send(()).await.unwrap();

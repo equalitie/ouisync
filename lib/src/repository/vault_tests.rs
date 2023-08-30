@@ -424,7 +424,7 @@ async fn receive_bumped_root_node() {
     .await;
 
     let node = vault
-        .store
+        .store()
         .acquire_read()
         .await
         .unwrap()
@@ -451,7 +451,7 @@ async fn receive_bumped_root_node() {
         .unwrap();
 
     let node = vault
-        .store
+        .store()
         .acquire_read()
         .await
         .unwrap()

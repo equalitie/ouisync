@@ -107,6 +107,10 @@ impl NodeState {
         matches!(self, Self::Approved)
     }
 
+    pub fn is_incomplete(self) -> bool {
+        matches!(self, Self::Incomplete)
+    }
+
     pub fn update(&mut self, other: Self) {
         *self = match (*self, other) {
             (Self::Incomplete, _) | (_, Self::Incomplete) => Self::Incomplete,

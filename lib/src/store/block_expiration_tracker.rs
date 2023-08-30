@@ -25,6 +25,10 @@ pub(crate) struct BlockExpirationTracker {
 }
 
 impl BlockExpirationTracker {
+    pub fn pool(&self) -> &db::Pool {
+        &self.pool
+    }
+
     pub async fn enable_expiration(
         pool: db::Pool,
         expiration_time: Duration,
@@ -79,25 +83,6 @@ impl BlockExpirationTracker {
         lock.handle_block_update(block, SystemTime::now());
         drop(lock);
         self.watch_tx.send(()).unwrap_or(());
-    }
-
-    pub async fn set_as_missing_if_expired(&self, block: &BlockId) -> Result<(), Error> {
-        let mut tx = self.pool.begin_write().await?;
-
-        sqlx::query(
-            "UPDATE snapshot_leaf_nodes
-             SET block_presence = ?
-             WHERE block_id = ? AND block_presence = ?",
-        )
-        .bind(SingleBlockPresence::Missing)
-        .bind(&block)
-        .bind(SingleBlockPresence::Expired)
-        .execute(&mut tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(())
     }
 
     pub fn handle_block_removed(&self, block: &BlockId) {

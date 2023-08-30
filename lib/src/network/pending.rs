@@ -79,6 +79,11 @@ pub(super) enum PendingResponse {
         permit: Option<ClientPermit>,
         debug: DebugReceivedResponse,
     },
+    BlockNotFound {
+        block_id: BlockId,
+        permit: Option<ClientPermit>,
+        debug: DebugReceivedResponse,
+    },
 }
 
 pub(super) struct PendingRequests {
@@ -183,6 +188,13 @@ impl PendingRequests {
                         }
                     };
                     Some(r)
+                }
+                ProcessedResponse::Failure(processed_response::Failure::Block(block_id, debug)) => {
+                    Some(PendingResponse::BlockNotFound {
+                        block_id,
+                        permit,
+                        debug,
+                    })
                 }
                 ProcessedResponse::Failure(_) => None,
             }
