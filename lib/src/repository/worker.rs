@@ -119,33 +119,33 @@ async fn maintain(
 
     // Merge branches
     if let Some(local_branch) = local_branch {
-        success = success
-            && shared
-                .vault
-                .monitor
-                .merge_job
-                .run(merge::run(shared, local_branch))
-                .await;
+        let job_success = shared
+            .vault
+            .monitor
+            .merge_job
+            .run(merge::run(shared, local_branch))
+            .await;
+        success = success && job_success;
     }
 
     // Prune outdated branches and snapshots
-    success = success
-        && shared
-            .vault
-            .monitor
-            .prune_job
-            .run(prune::run(shared, unlock_tx, prune_counter))
-            .await;
+    let job_success = shared
+        .vault
+        .monitor
+        .prune_job
+        .run(prune::run(shared, unlock_tx, prune_counter))
+        .await;
+    success = success && job_success;
 
     // Collect unreachable blocks
     if shared.secrets.can_read() {
-        success = success
-            && shared
-                .vault
-                .monitor
-                .trash_job
-                .run(trash::run(shared, local_branch, unlock_tx))
-                .await;
+        let job_success = shared
+            .vault
+            .monitor
+            .trash_job
+            .run(trash::run(shared, local_branch, unlock_tx))
+            .await;
+        success = success && job_success;
     }
 
     if success {
