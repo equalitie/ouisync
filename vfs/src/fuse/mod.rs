@@ -961,7 +961,7 @@ fn to_error_code(error: &Error) -> libc::c_int {
         Error::EntryExists => libc::EEXIST,
         Error::EntryIsFile => libc::ENOTDIR,
         Error::EntryIsDirectory => libc::EISDIR,
-        Error::NonUtf8FileName => libc::EINVAL,
+        Error::NonUtf8FileName | Error::InvalidArgument => libc::EINVAL,
         Error::OffsetOutOfRange => libc::EINVAL,
         Error::PermissionDenied => libc::EACCES,
         Error::DirectoryNotEmpty => libc::ENOTEMPTY,

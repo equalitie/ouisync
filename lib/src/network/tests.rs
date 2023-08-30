@@ -5,7 +5,7 @@ use super::{
     server::Server,
 };
 use crate::{
-    block_tracker::{BlockTracker, OfferState},
+    block_tracker::OfferState,
     crypto::sign::{Keypair, PublicKey},
     db,
     event::{Event, EventSender, Payload},
@@ -14,9 +14,8 @@ use crate::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
         BlockId, RootNode, SingleBlockPresence, VersionVectorOp, BLOCK_SIZE,
     },
-    repository::{BlockRequestMode, LocalId, RepositoryId, RepositoryMonitor, Vault},
+    repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
-    store::Store,
     test_utils,
     version_vector::VersionVector,
 };
@@ -371,24 +370,18 @@ async fn create_repository<R: Rng + CryptoRng>(
     write_keys: &Keypair,
 ) -> (TempDir, Vault, PublicKey) {
     let (base_dir, db) = db::create_temp().await.unwrap();
-    let store = Store::new(db);
     let writer_id = PublicKey::generate(rng);
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
 
-    let state = Vault {
+
+    let state = Vault::new(
         repository_id,
-        store,
         event_tx,
-        block_tracker: BlockTracker::new(),
-        block_request_mode: BlockRequestMode::Greedy,
-        local_id: LocalId::new(),
-        monitor: Arc::new(RepositoryMonitor::new(
-            StateMonitor::make_root(),
-            Metrics::new(),
-            "test",
-        )),
-    };
+        db,
+        BlockRequestMode::Greedy,
+        RepositoryMonitor::new(StateMonitor::make_root(), Metrics::new(), "test"),
+    );
 
     (base_dir, state, writer_id)
 }

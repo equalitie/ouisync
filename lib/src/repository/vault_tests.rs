@@ -1,7 +1,7 @@
-use super::{vault::*, LocalId, RepositoryId, RepositoryMonitor};
+use super::{vault::*, RepositoryId, RepositoryMonitor};
 use crate::{
     access_control::WriteSecrets,
-    block_tracker::{BlockTracker, OfferState},
+    block_tracker::OfferState,
     collections::HashSet,
     crypto::{
         sign::{Keypair, PublicKey},
@@ -19,14 +19,13 @@ use crate::{
         EMPTY_INNER_HASH,
     },
     state_monitor::StateMonitor,
-    store::{self, ReadTransaction, Store},
+    store::{self, ReadTransaction},
     test_utils,
     version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::{future, StreamExt, TryStreamExt};
 use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use std::sync::Arc;
 use tempfile::TempDir;
 use test_strategy::proptest;
 
@@ -324,7 +323,7 @@ mod receive_and_create_root_node {
         // Mark one of the missing block as present so the block presences are different (but still
         // `Some`).
         let mut tx = vault.store().begin_write().await.unwrap();
-        tx.receive_block(&block_1.data, &block_1.nonce)
+        tx.receive_block(block_1.id(), &block_1.data, &block_1.nonce)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -425,7 +424,7 @@ async fn receive_bumped_root_node() {
     .await;
 
     let node = vault
-        .store
+        .store()
         .acquire_read()
         .await
         .unwrap()
@@ -452,7 +451,7 @@ async fn receive_bumped_root_node() {
         .unwrap();
 
     let node = vault
-        .store
+        .store()
         .acquire_read()
         .await
         .unwrap()
@@ -922,7 +921,7 @@ async fn block_ids_local() {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
+    let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = [block_id].into_iter().collect();
 
     assert_eq!(actual, expected);
@@ -946,7 +945,7 @@ async fn block_ids_remote() {
     )
     .await;
 
-    let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
+    let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = snapshot.blocks().keys().copied().collect();
 
     assert_eq!(actual, expected);
@@ -996,7 +995,7 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
             .unwrap();
     }
 
-    let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
+    let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     assert!(actual.is_empty());
 }
 
@@ -1036,7 +1035,7 @@ async fn block_ids_multiple_branches() {
     )
     .await;
 
-    let actual = vault.store.block_ids(u32::MAX).next().await.unwrap();
+    let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
     let expected = all_blocks
         .iter()
         .map(|(_, block)| block.id())
@@ -1067,7 +1066,7 @@ async fn block_ids_pagination() {
     let mut sorted_blocks: Vec<_> = snapshot.blocks().keys().copied().collect();
     sorted_blocks.sort();
 
-    let mut page = vault.store.block_ids(2);
+    let mut page = vault.store().block_ids(2);
 
     let actual = page.next().await.unwrap();
     let expected = sorted_blocks[..2].iter().copied().collect();
@@ -1113,7 +1112,7 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
     let mut expected_received_blocks = HashSet::new();
 
     assert_eq!(
-        vault.store.sync_progress().await.unwrap(),
+        vault.store().sync_progress().await.unwrap(),
         Progress {
             value: expected_received_blocks.len() as u64,
             total: expected_total_blocks.len() as u64
@@ -1133,7 +1132,7 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
         expected_total_blocks.extend(snapshot.blocks().keys().copied());
 
         assert_eq!(
-            vault.store.sync_progress().await.unwrap(),
+            vault.store().sync_progress().await.unwrap(),
             Progress {
                 value: expected_received_blocks.len() as u64,
                 total: expected_total_blocks.len() as u64,
@@ -1144,7 +1143,7 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
         expected_received_blocks.extend(snapshot.blocks().keys().copied());
 
         assert_eq!(
-            vault.store.sync_progress().await.unwrap(),
+            vault.store().sync_progress().await.unwrap(),
             Progress {
                 value: expected_received_blocks.len() as u64,
                 total: expected_total_blocks.len() as u64,
@@ -1162,25 +1161,17 @@ async fn setup() -> (TempDir, Vault, WriteSecrets) {
 
 async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {
     let (base_dir, pool) = db::create_temp().await.unwrap();
-    let store = Store::new(pool);
 
     let secrets = WriteSecrets::generate(rng);
     let repository_id = RepositoryId::from(secrets.write_keys.public);
 
-    let event_tx = EventSender::new(1);
-    let vault = Vault {
+    let vault = Vault::new(
         repository_id,
-        store,
-        event_tx,
-        block_tracker: BlockTracker::new(),
-        block_request_mode: BlockRequestMode::Lazy,
-        local_id: LocalId::new(),
-        monitor: Arc::new(RepositoryMonitor::new(
-            StateMonitor::make_root(),
-            Metrics::new(),
-            "test",
-        )),
-    };
+        EventSender::new(1),
+        pool,
+        BlockRequestMode::Lazy,
+        RepositoryMonitor::new(StateMonitor::make_root(), Metrics::new(), "test"),
+    );
 
     (base_dir, vault, secrets)
 }
@@ -1212,7 +1203,9 @@ async fn receive_snapshot(
 
 async fn receive_block(vault: &Vault, block: &Block) {
     let mut tx = vault.store().begin_write().await.unwrap();
-    tx.receive_block(&block.data, &block.nonce).await.unwrap();
+    tx.receive_block(block.id(), &block.data, &block.nonce)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 

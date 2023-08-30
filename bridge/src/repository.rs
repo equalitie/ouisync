@@ -1,7 +1,7 @@
 use crate::{
     config::{ConfigError, ConfigKey, ConfigStore},
     device_id,
-    error::Result,
+    error::{Error, Result},
     protocol::remote::{Request, Response},
     transport::RemoteClient,
 };
@@ -11,10 +11,14 @@ use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
     RepositoryParams, ShareToken, StateMonitor, StorageSize,
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 use tokio_rustls::rustls;
 
 const DEFAULT_QUOTA_KEY: ConfigKey<u64> = ConfigKey::new("default_quota", "Default storage quota");
+const DEFAULT_BLOCK_EXPIRATION_MILLIS: ConfigKey<u64> = ConfigKey::new(
+    "default_block_expiration",
+    "Default time in seconds when blocks start to expire if not used",
+);
 
 /// Creates a new repository and set access to it based on the following table:
 ///
@@ -56,6 +60,9 @@ pub async fn create(
 
     let quota = get_default_quota(config).await?;
     repository.set_quota(quota).await?;
+
+    let block_expiration = get_default_block_expiration(config).await?;
+    repository.set_block_expiration(block_expiration).await?;
 
     Ok(repository)
 }
@@ -213,6 +220,33 @@ pub async fn get_default_quota(config: &ConfigStore) -> Result<Option<StorageSiz
 
     match entry.get().await {
         Ok(quota) => Ok(Some(StorageSize::from_bytes(quota))),
+        Err(ConfigError::NotFound) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub async fn set_default_block_expiration(
+    config: &ConfigStore,
+    value: Option<Duration>,
+) -> Result<()> {
+    let entry = config.entry(DEFAULT_BLOCK_EXPIRATION_MILLIS);
+
+    if let Some(value) = value {
+        entry
+            .set(&u64::try_from(value.as_millis()).map_err(|_| Error::InvalidArgument)?)
+            .await?;
+    } else {
+        entry.remove().await?;
+    }
+
+    Ok(())
+}
+
+pub async fn get_default_block_expiration(config: &ConfigStore) -> Result<Option<Duration>> {
+    let entry = config.entry::<u64>(DEFAULT_BLOCK_EXPIRATION_MILLIS);
+
+    match entry.get().await {
+        Ok(millis) => Ok(Some(Duration::from_millis(millis))),
         Err(ConfigError::NotFound) => Ok(None),
         Err(error) => Err(error.into()),
     }

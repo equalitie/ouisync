@@ -24,7 +24,6 @@ pub(crate) use self::{
 
 use crate::{
     access_control::{Access, AccessMode, AccessSecrets, LocalSecret},
-    block_tracker::BlockTracker,
     branch::{Branch, BranchShared},
     crypto::{
         cipher,
@@ -44,7 +43,7 @@ use crate::{
     protocol::BLOCK_SIZE,
     state_monitor::StateMonitor,
     storage_size::StorageSize,
-    store::{self, Store},
+    store,
     sync::broadcast::ThrottleReceiver,
 };
 use camino::Utf8Path;
@@ -168,7 +167,6 @@ impl Repository {
         monitor: RepositoryMonitor,
     ) -> Result<Self> {
         let event_tx = EventSender::new(EVENT_CHANNEL_CAPACITY);
-        let store = Store::new(pool);
 
         let block_request_mode = if secrets.can_read() {
             BlockRequestMode::Lazy
@@ -176,15 +174,24 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-        let vault = Vault {
-            repository_id: *secrets.id(),
-            store,
+
+        let vault = Vault::new(
+            *secrets.id(),
             event_tx,
-            block_tracker: BlockTracker::new(),
+            pool,
             block_request_mode,
-            local_id: LocalId::new(),
-            monitor: Arc::new(monitor),
-        };
+            monitor,
+        );
+
+        {
+            let mut conn = vault.store().db().acquire().await?;
+            if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
+                vault
+                    .store()
+                    .set_block_expiration(Some(block_expiration))
+                    .await?;
+            }
+        }
 
         tracing::debug!(
             parent: vault.monitor.span(),
@@ -431,6 +438,25 @@ impl Repository {
     /// Get the storage quota in bytes or `None` if no quota is set.
     pub async fn quota(&self) -> Result<Option<StorageSize>> {
         self.shared.vault.quota().await
+    }
+
+    /// Set the duration after which blocks start to expire (are deleted) when not used. Use `None`
+    /// to disable expiration. Default is `None`.
+    pub async fn set_block_expiration(&self, block_expiration: Option<Duration>) -> Result<()> {
+        {
+            let mut tx = self.shared.vault.store().db().begin_write().await?;
+            metadata::block_expiration::set(&mut tx, block_expiration).await?;
+            tx.commit().await?;
+        }
+        self.shared
+            .vault
+            .set_block_expiration(block_expiration)
+            .await
+    }
+
+    /// Get the block expiration duration. `None` means block expiration is not set.
+    pub async fn block_expiration(&self) -> Option<Duration> {
+        self.shared.vault.block_expiration().await
     }
 
     /// Get the total size of the data stored in this repository.
@@ -847,7 +873,7 @@ async fn report_sync_progress(vault: Vault) {
             Err(RecvError::Closed) => break,
         }
 
-        let next_progress = match vault.store.sync_progress().await {
+        let next_progress = match vault.store().sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
                 tracing::error!("Failed to retrieve sync progress: {:?}", error);

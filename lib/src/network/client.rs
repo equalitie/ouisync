@@ -9,7 +9,8 @@ use crate::{
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
     protocol::{
-        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof,
+        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
+        UntrustedProof,
     },
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
     store::{self, ReceiveFilter},
@@ -64,6 +65,8 @@ impl Client {
     pub async fn run(&mut self, rx: &mut mpsc::Receiver<Response>) -> Result<()> {
         self.receive_filter.reset().await?;
 
+        let mut reload_index_rx = self.vault.store().client_reload_index_tx.subscribe();
+
         let mut block_promise_acceptor = self.block_tracker.acceptor();
 
         // We're making sure to not send more requests than MAX_PENDING_RESPONSES, but there may be
@@ -107,6 +110,12 @@ impl Client {
                 result = &mut handle_queued_responses => {
                     result?;
                     break;
+                }
+                branch_to_reload = reload_index_rx.recv() => {
+                    match branch_to_reload {
+                        Ok(branch_to_reload) => self.reload_index(&branch_to_reload),
+                        Err(_) => (),
+                    }
                 }
             }
         }
@@ -184,6 +193,17 @@ impl Client {
                     .monitor
                     .handle_block_metric
                     .measure_ok(self.handle_block(data, nonce, block_promise, debug))
+                    .await
+            }
+            PendingResponse::BlockNotFound {
+                block_id,
+                permit: _permit,
+                debug,
+            } => {
+                self.vault
+                    .monitor
+                    .handle_block_not_found_metric
+                    .measure_ok(self.handle_block_not_found(block_id, debug))
                     .await
             }
         }
@@ -347,6 +367,18 @@ impl Client {
         }
     }
 
+    #[instrument(skip_all, fields(block_id), err(Debug))]
+    async fn handle_block_not_found(
+        &self,
+        block_id: BlockId,
+        _debug: DebugReceivedResponse,
+    ) -> Result<()> {
+        tracing::trace!("Client received block not found {:?}", block_id);
+        self.vault
+            .receive_block_not_found(block_id, &self.receive_filter)
+            .await
+    }
+
     // Request again the branches that became completed. This is to cover the following edge
     // case:
     //
@@ -366,7 +398,7 @@ impl Client {
     // requested as soon as possible.
     fn refresh_branches(&self, branches: &[PublicKey]) {
         for branch_id in branches {
-            self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
+            self.reload_index(branch_id);
         }
     }
 
@@ -405,6 +437,10 @@ impl Client {
                 "Snapshot complete"
             );
         }
+    }
+
+    fn reload_index(&self, branch_id: &PublicKey) {
+        self.enqueue_request(PendingRequest::RootNode(*branch_id, DebugRequest::start()));
     }
 }
 

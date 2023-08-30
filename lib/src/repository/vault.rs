@@ -9,7 +9,7 @@ use crate::{
     error::{Error, Result},
     event::{EventSender, Payload},
     protocol::{
-        BlockData, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError,
+        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError,
         UntrustedProof,
     },
     storage_size::StorageSize,
@@ -20,12 +20,12 @@ use crate::{
 };
 use futures_util::TryStreamExt;
 use sqlx::Row;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub(crate) struct Vault {
-    pub repository_id: RepositoryId,
-    pub store: Store,
+    repository_id: RepositoryId,
+    store: Store,
     pub event_tx: EventSender,
     pub block_tracker: BlockTracker,
     pub block_request_mode: BlockRequestMode,
@@ -34,6 +34,26 @@ pub(crate) struct Vault {
 }
 
 impl Vault {
+    pub fn new(
+        repository_id: RepositoryId,
+        event_tx: EventSender,
+        pool: db::Pool,
+        block_request_mode: BlockRequestMode,
+        monitor: RepositoryMonitor,
+    ) -> Self {
+        let store = Store::new(pool);
+
+        Self {
+            repository_id,
+            store,
+            event_tx,
+            block_tracker: BlockTracker::new(),
+            block_request_mode,
+            local_id: LocalId::new(),
+            monitor: Arc::new(monitor),
+        }
+    }
+
     pub fn repository_id(&self) -> &RepositoryId {
         &self.repository_id
     }
@@ -111,7 +131,7 @@ impl Vault {
         let event_tx = self.event_tx.clone();
 
         let mut tx = self.store().begin_write().await?;
-        let status = match tx.receive_block(data, nonce).await {
+        let status = match tx.receive_block(&block_id, data, nonce).await {
             Ok(status) => status,
             Err(error) => {
                 if matches!(error, store::Error::BlockNotReferenced) {
@@ -139,6 +159,28 @@ impl Vault {
             }
         })
         .await?;
+
+        Ok(())
+    }
+
+    /// Receive a message that the block has been found on the peer.
+    pub async fn receive_block_not_found(
+        &self,
+        block_id: BlockId,
+        receive_filter: &ReceiveFilter,
+    ) -> Result<()> {
+        // We received a 'block not found' because we sent a request for the block, and we sent
+        // that request because the index that we downloaded from the peer indicated that the peer
+        // had the block. But it could have been lying and the block at the peer could have
+        // expired. If that's the case, then the peer should have updated their index and we'll
+        // need to re-download the part referring to the `block_id`. Thus we need to remove that
+        // part from the `receive_filter`.
+
+        self.store()
+            .begin_write()
+            .await?
+            .remove_from_receive_filter_index_nodes_for(block_id, receive_filter)
+            .await?;
 
         Ok(())
     }
@@ -183,6 +225,14 @@ impl Vault {
             Err(Error::EntryNotFound) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
+        Ok(self.store.set_block_expiration(duration).await?)
+    }
+
+    pub async fn block_expiration(&self) -> Option<Duration> {
+        self.store.block_expiration().await
     }
 
     pub async fn approve_offers(&self, branch_id: &PublicKey) -> Result<()> {

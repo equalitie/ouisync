@@ -2,7 +2,7 @@ use clap::{builder::BoolishValueParser, Subcommand};
 use ouisync_bridge::logger::LogFormat;
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr, path::PathBuf};
+use std::{fmt, net::SocketAddr, path::PathBuf, time::Duration};
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -201,6 +201,24 @@ pub(crate) enum Request {
         /// Ti, Gi, ...) and decimal (k, M, T, G, ...) suffixes.
         value: Option<StorageSize>,
     },
+    /// Get or set block expiration
+    BlockExpiration {
+        /// Name of the repository to get/set the quota for
+        #[arg(
+            short,
+            long,
+            required_unless_present = "default",
+            conflicts_with = "default"
+        )]
+        name: Option<String>,
+
+        /// Remove the quota
+        #[arg(short, long, conflicts_with = "value")]
+        remove: bool,
+
+        /// Set duration after which blocks are removed if not used (in seconds).
+        value: Option<u64>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -213,6 +231,7 @@ pub(crate) enum Response {
     SocketAddrs(Vec<SocketAddr>),
     StorageSize(StorageSize),
     QuotaInfo(QuotaInfo),
+    BlockExpiration(Option<Duration>),
 }
 
 impl From<()> for Response {
@@ -296,6 +315,7 @@ impl fmt::Display for Response {
             }
             Self::StorageSize(value) => write!(f, "{value}"),
             Self::QuotaInfo(info) => write!(f, "{info}"),
+            Self::BlockExpiration(info) => write!(f, "{info:?}"),
         }
     }
 }

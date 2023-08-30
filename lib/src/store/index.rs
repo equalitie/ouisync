@@ -27,6 +27,7 @@ pub(super) struct ReceiveStatus {
 }
 
 /// Reason for updating the summary
+#[derive(Debug)]
 pub(super) enum UpdateSummaryReason {
     /// Updating summary because a block was removed
     BlockRemoved,

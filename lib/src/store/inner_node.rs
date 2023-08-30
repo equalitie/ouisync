@@ -4,7 +4,7 @@ use crate::{
     db,
     protocol::{InnerNode, InnerNodeMap, LeafNodeSet, Summary, EMPTY_INNER_HASH, EMPTY_LEAF_HASH},
 };
-use futures_util::{future, TryStreamExt};
+use futures_util::{future, Stream, TryStreamExt};
 use sqlx::Row;
 use std::convert::TryInto;
 
@@ -55,6 +55,18 @@ pub(super) async fn load_children(
     .try_collect()
     .await
     .map_err(From::from)
+}
+
+/// Load all inner nodes with the specified parent hash.
+pub(super) fn load_parent_hashes<'a>(
+    conn: &'a mut db::Connection,
+    hash: &'a Hash,
+) -> impl Stream<Item = Result<Hash, Error>> + 'a {
+    sqlx::query("SELECT parent FROM snapshot_inner_nodes WHERE hash = ?")
+        .bind(hash)
+        .fetch(conn)
+        .map_ok(|row| row.get(0))
+        .err_into()
 }
 
 pub(super) async fn load(

@@ -43,6 +43,15 @@ impl ReceiveFilter {
 
         Ok(true)
     }
+
+    pub async fn remove(&self, tx: &mut db::WriteTransaction, hash: &Hash) -> Result<(), Error> {
+        sqlx::query("DELETE FROM received_nodes WHERE hash = ? AND client_id = ?")
+            .bind(hash)
+            .bind(db::encode_u64(self.id))
+            .execute(tx)
+            .await?;
+        Ok(())
+    }
 }
 
 impl Drop for ReceiveFilter {

@@ -47,12 +47,6 @@ pub const DHT_ROUTERS: &[&str] = &[
 pub const MIN_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(3 * 60);
 pub const MAX_DHT_ANNOUNCE_DELAY: Duration = Duration::from_secs(6 * 60);
 
-#[derive(Clone)]
-pub struct ActiveDhtNodes {
-    pub good: HashSet<SocketAddr>,
-    pub questionable: HashSet<SocketAddr>,
-}
-
 #[async_trait]
 pub trait DhtContactsStoreTrait: Sync + Send + 'static {
     async fn load_v4(&self) -> io::Result<HashSet<SocketAddrV4>>;
