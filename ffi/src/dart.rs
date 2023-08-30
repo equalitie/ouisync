@@ -232,7 +232,7 @@ unsafe impl<T> Send for Port<T> {}
 
 impl<T> Clone for Port<T> {
     fn clone(&self) -> Self {
-        Self(self.0, PhantomData)
+        *self
     }
 }
 
