@@ -165,7 +165,7 @@ pub(super) async fn set_missing_if_expired(
          WHERE block_id = ? AND block_presence = ?",
     )
     .bind(SingleBlockPresence::Missing)
-    .bind(&block)
+    .bind(block)
     .bind(SingleBlockPresence::Expired)
     .execute(tx)
     .await?;

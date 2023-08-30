@@ -112,9 +112,8 @@ impl Client {
                     break;
                 }
                 branch_to_reload = reload_index_rx.recv() => {
-                    match branch_to_reload {
-                        Ok(branch_to_reload) => self.reload_index(&branch_to_reload),
-                        Err(_) => (),
+                    if let Ok(branch_to_reload) = branch_to_reload {
+                        self.reload_index(&branch_to_reload);
                     }
                 }
             }

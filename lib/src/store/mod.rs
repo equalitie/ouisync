@@ -105,10 +105,7 @@ impl Store {
     }
 
     pub async fn block_expiration(&self) -> Option<Duration> {
-        match &*self.block_expiration_tracker.read().await {
-            Some(tracker) => Some(tracker.block_expiration()),
-            None => None,
-        }
+        (*self.block_expiration_tracker.read().await).as_ref().map(|tracker| tracker.block_expiration())
     }
 
     /// Acquires a `Reader`
@@ -283,10 +280,8 @@ impl Reader {
 
         let result = block::read(self.db(), id, buffer).await;
 
-        if matches!(result, Err(Error::BlockNotFound)) {
-            if self.set_as_missing_if_expired(id).await? {
-                block_tracker.require(*id);
-            }
+        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await? {
+            block_tracker.require(*id);
         }
 
         result
@@ -308,7 +303,7 @@ impl Reader {
             return Ok(false);
         }
 
-        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, &block_id)
+        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
             .try_collect()
             .await?;
 
@@ -782,9 +777,9 @@ impl WriteTransaction {
 
         for _ in 0..INNER_LAYER_COUNT {
             for node in &nodes {
-                receive_filter.remove(self.db(), &node).await?;
+                receive_filter.remove(self.db(), node).await?;
 
-                let mut parents = inner_node::load_parent_hashes(self.db(), &node);
+                let mut parents = inner_node::load_parent_hashes(self.db(), node);
 
                 while let Some(parent) = parents.try_next().await? {
                     next_layer.insert(parent);

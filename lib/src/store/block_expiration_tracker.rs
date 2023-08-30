@@ -232,16 +232,13 @@ async fn run_task(
         let now = SystemTime::now();
 
         if expires_at > now {
-            match expires_at.duration_since(now) {
-                Ok(duration) => {
-                    select! {
-                        _ = sleep(duration) => (),
-                        _ = expiration_time_rx.changed() => {
-                            continue;
-                        }
+            if let Ok(duration) = expires_at.duration_since(now) {
+                select! {
+                    _ = sleep(duration) => (),
+                    _ = expiration_time_rx.changed() => {
+                        continue;
                     }
                 }
-                Err(_) => (),
             }
 
             // Check it's still the oldest block.
@@ -398,11 +395,11 @@ mod test {
 
         writer
             .link_block(
-                &branch_id,
+                branch_id,
                 &rand::random(),
                 &block_id,
                 SingleBlockPresence::Present,
-                &write_keys,
+                write_keys,
             )
             .await
             .unwrap();
