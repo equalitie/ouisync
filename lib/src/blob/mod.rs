@@ -31,8 +31,7 @@ pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 // Max number of blocks in the cache. Increasing this number decreases the number of flushes needed
 // during writes but increases the coplexity of the individual flushes.
-// TODO: Find optimal value for this.
-const CACHE_CAPACITY: usize = 64;
+const CACHE_CAPACITY: usize = 2048; // 64 MiB
 
 #[derive(Debug, Error)]
 pub(crate) enum ReadWriteError {
