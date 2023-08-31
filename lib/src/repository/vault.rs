@@ -9,8 +9,7 @@ use crate::{
     error::{Error, Result},
     event::{EventSender, Payload},
     protocol::{
-        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError,
-        UntrustedProof,
+        Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, ProofError, UntrustedProof,
     },
     storage_size::StorageSize,
     store::{
@@ -121,17 +120,12 @@ impl Vault {
     }
 
     /// Receive a block from other replica.
-    pub async fn receive_block(
-        &self,
-        data: &BlockData,
-        nonce: &BlockNonce,
-        promise: Option<BlockPromise>,
-    ) -> Result<()> {
-        let block_id = data.id;
+    pub async fn receive_block(&self, block: &Block, promise: Option<BlockPromise>) -> Result<()> {
+        let block_id = block.id;
         let event_tx = self.event_tx.clone();
 
         let mut tx = self.store().begin_write().await?;
-        let status = match tx.receive_block(&block_id, data, nonce).await {
+        let status = match tx.receive_block(block).await {
             Ok(status) => status,
             Err(error) => {
                 if matches!(error, store::Error::BlockNotReferenced) {

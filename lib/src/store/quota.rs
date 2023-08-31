@@ -111,7 +111,7 @@ mod tests {
     use crate::{
         crypto::sign::{Keypair, PublicKey},
         protocol::SingleBlockPresence,
-        store::Store,
+        store::{Changeset, Store},
     };
     use tempfile::TempDir;
 
@@ -129,25 +129,21 @@ mod tests {
         let branch_id = PublicKey::random();
 
         let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
         assert_eq!(count_referenced_blocks(tx.db(), &[]).await.unwrap(), 0);
+        changeset.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
-        tx.link_block(
-            &branch_id,
-            &rand::random(),
-            &rand::random(),
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
-
-        let root_hash = tx.load_root_node(&branch_id).await.unwrap().proof.hash;
+        let mut r = store.acquire_read().await.unwrap();
+        let root_hash = r.load_root_node(&branch_id).await.unwrap().proof.hash;
 
         assert_eq!(
-            count_referenced_blocks(tx.db(), &[root_hash])
-                .await
-                .unwrap(),
+            count_referenced_blocks(r.db(), &[root_hash]).await.unwrap(),
             1
         );
     }
@@ -160,35 +156,28 @@ mod tests {
         let branch_a_id = PublicKey::random();
         let branch_b_id = PublicKey::random();
 
-        let mut tx = pool.begin_write().await.unwrap();
-
-        // unique blocks
-        for branch_id in [&branch_a_id, &branch_b_id] {
-            tx.link_block(
-                branch_id,
-                &rand::random(),
-                &rand::random(),
-                SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
-        }
-
-        // shared blocks
         let shared_locator = rand::random();
         let shared_block_id = rand::random();
 
+        let mut tx = pool.begin_write().await.unwrap();
+
         for branch_id in [&branch_a_id, &branch_b_id] {
-            tx.link_block(
-                branch_id,
-                &shared_locator,
-                &shared_block_id,
+            let mut changeset = Changeset::new();
+
+            // unique block
+            changeset.link_block(rand::random(), rand::random(), SingleBlockPresence::Present);
+
+            // shared blocks
+            changeset.link_block(
+                shared_locator,
+                shared_block_id,
                 SingleBlockPresence::Present,
-                &write_keys,
-            )
-            .await
-            .unwrap();
+            );
+
+            changeset
+                .apply(&mut tx, branch_id, &write_keys)
+                .await
+                .unwrap();
         }
 
         let root_hash_a = tx.load_root_node(&branch_a_id).await.unwrap().proof.hash;

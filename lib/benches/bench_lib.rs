@@ -8,10 +8,8 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use utils::Actor;
 
-criterion_group!(default, write_file, read_file, remove_file, sync);
+criterion_group!(default, write_file, read_file, sync);
 criterion_main!(default);
-
-const FILE_SIZES_M: &[u64] = &[1, 8];
 
 fn write_file(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
@@ -21,7 +19,7 @@ fn write_file(c: &mut Criterion) {
 
     let buffer_size = 4096;
 
-    for &m in FILE_SIZES_M {
+    for m in [1, 8, 16] {
         let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
@@ -63,7 +61,7 @@ fn read_file(c: &mut Criterion) {
 
     let buffer_size = 4096;
 
-    for &m in FILE_SIZES_M {
+    for m in [1, 8, 16] {
         let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));
@@ -108,63 +106,13 @@ fn read_file(c: &mut Criterion) {
     group.finish();
 }
 
-fn remove_file(c: &mut Criterion) {
-    let runtime = Runtime::new().unwrap();
-
-    let mut group = c.benchmark_group("lib/remove_file");
-    group.sample_size(10);
-
-    for &m in FILE_SIZES_M {
-        let file_size = m * 1024 * 1024;
-
-        group.throughput(Throughput::Bytes(file_size));
-        group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
-            let file_name = Utf8Path::new("file.dat");
-
-            b.iter_batched_ref(
-                || {
-                    let mut rng = StdRng::from_entropy();
-                    let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-
-                    let repo = runtime.block_on(async {
-                        let repo = utils::create_repo(
-                            &mut rng,
-                            &base_dir.path().join("repo.db"),
-                            0,
-                            StateMonitor::make_root(),
-                        )
-                        .await;
-                        utils::write_file(
-                            &mut rng,
-                            &repo,
-                            file_name,
-                            file_size as usize,
-                            4096,
-                            false,
-                        )
-                        .await;
-                        repo
-                    });
-
-                    (base_dir, repo)
-                },
-                |(_base_dir, repo)| {
-                    runtime.block_on(async { repo.remove_entry(file_name).await.unwrap() });
-                },
-                BatchSize::LargeInput,
-            );
-        });
-    }
-    group.finish();
-}
-
 fn sync(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
     let mut group = c.benchmark_group("lib/sync");
     group.sample_size(10);
 
-    for &m in FILE_SIZES_M {
+    for m in [1, 8] {
         let file_size = m * 1024 * 1024;
 
         group.throughput(Throughput::Bytes(file_size));

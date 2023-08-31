@@ -8,10 +8,7 @@ use crate::{
     block_tracker::{BlockPromise, BlockTrackerClient, OfferState},
     crypto::{sign::PublicKey, CacheHash, Hashable},
     error::{Error, Result},
-    protocol::{
-        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
-        UntrustedProof,
-    },
+    protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::{BlockRequestMode, RepositoryMonitor, Vault},
     store::{self, ReceiveFilter},
 };
@@ -182,8 +179,7 @@ impl Client {
                     .await
             }
             PendingResponse::Block {
-                data,
-                nonce,
+                block,
                 block_promise,
                 permit: _permit,
                 debug,
@@ -191,7 +187,7 @@ impl Client {
                 self.vault
                     .monitor
                     .handle_block_metric
-                    .measure_ok(self.handle_block(data, nonce, block_promise, debug))
+                    .measure_ok(self.handle_block(block, block_promise, debug))
                     .await
             }
             PendingResponse::BlockNotFound {
@@ -350,15 +346,14 @@ impl Client {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?data.id), err(Debug))]
+    #[instrument(skip_all, fields(id = ?block.id), err(Debug))]
     async fn handle_block(
         &self,
-        data: BlockData,
-        nonce: BlockNonce,
+        block: Block,
         block_promise: Option<BlockPromise>,
         _debug: DebugReceivedResponse,
     ) -> Result<()> {
-        match self.vault.receive_block(&data, &nonce, block_promise).await {
+        match self.vault.receive_block(&block, block_promise).await {
             // Ignore `BlockNotReferenced` errors as they only mean that the block is no longer
             // needed.
             Ok(()) | Err(Error::Store(store::Error::BlockNotReferenced)) => Ok(()),

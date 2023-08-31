@@ -7,9 +7,8 @@ use crate::{
     branch::Branch,
     directory::{Directory, ParentContext},
     error::{Error, Result},
-    locator::Locator,
-    protocol::{VersionVectorOp, BLOCK_SIZE},
-    store::WriteTransaction,
+    protocol::{Locator, BLOCK_SIZE},
+    store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
 use std::{fmt, future::Future, io::SeekFrom};
@@ -208,12 +207,26 @@ impl File {
         }
 
         let mut tx = self.branch().store().begin_write().await?;
-        self.blob.flush(&mut tx).await?;
+        let mut changeset = Changeset::new();
+
+        self.blob.flush(&mut tx, &mut changeset).await?;
         self.parent
             .bump(
                 &mut tx,
+                &mut changeset,
                 self.branch().clone(),
-                VersionVectorOp::IncrementLocal,
+                &VersionVector::new(),
+            )
+            .await?;
+
+        changeset
+            .apply(
+                &mut tx,
+                self.branch().id(),
+                self.branch()
+                    .keys()
+                    .write()
+                    .ok_or(Error::PermissionDenied)?,
             )
             .await?;
 
@@ -225,8 +238,12 @@ impl File {
 
     /// Saves any pending modifications but does not update the version vectors. For internal use
     /// only.
-    pub(crate) async fn save(&mut self, tx: &mut WriteTransaction) -> Result<()> {
-        self.blob.flush(tx).await?;
+    pub(crate) async fn save(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
+        self.blob.flush(tx, changeset).await?;
         Ok(())
     }
 

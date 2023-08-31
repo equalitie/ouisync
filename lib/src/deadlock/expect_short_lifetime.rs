@@ -12,6 +12,7 @@ use std::{
 /// than expected.
 pub(crate) struct ExpectShortLifetime {
     id: Id,
+    start: Instant,
 }
 
 impl ExpectShortLifetime {
@@ -24,13 +25,16 @@ impl ExpectShortLifetime {
         let context = Context::new(location);
         let id = schedule(max_lifetime, context);
 
-        Self { id }
+        Self {
+            id,
+            start: Instant::now(),
+        }
     }
 }
 
 impl Drop for ExpectShortLifetime {
     fn drop(&mut self) {
-        cancel(self.id);
+        cancel(self.id, self.start);
     }
 }
 
@@ -73,11 +77,12 @@ fn schedule(duration: Duration, context: Context) -> Id {
     TIMER.schedule(deadline, context)
 }
 
-fn cancel(id: Id) {
+fn cancel(id: Id, start: Instant) {
     if TIMER.cancel(id).is_none() {
-        println!(
-            "🐢🐢🐢 Previously reported task (id: {}) eventually completed 🐢🐢🐢",
-            id
+        tracing::warn!(
+            "🐢🐢🐢 Previously reported task (id: {}) eventually completed in {:?} 🐢🐢🐢",
+            id,
+            start.elapsed(),
         );
     }
 }
@@ -86,11 +91,10 @@ fn watching_thread() {
     loop {
         let (id, context) = TIMER.wait();
 
-        // Using `println!` and not `tracing::*` to avoid circular dependencies because on
-        // Android tracing uses `StateMonitor` which uses these mutexes.
-        println!(
+        tracing::warn!(
             "🐢🐢🐢 Task taking too long (id: {}) 🐢🐢🐢\n{}\n",
-            id, context
+            id,
+            context
         );
     }
 }

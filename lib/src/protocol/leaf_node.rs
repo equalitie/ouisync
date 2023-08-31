@@ -67,37 +67,30 @@ impl LeafNodeSet {
         self.0.iter()
     }
 
-    /// Inserts a new node or updates it if already exists.
-    pub fn modify(
+    /// Inserts a new node
+    pub fn insert(
         &mut self,
-        locator: &Hash,
-        block_id: &BlockId,
+        locator: Hash,
+        block_id: BlockId,
         block_presence: SingleBlockPresence,
-    ) -> LeafNodeModifyStatus {
-        match self.lookup(locator) {
+    ) {
+        match self.lookup(&locator) {
             Ok(index) => {
-                let node = &mut self.0[index];
-
-                if &node.block_id == block_id {
-                    LeafNodeModifyStatus::Unchanged
-                } else {
-                    let old_block_id = node.block_id;
-                    node.block_id = *block_id;
-                    node.block_presence = block_presence;
-
-                    LeafNodeModifyStatus::Updated(old_block_id)
-                }
+                self.0[index] = LeafNode {
+                    locator,
+                    block_id,
+                    block_presence,
+                };
             }
             Err(index) => {
                 self.0.insert(
                     index,
                     LeafNode {
-                        locator: *locator,
-                        block_id: *block_id,
+                        locator,
+                        block_id,
                         block_presence,
                     },
                 );
-                LeafNodeModifyStatus::Inserted
             }
         }
     }
@@ -105,6 +98,16 @@ impl LeafNodeSet {
     pub fn remove(&mut self, locator: &Hash) -> Option<LeafNode> {
         let index = self.lookup(locator).ok()?;
         Some(self.0.remove(index))
+    }
+
+    pub fn remove_if(&mut self, locator: &Hash, block_id: &BlockId) -> Option<LeafNode> {
+        let index = self.lookup(locator).ok()?;
+
+        if self.0[index].block_id == *block_id {
+            Some(self.0.remove(index))
+        } else {
+            None
+        }
     }
 
     /// Returns the same nodes but with the `block_presence` set to `Missing`.
@@ -163,12 +166,6 @@ impl Hashable for LeafNodeSet {
         b"leaf".update_hash(state); // to disambiguate it from hash of inner nodes
         self.0.update_hash(state);
     }
-}
-
-pub(crate) enum LeafNodeModifyStatus {
-    Updated(BlockId),
-    Inserted,
-    Unchanged,
 }
 
 // Cached hash of an empty LeafNodeSet.

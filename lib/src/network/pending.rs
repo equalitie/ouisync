@@ -7,10 +7,7 @@ use crate::{
     collections::{hash_map::Entry, HashMap},
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     deadlock::BlockingMutex,
-    protocol::{
-        BlockData, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet, MultiBlockPresence,
-        UntrustedProof,
-    },
+    protocol::{Block, BlockId, InnerNodeMap, LeafNodeSet, MultiBlockPresence, UntrustedProof},
     repository::RepositoryMonitor,
     sync::uninitialized_watch,
 };
@@ -71,8 +68,7 @@ pub(super) enum PendingResponse {
         debug: DebugReceivedResponse,
     },
     Block {
-        data: BlockData,
-        nonce: BlockNonce,
+        block: Block,
         // This will be `None` if the request timeouted but we still received the response
         // afterwards.
         block_promise: Option<BlockPromise>,
@@ -177,10 +173,9 @@ impl PendingRequests {
                                 debug,
                             }
                         }
-                        processed_response::Success::Block { data, nonce, debug } => {
+                        processed_response::Success::Block { block, debug } => {
                             PendingResponse::Block {
-                                data,
-                                nonce,
+                                block,
                                 permit,
                                 debug,
                                 block_promise: request_data.block_promise,
@@ -337,8 +332,7 @@ mod processed_response {
             DebugReceivedResponse,
         ),
         Block {
-            data: BlockData,
-            nonce: BlockNonce,
+            block: Block,
             debug: DebugReceivedResponse,
         },
     }
@@ -368,7 +362,7 @@ impl ProcessedResponse {
             Self::Success(processed_response::Success::LeafNodes(nodes, disambiguator, _)) => {
                 Key::ChildNodes(nodes.hash(), *disambiguator)
             }
-            Self::Success(processed_response::Success::Block { data, .. }) => Key::Block(data.id),
+            Self::Success(processed_response::Success::Block { block, .. }) => Key::Block(block.id),
             Self::Failure(processed_response::Failure::RootNode(branch_id, _)) => {
                 Key::RootNode(*branch_id)
             }
@@ -411,8 +405,7 @@ impl From<Response> for ProcessedResponse {
                 nonce,
                 debug,
             } => Self::Success(processed_response::Success::Block {
-                data: content.into(),
-                nonce,
+                block: Block::new(content, nonce),
                 debug: debug.received(),
             }),
             Response::RootNodeError(branch_id, debug) => Self::Failure(

@@ -21,8 +21,8 @@ pub struct VersionVector(BTreeMap<PublicKey, u64>);
 
 impl VersionVector {
     /// Creates an empty version vector.
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self(BTreeMap::new())
     }
 
     pub fn first(writer_id: PublicKey) -> Self {

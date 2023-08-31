@@ -8,9 +8,8 @@ use crate::{
     branch::Branch,
     directory::{content::EntryExists, Directory},
     error::Result,
-    locator::Locator,
-    protocol::VersionVectorOp,
-    store::{ReadTransaction, WriteTransaction},
+    protocol::Locator,
+    store::{Changeset, ReadTransaction},
     version_vector::VersionVector,
 };
 use tracing::{field, instrument, Span};
@@ -47,15 +46,16 @@ impl ParentContext {
     /// This updates the version vector of this entry and all its ancestors.
     pub async fn bump(
         &self,
-        tx: &mut WriteTransaction,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
         branch: Branch,
-        op: VersionVectorOp<'_>,
+        merge: &VersionVector,
     ) -> Result<()> {
         let mut directory = self.open_in(tx, branch).await?;
         let mut content = directory.content.clone();
-        content.bump(directory.branch(), &self.entry_name, op)?;
-        directory.save(tx, &content).await?;
-        directory.bump(tx, op).await?;
+        content.bump(directory.branch(), &self.entry_name, merge)?;
+        directory.save(tx, changeset, &content).await?;
+        directory.bump(tx, changeset, merge).await?;
 
         Ok(())
     }
@@ -150,6 +150,8 @@ impl ParentContext {
         // cases the newly forked blob will be unlocked and eventually garbage-collected. This
         // wastes work but is otherwise harmless. The fork can be retried at any time.
         let mut tx = directory.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
+
         directory.refresh_in(&mut tx).await?;
         let src_vv = src_entry_data.version_vector().clone();
 
@@ -162,11 +164,9 @@ impl ParentContext {
             old_blob_id.map(|_| lock),
         ) {
             Ok(_lock) => {
-                directory.save(&mut tx, &content).await?;
-                directory
-                    .bump(&mut tx, VersionVectorOp::Merge(&src_vv))
-                    .await?;
-                directory.commit(tx).await?;
+                directory.save(&mut tx, &mut changeset, &content).await?;
+                directory.bump(&mut tx, &mut changeset, &src_vv).await?;
+                directory.commit(tx, changeset).await?;
                 directory.finalize(content);
                 tracing::trace!("fork complete");
                 Ok(new_context)

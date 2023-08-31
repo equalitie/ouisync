@@ -31,7 +31,6 @@ mod future;
 mod iterator;
 mod joint_directory;
 mod joint_entry;
-mod locator;
 mod progress;
 mod protocol;
 mod repository;

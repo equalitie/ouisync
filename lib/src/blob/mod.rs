@@ -1,7 +1,6 @@
 pub(crate) mod lock;
 
 mod block_ids;
-mod buffer;
 mod id;
 mod position;
 
@@ -14,19 +13,16 @@ use self::position::Position;
 use crate::{
     branch::Branch,
     collections::{hash_map::Entry, HashMap},
-    crypto::{
-        cipher::{self, Nonce, SecretKey},
-        sign::{self, PublicKey},
-    },
+    crypto::cipher::{self, Nonce, SecretKey},
     error::{Error, Result},
-    locator::Locator,
-    protocol::{BlockId, BlockNonce, RootNode, SingleBlockPresence, BLOCK_SIZE},
-    store::{self, ReadTransaction, WriteTransaction},
+    protocol::{
+        Block, BlockContent, BlockId, BlockNonce, Locator, RootNode, SingleBlockPresence,
+        BLOCK_SIZE,
+    },
+    store::{self, Changeset, ReadTransaction},
 };
-use buffer::Buffer;
 use std::{io::SeekFrom, iter, mem};
 use thiserror::Error;
-use tracing::{field, instrument, Instrument, Span};
 
 /// Size of the blob header in bytes.
 // Using u64 instead of usize because HEADER_SIZE must be the same irrespective of whether we're on
@@ -35,8 +31,7 @@ pub const HEADER_SIZE: usize = mem::size_of::<u64>();
 
 // Max number of blocks in the cache. Increasing this number decreases the number of flushes needed
 // during writes but increases the coplexity of the individual flushes.
-// TODO: Find optimal value for this.
-const CACHE_CAPACITY: usize = 64;
+const CACHE_CAPACITY: usize = 2048; // 64 MiB
 
 #[derive(Debug, Error)]
 pub(crate) enum ReadWriteError {
@@ -296,7 +291,12 @@ impl Blob {
         Ok(write_len)
     }
 
-    pub async fn write_all(&mut self, tx: &mut WriteTransaction, buffer: &[u8]) -> Result<()> {
+    pub async fn write_all(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+        buffer: &[u8],
+    ) -> Result<()> {
         let mut offset = 0;
 
         loop {
@@ -309,7 +309,7 @@ impl Blob {
                     self.warmup(tx).await?;
                 }
                 Err(ReadWriteError::CacheFull) => {
-                    self.flush(tx).await?;
+                    self.flush(tx, changeset).await?;
                 }
             }
         }
@@ -366,9 +366,13 @@ impl Blob {
 
     /// Flushes this blob, ensuring that all intermediately buffered contents gets written to the
     /// store.
-    pub(crate) async fn flush(&mut self, tx: &mut WriteTransaction) -> Result<()> {
-        self.write_len(tx).await?;
-        self.write_blocks(tx).await?;
+    pub(crate) async fn flush(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
+        self.write_len(tx, changeset).await?;
+        self.write_blocks(changeset);
 
         Ok(())
     }
@@ -393,7 +397,11 @@ impl Blob {
     }
 
     // Write length, if changed
-    async fn write_len(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    async fn write_len(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+    ) -> Result<()> {
         if self.len_modified == self.len_original {
             return Ok(());
         }
@@ -407,15 +415,7 @@ impl Blob {
             let (_, mut content) =
                 read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
             content.write_u64(0, self.len_modified);
-            write_block(
-                tx,
-                self.branch.id(),
-                &locator,
-                content,
-                self.branch.keys().read(),
-                self.branch.keys().write().ok_or(Error::PermissionDenied)?,
-            )
-            .await?;
+            write_block(changeset, &locator, content, self.branch.keys().read());
         }
 
         self.len_original = self.len_modified;
@@ -423,7 +423,7 @@ impl Blob {
         Ok(())
     }
 
-    async fn write_blocks(&mut self, tx: &mut WriteTransaction) -> Result<()> {
+    fn write_blocks(&mut self, changeset: &mut Changeset) {
         // Poor man's `drain_filter`.
         let cache = mem::take(&mut self.cache);
         let (dirty, clean): (HashMap<_, _>, _) =
@@ -433,17 +433,12 @@ impl Blob {
         for (number, block) in dirty {
             let locator = Locator::head(self.id).nth(number);
             write_block(
-                tx,
-                self.branch.id(),
+                changeset,
                 &locator,
                 block.content,
                 self.branch.keys().read(),
-                self.branch.keys().write().ok_or(Error::PermissionDenied)?,
-            )
-            .await?;
+            );
         }
-
-        Ok(())
     }
 }
 
@@ -463,7 +458,7 @@ impl Clone for Blob {
 
 #[derive(Default)]
 struct CachedBlock {
-    content: Buffer,
+    content: BlockContent,
     dirty: bool,
 }
 
@@ -477,8 +472,8 @@ impl CachedBlock {
     }
 }
 
-impl From<Buffer> for CachedBlock {
-    fn from(content: Buffer) -> Self {
+impl From<BlockContent> for CachedBlock {
+    fn from(content: BlockContent) -> Self {
         Self {
             content,
             dirty: false,
@@ -516,6 +511,7 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
     let locators = Locator::head(blob_id).sequence().take(end as usize);
     for locator in locators {
         let mut tx = src_branch.store().begin_write().await?;
+        let mut changeset = Changeset::new();
 
         let encoded_locator = locator.encode(read_key);
 
@@ -534,25 +530,18 @@ pub(crate) async fn fork(blob_id: BlobId, src_branch: &Branch, dst_branch: &Bran
             SingleBlockPresence::Missing
         };
 
-        // It can happen that the current and dst branches are different, but the blob has
-        // already been forked by some other task in the meantime. In that case this
-        // `insert` is a no-op. We still proceed normally to maintain idempotency.
-        tx.link_block(
-            dst_branch.id(),
-            &encoded_locator,
-            &block_id,
-            block_presence,
-            write_keys,
-        )
-        .instrument(tracing::info_span!(
-            "fork_block",
-            num = locator.number(),
-            id = ?block_id,
-            ?block_presence,
-        ))
-        .await?;
-
+        changeset.link_block(encoded_locator, block_id, block_presence);
+        changeset
+            .apply(&mut tx, dst_branch.id(), write_keys)
+            .await?;
         tx.commit().await?;
+
+        tracing::trace!(
+            num = locator.number(),
+            block_id = ?block_id,
+            ?block_presence,
+            "fork block",
+        );
     }
 
     Ok(())
@@ -595,51 +584,41 @@ async fn read_block(
     root_node: &RootNode,
     locator: &Locator,
     read_key: &cipher::SecretKey,
-) -> Result<(BlockId, Buffer)> {
+) -> Result<(BlockId, BlockContent)> {
     let id = tx
         .find_block_at(root_node, &locator.encode(read_key))
         .await?;
 
-    let mut buffer = Buffer::new();
-    let nonce = tx.read_block(&id, &mut buffer).await?;
+    let mut content = BlockContent::new();
+    let nonce = tx.read_block(&id, &mut content).await?;
 
-    decrypt_block(read_key, &nonce, &mut buffer);
+    decrypt_block(read_key, &nonce, &mut content);
 
-    Ok((id, buffer))
+    Ok((id, content))
 }
 
-#[instrument(skip(tx, buffer, read_key, write_keys), fields(id))]
-async fn write_block(
-    tx: &mut WriteTransaction,
-    branch_id: &PublicKey,
+fn write_block(
+    changeset: &mut Changeset,
     locator: &Locator,
-    mut buffer: Buffer,
+    mut content: BlockContent,
     read_key: &cipher::SecretKey,
-    write_keys: &sign::Keypair,
-) -> Result<BlockId> {
+) -> BlockId {
     let nonce = rand::random();
-    encrypt_block(read_key, &nonce, &mut buffer);
-    let id = BlockId::from_content(&buffer);
+    encrypt_block(read_key, &nonce, &mut content);
 
-    Span::current().record("id", field::debug(&id));
+    let block = Block::new(content, nonce);
+    let block_id = block.id;
 
-    let inserted = tx
-        .link_block(
-            branch_id,
-            &locator.encode(read_key),
-            &id,
-            SingleBlockPresence::Present,
-            write_keys,
-        )
-        .await?;
+    changeset.link_block(
+        locator.encode(read_key),
+        block.id,
+        SingleBlockPresence::Present,
+    );
+    changeset.write_block(block);
 
-    // We shouldn't be inserting a block to a branch twice. If we do, the assumption is that we
-    // hit one in 2^sizeof(BlockId) chance that we randomly generated the same BlockId twice.
-    assert!(inserted);
+    tracing::trace!(?locator, ?block_id, "write block");
 
-    tx.write_block(&id, &buffer, &nonce).await?;
-
-    Ok(id)
+    block_id
 }
 
 fn decrypt_block(blob_key: &cipher::SecretKey, block_nonce: &BlockNonce, content: &mut [u8]) {

@@ -6,7 +6,7 @@ use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
     event::Payload,
-    protocol::{BlockId, RootNode, BLOCK_SIZE},
+    protocol::{BlockContent, BlockId, RootNode},
     repository::Vault,
     store,
 };
@@ -196,7 +196,7 @@ impl<'a> Responder<'a> {
     #[instrument(skip(self, debug), err(Debug))]
     async fn handle_block(&self, id: BlockId, debug: DebugRequestPayload) -> Result<()> {
         let debug = debug.begin_reply();
-        let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
+        let mut content = BlockContent::new();
         let result = self
             .vault
             .store()

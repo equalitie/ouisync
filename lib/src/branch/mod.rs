@@ -7,9 +7,8 @@ use crate::{
     error::{Error, Result},
     event::{EventScope, EventSender, Payload},
     file::{File, FileProgressCache},
-    locator::Locator,
     path,
-    protocol::BlockId,
+    protocol::{BlockId, Locator},
     store::{self, Store},
     version_vector::VersionVector,
 };

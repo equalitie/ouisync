@@ -99,6 +99,9 @@ pub(super) async fn save(
     parent: &Hash,
     bucket: u8,
 ) -> Result<(), Error> {
+    debug_assert_ne!(node.hash, *EMPTY_INNER_HASH);
+    debug_assert_ne!(node.hash, *EMPTY_LEAF_HASH);
+
     sqlx::query(
         "INSERT INTO snapshot_inner_nodes (
              parent,

@@ -119,33 +119,33 @@ async fn maintain(
 
     // Merge branches
     if let Some(local_branch) = local_branch {
-        success = success
-            && shared
-                .vault
-                .monitor
-                .merge_job
-                .run(merge::run(shared, local_branch))
-                .await;
+        let job_success = shared
+            .vault
+            .monitor
+            .merge_job
+            .run(merge::run(shared, local_branch))
+            .await;
+        success = success && job_success;
     }
 
     // Prune outdated branches and snapshots
-    success = success
-        && shared
-            .vault
-            .monitor
-            .prune_job
-            .run(prune::run(shared, unlock_tx, prune_counter))
-            .await;
+    let job_success = shared
+        .vault
+        .monitor
+        .prune_job
+        .run(prune::run(shared, unlock_tx, prune_counter))
+        .await;
+    success = success && job_success;
 
     // Collect unreachable blocks
     if shared.secrets.can_read() {
-        success = success
-            && shared
-                .vault
-                .monitor
-                .trash_job
-                .run(trash::run(shared, local_branch, unlock_tx))
-                .await;
+        let job_success = shared
+            .vault
+            .monitor
+            .trash_job
+            .run(trash::run(shared, local_branch, unlock_tx))
+            .await;
+        success = success && job_success;
     }
 
     if success {
@@ -410,13 +410,11 @@ mod prune {
 mod trash {
     use super::*;
     use crate::{
-        crypto::sign::{Keypair, PublicKey},
         protocol::BlockId,
-        store::{self, WriteTransaction},
+        store::{Changeset, ReadTransaction, WriteTransaction},
     };
     use futures_util::TryStreamExt;
     use std::collections::BTreeSet;
-    use tracing::Instrument;
 
     pub(super) async fn run(
         shared: &Shared,
@@ -607,7 +605,11 @@ mod trash {
             total_count += batch.len();
 
             if let Some((local_branch, write_keys)) = &local_branch_and_write_keys {
-                remove_local_nodes(&mut tx, local_branch.id(), write_keys, &batch).await?;
+                let mut changeset = Changeset::new();
+                remove_local_nodes(&mut tx, &mut changeset, &batch).await?;
+                changeset
+                    .apply(&mut tx, local_branch.id(), write_keys)
+                    .await?;
             }
 
             remove_blocks(&mut tx, &batch).await?;
@@ -633,24 +635,16 @@ mod trash {
     }
 
     async fn remove_local_nodes(
-        tx: &mut WriteTransaction,
-        branch_id: &PublicKey,
-        write_keys: &Keypair,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
         block_ids: &[BlockId],
     ) -> Result<()> {
         for block_id in block_ids {
             let locators: Vec<_> = tx.load_locators(block_id).try_collect().await?;
-            let span = tracing::info_span!("remove_local_node", ?block_id);
 
             for locator in locators {
-                match tx
-                    .unlink_block(branch_id, &locator, Some(block_id), write_keys)
-                    .instrument(span.clone())
-                    .await
-                {
-                    Ok(()) | Err(store::Error::LocatorNotFound) => (),
-                    Err(error) => return Err(error.into()),
-                }
+                tracing::trace!(?block_id, "unreachable local node removed");
+                changeset.unlink_block(locator, Some(*block_id));
             }
         }
 

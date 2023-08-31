@@ -1,6 +1,9 @@
 use super::*;
 use crate::{
-    crypto::cipher::SecretKey, locator::Locator, protocol::EMPTY_INNER_HASH, test_utils, BLOCK_SIZE,
+    crypto::{cipher::SecretKey, sign::Keypair},
+    protocol::{Locator, SingleBlockPresence, EMPTY_INNER_HASH},
+    test_utils,
+    version_vector::VersionVector,
 };
 use proptest::{arbitrary::any, collection::vec};
 use rand::{
@@ -25,16 +28,13 @@ async fn link_and_find_block() {
     let encoded_locator = locator.encode(&read_key);
 
     let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+    changeset.link_block(encoded_locator, block_id, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id, &write_keys)
+        .await
+        .unwrap();
 
-    tx.link_block(
-        &branch_id,
-        &encoded_locator,
-        &block_id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
 
     assert_eq!(r, block_id);
@@ -55,26 +55,15 @@ async fn rewrite_locator() {
         let encoded_locator = locator.encode(&read_key);
 
         let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
-        tx.link_block(
-            &branch_id,
-            &encoded_locator,
-            &b1,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        changeset.link_block(encoded_locator, b1, SingleBlockPresence::Present);
+        changeset.link_block(encoded_locator, b2, SingleBlockPresence::Present);
 
-        tx.link_block(
-            &branch_id,
-            &encoded_locator,
-            &b2,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
+            .await
+            .unwrap();
 
         let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
         assert_eq!(r, b2);
@@ -98,18 +87,16 @@ async fn remove_locator() {
     let encoded_locator = locator.encode(&read_key);
 
     let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
     assert_eq!(0, count_child_nodes(&mut tx).await.unwrap());
 
-    tx.link_block(
-        &branch_id,
-        &encoded_locator,
-        &b,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    changeset.link_block(encoded_locator, b, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id, &write_keys)
+        .await
+        .unwrap();
+
     let r = tx.find_block(&branch_id, &encoded_locator).await.unwrap();
     assert_eq!(r, b);
 
@@ -118,7 +105,10 @@ async fn remove_locator() {
         count_child_nodes(&mut tx).await.unwrap(),
     );
 
-    tx.unlink_block(&branch_id, &encoded_locator, None, &write_keys)
+    let mut changeset = Changeset::new();
+    changeset.unlink_block(encoded_locator, None);
+    changeset
+        .apply(&mut tx, &branch_id, &write_keys)
         .await
         .unwrap();
 
@@ -141,50 +131,50 @@ async fn remove_block() {
     let branch_id_0 = PublicKey::random();
     let branch_id_1 = PublicKey::random();
 
-    let block_id = rand::random();
-    let buffer = vec![0; BLOCK_SIZE];
+    let block: Block = rand::random();
+    let block_id = block.id;
 
     let mut tx = store.begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
 
-    tx.write_block(&block_id, &buffer, &BlockNonce::default())
-        .await
-        .unwrap();
+    changeset.write_block(block);
 
     let locator0 = Locator::head(rand::random());
     let locator0 = locator0.encode(&read_key);
-    tx.link_block(
-        &branch_id_0,
-        &locator0,
-        &block_id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    changeset.link_block(locator0, block_id, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id_0, &write_keys)
+        .await
+        .unwrap();
 
     let locator1 = Locator::head(rand::random());
     let locator1 = locator1.encode(&read_key);
-    tx.link_block(
-        &branch_id_1,
-        &locator1,
-        &block_id,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
+    let mut changeset = Changeset::new();
+    changeset.link_block(locator1, block_id, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id_1, &write_keys)
+        .await
+        .unwrap();
 
     assert!(tx.block_exists(&block_id).await.unwrap());
 
-    tx.unlink_block(&branch_id_0, &locator0, None, &write_keys)
+    let mut changeset = Changeset::new();
+    changeset.unlink_block(locator0, None);
+    changeset
+        .apply(&mut tx, &branch_id_0, &write_keys)
         .await
         .unwrap();
+
     assert!(tx.block_exists(&block_id).await.unwrap());
 
-    tx.unlink_block(&branch_id_1, &locator1, None, &write_keys)
+    let mut changeset = Changeset::new();
+    changeset.unlink_block(locator1, None);
+    changeset
+        .apply(&mut tx, &branch_id_1, &write_keys)
         .await
         .unwrap();
-    assert!(!tx.block_exists(&block_id).await.unwrap(),);
+
+    assert!(!tx.block_exists(&block_id).await.unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -200,44 +190,35 @@ async fn overwrite_block() {
     let locator = Locator::head(rng.gen());
     let locator = locator.encode(&read_key);
 
-    let mut buffer = vec![0; BLOCK_SIZE];
-
-    rng.fill(&mut buffer[..]);
-    let id0 = BlockId::from_content(&buffer);
+    let block0: Block = rng.gen();
+    let block0_id = block0.id;
 
     let mut tx = store.begin_write().await.unwrap();
 
-    tx.link_block(
-        &branch_id,
-        &locator,
-        &id0,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
-    tx.write_block(&id0, &buffer, &rng.gen()).await.unwrap();
+    let mut changeset = Changeset::new();
+    changeset.link_block(locator, block0.id, SingleBlockPresence::Present);
+    changeset.write_block(block0);
+    changeset
+        .apply(&mut tx, &branch_id, &write_keys)
+        .await
+        .unwrap();
 
-    assert!(tx.block_exists(&id0).await.unwrap());
+    assert!(tx.block_exists(&block0_id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 
-    rng.fill(&mut buffer[..]);
-    let id1 = BlockId::from_content(&buffer);
+    let block1: Block = rng.gen();
+    let block1_id = block1.id;
 
-    tx.write_block(&id1, &buffer, &rng.gen()).await.unwrap();
+    let mut changeset = Changeset::new();
+    changeset.write_block(block1);
+    changeset.link_block(locator, block1_id, SingleBlockPresence::Present);
+    changeset
+        .apply(&mut tx, &branch_id, &write_keys)
+        .await
+        .unwrap();
 
-    tx.link_block(
-        &branch_id,
-        &locator,
-        &id1,
-        SingleBlockPresence::Present,
-        &write_keys,
-    )
-    .await
-    .unwrap();
-
-    assert!(!tx.block_exists(&id0).await.unwrap());
-    assert!(tx.block_exists(&id1).await.unwrap());
+    assert!(!tx.block_exists(&block0_id).await.unwrap());
+    assert!(tx.block_exists(&block1_id).await.unwrap());
     assert_eq!(tx.count_blocks().await.unwrap(), 1);
 }
 
@@ -263,14 +244,17 @@ async fn fallback() {
         (id3, SingleBlockPresence::Missing),
     ] {
         let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
         // TODO: `link_block` auto-prunes so this doesn't work. We need to simulate receiving
         // remote snapshots here instead.
-        tx.link_block(&branch_0_id, &locator, &block_id, presence, &write_keys)
-            .await
-            .unwrap();
+        changeset.link_block(locator, block_id, presence);
 
         // TODO: actually create the present blocks
 
+        changeset
+            .apply(&mut tx, &branch_0_id, &write_keys)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
     }
 
@@ -314,6 +298,7 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
     let write_keys = Keypair::generate(&mut rng);
 
     let mut locators = Vec::new();
+
     let mut tx = store.begin_write().await.unwrap();
 
     // Add blocks
@@ -321,15 +306,12 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
         let locator = rng.gen();
         let block_id = rng.gen();
 
-        tx.link_block(
-            &branch_id,
-            &locator,
-            &block_id,
-            SingleBlockPresence::Present,
-            &write_keys,
-        )
-        .await
-        .unwrap();
+        let mut changeset = Changeset::new();
+        changeset.link_block(locator, block_id, SingleBlockPresence::Present);
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
+            .await
+            .unwrap();
 
         locators.push(locator);
 
@@ -340,7 +322,10 @@ async fn empty_nodes_are_not_stored_case(leaf_count: usize, rng_seed: u64) {
     locators.shuffle(&mut rng);
 
     for locator in locators {
-        tx.unlink_block(&branch_id, &locator, None, &write_keys)
+        let mut changeset = Changeset::new();
+        changeset.unlink_block(locator, None);
+        changeset
+            .apply(&mut tx, &branch_id, &write_keys)
             .await
             .unwrap();
 
@@ -380,15 +365,12 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 let block_id = rng.gen();
 
                 let mut tx = store.begin_write().await.unwrap();
-                tx.link_block(
-                    &branch_id,
-                    &locator,
-                    &block_id,
-                    SingleBlockPresence::Present,
-                    &write_keys,
-                )
-                .await
-                .unwrap();
+                let mut changeset = Changeset::new();
+                changeset.link_block(locator, block_id, SingleBlockPresence::Present);
+                changeset
+                    .apply(&mut tx, &branch_id, &write_keys)
+                    .await
+                    .unwrap();
                 tx.commit().await.unwrap();
 
                 expected.insert(locator, block_id);
@@ -399,7 +381,10 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
                 };
 
                 let mut tx = store.begin_write().await.unwrap();
-                tx.unlink_block(&branch_id, &locator, None, &write_keys)
+                let mut changeset = Changeset::new();
+                changeset.unlink_block(locator, None);
+                changeset
+                    .apply(&mut tx, &branch_id, &write_keys)
                     .await
                     .unwrap();
                 tx.commit().await.unwrap();
@@ -408,7 +393,10 @@ async fn prune_case(ops: Vec<PruneTestOp>, rng_seed: u64) {
             }
             PruneTestOp::Bump => {
                 let mut tx = store.begin_write().await.unwrap();
-                tx.bump(&branch_id, VersionVectorOp::IncrementLocal, &write_keys)
+                let mut changeset = Changeset::new();
+                changeset.bump(&VersionVector::new());
+                changeset
+                    .apply(&mut tx, &branch_id, &write_keys)
                     .await
                     .unwrap();
                 tx.commit().await.unwrap();

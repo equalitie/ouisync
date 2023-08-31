@@ -120,6 +120,8 @@ async fn remove_file() {
 // Rename a file without moving it to another directory.
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_file() {
+    crate::test_utils::init_log();
+
     let (_base_dir, branch) = setup().await;
 
     let src_name = "zebra.txt";
@@ -156,7 +158,7 @@ async fn rename_file() {
         .await
         .unwrap();
 
-    // Reopen again and check the file entry was removed.
+    // Reopen again and check the file entry was renamed.
     let parent_dir = branch
         .open_root(DirectoryLocking::Enabled, DirectoryFallback::Disabled)
         .await

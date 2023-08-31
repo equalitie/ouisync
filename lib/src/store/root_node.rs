@@ -1,9 +1,6 @@
 use super::error::Error;
 use crate::{
-    crypto::{
-        sign::{Keypair, PublicKey},
-        Hash,
-    },
+    crypto::{sign::PublicKey, Hash},
     db,
     debug::DebugPrinter,
     protocol::{MultiBlockPresence, NodeState, Proof, RootNode, SingleBlockPresence, Summary},
@@ -112,18 +109,6 @@ pub(super) async fn create(
         proof,
         summary,
     })
-}
-
-pub(super) async fn load_or_create(
-    conn: &mut db::Connection,
-    branch_id: &PublicKey,
-    write_keys: &Keypair,
-) -> Result<RootNode, Error> {
-    match load(conn, branch_id).await {
-        Ok(root_node) => Ok(root_node),
-        Err(Error::BranchNotFound) => Ok(RootNode::empty(*branch_id, write_keys)),
-        Err(error) => Err(error),
-    }
 }
 
 /// Returns the latest approved root node of the specified branch.
@@ -617,6 +602,7 @@ pub(super) fn load_all_by_writer_in_any_state<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::sign::Keypair;
     use assert_matches::assert_matches;
     use tempfile::TempDir;
 

@@ -77,10 +77,10 @@ impl BlockExpirationTracker {
         })
     }
 
-    pub fn handle_block_update(&self, block: &BlockId) {
+    pub fn handle_block_update(&self, block_id: &BlockId) {
         // Not inlining these lines to call `SystemTime::now()` only once the `lock` is acquired.
         let mut lock = self.shared.lock().unwrap();
-        lock.handle_block_update(block, SystemTime::now());
+        lock.handle_block_update(block_id, SystemTime::now());
         drop(lock);
         self.watch_tx.send(()).unwrap_or(());
     }
@@ -296,8 +296,7 @@ async fn run_task(
 mod test {
     use super::super::*;
     use super::*;
-    use crate::protocol::{BLOCK_NONCE_SIZE, BLOCK_SIZE};
-    use rand::Rng;
+    use crate::crypto::sign::Keypair;
     use tempfile::TempDir;
 
     #[test]
@@ -383,36 +382,21 @@ mod test {
 
     async fn add_block(write_keys: &Keypair, branch_id: &PublicKey, store: &Store) -> BlockId {
         let mut writer = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
 
-        let block_id: BlockId = rand::random();
-        let block_data = random_block_content();
-        let block_nonce: [u8; BLOCK_NONCE_SIZE] = rand::random();
+        let block: Block = rand::random();
+        let block_id = block.id;
 
-        writer
-            .write_block(&block_id, &block_data, &block_nonce)
-            .await
-            .unwrap();
-
-        writer
-            .link_block(
-                branch_id,
-                &rand::random(),
-                &block_id,
-                SingleBlockPresence::Present,
-                write_keys,
-            )
+        changeset.write_block(block);
+        changeset.link_block(rand::random(), block_id, SingleBlockPresence::Present);
+        changeset
+            .apply(&mut writer, branch_id, write_keys)
             .await
             .unwrap();
 
         writer.commit().await.unwrap();
 
         block_id
-    }
-
-    fn random_block_content() -> Vec<u8> {
-        let mut content = vec![0; BLOCK_SIZE];
-        rand::thread_rng().fill(&mut content[..]);
-        content
     }
 
     async fn count_blocks(pool: &db::Pool) -> u64 {

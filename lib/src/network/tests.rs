@@ -12,10 +12,11 @@ use crate::{
     metrics::Metrics,
     protocol::{
         test_utils::{receive_blocks, receive_nodes, Snapshot},
-        BlockId, RootNode, SingleBlockPresence, VersionVectorOp, BLOCK_SIZE,
+        Block, BlockId, RootNode, SingleBlockPresence,
     },
     repository::{BlockRequestMode, RepositoryId, RepositoryMonitor, Vault},
     state_monitor::StateMonitor,
+    store::Changeset,
     test_utils,
     version_vector::VersionVector,
 };
@@ -142,10 +143,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
             a_block_tracker.offer(*id, OfferState::Approved);
             let promise = a_block_tracker.acceptor().try_accept().unwrap();
 
-            a_vault
-                .receive_block(&block.data, &block.nonce, Some(promise))
-                .await
-                .unwrap();
+            a_vault.receive_block(block, Some(promise)).await.unwrap();
             tracing::info!(?id, "write block");
 
             // Then wait until replica B receives and writes it too.
@@ -374,7 +372,6 @@ async fn create_repository<R: Rng + CryptoRng>(
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
 
-
     let state = Vault::new(
         repository_id,
         event_tx,
@@ -485,15 +482,11 @@ async fn create_changeset(
     write_keys: &Keypair,
     size: usize,
 ) {
+    assert!(size > 0);
+
     for _ in 0..size {
         create_block(rng, vault, writer_id, write_keys).await;
     }
-
-    let mut tx = vault.store().begin_write().await.unwrap();
-    tx.bump(writer_id, VersionVectorOp::IncrementLocal, write_keys)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
 
     vault.event_tx.send(Payload::BranchChanged(*writer_id));
 }
@@ -505,24 +498,17 @@ async fn create_block(
     write_keys: &Keypair,
 ) {
     let encoded_locator = rng.gen();
-
-    let mut content = vec![0; BLOCK_SIZE];
-    rng.fill(&mut content[..]);
-
-    let block_id = BlockId::from_content(&content);
-    let nonce = rng.gen();
+    let block: Block = rng.gen();
 
     let mut tx = vault.store().begin_write().await.unwrap();
-    tx.link_block(
-        branch_id,
-        &encoded_locator,
-        &block_id,
-        SingleBlockPresence::Present,
-        write_keys,
-    )
-    .await
-    .unwrap();
-    tx.write_block(&block_id, &content, &nonce).await.unwrap();
+    let mut changeset = Changeset::new();
+
+    changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
+    changeset.write_block(block);
+    changeset
+        .apply(&mut tx, branch_id, write_keys)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 

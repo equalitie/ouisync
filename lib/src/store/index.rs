@@ -574,7 +574,7 @@ mod tests {
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::receive(&mut write_tx, &mut cache_tx, &block.data, &block.nonce)
+            block::receive(&mut write_tx, &mut cache_tx, block)
                 .await
                 .unwrap();
             received_blocks += 1;

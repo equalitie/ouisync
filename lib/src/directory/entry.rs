@@ -10,7 +10,7 @@ use crate::{
     crypto::sign::PublicKey,
     error::{Error, Result},
     file::File,
-    locator::Locator,
+    protocol::Locator,
     store::ReadTransaction,
     version_vector::VersionVector,
     versioned::{BranchItem, Versioned},

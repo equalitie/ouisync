@@ -1,7 +1,12 @@
 use crate::crypto::{Digest, Hash, Hashable};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use serde::{Deserialize, Serialize};
-use std::{array::TryFromSliceError, fmt};
+use std::{
+    array::TryFromSliceError,
+    fmt,
+    ops::{Deref, DerefMut},
+};
+use zeroize::Zeroize;
 
 /// Block size in bytes.
 pub const BLOCK_SIZE: usize = 32 * 1024;
@@ -21,8 +26,8 @@ pub struct BlockId(Hash);
 impl BlockId {
     pub(crate) const SIZE: usize = Hash::SIZE;
 
-    pub(crate) fn from_content(content: &[u8]) -> Self {
-        Self(content.hash())
+    pub(crate) fn from_content(content: &BlockContent) -> Self {
+        Self(content.0[..].hash())
     }
 }
 
@@ -64,23 +69,101 @@ derive_sqlx_traits_for_byte_array_wrapper!(BlockId);
 derive_rand_for_wrapper!(BlockId);
 
 #[derive(Clone)]
-pub(crate) struct BlockData {
-    pub content: Box<[u8]>,
+pub(crate) struct Block {
     pub id: BlockId,
+    pub content: BlockContent,
+    pub nonce: BlockNonce,
 }
 
-impl From<Box<[u8]>> for BlockData {
-    fn from(content: Box<[u8]>) -> Self {
+impl Block {
+    pub fn new(content: BlockContent, nonce: BlockNonce) -> Self {
         let id = BlockId::from_content(&content);
-        Self { content, id }
+        Self { id, content, nonce }
     }
 }
 
-impl Distribution<BlockData> for Standard {
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlockData {
+impl Distribution<Block> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
+        Block::new(rng.gen(), rng.gen())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct BlockContent(Box<[u8]>);
+
+impl BlockContent {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // Read data from `offset` of the buffer into a fixed-length array.
+    //
+    // # Panics
+    //
+    // Panics if the remaining length after `offset` is less than `N`.
+    pub fn read_array<const N: usize>(&self, offset: usize) -> [u8; N] {
+        self[offset..offset + N].try_into().unwrap()
+    }
+
+    // Read data from `offset` of the buffer into a `u64`.
+    //
+    // # Panics
+    //
+    // Panics if the remaining length is less than `size_of::<u64>()`
+    pub fn read_u64(&self, offset: usize) -> u64 {
+        u64::from_le_bytes(self.read_array(offset))
+    }
+
+    // Read data from offset into `dst`.
+    pub fn read(&self, offset: usize, dst: &mut [u8]) {
+        dst.copy_from_slice(&self.0[offset..offset + dst.len()]);
+    }
+
+    // Write a `u64` at `offset` into the buffer.
+    pub fn write_u64(&mut self, offset: usize, value: u64) {
+        let bytes = value.to_le_bytes();
+        self.write(offset, &bytes[..]);
+    }
+
+    // Writes data from `dst` into the buffer.
+    pub fn write(&mut self, offset: usize, src: &[u8]) {
+        self.0[offset..offset + src.len()].copy_from_slice(src);
+    }
+}
+
+impl Default for BlockContent {
+    fn default() -> Self {
+        Self(vec![0; BLOCK_SIZE].into_boxed_slice())
+    }
+}
+
+// Scramble the buffer on drop to prevent leaving decrypted data in memory past the buffer
+// lifetime.
+impl Drop for BlockContent {
+    fn drop(&mut self) {
+        self.0.zeroize()
+    }
+}
+
+impl Deref for BlockContent {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BlockContent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Distribution<BlockContent> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlockContent {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         rng.fill(&mut content[..]);
 
-        BlockData::from(content)
+        BlockContent(content)
     }
 }

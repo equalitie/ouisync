@@ -354,11 +354,7 @@ type ClientId = usize;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        collections::HashSet,
-        protocol::{BlockData, BLOCK_SIZE},
-        test_utils,
-    };
+    use crate::{collections::HashSet, protocol::Block, test_utils};
     use futures_util::future;
     use rand::{distributions::Standard, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use std::{pin::pin, time::Duration};
@@ -375,12 +371,12 @@ mod tests {
         assert!(client.acceptor().try_accept().is_none());
 
         // Offered but not required blocks are not returned
-        let block0 = make_block();
+        let block0: Block = rand::random();
         client.offer(block0.id, OfferState::Approved);
         assert!(client.acceptor().try_accept().is_none());
 
         // Required but not offered blocks are not returned
-        let block1 = make_block();
+        let block1: Block = rand::random();
         tracker.require(block1.id);
         assert!(client.acceptor().try_accept().is_none());
 
@@ -403,7 +399,7 @@ mod tests {
     async fn simple_async() {
         let tracker = BlockTracker::new();
 
-        let block = make_block();
+        let block: Block = rand::random();
         let client = tracker.client();
         let mut acceptor = client.acceptor();
 
@@ -444,7 +440,7 @@ mod tests {
         let client0 = tracker.client();
         let client1 = tracker.client();
 
-        let block = make_block();
+        let block: Block = rand::random();
 
         tracker.require(block.id);
         client0.offer(block.id, OfferState::Approved);
@@ -477,7 +473,7 @@ mod tests {
         let client0 = tracker.client();
         let client1 = tracker.client();
 
-        let block = make_block();
+        let block: Block = rand::random();
 
         client0.offer(block.id, OfferState::Approved);
         client1.offer(block.id, OfferState::Approved);
@@ -503,7 +499,7 @@ mod tests {
         let client0 = tracker.client();
         let client1 = tracker.client();
 
-        let block = make_block();
+        let block: Block = rand::random();
 
         client0.offer(block.id, OfferState::Approved);
         client1.offer(block.id, OfferState::Approved);
@@ -537,7 +533,7 @@ mod tests {
         let client0 = tracker.client();
         let client1 = tracker.client();
 
-        let block = make_block();
+        let block: Block = rand::random();
 
         client0.offer(block.id, OfferState::Approved);
         client1.offer(block.id, OfferState::Approved);
@@ -561,7 +557,7 @@ mod tests {
         let tracker = BlockTracker::new();
         let client = tracker.client();
 
-        let block = make_block();
+        let block: Block = rand::random();
         tracker.require(block.id);
 
         client.offer(block.id, OfferState::Pending);
@@ -585,7 +581,7 @@ mod tests {
         let tracker = BlockTracker::new();
         let clients: Vec<_> = (0..num_clients).map(|_| tracker.client()).collect();
 
-        let block = make_block();
+        let block: Block = rand::random();
 
         tracker.require(block.id);
 
@@ -673,12 +669,5 @@ mod tests {
         for block_id in &block_ids {
             assert!(block_promise.contains(block_id));
         }
-    }
-
-    fn make_block() -> BlockData {
-        let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
-        rand::thread_rng().fill(&mut content[..]);
-
-        BlockData::from(content)
     }
 }

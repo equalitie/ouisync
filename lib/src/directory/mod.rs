@@ -26,9 +26,8 @@ use crate::{
     debug::DebugPrinter,
     error::{Error, Result},
     file::File,
-    locator::Locator,
-    protocol::{RootNode, VersionVectorOp},
-    store::{self, ReadTransaction, WriteTransaction},
+    protocol::{Locator, RootNode},
+    store::{self, Changeset, ReadTransaction, WriteTransaction},
     version_vector::VersionVector,
 };
 use async_recursion::async_recursion;
@@ -63,6 +62,7 @@ impl Directory {
 
         let lock = branch.locker().read(*locator.blob_id()).await;
         let mut tx = branch.store().begin_write().await?;
+        let mut changeset = Changeset::new();
 
         let dir = match Self::open_in(
             Some(lock),
@@ -83,9 +83,10 @@ impl Directory {
             dir
         } else {
             let mut dir = Self::create(branch, locator, None);
-            dir.save(&mut tx, &Content::empty()).await?;
-            dir.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
-            dir.commit(tx).await?;
+            dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
+            dir.bump(&mut tx, &mut changeset, &VersionVector::new())
+                .await?;
+            dir.commit(tx, changeset).await?;
             dir
         };
 
@@ -116,6 +117,8 @@ impl Directory {
     /// Creates a new file inside this directory.
     pub async fn create_file(&mut self, name: String) -> Result<File> {
         let mut tx = self.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
+
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
@@ -130,10 +133,11 @@ impl Directory {
         let mut content = self.content.clone();
 
         let _old_lock = content.insert(self.branch(), name, data, None)?;
-        file.save(&mut tx).await?;
-        self.save(&mut tx, &content).await?;
-        self.bump(&mut tx, VersionVectorOp::IncrementLocal).await?;
-        self.commit(tx).await?;
+        file.save(&mut tx, &mut changeset).await?;
+        self.save(&mut tx, &mut changeset, &content).await?;
+        self.bump(&mut tx, &mut changeset, &VersionVector::new())
+            .await?;
+        self.commit(tx, changeset).await?;
         self.finalize(content);
 
         Ok(file)
@@ -141,22 +145,29 @@ impl Directory {
 
     /// Creates a new subdirectory of this directory.
     pub async fn create_directory(&mut self, name: String) -> Result<Self> {
-        self.create_directory_with_version_vector_op(name, VersionVectorOp::IncrementLocal)
+        self.create_directory_with_version_vector(name, &VersionVector::new())
             .await
     }
 
-    async fn create_directory_with_version_vector_op(
+    async fn create_directory_with_version_vector(
         &mut self,
         name: String,
-        op: VersionVectorOp<'_>,
+        merge: &VersionVector,
     ) -> Result<Self> {
         let mut tx = self.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
+
         self.refresh_in(&mut tx).await?;
 
         let blob_id = rand::random();
 
         let mut version_vector = self.content.initial_version_vector(&name);
-        op.apply(self.branch().id(), &mut version_vector);
+
+        if merge.is_empty() {
+            version_vector.increment(*self.branch().id())
+        } else {
+            version_vector.merge(merge)
+        }
 
         let data = EntryData::directory(blob_id, version_vector);
         let parent = self.create_parent_context(name.clone());
@@ -166,10 +177,10 @@ impl Directory {
         let mut content = self.content.clone();
 
         let _old_lock = content.insert(self.branch(), name, data, None)?;
-        dir.save(&mut tx, &Content::empty()).await?;
-        self.save(&mut tx, &content).await?;
-        self.bump(&mut tx, op).await?;
-        self.commit(tx).await?;
+        dir.save(&mut tx, &mut changeset, &Content::empty()).await?;
+        self.save(&mut tx, &mut changeset, &content).await?;
+        self.bump(&mut tx, &mut changeset, merge).await?;
+        self.commit(tx, changeset).await?;
         self.finalize(content);
 
         Ok(dir)
@@ -183,38 +194,32 @@ impl Directory {
         name: &str,
         merge_vv: &VersionVector,
     ) -> Result<Self> {
-        if let Some(dir) = self
-            .try_open_directory_and_merge_version_vector(name, merge_vv)
-            .await?
-        {
+        if let Some(mut dir) = self.try_open_directory(name).await? {
+            dir.merge_version_vector(merge_vv).await?;
             Ok(dir)
         } else {
             match self
-                .create_directory_with_version_vector_op(
-                    name.to_owned(),
-                    VersionVectorOp::Merge(merge_vv),
-                )
+                .create_directory_with_version_vector(name.to_owned(), merge_vv)
                 .await
             {
                 Ok(dir) => Ok(dir),
                 Err(Error::EntryExists) => {
                     // The entry have been created in the meantime by some other task. Try to open
                     // it again (this time it must exist).
-                    self.try_open_directory_and_merge_version_vector(name, merge_vv)
-                        .await
-                        .transpose()
-                        .expect("entry must exist")
+                    let mut dir = self
+                        .try_open_directory(name)
+                        .await?
+                        .expect("entry must exist");
+                    dir.merge_version_vector(merge_vv).await?;
+
+                    Ok(dir)
                 }
                 Err(error) => Err(error),
             }
         }
     }
 
-    async fn try_open_directory_and_merge_version_vector(
-        &self,
-        name: &str,
-        merge_vv: &VersionVector,
-    ) -> Result<Option<Self>> {
+    async fn try_open_directory(&self, name: &str) -> Result<Option<Self>> {
         let entry = match self.lookup(name) {
             Ok(EntryRef::Directory(entry)) => entry,
             Ok(EntryRef::Tombstone(_)) | Err(Error::EntryNotFound) => return Ok(None),
@@ -222,8 +227,7 @@ impl Directory {
             Err(error) => return Err(error),
         };
 
-        let mut dir = entry.open(DirectoryFallback::Disabled).await?;
-        dir.merge_version_vector(merge_vv).await?;
+        let dir = entry.open(DirectoryFallback::Disabled).await?;
 
         Ok(Some(dir))
     }
@@ -251,9 +255,10 @@ impl Directory {
         tombstone: EntryTombstoneData,
     ) -> Result<()> {
         let mut tx = self.branch().store().begin_write().await?;
+        let mut changeset = Changeset::new();
 
         let (content, _old_lock) = match self
-            .begin_remove_entry(&mut tx, name, branch_id, tombstone)
+            .begin_remove_entry(&mut tx, &mut changeset, name, branch_id, tombstone)
             .await
         {
             Ok(content) => content,
@@ -263,7 +268,7 @@ impl Directory {
             Err(error) => return Err(error),
         };
 
-        self.commit(tx).await?;
+        self.commit(tx, changeset).await?;
         self.finalize(content);
 
         Ok(())
@@ -301,21 +306,37 @@ impl Directory {
 
         let mut tx = self.branch().store().begin_write().await?;
 
+        let mut changeset = Changeset::new();
         let (dst_content, _old_dst_lock) = dst_dir
-            .begin_insert_entry(&mut tx, dst_name.to_owned(), dst_data)
+            .begin_insert_entry(&mut tx, &mut changeset, dst_name.to_owned(), dst_data)
+            .await?;
+
+        // TODO: Handle the case when `self` == `dst_dir` separately (call `refresh` and `save`
+        // only once) to avoid having to apply the changeset here.
+        changeset
+            .apply(
+                &mut tx,
+                self.branch().id(),
+                self.branch()
+                    .keys()
+                    .write()
+                    .ok_or(Error::PermissionDenied)?,
+            )
             .await?;
 
         let branch_id = *self.branch().id();
+        let mut changeset = Changeset::new();
         let (src_content, _old_src_lock) = self
             .begin_remove_entry(
                 &mut tx,
+                &mut changeset,
                 src_name,
                 &branch_id,
                 EntryTombstoneData::moved(src_vv),
             )
             .await?;
 
-        self.commit(tx).await?;
+        self.commit(tx, changeset).await?;
         self.finalize(src_content);
         dst_dir.finalize(dst_content);
 
@@ -357,8 +378,10 @@ impl Directory {
     #[instrument(skip(self), err(Debug))]
     pub(crate) async fn merge_version_vector(&mut self, vv: &VersionVector) -> Result<()> {
         let mut tx = self.branch().store().begin_write().await?;
-        self.bump(&mut tx, VersionVectorOp::Merge(vv)).await?;
-        self.commit(tx).await
+        let mut changeset = Changeset::new();
+
+        self.bump(&mut tx, &mut changeset, vv).await?;
+        self.commit(tx, changeset).await
     }
 
     pub async fn parent(&self) -> Result<Option<Directory>> {
@@ -523,7 +546,8 @@ impl Directory {
 
     async fn begin_remove_entry(
         &mut self,
-        tx: &mut WriteTransaction,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
         name: &str,
         branch_id: &PublicKey,
         mut tombstone: EntryTombstoneData,
@@ -569,12 +593,14 @@ impl Directory {
             Err(e) => return Err(e),
         };
 
-        self.begin_insert_entry(tx, name.to_owned(), new_data).await
+        self.begin_insert_entry(tx, changeset, name.to_owned(), new_data)
+            .await
     }
 
     async fn begin_insert_entry(
         &mut self,
-        tx: &mut WriteTransaction,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
         name: String,
         data: EntryData,
     ) -> Result<(Content, Option<UniqueLock>)> {
@@ -582,8 +608,8 @@ impl Directory {
 
         let mut content = self.content.clone();
         let old_lock = content.insert(self.branch(), name, data, None)?;
-        self.save(tx, &content).await?;
-        self.bump(tx, VersionVectorOp::IncrementLocal).await?;
+        self.save(tx, changeset, &content).await?;
+        self.bump(tx, changeset, &VersionVector::new()).await?;
 
         Ok((content, old_lock))
     }
@@ -606,42 +632,57 @@ impl Directory {
         }
     }
 
-    async fn save(&mut self, tx: &mut WriteTransaction, content: &Content) -> Result<()> {
+    async fn save(
+        &mut self,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+        content: &Content,
+    ) -> Result<()> {
         // Save the directory content into the store
         let buffer = content.serialize();
         self.blob.truncate(0)?;
-        self.blob.write_all(tx, &buffer).await?;
-        self.blob.flush(tx).await?;
+        self.blob.write_all(tx, changeset, &buffer).await?;
+        self.blob.flush(tx, changeset).await?;
 
         Ok(())
     }
 
     /// Atomically commits the transaction and sends notification event.
-    async fn commit(&mut self, tx: WriteTransaction) -> Result<()> {
+    async fn commit(&mut self, mut tx: WriteTransaction, changeset: Changeset) -> Result<()> {
+        changeset
+            .apply(
+                &mut tx,
+                self.branch().id(),
+                self.branch()
+                    .keys()
+                    .write()
+                    .ok_or(Error::PermissionDenied)?,
+            )
+            .await?;
+
         let event_tx = self.branch().notify();
         tx.commit_and_then(move || event_tx.send()).await?;
+
         Ok(())
     }
 
     /// Updates the version vectors of this directory and all its ancestors.
+    /// If `merge` is non-empty, the resulting vv is computed by mergin the original vv with it,
+    /// otherwise by incrementing the local version.
     #[async_recursion]
-    async fn bump<'a: 'async_recursion>(
+    async fn bump(
         &mut self,
-        tx: &mut WriteTransaction,
-        op: VersionVectorOp<'a>,
+        tx: &mut ReadTransaction,
+        changeset: &mut Changeset,
+        merge: &VersionVector,
     ) -> Result<()> {
         // Update the version vector of this directory and all it's ancestors
         if let Some(parent) = self.parent.as_mut() {
-            parent.bump(tx, self.blob.branch().clone(), op).await
+            parent
+                .bump(tx, changeset, self.blob.branch().clone(), merge)
+                .await
         } else {
-            let write_keys = self
-                .branch()
-                .keys()
-                .write()
-                .ok_or(Error::PermissionDenied)?;
-
-            tx.bump(self.branch().id(), op, write_keys).await?;
-
+            changeset.bump(merge);
             Ok(())
         }
     }
