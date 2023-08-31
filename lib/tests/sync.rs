@@ -976,25 +976,33 @@ fn content_stays_available_during_sync() {
 
 #[test]
 fn redownload_expired_blocks() {
+    use std::time::SystemTime;
+
     let mut env = Env::new();
     let (origin_has_it_tx, mut origin_has_it_rx) = mpsc::channel(1);
     let (cache_had_it_tx, mut cache_had_it_rx) = mpsc::channel(1);
     let (finish_origin_tx, mut finish_origin_rx) = mpsc::channel(1);
     let (finish_cache_tx, mut finish_cache_rx) = mpsc::channel(1);
 
-    env.actor("origin", async move {
-        let (_network, repo, _reg) = actor::setup().await;
+    let test_content = Arc::new(common::random_content(2 * 1024 * 1024));
 
-        // Create a file
-        let mut file = repo.create_file("test.txt").await.unwrap();
-        file.write_all(b"test content").await.unwrap();
-        file.flush().await.unwrap();
+    env.actor("origin", {
+        let test_content = test_content.clone();
+        async move {
+            let (_network, repo, _reg) = actor::setup().await;
 
-        let block_count = repo.count_blocks().await.unwrap();
+            // Create a file
+            let mut file = repo.create_file("test.txt").await.unwrap();
+            //file.write_all(b"test content").await.unwrap();
+            file.write_all(&test_content).await.unwrap();
+            file.flush().await.unwrap();
 
-        origin_has_it_tx.send(block_count).await.unwrap();
+            let block_count = repo.count_blocks().await.unwrap();
 
-        finish_origin_rx.recv().await;
+            origin_has_it_tx.send(block_count).await.unwrap();
+
+            finish_origin_rx.recv().await;
+        }
     });
 
     env.actor("cache", async move {
@@ -1002,11 +1010,9 @@ fn redownload_expired_blocks() {
         let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
         let _reg = network.register(repo.handle()).await;
 
-        repo.set_block_expiration(Some(Duration::from_secs(1)))
-            .await
-            .unwrap();
-
         let block_count = origin_has_it_rx.recv().await.unwrap();
+
+        let start = SystemTime::now();
 
         network.add_user_provided_peer(&actor::lookup_addr("origin").await);
 
@@ -1018,11 +1024,22 @@ fn redownload_expired_blocks() {
         })
         .await;
 
+        let normal_sync_duration = SystemTime::now().duration_since(start).unwrap();
+
+        let expiration_duration = Duration::from_secs(5);
+
+        repo.set_block_expiration(Some(expiration_duration))
+            .await
+            .unwrap();
+
         // Wait for the blocks to expire. TODO: We could also wait for the block count to drop to
         // zero, but currently the expiration tracker does not trigger a repo change.
-        sleep(Duration::from_secs(3)).await;
+        sleep(3 * expiration_duration).await;
 
-        cache_had_it_tx.send(()).await.unwrap();
+        cache_had_it_tx
+            .send((normal_sync_duration, SystemTime::now()))
+            .await
+            .unwrap();
 
         finish_cache_rx.recv().await;
     });
@@ -1032,12 +1049,21 @@ fn redownload_expired_blocks() {
         let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
         let _reg = network.register(repo.handle()).await;
 
-        cache_had_it_rx.recv().await;
+        // Use `start` to measure how long it took to sync the data from the expired cache.
+        let (normal_sync_duration, start) = cache_had_it_rx.recv().await.unwrap();
 
         network.add_user_provided_peer(&actor::lookup_addr("cache").await);
 
         common::expect_entry_exists(&repo, "test.txt", EntryType::File).await;
-        common::expect_file_content(&repo, "test.txt", b"test content").await;
+        common::expect_file_content(&repo, "test.txt", &test_content).await;
+
+        let expired_sync_duration = SystemTime::now().duration_since(start).unwrap();
+
+        assert!(
+            expired_sync_duration < 3 * normal_sync_duration,
+            "Sync of expired blocks is more than 3x higher than normal sync \
+            (normal:{normal_sync_duration:?}, expired:{expired_sync_duration:?})"
+        );
 
         finish_origin_tx.send(()).await.unwrap();
         finish_cache_tx.send(()).await.unwrap();

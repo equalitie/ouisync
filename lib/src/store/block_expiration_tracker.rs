@@ -268,12 +268,16 @@ async fn run_task(
         .execute(&mut tx)
         .await?;
 
-        if update_result.rows_affected() > 0 {
-            sqlx::query("DELETE FROM blocks WHERE id = ?")
-                .bind(&block)
-                .execute(&mut tx)
-                .await?;
+        if update_result.rows_affected() == 0 {
+            return Ok(());
         }
+
+        sqlx::query("DELETE FROM blocks WHERE id = ?")
+            .bind(&block)
+            .execute(&mut tx)
+            .await?;
+
+        tracing::warn!("Block {block:?} has expired");
 
         // We need to remove the block from `shared` here while the database is locked for writing.
         // If we did it after the commit, it could happen that after the commit but between the
