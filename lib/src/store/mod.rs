@@ -105,7 +105,9 @@ impl Store {
     }
 
     pub async fn block_expiration(&self) -> Option<Duration> {
-        (*self.block_expiration_tracker.read().await).as_ref().map(|tracker| tracker.block_expiration())
+        (*self.block_expiration_tracker.read().await)
+            .as_ref()
+            .map(|tracker| tracker.block_expiration())
     }
 
     /// Acquires a `Reader`
@@ -280,7 +282,8 @@ impl Reader {
 
         let result = block::read(self.db(), id, buffer).await;
 
-        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await? {
+        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await?
+        {
             block_tracker.require(*id);
         }
 
