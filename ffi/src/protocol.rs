@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
+    path::PathBuf,
 };
 use thiserror::Error;
 
@@ -80,6 +81,9 @@ pub(crate) enum Request {
     RepositorySyncProgress(Handle<RepositoryHolder>),
     RepositoryMirror {
         repository: Handle<RepositoryHolder>,
+    },
+    RepositoryMountAll {
+        mount_point: PathBuf,
     },
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),

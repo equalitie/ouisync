@@ -14,9 +14,8 @@ pub struct MultiRepoVFS;
 
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
-        _runtime_handle: tokio::runtime::Handle,
         _mount_point: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
         Box::pin(future::ready(Err(MountError::Unsupported)))
     }
 

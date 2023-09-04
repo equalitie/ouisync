@@ -19,6 +19,7 @@ use std::{
     thread,
     time::UNIX_EPOCH,
 };
+use tokio::runtime::Handle as RuntimeHandle;
 use widestring::{U16CStr, U16CString, U16Str};
 use winapi::{shared::ntstatus::*, um::winnt};
 
@@ -40,7 +41,7 @@ impl RepoMap {
 
 pub struct MultiRepoVFS {
     entry_id_generator: Arc<EntryIdGenerator>,
-    runtime_handle: tokio::runtime::Handle,
+    runtime_handle: RuntimeHandle,
     repos: Arc<BlockingRwLock<RepoMap>>,
     unmount_tx: mpsc::SyncSender<()>,
     // It's `Option` so we can move it out of there in `Drop::drop`.
@@ -49,7 +50,6 @@ pub struct MultiRepoVFS {
 
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
-        runtime_handle: tokio::runtime::Handle,
         mount_point: impl AsRef<Path>,
     ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>>>> {
         let mount_point = U16CString::from_os_str(mount_point.as_ref().as_os_str());
@@ -124,7 +124,7 @@ impl MultiRepoMount for MultiRepoVFS {
 
             Ok(Self {
                 entry_id_generator,
-                runtime_handle,
+                runtime_handle: RuntimeHandle::current(),
                 repos,
                 unmount_tx,
                 join_handle: Some(join_handle),
@@ -132,7 +132,7 @@ impl MultiRepoMount for MultiRepoVFS {
         })
     }
 
-    fn insert_repo(&self, store_path: Utf8PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
+    fn insert(&self, store_path: Utf8PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
         let name = match store_path.file_stem() {
             Some(name) => name,
             None => {
@@ -198,7 +198,7 @@ impl MultiRepoMount for MultiRepoVFS {
         Ok(())
     }
 
-    fn remove_repo(&self, store_path: &Utf8Path) -> Result<(), io::Error> {
+    fn remove(&self, store_path: &Utf8Path) -> Result<(), io::Error> {
         let mut repos_lock = self.repos.write().unwrap();
         let RepoMap {
             name_to_repo,

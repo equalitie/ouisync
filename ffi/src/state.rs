@@ -5,19 +5,10 @@ use crate::{
 };
 use once_cell::sync::OnceCell;
 use ouisync_bridge::{config::ConfigStore, transport};
-use ouisync_lib::{
-    deadlock::{BlockingMutex, BlockingRwLockReadGuard},
-    network::Network,
-    StateMonitor,
-};
-use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
+use ouisync_lib::{deadlock::BlockingMutex, network::Network, StateMonitor};
+use ouisync_vfs::{MountError, MultiRepoMount, MultiRepoVFS};
 use scoped_task::ScopedJoinHandle;
-use std::{
-    collections::{BTreeSet, HashMap},
-    io,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, io, path::PathBuf, sync::Arc};
 
 pub(crate) struct State {
     pub root_monitor: StateMonitor,
@@ -101,12 +92,31 @@ impl State {
         self.repositories.get(handle)
     }
 
-    // Used on operating systems where `MultiRepoVFS` from `ouisync_vfs` is implemented.
-    #[allow(dead_code)]
-    pub fn read_repositories(
-        &self,
-    ) -> BlockingRwLockReadGuard<HashMap<u64, Arc<RepositoryHolder>>> {
-        self.repositories.read()
+    pub fn get_all_repositories(&self) -> Vec<Arc<RepositoryHolder>> {
+        self.repositories.get_all()
+    }
+
+    pub async fn mount_all(&self, mount_point: PathBuf) -> Result<(), MountError> {
+        let mounter = MultiRepoVFS::create(mount_point).await.map_err(|error| {
+            tracing::error!("Failed create mounter: {error:?}");
+            error
+        })?;
+
+        for repo_holder in self.get_all_repositories() {
+            if let Err(error) = mounter.insert(
+                repo_holder.store_path.clone(),
+                repo_holder.repository.clone(),
+            ) {
+                tracing::error!(
+                    "Failed to mount repository {:?}: {error:?}",
+                    repo_holder.store_path
+                );
+            }
+        }
+
+        *self.mounter.lock().unwrap() = Some(mounter);
+
+        Ok(())
     }
 }
 

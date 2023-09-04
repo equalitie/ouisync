@@ -29,7 +29,6 @@ use thiserror::Error;
 
 pub trait MultiRepoMount {
     fn create(
-        runtime_handle: tokio::runtime::Handle,
         mount_point: impl AsRef<Path>,
     ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>>
     where
@@ -49,5 +48,5 @@ pub enum MountError {
     #[error("Can't install the backend driver")]
     DriverInstall,
     #[error("Backend error")]
-    Backend(#[source] Box<dyn std::error::Error>),
+    Backend(#[source] Box<dyn std::error::Error + Send + 'static>),
 }
