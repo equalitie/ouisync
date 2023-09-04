@@ -10,7 +10,7 @@ use ouisync_lib::{
     network::Network,
     StateMonitor,
 };
-use ouisync_vfs::MultiRepoVFS;
+use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
 use scoped_task::ScopedJoinHandle;
 use std::{
     collections::{BTreeSet, HashMap},
@@ -70,8 +70,7 @@ impl State {
 
     pub fn insert_repository(&self, holder: RepositoryHolder) -> Handle<RepositoryHolder> {
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
-            if let Err(error) =
-                mounter.add_repo(holder.store_path.clone(), holder.repository.clone())
+            if let Err(error) = mounter.insert(holder.store_path.clone(), holder.repository.clone())
             {
                 tracing::error!(
                     "Failed to mount repository {:?}: {error:?}",
@@ -84,12 +83,18 @@ impl State {
     }
 
     pub fn remove_repository(&self, handle: Handle<RepositoryHolder>) -> Option<RepositoryHolder> {
+        let holder = self.repositories.remove(handle)?;
+
         if let Some(mounter) = &*self.mounter.lock().unwrap() {
-            let repository = self.repositories.get(handle);
-            mounter.remove_repo(repository.store_path.clone());
+            if let Err(error) = mounter.remove(&holder.store_path) {
+                tracing::error!(
+                    "Failed to unmount repository {:?}: {error:?}",
+                    holder.store_path
+                );
+            }
         }
 
-        self.repositories.remove(handle)
+        Some(holder)
     }
 
     pub fn get_repository(&self, handle: Handle<RepositoryHolder>) -> Arc<RepositoryHolder> {

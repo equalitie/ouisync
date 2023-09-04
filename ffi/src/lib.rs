@@ -34,7 +34,7 @@ use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
-use ouisync_vfs::MountError;
+use ouisync_vfs::{MountError, MultiRepoMount, MultiRepoVFS};
 #[cfg(unix)]
 use std::os::raw::c_int;
 use std::{
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn session_mount_all(
         Err(_error) => {
             session
                 .port_sender
-                .send_result(port, Err(MountError::FailedToParseMountPoint));
+                .send_result(port, Err(MountError::InvalidMountPoint));
             return;
         }
     };
@@ -335,27 +335,17 @@ impl Session {
         Ok(session)
     }
 
-    // TODO: Linux, OSX
-    #[cfg(not(target_os = "windows"))]
-    fn mount_all(&self, _mount_point: PathBuf, port: Port<Result<(), MountError>>) {
-        self.port_sender
-            .send_result(port, Err(MountError::UnsupportedOs))
-    }
-
-    #[cfg(target_os = "windows")]
     fn mount_all(&self, mount_point: PathBuf, port: Port<Result<(), MountError>>) {
         let state = self.state.clone();
         let runtime = self.runtime.handle().clone();
         let port_sender = self.port_sender;
 
         self.runtime.spawn(async move {
-            use ouisync_vfs::MultiRepoVFS;
-
             // TODO: Let the user chose what the mount point is.
-            let mounter = match MultiRepoVFS::mount(runtime, mount_point).await {
+            let mounter = match MultiRepoVFS::create(runtime, mount_point).await {
                 Ok(mounter) => mounter,
                 Err(error) => {
-                    tracing::error!("Failed to mount session: {error:?}");
+                    tracing::error!("Failed create mounter: {error:?}");
                     port_sender.send_result(port, Err(error));
                     return;
                 }
@@ -364,7 +354,7 @@ impl Session {
             let repos = state.read_repositories();
 
             for repo_holder in repos.values() {
-                if let Err(error) = mounter.add_repo(
+                if let Err(error) = mounter.insert(
                     repo_holder.store_path.clone(),
                     repo_holder.repository.clone(),
                 ) {
