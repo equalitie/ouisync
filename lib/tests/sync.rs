@@ -986,6 +986,14 @@ fn redownload_expired_blocks() {
 
     let test_content = Arc::new(common::random_content(2 * 1024 * 1024));
 
+    async fn wait_for_block_count(repo: &Repository, block_count: u64) {
+        common::eventually(&repo, || {
+            async { repo.count_blocks().await.unwrap() == block_count }
+                .instrument(tracing::Span::current())
+        })
+        .await;
+    }
+
     env.actor("origin", {
         let test_content = test_content.clone();
         async move {
@@ -993,7 +1001,6 @@ fn redownload_expired_blocks() {
 
             // Create a file
             let mut file = repo.create_file("test.txt").await.unwrap();
-            //file.write_all(b"test content").await.unwrap();
             file.write_all(&test_content).await.unwrap();
             file.flush().await.unwrap();
 
@@ -1013,16 +1020,11 @@ fn redownload_expired_blocks() {
         let block_count = origin_has_it_rx.recv().await.unwrap();
 
         let start = SystemTime::now();
-
         network.add_user_provided_peer(&actor::lookup_addr("origin").await);
 
         // Wait to have the blocks, this is a blind replica, so we can't check the file exists and
         // has the required content.
-        common::eventually(&repo, || {
-            async { repo.count_blocks().await.unwrap() == block_count }
-                .instrument(tracing::Span::current())
-        })
-        .await;
+        wait_for_block_count(&repo, block_count).await;
 
         let normal_sync_duration = SystemTime::now().duration_since(start).unwrap();
 
@@ -1037,7 +1039,7 @@ fn redownload_expired_blocks() {
         sleep(3 * expiration_duration).await;
 
         cache_had_it_tx
-            .send((normal_sync_duration, SystemTime::now()))
+            .send((block_count, normal_sync_duration))
             .await
             .unwrap();
 
@@ -1046,16 +1048,16 @@ fn redownload_expired_blocks() {
 
     env.actor("reader", async move {
         let network = actor::create_network(Proto::Tcp).await;
-        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Read).await;
+        let repo = actor::create_repo_with_mode(DEFAULT_REPO, AccessMode::Blind).await;
         let _reg = network.register(repo.handle()).await;
 
         // Use `start` to measure how long it took to sync the data from the expired cache.
-        let (normal_sync_duration, start) = cache_had_it_rx.recv().await.unwrap();
+        let (block_count, normal_sync_duration) = cache_had_it_rx.recv().await.unwrap();
 
+        let start = SystemTime::now();
         network.add_user_provided_peer(&actor::lookup_addr("cache").await);
 
-        common::expect_entry_exists(&repo, "test.txt", EntryType::File).await;
-        common::expect_file_content(&repo, "test.txt", &test_content).await;
+        wait_for_block_count(&repo, block_count).await;
 
         let expired_sync_duration = SystemTime::now().duration_since(start).unwrap();
 
