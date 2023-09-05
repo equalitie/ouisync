@@ -133,15 +133,13 @@ impl VirtualFilesystem {
                             shared,
                         )
                     }
+                } else if create_directory {
+                    self.repo.create_directory(&path).await?;
+                    Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
                 } else {
-                    if create_directory {
-                        self.repo.create_directory(&path).await?;
-                        Entry::new_dir(self.repo.clone(), path.clone(), shared).await?
-                    } else {
-                        let mut file = self.repo.create_file(path).await?;
-                        file.flush().await?;
-                        Entry::new_file(OpenState::Open(file), shared)
-                    }
+                    let mut file = self.repo.create_file(path).await?;
+                    file.flush().await?;
+                    Entry::new_file(OpenState::Open(file), shared)
                 };
 
                 return Ok((entry, true /* is new */));
@@ -233,7 +231,7 @@ impl VirtualFilesystem {
 
         match handles.entry(lock.path.clone()) {
             hash_map::Entry::Occupied(occupied) => {
-                assert_eq!(Arc::as_ptr(occupied.get()), Arc::as_ptr(&shared));
+                assert_eq!(Arc::as_ptr(occupied.get()), Arc::as_ptr(shared));
 
                 lock.handle_count -= 1;
 
@@ -250,7 +248,7 @@ impl VirtualFilesystem {
                     return to_delete;
                 }
 
-                return None;
+                None
             }
             // This FileEntry exists, so it must be in `handles`.
             hash_map::Entry::Vacant(_) => {
@@ -314,7 +312,8 @@ impl VirtualFilesystem {
 
     // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
     // https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
-    #[instrument(skip(self, file_name, _security_context, access_mask, _file_attributes, _share_access, create_disposition, create_options), fields(file_name = ?to_path(file_name)), err(Debug))]
+    #[instrument(skip_all, fields(file_name = ?to_path(file_name)), err(Debug))]
+    #[allow(clippy::too_many_arguments)]
     async fn async_create_file<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -353,6 +352,7 @@ impl VirtualFilesystem {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_file(
         &self,
         file_name: &U16CStr,
@@ -817,7 +817,7 @@ impl VirtualFilesystem {
                         // preserve the seek offset.
                         *file = OpenState::Lazy {
                             path: src_path.clone(),
-                            create_disposition: CreateDisposition::FileOpen,
+                            create_disposition: CreateDisposition::Open,
                         }
                     }
                     OpenState::Lazy { .. } | OpenState::Closed => {}
@@ -829,7 +829,7 @@ impl VirtualFilesystem {
         }
 
         self.repo
-            .move_entry(&src_dir, &src_name, &dst_dir, &dst_name)
+            .move_entry(&src_dir, src_name, &dst_dir, dst_name)
             .await?;
 
         Ok(())
@@ -1117,7 +1117,7 @@ impl From<Error> for i32 {
                     E::EntryIsFile => STATUS_INVALID_DEVICE_REQUEST,
                     E::EntryIsDirectory => STATUS_INVALID_DEVICE_REQUEST,
                     E::NonUtf8FileName => STATUS_OBJECT_NAME_INVALID,
-                    E::OffsetOutOfRange => STATUS_INVALID_PARAMETER,
+                    E::InvalidArgument | E::OffsetOutOfRange => STATUS_INVALID_PARAMETER,
                     E::DirectoryNotEmpty => STATUS_DIRECTORY_NOT_EMPTY,
                     E::OperationNotSupported => STATUS_NOT_IMPLEMENTED,
                     E::Writer(_) => STATUS_IO_DEVICE_ERROR,
@@ -1300,28 +1300,28 @@ impl OpenState {
 #[derive(Debug)]
 enum CreateDisposition {
     // If the file already exists, replace it with the given file. If it does not, create the given file.
-    FileSupersede,
+    Supersede,
     // If the file already exists, fail the request and do not create or open the given file. If it does not, create the given file.
-    FileCreate,
+    Create,
     // If the file already exists, open it instead of creating a new file. If it does not, fail the request and do not create a new file.
-    FileOpen,
+    Open,
     // If the file already exists, open it. If it does not, create the given file.
-    FileOpenIf,
+    OpenIf,
     //  If the file already exists, open it and overwrite it. If it does not, fail the request.
-    FileOverwrite,
+    Overwrite,
     //  If the file already exists, open it and overwrite it. If it does not, create the given file.
-    FileOverwriteIf,
+    OverwriteIf,
 }
 
 impl CreateDisposition {
     fn should_create(&self) -> bool {
         match self {
-            Self::FileSupersede => true,
-            Self::FileCreate => true,
-            Self::FileOpen => false,
-            Self::FileOpenIf => true,
-            Self::FileOverwrite => false,
-            Self::FileOverwriteIf => true,
+            Self::Supersede => true,
+            Self::Create => true,
+            Self::Open => false,
+            Self::OpenIf => true,
+            Self::Overwrite => false,
+            Self::OverwriteIf => true,
         }
     }
 }
@@ -1331,12 +1331,12 @@ impl TryFrom<u32> for CreateDisposition {
 
     fn try_from(n: u32) -> Result<Self, Self::Error> {
         match n {
-            FILE_SUPERSEDE => Ok(Self::FileSupersede),
-            FILE_CREATE => Ok(Self::FileCreate),
-            FILE_OPEN => Ok(Self::FileOpen),
-            FILE_OPEN_IF => Ok(Self::FileOpenIf),
-            FILE_OVERWRITE => Ok(Self::FileOverwrite),
-            FILE_OVERWRITE_IF => Ok(Self::FileOverwriteIf),
+            FILE_SUPERSEDE => Ok(Self::Supersede),
+            FILE_CREATE => Ok(Self::Create),
+            FILE_OPEN => Ok(Self::Open),
+            FILE_OPEN_IF => Ok(Self::OpenIf),
+            FILE_OVERWRITE => Ok(Self::Overwrite),
+            FILE_OVERWRITE_IF => Ok(Self::OverwriteIf),
             _ => Err(STATUS_INVALID_PARAMETER.into()),
         }
     }
@@ -1418,9 +1418,8 @@ impl fmt::Debug for AccessMask {
 
 pub(crate) fn default_mount_flags() -> MountFlags {
     // TODO: Check these flags.
-    let flags = MountFlags::empty();
     //flags |= ALT_STREAM;
     //flags |= MountFlags::DEBUG | MountFlags::STDERR;
     //flags |= MountFlags::REMOVABLE;
-    flags
+    MountFlags::empty()
 }

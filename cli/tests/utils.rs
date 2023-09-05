@@ -401,7 +401,6 @@ where
 
 // Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
 // allow destructors to run.
-// TODO: windows version
 #[cfg(unix)]
 fn terminate(process: &Child) {
     // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
@@ -409,6 +408,11 @@ fn terminate(process: &Child) {
     unsafe {
         libc::kill(process.id() as libc::pid_t, libc::SIGTERM);
     }
+}
+
+#[cfg(windows)]
+fn terminate(_process: &Child) {
+    todo!()
 }
 
 // RNG adaptor that implements `io::Read`.
