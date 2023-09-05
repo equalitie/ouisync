@@ -17,7 +17,7 @@ pub use crate::dokan::{
 mod dummy;
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub use dummy::MultiRepoVFS;
+pub use dummy::{mount, MountGuard, MultiRepoVFS};
 
 #[cfg(test)]
 mod tests;

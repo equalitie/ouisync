@@ -1,3 +1,5 @@
+//! Dummy implementation that does nothing. Used on OSes that don't support mounting.
+
 use crate::{MountError, MultiRepoMount};
 use ouisync_lib::Repository;
 use std::{
@@ -8,8 +10,6 @@ use std::{
     sync::Arc,
 };
 
-/// Dummy implementation of `MultiRepoVFS` that does nothing. Used on OSes that don't support
-/// mounting.
 pub struct MultiRepoVFS;
 
 impl MultiRepoMount for MultiRepoVFS {
@@ -26,4 +26,14 @@ impl MultiRepoMount for MultiRepoVFS {
     fn remove(&self, _store_path: &Path) -> Result<(), io::Error> {
         Err(io::ErrorKind::Unsupported.into())
     }
+}
+
+pub struct MountGuard;
+
+pub fn mount(
+    _runtime_handle: tokio::runtime::Handle,
+    _repository: Arc<Repository>,
+    _mount_point: impl AsRef<Path>,
+) -> Result<MountGuard, io::Error> {
+    Err(io::ErrorKind::Unsupported.into())
 }
