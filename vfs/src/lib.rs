@@ -25,6 +25,7 @@ mod tests;
 use ouisync_lib::Repository;
 use std::{
     future::Future,
+    io,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -38,9 +39,9 @@ pub trait MultiRepoMount {
     where
         Self: Sized;
 
-    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), MountError>;
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error>;
 
-    fn remove(&self, store_path: &Path) -> Result<(), MountError>;
+    fn remove(&self, store_path: &Path) -> Result<(), io::Error>;
 }
 
 #[derive(Debug, Error)]

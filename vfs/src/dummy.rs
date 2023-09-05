@@ -1,9 +1,9 @@
 use crate::{MountError, MultiRepoMount};
-use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_lib::Repository;
 use std::{
     future::{self, Future},
-    path::Path,
+    io,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
 };
@@ -19,11 +19,11 @@ impl MultiRepoMount for MultiRepoVFS {
         Box::pin(future::ready(Err(MountError::Unsupported)))
     }
 
-    fn insert(&self, _store_path: Utf8PathBuf, _repo: Arc<Repository>) -> Result<(), MountError> {
-        Err(MountError::Unsupported)
+    fn insert(&self, _store_path: PathBuf, _repo: Arc<Repository>) -> Result<(), io::Error> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 
-    fn remove(&self, _store_path: &Utf8Path) -> Result<(), MountError> {
-        Err(MountError::Unsupported)
+    fn remove(&self, _store_path: &Path) -> Result<(), io::Error> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 }
