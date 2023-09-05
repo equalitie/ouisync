@@ -35,6 +35,7 @@ pem = "2.0.1"
 rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "io-std"] }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "compat"] }

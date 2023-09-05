@@ -4,7 +4,6 @@ use crate::{
     state::State,
 };
 use camino::Utf8PathBuf;
-use ouisync_bridge::error::Result;
 use serde::{Deserialize, Serialize};
 
 // Currently this is only a read-only snapshot of a directory.
@@ -22,7 +21,7 @@ pub(crate) async fn create(
     state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     state
         .get_repository(repo)
         .repository
@@ -35,7 +34,7 @@ pub(crate) async fn open(
     state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<Directory> {
+) -> Result<Directory, ouisync_lib::Error> {
     let repo = state.get_repository(repo);
 
     let dir = repo.repository.open_directory(path).await?;
@@ -57,7 +56,7 @@ pub(crate) async fn remove(
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
     recursive: bool,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     let repo = &state.get_repository(repo).repository;
 
     if recursive {

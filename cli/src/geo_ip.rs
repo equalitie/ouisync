@@ -1,7 +1,6 @@
 //! IP geolocation
 
 use maxminddb::{geoip2, MaxMindDBError, Reader};
-use ouisync_bridge::error::{Error, Result};
 use std::{
     fmt, io,
     net::IpAddr,
@@ -24,7 +23,7 @@ impl GeoIp {
         }
     }
 
-    pub async fn refresh(&mut self) -> Result<()> {
+    pub async fn refresh(&mut self) -> Result<(), io::Error> {
         let mut file = File::open(&self.path).await?;
 
         let new_timestamp = file.metadata().await?.modified()?;
@@ -89,19 +88,19 @@ impl fmt::Display for CountryCode {
 
 pub(crate) enum LookupError {
     NotFound,
-    Fatal(Error),
+    Io(io::Error),
 }
 
 impl From<MaxMindDBError> for LookupError {
     fn from(src: MaxMindDBError) -> Self {
         match src {
             MaxMindDBError::AddressNotFoundError(_) => Self::NotFound,
-            _ => Self::Fatal(io::Error::new(io::ErrorKind::Other, src).into()),
+            _ => Self::Io(io::Error::new(io::ErrorKind::Other, src)),
         }
     }
 }
 
-async fn load(file: &mut File) -> Result<Reader<Vec<u8>>> {
+async fn load(file: &mut File) -> Result<Reader<Vec<u8>>, io::Error> {
     let mut content = Vec::new();
     file.read_to_end(&mut content).await?;
 

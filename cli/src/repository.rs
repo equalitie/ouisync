@@ -1,8 +1,8 @@
 use crate::{options::Dirs, utils, DB_EXTENSION};
+use anyhow::Result;
 use camino::Utf8Path;
 use ouisync_bridge::{
     config::ConfigStore,
-    error::{Error, Result},
     protocol::remote::{Request, Response},
     transport::RemoteClient,
 };
@@ -19,6 +19,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
+use thiserror::Error;
 use tokio::{fs, runtime, task};
 use tokio_stream::StreamExt;
 
@@ -83,14 +84,9 @@ impl Deref for RepositoryName {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("invalid repository name")]
 pub(crate) struct InvalidRepositoryName;
-
-impl From<InvalidRepositoryName> for Error {
-    fn from(_: InvalidRepositoryName) -> Self {
-        Self::InvalidArgument
-    }
-}
 
 pub(crate) struct RepositoryHolder {
     pub repository: Arc<Repository>,
@@ -116,6 +112,7 @@ impl RepositoryHolder {
         &self.name
     }
 
+    // TODO: should `mount_point` be `Option<&Path>` ?
     pub async fn set_mount_point(&self, mount_point: Option<&str>) {
         let metadata = self.repository.metadata();
 
@@ -393,18 +390,12 @@ impl RepositoryMap {
     }
 }
 
+#[derive(Debug, Error)]
 pub(crate) enum FindError {
+    #[error("repository not found")]
     NotFound,
+    #[error("repository name is ambiguous")]
     Ambiguous,
-}
-
-impl From<FindError> for Error {
-    fn from(src: FindError) -> Self {
-        match src {
-            FindError::NotFound => Error::Library(ouisync_lib::Error::EntryNotFound),
-            FindError::Ambiguous => Error::Library(ouisync_lib::Error::AmbiguousEntry),
-        }
-    }
 }
 
 // Find repositories that are marked to be opened on startup and open them.

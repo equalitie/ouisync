@@ -1,7 +1,4 @@
-use crate::{
-    config::{ConfigError, ConfigKey, ConfigStore},
-    error::Result,
-};
+use crate::config::{ConfigError, ConfigKey, ConfigStore};
 use ouisync_lib::DeviceId;
 use rand::{rngs::OsRng, Rng};
 
@@ -21,7 +18,7 @@ const KEY: ConfigKey<DeviceId> = ConfigKey::new(
      identification.",
 );
 
-pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
+pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId, ConfigError> {
     let cfg = config.entry(KEY);
 
     match cfg.get().await {
@@ -31,7 +28,7 @@ pub async fn get_or_create(config: &ConfigStore) -> Result<DeviceId> {
             cfg.set(&new_id).await?;
             Ok(new_id)
         }
-        Err(e) => Err(e.into()),
+        Err(ConfigError::Io(error)) => Err(error.into()),
     }
 }
 

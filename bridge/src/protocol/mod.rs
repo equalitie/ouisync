@@ -1,32 +1,22 @@
 pub mod remote;
 
-use crate::{
-    constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH},
-    error::{Error, ErrorCode, Result, ToErrorCode},
-};
+use crate::constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ServerMessage<T> {
+pub(crate) enum ServerMessage<T, E> {
     Success(T),
-    Failure { code: ErrorCode, message: String },
+    Failure(E),
     Notification(Notification),
 }
 
-impl<T> ServerMessage<T> {
-    pub fn response(result: Result<T>) -> Self {
+impl<T, E> ServerMessage<T, E> {
+    pub fn response(result: Result<T, E>) -> Self {
         match result {
             Ok(response) => Self::Success(response),
-            Err(error) => Self::Failure {
-                code: error.to_error_code(),
-                // TODO: include also sources
-                message: match error {
-                    Error::Io(inner) => inner.to_string(),
-                    _ => error.to_string(),
-                },
-            },
+            Err(error) => Self::Failure(error),
         }
     }
 
@@ -56,8 +46,6 @@ pub enum NetworkEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
-    use std::io;
 
     #[test]
     fn server_message_serialize_deserialize() {
@@ -67,21 +55,25 @@ mod tests {
             Bool(bool),
         }
 
+        #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+        enum TestError {
+            ForbiddenRequest,
+            Io,
+        }
+
         let origs = [
             ServerMessage::response(Ok(TestResponse::None)),
             ServerMessage::response(Ok(TestResponse::Bool(true))),
             ServerMessage::response(Ok(TestResponse::Bool(false))),
-            ServerMessage::response(Err(Error::ForbiddenRequest)),
-            ServerMessage::response(Err(Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                "something went wrong",
-            )))),
+            ServerMessage::response(Err(TestError::ForbiddenRequest)),
+            ServerMessage::response(Err(TestError::Io)),
         ];
 
         for orig in origs {
             let encoded = rmp_serde::to_vec(&orig).unwrap();
             println!("{encoded:?}");
-            let decoded: ServerMessage<TestResponse> = rmp_serde::from_slice(&encoded).unwrap();
+            let decoded: ServerMessage<TestResponse, TestError> =
+                rmp_serde::from_slice(&encoded).unwrap();
             assert_eq!(decoded, orig);
         }
     }

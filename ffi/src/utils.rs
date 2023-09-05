@@ -1,9 +1,9 @@
-use ouisync_bridge::error::{Error, Result};
 use std::{
     ffi::{CStr, CString},
     marker::PhantomData,
     os::raw::c_char,
     ptr,
+    str::Utf8Error,
 };
 
 /// FFI handle to a resource with unique ownership.
@@ -27,28 +27,22 @@ impl<T> UniqueHandle<T> {
     }
 }
 
-pub(crate) unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str> {
+pub(crate) unsafe fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, Utf8Error> {
     Ok(ptr_to_maybe_str(ptr)?.unwrap_or(""))
 }
 
-pub(crate) unsafe fn ptr_to_maybe_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>> {
+pub(crate) unsafe fn ptr_to_maybe_str<'a>(
+    ptr: *const c_char,
+) -> Result<Option<&'a str>, Utf8Error> {
     if ptr.is_null() {
         return Ok(None);
     }
 
-    Ok(Some(
-        CStr::from_ptr(ptr)
-            .to_str()
-            .map_err(|_| Error::InvalidArgument)?,
-    ))
-}
-
-pub(crate) fn str_to_c_string(s: &str) -> Result<CString> {
-    CString::new(s.as_bytes()).map_err(|_| Error::InvalidArgument)
+    CStr::from_ptr(ptr).to_str().map(Some)
 }
 
 pub(crate) fn str_to_ptr(s: &str) -> *mut c_char {
-    str_to_c_string(s)
+    CString::new(s.as_bytes())
         .map(CString::into_raw)
         .unwrap_or(ptr::null_mut())
 }

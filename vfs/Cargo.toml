@@ -16,7 +16,6 @@ harness = false
 [dependencies]
 camino = "1.0.9"
 ouisync-lib = { package = "ouisync", path = "../lib" }
-ouisync-bridge = { path = "../bridge" }
 slab = "0.4.6"
 tokio = { workspace = true }
 tracing = { workspace = true }

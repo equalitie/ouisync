@@ -7,7 +7,6 @@ use crate::{
 use anyhow::Result;
 use ouisync_bridge::{
     config::{ConfigError, ConfigKey},
-    error::Error,
     logger::{LogFormat, Logger},
     transport::RemoteServer,
 };
@@ -75,7 +74,7 @@ impl ServerContainer {
         Self::default()
     }
 
-    pub async fn init(&self, state: Arc<State>) -> Result<(), Error> {
+    pub async fn init(&self, state: Arc<State>) -> Result<()> {
         let entry = state.config.entry(BIND_RPC_KEY);
         let addrs = match entry.get().await {
             Ok(addrs) => addrs,
@@ -89,11 +88,7 @@ impl ServerContainer {
         Ok(())
     }
 
-    pub async fn set(
-        &self,
-        state: Arc<State>,
-        addrs: &[SocketAddr],
-    ) -> Result<Vec<SocketAddr>, Error> {
+    pub async fn set(&self, state: Arc<State>, addrs: &[SocketAddr]) -> Result<Vec<SocketAddr>> {
         let entry = state.config.entry(BIND_RPC_KEY);
 
         let (handles, addrs) = start(state, addrs).await?;
@@ -110,7 +105,7 @@ impl ServerContainer {
 async fn start(
     state: Arc<State>,
     addrs: &[SocketAddr],
-) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>), Error> {
+) -> Result<(Vec<ScopedAbortHandle>, Vec<SocketAddr>)> {
     let mut handles = Vec::with_capacity(addrs.len());
     let mut local_addrs = Vec::with_capacity(addrs.len());
 

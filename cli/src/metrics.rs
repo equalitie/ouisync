@@ -2,6 +2,7 @@ use crate::{
     geo_ip::{CountryCode, GeoIp},
     state::State,
 };
+use anyhow::Result;
 use hyper::{
     server::{conn::AddrIncoming, Server},
     service::{make_service_fn, service_fn},
@@ -10,10 +11,7 @@ use hyper::{
 use hyper_rustls::TlsAcceptor;
 use metrics::{Gauge, Key, KeyName, Label, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
-use ouisync_bridge::{
-    config::{ConfigError, ConfigKey},
-    error::Error,
-};
+use ouisync_bridge::config::{ConfigError, ConfigKey};
 use ouisync_lib::{network::PeerState, PeerInfoCollector, PublicRuntimeId};
 use scoped_task::ScopedAbortHandle;
 use std::{
@@ -47,7 +45,7 @@ impl MetricsServer {
         }
     }
 
-    pub async fn init(&self, state: &State) -> Result<(), Error> {
+    pub async fn init(&self, state: &State) -> Result<()> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         let addr = match entry.get().await {
@@ -64,7 +62,7 @@ impl MetricsServer {
         Ok(())
     }
 
-    pub async fn bind(&self, state: &State, addr: Option<SocketAddr>) -> Result<(), Error> {
+    pub async fn bind(&self, state: &State, addr: Option<SocketAddr>) -> Result<()> {
         let entry = state.config.entry(BIND_METRICS_KEY);
 
         if let Some(addr) = addr {
@@ -84,7 +82,7 @@ impl MetricsServer {
     }
 }
 
-async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle, Error> {
+async fn start(state: &State, addr: SocketAddr) -> Result<ScopedAbortHandle> {
     let recorder = PrometheusBuilder::new().build_recorder();
     let recorder_handle = recorder.handle();
 

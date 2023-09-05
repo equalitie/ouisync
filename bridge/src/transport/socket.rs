@@ -1,11 +1,8 @@
 //! Low-level Client and Server tha wraps Stream/Sink of bytes. Used to implement some higher-level
 //! clients/servers
 
-use super::Handler;
-use crate::{
-    error::{Error, ErrorCode, Result},
-    protocol::ServerMessage,
-};
+use super::{Handler, TransportError};
+use crate::protocol::ServerMessage;
 use bytes::{Bytes, BytesMut};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{de::DeserializeOwned, Serialize};
@@ -40,7 +37,7 @@ pub mod server_connection {
                     let task = async move {
                         let result = match result {
                             Ok(request) => handler.handle(request, notification_tx).await,
-                            Err(error) => Err(error),
+                            Err(error) => Err(error.into()),
                         };
 
                         (id, result)
@@ -51,7 +48,7 @@ pub mod server_connection {
                 notification = notification_rx.recv() => {
                     // unwrap is OK because the sender exists at this point.
                     let (id, notification) = notification.unwrap();
-                    let message = ServerMessage::<H::Response>::notification(notification);
+                    let message = ServerMessage::<H::Response, H::Error>::notification(notification);
                     send(&mut socket, id, message).await;
                 }
                 Some((id, result)) = request_handlers.next() => {
@@ -63,12 +60,12 @@ pub mod server_connection {
     }
 }
 
-pub struct SocketClient<Socket, Request, Response> {
-    request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response>>)>,
+pub struct SocketClient<Socket, Request, Response, Error> {
+    request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response, Error>>)>,
     _socket: PhantomData<Socket>,
 }
 
-impl<Socket, Request, Response> SocketClient<Socket, Request, Response>
+impl<Socket, Request, Response, Error> SocketClient<Socket, Request, Response, Error>
 where
     Socket: Stream<Item = io::Result<BytesMut>>
         + Sink<Bytes, Error = io::Error>
@@ -77,6 +74,7 @@ where
         + 'static,
     Request: Serialize + Send + 'static,
     Response: DeserializeOwned + Send + 'static,
+    Error: From<TransportError> + DeserializeOwned + Send + 'static,
 {
     pub fn new(socket: Socket) -> Self {
         let (request_tx, request_rx) = mpsc::channel(1);
@@ -89,37 +87,41 @@ where
         }
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
             .send((request, response_tx))
             .await
-            .map_err(|_| Error::ConnectionLost)?;
+            .map_err(|_| TransportError::ConnectionLost)?;
 
-        match response_rx.await.map_err(|_| Error::ConnectionLost) {
+        match response_rx
+            .await
+            .map_err(|_| TransportError::ConnectionLost)
+        {
             Ok(result) => result,
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         }
     }
 }
 
-struct Worker<Socket, Request, Response> {
+struct Worker<Socket, Request, Response, Error> {
     running: bool,
-    request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
+    request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response, Error>>)>,
     socket: Socket,
-    pending_requests: HashMap<u64, oneshot::Sender<Result<Response>>>,
+    pending_requests: HashMap<u64, oneshot::Sender<Result<Response, Error>>>,
     next_message_id: u64,
 }
 
-impl<Socket, Request, Response> Worker<Socket, Request, Response>
+impl<Socket, Request, Response, Error> Worker<Socket, Request, Response, Error>
 where
     Socket: Stream<Item = io::Result<BytesMut>> + Sink<Bytes, Error = io::Error> + Unpin + Send,
     Request: Serialize,
     Response: DeserializeOwned,
+    Error: From<TransportError> + DeserializeOwned,
 {
     fn new(
-        request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response>>)>,
+        request_rx: mpsc::Receiver<(Request, oneshot::Sender<Result<Response, Error>>)>,
         socket: Socket,
     ) -> Self {
         Self {
@@ -147,7 +149,7 @@ where
 
     async fn handle_request(
         &mut self,
-        request: Option<(Request, oneshot::Sender<Result<Response>>)>,
+        request: Option<(Request, oneshot::Sender<Result<Response, Error>>)>,
     ) {
         let Some((request, response_tx)) = request else {
             self.running = false;
@@ -165,7 +167,7 @@ where
 
     async fn handle_server_message(
         &mut self,
-        message: Option<(u64, Result<ServerMessage<Response>>)>,
+        message: Option<(u64, ServerMessageResult<Response, Error>)>,
     ) {
         let Some((message_id, message)) = message else {
             self.running = false;
@@ -179,24 +181,22 @@ where
 
         let response = match message {
             Ok(ServerMessage::Success(response)) => Ok(response),
-            Ok(ServerMessage::Failure { code, message }) => {
-                Err(Error::RequestFailed { code, message })
+            Ok(ServerMessage::Failure(error)) => Err(error),
+            Ok(ServerMessage::Notification(_)) => {
+                tracing::error!("notifications are not supported yet");
+                return;
             }
-            Ok(ServerMessage::Notification(_)) => Err(Error::RequestFailed {
-                code: ErrorCode::OperationNotSupported,
-                message: "notifications not supported yet".to_owned(),
-            }),
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         };
 
         response_tx.send(response).ok();
     }
 }
 
-async fn receive<R, M>(reader: &mut R) -> Option<(u64, Result<M>)>
+async fn receive<R, T>(reader: &mut R) -> Option<(u64, Result<T, TransportError>)>
 where
     R: Stream<Item = io::Result<BytesMut>> + Unpin,
-    M: DeserializeOwned,
+    T: DeserializeOwned,
 {
     loop {
         let buffer = match reader.try_next().await {
@@ -220,7 +220,7 @@ where
 
         let body = rmp_serde::from_slice(&buffer[8..]).map_err(|error| {
             tracing::error!(?error, "failed to decode message body");
-            Error::MalformedRequest(error)
+            TransportError::MalformedMessage
         });
 
         return Some((id, body));
@@ -249,3 +249,5 @@ where
 
     true
 }
+
+type ServerMessageResult<R, E> = Result<ServerMessage<R, E>, TransportError>;

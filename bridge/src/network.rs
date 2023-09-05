@@ -1,7 +1,4 @@
-use crate::{
-    config::{ConfigKey, ConfigStore},
-    error::{Error, Result},
-};
+use crate::config::{ConfigKey, ConfigStore};
 use ouisync_lib::network::{peer_addr::PeerAddr, Network};
 use serde::{Deserialize, Serialize};
 use std::{io, net::SocketAddr, num::ParseIntError};
@@ -167,10 +164,10 @@ pub async fn remove_user_provided_peers(
 /// it and don't have to wait for it to be discovered (e.g. on the DHT).
 ///
 /// NOTE: Currently this is not persisted.
-pub async fn add_storage_server(network: &Network, host: &str) -> Result<()> {
-    let (hostname, port) = split_port(host).map_err(|_| {
+pub async fn add_storage_server(network: &Network, host: &str) -> Result<(), io::Error> {
+    let (hostname, port) = split_port(host).map_err(|error| {
         tracing::error!(host, "invalid storage server host");
-        Error::InvalidArgument
+        io::Error::new(io::ErrorKind::InvalidInput, error)
     })?;
     let port = port.unwrap_or(DEFAULT_STORAGE_SERVER_PORT);
 

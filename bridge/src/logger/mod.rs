@@ -6,11 +6,10 @@ mod default;
 
 mod common;
 
-use crate::error::{Error, Result};
 use ouisync_lib::StateMonitor;
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt, fs,
+    fmt, fs, io,
     panic::{self, PanicInfo},
     path::Path,
     str::FromStr,
@@ -31,9 +30,9 @@ impl Logger {
         path: Option<&Path>,
         root_monitor: Option<StateMonitor>,
         format: LogFormat,
-    ) -> Result<Self> {
+    ) -> Result<Self, io::Error> {
         if let Some(parent) = path.and_then(|path| path.parent()) {
-            fs::create_dir_all(parent).map_err(Error::InitializeLogger)?;
+            fs::create_dir_all(parent)?;
         }
 
         let inner = Inner::new(path, format)?;
