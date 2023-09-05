@@ -6,8 +6,8 @@ env:
   PROPTEST_CASES: 32
 
 jobs:
-  build_and_test:
-    name: OuiSync
+  check_and_test_on_linux:
+    name: Check and run tests on linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -46,3 +46,16 @@ jobs:
       - name: "Run cli integration tests"
         run: cargo test -p ouisync-cli --test cli
 
+  check_on_windows:
+    name: Check on windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: clippy
+      # TODO: cache
+      - name: "Run clippy"
+        run: cargo clippy --all-targets
