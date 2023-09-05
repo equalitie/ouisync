@@ -27,7 +27,7 @@ struct RepoMap {
     // Invariant that must hold: if there exists a key in `name_to_repo`, then there must exist a
     // exactly one entry in `path_to_name` with the same value.
     name_to_repo: HashMap<U16CString, Arc<VirtualFilesystem>>,
-    path_to_name: HashMap<Utf8PathBuf, U16CString>,
+    path_to_name: HashMap<PathBuf, U16CString>,
 }
 
 impl RepoMap {
@@ -132,7 +132,7 @@ impl MultiRepoMount for MultiRepoVFS {
         })
     }
 
-    fn insert(&self, store_path: Utf8PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
         let name = match store_path.file_stem() {
             Some(name) => name,
             None => {
@@ -198,7 +198,7 @@ impl MultiRepoMount for MultiRepoVFS {
         Ok(())
     }
 
-    fn remove(&self, store_path: &Utf8Path) -> Result<(), io::Error> {
+    fn remove(&self, store_path: &Path) -> Result<(), io::Error> {
         let mut repos_lock = self.repos.write().unwrap();
         let RepoMap {
             name_to_repo,

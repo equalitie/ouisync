@@ -4,13 +4,12 @@ use crate::{
     protocol::remote::{Request, Response, ServerError},
     transport::RemoteClient,
 };
-use camino::Utf8PathBuf;
 use futures_util::future;
 use ouisync_lib::{
     crypto::Password, Access, AccessMode, AccessSecrets, LocalSecret, ReopenToken, Repository,
     RepositoryParams, ShareToken, StateMonitor, StorageSize,
 };
-use std::{borrow::Cow, io, sync::Arc, time::Duration};
+use std::{borrow::Cow, io, path::PathBuf, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio_rustls::rustls;
 
@@ -48,15 +47,14 @@ pub enum MirrorError {
 /// None                 |  any                   |  write         |  read without password, require password for writing
 /// any                  |  any                   |  write         |  read with password, write with (same or different) password
 pub async fn create(
-    // TODO: does this need to be utf8?
-    store: Utf8PathBuf,
+    store: PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
     share_token: Option<ShareToken>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
-    let params = RepositoryParams::new(store.into_std_path_buf())
+    let params = RepositoryParams::new(store)
         .with_device_id(device_id::get_or_create(config).await?)
         .with_parent_monitor(repos_monitor.clone());
 
@@ -86,13 +84,12 @@ pub async fn create(
 
 /// Opens an existing repository.
 pub async fn open(
-    // TODO: does this need to be utf8?
-    store: Utf8PathBuf,
+    store: PathBuf,
     local_password: Option<String>,
     config: &ConfigStore,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, OpenError> {
-    let params = RepositoryParams::new(store.into_std_path_buf())
+    let params = RepositoryParams::new(store)
         .with_device_id(device_id::get_or_create(config).await?)
         .with_parent_monitor(repos_monitor.clone());
 
@@ -106,12 +103,11 @@ pub async fn open(
 }
 
 pub async fn reopen(
-    store: Utf8PathBuf,
+    store: PathBuf,
     token: Vec<u8>,
     repos_monitor: &StateMonitor,
 ) -> Result<Repository, ouisync_lib::Error> {
-    let params =
-        RepositoryParams::new(store.into_std_path_buf()).with_parent_monitor(repos_monitor.clone());
+    let params = RepositoryParams::new(store).with_parent_monitor(repos_monitor.clone());
     let token = ReopenToken::decode(&token)?;
     let repository = Repository::reopen(&params, token).await?;
 

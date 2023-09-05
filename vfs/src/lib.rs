@@ -22,9 +22,13 @@ pub use dummy::MultiRepoVFS;
 #[cfg(test)]
 mod tests;
 
-use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_lib::Repository;
-use std::{future::Future, path::Path, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 use thiserror::Error;
 
 pub trait MultiRepoMount {
@@ -34,9 +38,9 @@ pub trait MultiRepoMount {
     where
         Self: Sized;
 
-    fn insert(&self, store_path: Utf8PathBuf, repo: Arc<Repository>) -> Result<(), MountError>;
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), MountError>;
 
-    fn remove(&self, store_path: &Utf8Path) -> Result<(), MountError>;
+    fn remove(&self, store_path: &Path) -> Result<(), MountError>;
 }
 
 #[derive(Debug, Error)]

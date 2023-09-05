@@ -14,6 +14,7 @@ use ouisync_vfs::MountGuard;
 use std::{
     borrow::{Borrow, Cow},
     collections::{btree_map::Entry, BTreeMap},
+    ffi::OsStr,
     fmt, io, mem,
     ops::{Bound, Deref},
     path::{Path, PathBuf},
@@ -426,15 +427,9 @@ pub(crate) async fn find_all(
             continue;
         }
 
-        let path: &Utf8Path = match entry.path().try_into() {
-            Ok(path) => path,
-            Err(_) => {
-                tracing::error!(path = ?entry.path(), "Invalid repository path - not utf8");
-                continue;
-            }
-        };
+        let path = entry.path();
 
-        if path.extension() != Some(DB_EXTENSION) {
+        if path.extension() != Some(OsStr::new(DB_EXTENSION)) {
             continue;
         }
 
@@ -458,7 +453,8 @@ pub(crate) async fn find_all(
             .strip_prefix(&dirs.store_dir)
             .unwrap_or(path)
             .with_extension("")
-            .into_string()
+            .to_string_lossy()
+            .into_owned()
             .try_into()
             // This unwrap should be ok because RepositoryName is only not allowed to start with
             // "/" or contain "..", none of which can happen here.

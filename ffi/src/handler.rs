@@ -42,7 +42,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 share_token,
             } => repository::create(
                 &self.state,
-                path,
+                path.into_std_path_buf(),
                 read_password,
                 write_password,
                 share_token,
@@ -50,7 +50,9 @@ impl ouisync_bridge::transport::Handler for Handler {
             .await?
             .into(),
             Request::RepositoryOpen { path, password } => {
-                repository::open(&self.state, path, password).await?.into()
+                repository::open(&self.state, path.into_std_path_buf(), password)
+                    .await?
+                    .into()
             }
             Request::RepositoryClose(handle) => {
                 repository::close(&self.state, handle).await?.into()
@@ -59,7 +61,9 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::create_reopen_token(&self.state, handle).into()
             }
             Request::RepositoryReopen { path, token } => {
-                repository::reopen(&self.state, path, token).await?.into()
+                repository::reopen(&self.state, path.into_std_path_buf(), token)
+                    .await?
+                    .into()
             }
             Request::RepositorySubscribe(handle) => {
                 repository::subscribe(&self.state, notification_tx, handle).into()

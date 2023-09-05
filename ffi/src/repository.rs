@@ -10,18 +10,18 @@ use ouisync_lib::{
     network::{self, Registration},
     path, AccessMode, Event, Payload, Progress, Repository, ShareToken,
 };
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast::error::RecvError;
 
 pub(crate) struct RepositoryHolder {
-    pub store_path: Utf8PathBuf,
+    pub store_path: PathBuf,
     pub repository: Arc<Repository>,
     pub registration: Registration,
 }
 
 pub(crate) async fn create(
     state: &State,
-    store_path: Utf8PathBuf,
+    store_path: PathBuf,
     local_read_password: Option<String>,
     local_write_password: Option<String>,
     share_token: Option<ShareToken>,
@@ -54,7 +54,7 @@ pub(crate) async fn create(
 /// Opens an existing repository.
 pub(crate) async fn open(
     state: &State,
-    store_path: Utf8PathBuf,
+    store_path: PathBuf,
     local_password: Option<String>,
 ) -> Result<Handle<RepositoryHolder>, Error> {
     let repository = repository::open(
@@ -100,7 +100,7 @@ pub(crate) fn create_reopen_token(state: &State, handle: Handle<RepositoryHolder
 
 pub(crate) async fn reopen(
     state: &State,
-    store_path: Utf8PathBuf,
+    store_path: PathBuf,
     token: Vec<u8>,
 ) -> Result<Handle<RepositoryHolder>, ouisync_lib::Error> {
     let repository = repository::reopen(store_path.clone(), token, &state.repos_monitor).await?;

@@ -1,7 +1,11 @@
 use crate::{MountError, MultiRepoMount};
-use camino::{Utf8Path, Utf8PathBuf};
 use ouisync_lib::Repository;
-use std::{future::Future, path::Path, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 // TODO: Implement this
 pub struct MultiRepoVFS {}
@@ -13,11 +17,11 @@ impl MultiRepoMount for MultiRepoVFS {
         todo!()
     }
 
-    fn insert(&self, _store_path: Utf8PathBuf, _repo: Arc<Repository>) -> Result<(), MountError> {
+    fn insert(&self, _store_path: PathBuf, _repo: Arc<Repository>) -> Result<(), MountError> {
         todo!()
     }
 
-    fn remove(&self, _store_path: &Utf8Path) -> Result<(), MountError> {
+    fn remove(&self, _store_path: &Path) -> Result<(), MountError> {
         todo!()
     }
 }
