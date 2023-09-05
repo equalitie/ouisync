@@ -138,7 +138,8 @@ impl ReadLock {
 
         let Some(state) = shared
             .get_mut(&self.branch_id)
-            .and_then(|states| states.get_mut(&self.blob_id)) else {
+            .and_then(|states| states.get_mut(&self.blob_id))
+        else {
             unreachable!();
         };
 
@@ -164,7 +165,8 @@ impl Clone for ReadLock {
 
         let Some(state) = shared
             .get_mut(&self.branch_id)
-            .and_then(|states| states.get_mut(&self.blob_id)) else {
+            .and_then(|states| states.get_mut(&self.blob_id))
+        else {
             unreachable!();
         };
 

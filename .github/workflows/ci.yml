@@ -33,7 +33,7 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: "Run clippy"
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets --no-deps
 
       - name: "Run unit tests"
         run: cargo test --lib
@@ -68,7 +68,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --all-targets
+          args: --all-targets --no-deps
 
   check_on_android:
     name: check (android)
@@ -94,5 +94,5 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --package ouisync --target aarch64-linux-android --all-targets
+          args: --package ouisync --target aarch64-linux-android --all-targets --no-deps
           use-cross: true

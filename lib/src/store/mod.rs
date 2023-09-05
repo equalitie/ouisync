@@ -280,7 +280,8 @@ impl Reader {
 
         let result = block::read(self.db(), id, content).await;
 
-        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await? {
+        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await?
+        {
             block_tracker.require(*id);
         }
 
