@@ -4,8 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use ouisync_bridge::{
-    error::{Error, Result},
-    protocol::remote::{Request, Response},
+    protocol::remote::{Request, Response, ServerError},
     transport::NotificationSender,
 };
 use ouisync_lib::{AccessMode, RepositoryId, ShareToken};
@@ -31,18 +30,18 @@ impl RemoteHandler {
 impl ouisync_bridge::transport::Handler for RemoteHandler {
     type Request = Request;
     type Response = Response;
+    type Error = ServerError;
 
     async fn handle(
         &self,
         request: Self::Request,
         _notification_tx: &NotificationSender,
-    ) -> Result<Self::Response> {
+    ) -> Result<Self::Response, Self::Error> {
         tracing::debug!(?request);
 
         let Some(state) = self.state.upgrade() else {
             tracing::error!("can't handle request - shutting down");
-            // TODO: return more appropriate error (ShuttingDown or similar)
-            return Err(Error::ForbiddenRequest);
+            return Err(ServerError::ShuttingDown);
         };
 
         match request {
@@ -63,14 +62,17 @@ impl ouisync_bridge::transport::Handler for RemoteHandler {
                 let store_path = state.store_path(name.as_ref());
 
                 let repository = ouisync_bridge::repository::create(
-                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
+                    store_path
+                        .try_into()
+                        .map_err(|_| ServerError::InvalidArgument)?,
                     None,
                     None,
                     Some(share_token),
                     &state.config,
                     &state.repositories_monitor,
                 )
-                .await?;
+                .await
+                .map_err(|error| ServerError::CreateRepository(error.to_string()))?;
 
                 tracing::info!(%name, "repository created");
 

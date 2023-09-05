@@ -1,14 +1,10 @@
 use crate::{
-    protocol::{QuotaInfo, Request, Response},
+    protocol::{Error, QuotaInfo, Request, Response},
     repository::{self, RepositoryHolder, RepositoryName, OPEN_ON_START},
     state::State,
 };
 use async_trait::async_trait;
-use ouisync_bridge::{
-    error::{Error, Result},
-    network,
-    transport::NotificationSender,
-};
+use ouisync_bridge::{network, transport::NotificationSender};
 use ouisync_lib::{PeerAddr, ShareToken};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -31,14 +27,15 @@ impl LocalHandler {
 impl ouisync_bridge::transport::Handler for LocalHandler {
     type Request = Request;
     type Response = Response;
+    type Error = Error;
 
     async fn handle(
         &self,
         request: Self::Request,
         _notification_tx: &NotificationSender,
-    ) -> Result<Self::Response> {
+    ) -> Result<Self::Response, Self::Error> {
         match request {
-            Request::Start { .. } => Err(Error::ForbiddenRequest),
+            Request::Start { .. } => unimplemented!(),
             Request::BindRpc { addrs } => Ok(self
                 .state
                 .rpc_servers
@@ -62,7 +59,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                     .as_deref()
                     .map(str::parse::<ShareToken>)
                     .transpose()
-                    .map_err(|_| Error::InvalidArgument)?;
+                    .map_err(|error| Error::new(format!("invalid share token: {error}")))?;
 
                 let name = match (name, &share_token) {
                     (Some(name), _) => name,
@@ -81,7 +78,9 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let write_password = write_password.or(password);
 
                 let repository = ouisync_bridge::repository::create(
-                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
+                    store_path.try_into().map_err(|error| {
+                        Error::new(format!("invalid repository store path: {error}"))
+                    })?,
                     read_password,
                     write_password,
                     share_token,
@@ -112,9 +111,7 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
             Request::Delete { name } => {
                 self.state.repositories.remove(&name);
 
-                repository::delete_store(&self.state.store_dir, &name)
-                    .await
-                    .map_err(Error::Io)?;
+                repository::delete_store(&self.state.store_dir, &name).await?;
 
                 Ok(().into())
             }
@@ -128,7 +125,9 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 let store_path = self.state.store_path(&name);
 
                 let repository = ouisync_bridge::repository::open(
-                    store_path.try_into().map_err(|_| Error::InvalidArgument)?,
+                    store_path.try_into().map_err(|error| {
+                        Error::new(format!("invalid repository store path: {error}"))
+                    })?,
                     password,
                     &self.state.config,
                     &self.state.repositories_monitor,
@@ -176,22 +175,23 @@ impl ouisync_bridge::transport::Handler for LocalHandler {
                 password,
             } => {
                 let holder = self.state.repositories.find(&name)?;
-
-                ouisync_bridge::repository::create_share_token(
+                let token = ouisync_bridge::repository::create_share_token(
                     &holder.repository,
                     password,
                     mode,
                     Some(name),
                 )
-                .await
-                .map(Into::into)
+                .await?;
+
+                Ok(token.into())
             }
             Request::Mount { name, path, all: _ } => {
                 if let Some(name) = name {
                     let holder = self.state.repositories.find(&name)?;
 
                     let mount_point = if let Some(path) = &path {
-                        path.to_str().ok_or(Error::InvalidArgument)?
+                        path.to_str()
+                            .ok_or_else(|| Error::new("invalid mount point"))?
                     } else {
                         ""
                     };

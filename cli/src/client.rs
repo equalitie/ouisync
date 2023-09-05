@@ -1,7 +1,7 @@
 use crate::{
     handler::local::LocalHandler,
     options::Dirs,
-    protocol::{Request, Response},
+    protocol::{Error, Request, Response},
     state::State,
     transport::{local::LocalClient, native::NativeClient},
 };
@@ -85,7 +85,7 @@ enum Client {
 }
 
 impl Client {
-    async fn invoke(&self, request: Request) -> ouisync_bridge::error::Result<Response> {
+    async fn invoke(&self, request: Request) -> Result<Response, Error> {
         match self {
             Self::Local(client) => client.invoke(request).await,
             Self::Native(client) => client.invoke(request).await,

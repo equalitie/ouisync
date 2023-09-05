@@ -1,12 +1,14 @@
 use crate::{
-    directory, file, network,
+    directory,
+    error::Error,
+    file, network,
     protocol::{Request, Response},
     repository, share_token,
     state::State,
     state_monitor,
 };
 use async_trait::async_trait;
-use ouisync_bridge::{error::Result, transport::NotificationSender};
+use ouisync_bridge::transport::NotificationSender;
 use ouisync_lib::PeerAddr;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -25,12 +27,13 @@ impl Handler {
 impl ouisync_bridge::transport::Handler for Handler {
     type Request = Request;
     type Response = Response;
+    type Error = Error;
 
     async fn handle(
         &self,
         request: Self::Request,
         notification_tx: &NotificationSender,
-    ) -> Result<Self::Response> {
+    ) -> Result<Self::Response, Self::Error> {
         let response = match request {
             Request::RepositoryCreate {
                 path,
@@ -53,7 +56,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                 repository::close(&self.state, handle).await?.into()
             }
             Request::RepositoryCreateReopenToken(handle) => {
-                repository::create_reopen_token(&self.state, handle)?.into()
+                repository::create_reopen_token(&self.state, handle).into()
             }
             Request::RepositoryReopen { path, token } => {
                 repository::reopen(&self.state, path, token).await?.into()

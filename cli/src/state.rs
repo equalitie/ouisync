@@ -5,10 +5,10 @@ use crate::{
     server::ServerContainer,
     transport::tls,
 };
+use anyhow::{format_err, Result};
 use futures_util::future;
 use ouisync_bridge::{
     config::ConfigStore,
-    error::Result,
     network::{self, NetworkDefaults},
     transport,
 };
@@ -145,11 +145,10 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
             cert_path.display()
         );
 
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("no certificates found in {}", cert_path.display()),
-        )
-        .into());
+        return Err(format_err!(
+            "no certificates found in {}",
+            cert_path.display()
+        ));
     }
 
     let keys = tls::load_keys(&key_path).await.map_err(|error| {
@@ -167,19 +166,16 @@ async fn make_server_config(config_dir: &Path) -> Result<Arc<rustls::ServerConfi
             cert_path.display()
         );
 
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("no keys found in {}", key_path.display()),
-        )
+        format_err!("no keys found in {}", key_path.display())
     })?;
 
-    transport::make_server_config(certs, key)
+    Ok(transport::make_server_config(certs, key)?)
 }
 
 async fn make_client_config(config_dir: &Path) -> Result<Arc<rustls::ClientConfig>> {
     // Load custom root certificates (if any)
     let additional_root_certs = load_certificates(&config_dir.join("root_certs")).await?;
-    transport::make_client_config(&additional_root_certs)
+    Ok(transport::make_client_config(&additional_root_certs)?)
 }
 
 async fn load_certificates(root_dir: &Path) -> Result<Vec<Certificate>> {

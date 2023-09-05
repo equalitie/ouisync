@@ -2,16 +2,13 @@
 
 use crate::{
     handler::local::LocalHandler,
-    protocol::{Request, Response},
+    protocol::{Error, Request, Response},
 };
 use interprocess::local_socket::{
     tokio::{LocalSocketListener, LocalSocketStream},
     ToLocalSocketName,
 };
-use ouisync_bridge::{
-    error::Result,
-    transport::{socket_server_connection, SocketClient},
-};
+use ouisync_bridge::transport::{socket_server_connection, SocketClient};
 use std::{fs, io, path::PathBuf};
 use tokio::task::JoinSet;
 use tokio_util::{
@@ -86,7 +83,7 @@ impl Drop for LocalServer {
 }
 
 pub(crate) struct LocalClient {
-    inner: SocketClient<Socket, Request, Response>,
+    inner: SocketClient<Socket, Request, Response, Error>,
 }
 
 impl LocalClient {
@@ -99,7 +96,7 @@ impl LocalClient {
         })
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
         self.inner.invoke(request).await
     }
 }

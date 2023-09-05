@@ -6,8 +6,8 @@ env:
   PROPTEST_CASES: 32
 
 jobs:
-  build_and_test:
-    name: OuiSync
+  check_and_test_on_linux:
+    name: check and test (linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -46,3 +46,24 @@ jobs:
       - name: "Run cli integration tests"
         run: cargo test -p ouisync-cli --test cli
 
+  check_on_windows:
+    name: check (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: clippy
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~\cargo\bin
+            ~\cargo\registry\index
+            ~\cargo\egistry\cache
+            ~\cargo\git\db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+      - name: "Run clippy"
+        run: cargo clippy --all-targets

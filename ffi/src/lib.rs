@@ -4,6 +4,7 @@
 mod utils;
 mod dart;
 mod directory;
+mod error;
 mod file;
 mod handler;
 mod network;
@@ -17,6 +18,7 @@ mod transport;
 
 use crate::{
     dart::{Port, PortSender},
+    error::{ErrorCode, ToErrorCode},
     handler::Handler,
     state::State,
     transport::{ClientSender, Server},
@@ -25,23 +27,22 @@ use crate::{
 #[cfg(unix)]
 use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
-use ouisync_bridge::{
-    error::{Error, ErrorCode, Result, ToErrorCode},
-    logger::{LogFormat, Logger},
-};
+use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
 use ouisync_vfs::MountError;
 #[cfg(unix)]
 use std::os::raw::c_int;
 use std::{
     ffi::CString,
-    mem,
+    io, mem,
     os::raw::{c_char, c_void},
     path::PathBuf,
     ptr, slice,
+    str::Utf8Error,
     sync::Arc,
     time::Duration,
 };
+use thiserror::Error;
 use tokio::{
     runtime::{self, Runtime},
     time,
@@ -54,8 +55,8 @@ pub struct SessionCreateResult {
     error_message: *const c_char,
 }
 
-impl From<Result<Session>> for SessionCreateResult {
-    fn from(result: Result<Session>) -> Self {
+impl From<Result<Session, SessionError>> for SessionCreateResult {
+    fn from(result: Result<Session, SessionError>) -> Self {
         match result {
             Ok(session) => Self {
                 session: SessionHandle::new(Box::new(session)),
@@ -90,12 +91,12 @@ pub unsafe extern "C" fn session_create(
 
     let configs_path = match utils::ptr_to_str(configs_path) {
         Ok(configs_path) => PathBuf::from(configs_path),
-        Err(error) => return Err(error).into(),
+        Err(error) => return Err(SessionError::from(error)).into(),
     };
 
     let log_path = match utils::ptr_to_maybe_str(log_path) {
         Ok(log_path) => log_path.map(PathBuf::from),
-        Err(error) => return Err(error).into(),
+        Err(error) => return Err(SessionError::from(error)).into(),
     };
 
     let (server, client_tx) = Server::new(port_sender, server_tx_port);
@@ -205,7 +206,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
-    port: Port<Result<()>>,
+    port: Port<Result<(), ouisync_lib::Error>>,
 ) {
     use std::os::unix::io::FromRawFd;
     use tokio::fs;
@@ -218,7 +219,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 
     session.runtime.spawn(async move {
         let mut src = src.file.lock().await;
-        let result = src.copy_to_writer(&mut dst).await.map_err(Error::from);
+        let result = src.copy_to_writer(&mut dst).await;
 
         port_sender.send_result(port, result);
     });
@@ -299,7 +300,7 @@ impl Session {
         log_path: Option<PathBuf>,
         port_sender: PortSender,
         client_sender: ClientSender,
-    ) -> Result<Self> {
+    ) -> Result<Self, SessionError> {
         let root_monitor = StateMonitor::make_root();
 
         // Init logger
@@ -307,13 +308,14 @@ impl Session {
             log_path.as_deref(),
             Some(root_monitor.clone()),
             LogFormat::Human,
-        )?;
+        )
+        .map_err(SessionError::InitializeLogger)?;
 
         // Create runtime
         let runtime = runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(Error::InitializeRuntime)?;
+            .map_err(SessionError::InitializeRuntime)?;
         let _enter = runtime.enter(); // runtime context is needed for some of the following calls
 
         let state = Arc::new(State::new(configs_path, root_monitor));
@@ -376,3 +378,13 @@ impl Session {
 }
 
 pub type SessionHandle = UniqueHandle<Session>;
+
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error("failed to initialize logger")]
+    InitializeLogger(#[source] io::Error),
+    #[error("failed to initialize runtime")]
+    InitializeRuntime(#[source] io::Error),
+    #[error("invalid utf8 string")]
+    InvalidUtf8(#[from] Utf8Error),
+}

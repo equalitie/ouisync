@@ -1,10 +1,7 @@
 //! Client and Server than run on different devices.
 
 use super::{socket_server_connection, Handler, SocketClient};
-use crate::{
-    error::Result,
-    protocol::remote::{Request, Response},
-};
+use crate::protocol::remote::{Request, Response, ServerError};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -36,7 +33,7 @@ const MAX_VERSION: u64 = 0;
 pub fn make_server_config(
     cert_chain: Vec<rustls::Certificate>,
     key: rustls::PrivateKey,
-) -> Result<Arc<rustls::ServerConfig>> {
+) -> io::Result<Arc<rustls::ServerConfig>> {
     make_server_config_with_versions(cert_chain, key, MIN_VERSION..=MAX_VERSION)
 }
 
@@ -44,7 +41,7 @@ fn make_server_config_with_versions(
     cert_chain: Vec<rustls::Certificate>,
     key: rustls::PrivateKey,
     versions: RangeInclusive<u64>,
-) -> Result<Arc<rustls::ServerConfig>> {
+) -> io::Result<Arc<rustls::ServerConfig>> {
     let mut config = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
@@ -64,14 +61,14 @@ fn make_server_config_with_versions(
 /// Shared config for `RemoteClient`
 pub fn make_client_config(
     additional_root_certs: &[rustls::Certificate],
-) -> Result<Arc<rustls::ClientConfig>> {
+) -> io::Result<Arc<rustls::ClientConfig>> {
     make_client_config_with_versions(additional_root_certs, MIN_VERSION..=MAX_VERSION)
 }
 
 fn make_client_config_with_versions(
     additional_root_certs: &[rustls::Certificate],
     versions: RangeInclusive<u64>,
-) -> Result<Arc<rustls::ClientConfig>> {
+) -> io::Result<Arc<rustls::ClientConfig>> {
     let mut root_cert_store = rustls::RootCertStore::empty();
 
     // Add default root certificates
@@ -130,7 +127,10 @@ impl RemoteServer {
         self.local_addr
     }
 
-    pub async fn run<H: Handler>(self, handler: H) {
+    pub async fn run<H>(self, handler: H)
+    where
+        H: Handler<Error = ServerError>,
+    {
         let mut connections = JoinSet::new();
 
         loop {
@@ -175,7 +175,7 @@ async fn run_connection<H: Handler>(stream: TcpStream, tls_acceptor: TlsAcceptor
 }
 
 pub struct RemoteClient {
-    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response>,
+    inner: SocketClient<Socket<MaybeTlsStream<TcpStream>>, Request, Response, ServerError>,
 }
 
 impl RemoteClient {
@@ -199,7 +199,7 @@ impl RemoteClient {
         Ok(Self { inner })
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, ServerError> {
         self.inner.invoke(request).await
     }
 }
@@ -377,8 +377,13 @@ mod tests {
     impl Handler for TestHandler {
         type Request = Request;
         type Response = Response;
+        type Error = ServerError;
 
-        async fn handle(&self, _: Self::Request, _: &NotificationSender) -> Result<Self::Response> {
+        async fn handle(
+            &self,
+            _: Self::Request,
+            _: &NotificationSender,
+        ) -> Result<Self::Response, Self::Error> {
             self.received.fetch_add(1, Ordering::Relaxed);
             Ok(Response::None)
         }

@@ -103,7 +103,7 @@ impl<T> ConfigEntry<T> {
         }
 
         let content = serde_json::to_string_pretty(value)
-            .map_err(|error| io::Error::new(ErrorKind::Other, error))?;
+            .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
 
         file.write_all(b"\n").await?;
         file.write_all(content.as_bytes()).await?;

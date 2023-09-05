@@ -2,7 +2,9 @@ use clap::{builder::BoolishValueParser, Subcommand};
 use ouisync_bridge::logger::LogFormat;
 use ouisync_lib::{AccessMode, PeerAddr, PeerInfo, StorageSize};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{fmt, io, net::SocketAddr, path::PathBuf, time::Duration};
+
+use crate::repository::{FindError, InvalidRepositoryName};
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
@@ -319,6 +321,42 @@ impl fmt::Display for Response {
         }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Error(String);
+
+impl Error {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for Error {}
+
+macro_rules! impl_from {
+    ($ty:ty) => {
+        impl From<$ty> for Error {
+            fn from(src: $ty) -> Self {
+                Self(src.to_string())
+            }
+        }
+    };
+}
+
+impl_from!(InvalidRepositoryName);
+impl_from!(FindError);
+impl_from!(ouisync_lib::Error);
+impl_from!(ouisync_bridge::config::ConfigError);
+impl_from!(ouisync_bridge::repository::OpenError);
+impl_from!(ouisync_bridge::transport::TransportError);
+impl_from!(anyhow::Error);
+impl_from!(io::Error);
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct QuotaInfo {

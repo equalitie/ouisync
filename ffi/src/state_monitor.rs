@@ -1,15 +1,15 @@
 use crate::state::{State, SubscriptionHandle};
-use ouisync_bridge::{error::Result, protocol::Notification, transport::NotificationSender};
+use ouisync_bridge::{protocol::Notification, transport::NotificationSender};
 use ouisync_lib::{MonitorId, StateMonitor};
 use std::time::Duration;
 use tokio::time;
 
 /// Retrieve a state monitor corresponding to the `path`.
-pub(crate) fn get(state: &State, path: Vec<MonitorId>) -> Result<StateMonitor> {
-    Ok(state
+pub(crate) fn get(state: &State, path: Vec<MonitorId>) -> Result<StateMonitor, ouisync_lib::Error> {
+    state
         .root_monitor
         .locate(path)
-        .ok_or(ouisync_lib::Error::EntryNotFound)?)
+        .ok_or(ouisync_lib::Error::EntryNotFound)
 }
 
 /// Subscribe to "on change" events happening inside a monitor corresponding to the `path`.
@@ -17,7 +17,7 @@ pub(crate) fn subscribe(
     state: &State,
     notification_tx: &NotificationSender,
     path: Vec<MonitorId>,
-) -> Result<SubscriptionHandle> {
+) -> Result<SubscriptionHandle, ouisync_lib::Error> {
     let monitor = state
         .root_monitor
         .locate(path)

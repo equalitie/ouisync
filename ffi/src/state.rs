@@ -4,7 +4,7 @@ use crate::{
     repository::RepositoryHolder,
 };
 use once_cell::sync::OnceCell;
-use ouisync_bridge::{config::ConfigStore, error::Result, transport};
+use ouisync_bridge::{config::ConfigStore, transport};
 use ouisync_lib::{
     deadlock::{BlockingMutex, BlockingRwLockReadGuard},
     network::Network,
@@ -14,6 +14,7 @@ use ouisync_vfs::MultiRepoVFS;
 use scoped_task::ScopedJoinHandle;
 use std::{
     collections::{BTreeSet, HashMap},
+    io,
     path::PathBuf,
     sync::Arc,
 };
@@ -61,7 +62,7 @@ impl State {
         self.tasks.remove(handle);
     }
 
-    pub fn get_remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>> {
+    pub fn get_remote_client_config(&self) -> Result<Arc<rustls::ClientConfig>, io::Error> {
         self.remote_client_config
             .get_or_try_init(|| transport::make_client_config(&[]))
             .cloned()

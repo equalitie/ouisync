@@ -1,8 +1,7 @@
 use crate::{registry::Handle, repository::RepositoryHolder, state::State};
 use camino::Utf8PathBuf;
-use ouisync_bridge::error::{Error, Result};
 use ouisync_lib::{deadlock::AsyncMutex, Branch, File};
-use std::{convert::TryInto, io::SeekFrom};
+use std::io::SeekFrom;
 
 pub struct FileHolder {
     pub(crate) file: AsyncMutex<File>,
@@ -13,7 +12,7 @@ pub(crate) async fn open(
     state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<Handle<FileHolder>> {
+) -> Result<Handle<FileHolder>, ouisync_lib::Error> {
     let repo = state.get_repository(repo);
     let local_branch = repo.repository.local_branch().ok();
 
@@ -31,7 +30,7 @@ pub(crate) async fn create(
     state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<Handle<FileHolder>> {
+) -> Result<Handle<FileHolder>, ouisync_lib::Error> {
     let repo = state.get_repository(repo);
     let local_branch = repo.repository.local_branch()?;
 
@@ -50,7 +49,7 @@ pub(crate) async fn remove(
     state: &State,
     repo: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     state
         .get_repository(repo)
         .repository
@@ -59,7 +58,10 @@ pub(crate) async fn remove(
     Ok(())
 }
 
-pub(crate) async fn close(state: &State, handle: Handle<FileHolder>) -> Result<()> {
+pub(crate) async fn close(
+    state: &State,
+    handle: Handle<FileHolder>,
+) -> Result<(), ouisync_lib::Error> {
     if let Some(holder) = state.files.remove(handle) {
         holder.file.lock().await.flush().await?
     }
@@ -67,7 +69,10 @@ pub(crate) async fn close(state: &State, handle: Handle<FileHolder>) -> Result<(
     Ok(())
 }
 
-pub(crate) async fn flush(state: &State, handle: Handle<FileHolder>) -> Result<()> {
+pub(crate) async fn flush(
+    state: &State,
+    handle: Handle<FileHolder>,
+) -> Result<(), ouisync_lib::Error> {
     state.files.get(handle).file.lock().await.flush().await?;
     Ok(())
 }
@@ -79,8 +84,8 @@ pub(crate) async fn read(
     handle: Handle<FileHolder>,
     offset: u64,
     len: u64,
-) -> Result<Vec<u8>> {
-    let len: usize = len.try_into().map_err(|_| Error::InvalidArgument)?;
+) -> Result<Vec<u8>, ouisync_lib::Error> {
+    let len = len as usize;
     let mut buffer = vec![0; len];
 
     let holder = state.files.get(handle);
@@ -101,7 +106,7 @@ pub(crate) async fn write(
     handle: Handle<FileHolder>,
     offset: u64,
     buffer: Vec<u8>,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.files.get(handle);
     let mut file = holder.file.lock().await;
 
@@ -121,7 +126,11 @@ pub(crate) async fn write(
 }
 
 /// Truncate the file to `len` bytes.
-pub(crate) async fn truncate(state: &State, handle: Handle<FileHolder>, len: u64) -> Result<()> {
+pub(crate) async fn truncate(
+    state: &State,
+    handle: Handle<FileHolder>,
+    len: u64,
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.files.get(handle);
 
     let mut file = holder.file.lock().await;
@@ -144,7 +153,10 @@ pub(crate) async fn len(state: &State, handle: Handle<FileHolder>) -> u64 {
 }
 
 /// Retrieve the sync progress of the file.
-pub(crate) async fn progress(state: &State, handle: Handle<FileHolder>) -> Result<u64> {
+pub(crate) async fn progress(
+    state: &State,
+    handle: Handle<FileHolder>,
+) -> Result<u64, ouisync_lib::Error> {
     // Don't keep the file locked while progress is being awaited.
     let progress = state.files.get(handle).file.lock().await.progress();
     let progress = progress.await?;

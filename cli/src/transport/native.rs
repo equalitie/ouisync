@@ -4,12 +4,9 @@
 
 use crate::{
     handler::local::LocalHandler,
-    protocol::{Request, Response},
+    protocol::{Error, Request, Response},
 };
-use ouisync_bridge::{
-    error::Result,
-    transport::{Handler as _, NotificationSender},
-};
+use ouisync_bridge::transport::{Handler as _, NotificationSender};
 use tokio::sync::mpsc;
 
 pub(crate) struct NativeClient {
@@ -27,7 +24,7 @@ impl NativeClient {
         }
     }
 
-    pub async fn invoke(&self, request: Request) -> Result<Response> {
+    pub async fn invoke(&self, request: Request) -> Result<Response, Error> {
         self.handler.handle(request, &self.notification_tx).await
     }
 

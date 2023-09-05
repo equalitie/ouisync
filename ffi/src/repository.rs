@@ -1,11 +1,11 @@
 use crate::{
+    error::Error,
     registry::Handle,
     state::{State, SubscriptionHandle},
 };
 use camino::Utf8PathBuf;
 use ouisync_bridge::{
     constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
-    error::Result,
     protocol::Notification,
     repository,
     transport::NotificationSender,
@@ -29,7 +29,7 @@ pub(crate) async fn create(
     local_read_password: Option<String>,
     local_write_password: Option<String>,
     share_token: Option<ShareToken>,
-) -> Result<Handle<RepositoryHolder>> {
+) -> Result<Handle<RepositoryHolder>, Error> {
     let repository = repository::create(
         store_path.clone(),
         local_read_password,
@@ -60,7 +60,7 @@ pub(crate) async fn open(
     state: &State,
     store_path: Utf8PathBuf,
     local_password: Option<String>,
-) -> Result<Handle<RepositoryHolder>> {
+) -> Result<Handle<RepositoryHolder>, Error> {
     let repository = repository::open(
         store_path.clone(),
         local_password,
@@ -81,7 +81,10 @@ pub(crate) async fn open(
 }
 
 /// Closes a repository.
-pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn close(
+    state: &State,
+    handle: Handle<RepositoryHolder>,
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.remove_repository(handle);
 
     if let Some(holder) = holder {
@@ -91,21 +94,19 @@ pub(crate) async fn close(state: &State, handle: Handle<RepositoryHolder>) -> Re
     Ok(())
 }
 
-pub(crate) fn create_reopen_token(
-    state: &State,
-    handle: Handle<RepositoryHolder>,
-) -> Result<Vec<u8>> {
-    let holder = state.get_repository(handle);
-    let token = holder.repository.reopen_token().encode();
-
-    Ok(token)
+pub(crate) fn create_reopen_token(state: &State, handle: Handle<RepositoryHolder>) -> Vec<u8> {
+    state
+        .get_repository(handle)
+        .repository
+        .reopen_token()
+        .encode()
 }
 
 pub(crate) async fn reopen(
     state: &State,
     store_path: Utf8PathBuf,
     token: Vec<u8>,
-) -> Result<Handle<RepositoryHolder>> {
+) -> Result<Handle<RepositoryHolder>, ouisync_lib::Error> {
     let repository = repository::reopen(store_path.clone(), token, &state.repos_monitor).await?;
     let repository = Arc::new(repository);
     let registration = state.network.register(repository.handle()).await;
@@ -124,7 +125,7 @@ pub(crate) async fn set_read_access(
     handle: Handle<RepositoryHolder>,
     local_read_password: Option<String>,
     share_token: Option<ShareToken>,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.get_repository(handle);
     repository::set_read_access(&holder.repository, local_read_password, share_token).await
 }
@@ -135,7 +136,7 @@ pub(crate) async fn set_read_and_write_access(
     local_old_rw_password: Option<String>,
     local_new_rw_password: Option<String>,
     share_token: Option<ShareToken>,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.get_repository(handle);
     repository::set_read_and_write_access(
         &holder.repository,
@@ -148,7 +149,10 @@ pub(crate) async fn set_read_and_write_access(
 
 /// Note that after removing read key the user may still read the repository if they previously had
 /// write key set up.
-pub(crate) async fn remove_read_key(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn remove_read_key(
+    state: &State,
+    handle: Handle<RepositoryHolder>,
+) -> Result<(), ouisync_lib::Error> {
     state
         .get_repository(handle)
         .repository
@@ -161,7 +165,7 @@ pub(crate) async fn remove_read_key(state: &State, handle: Handle<RepositoryHold
 pub(crate) async fn remove_write_key(
     state: &State,
     handle: Handle<RepositoryHolder>,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     state
         .get_repository(handle)
         .repository
@@ -174,24 +178,24 @@ pub(crate) async fn remove_write_key(
 pub(crate) async fn requires_local_password_for_reading(
     state: &State,
     handle: Handle<RepositoryHolder>,
-) -> Result<bool> {
-    Ok(state
+) -> Result<bool, ouisync_lib::Error> {
+    state
         .get_repository(handle)
         .repository
         .requires_local_password_for_reading()
-        .await?)
+        .await
 }
 
 /// Returns true if the repository requires a local password to be opened for writing.
 pub(crate) async fn requires_local_password_for_writing(
     state: &State,
     handle: Handle<RepositoryHolder>,
-) -> Result<bool> {
-    Ok(state
+) -> Result<bool, ouisync_lib::Error> {
+    state
         .get_repository(handle)
         .repository
         .requires_local_password_for_writing()
-        .await?)
+        .await
 }
 
 /// Return the info-hash of the repository formatted as hex string. This can be used as a globally
@@ -209,7 +213,7 @@ pub(crate) fn info_hash(state: &State, handle: Handle<RepositoryHolder>) -> Stri
 pub(crate) async fn database_id(
     state: &State,
     handle: Handle<RepositoryHolder>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u8>, ouisync_lib::Error> {
     let holder = state.get_repository(handle);
     Ok(holder.repository.database_id().await?.as_ref().to_vec())
 }
@@ -220,13 +224,13 @@ pub(crate) async fn entry_type(
     state: &State,
     handle: Handle<RepositoryHolder>,
     path: Utf8PathBuf,
-) -> Result<Option<u8>> {
+) -> Result<Option<u8>, ouisync_lib::Error> {
     let holder = state.get_repository(handle);
 
     match holder.repository.lookup_type(path).await {
         Ok(entry_type) => Ok(Some(entry_type_to_num(entry_type))),
         Err(ouisync_lib::Error::EntryNotFound) => Ok(None),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error),
     }
 }
 
@@ -236,7 +240,7 @@ pub(crate) async fn move_entry(
     handle: Handle<RepositoryHolder>,
     src: Utf8PathBuf,
     dst: Utf8PathBuf,
-) -> Result<()> {
+) -> Result<(), ouisync_lib::Error> {
     let holder = state.get_repository(handle);
     let (src_dir, src_name) = path::decompose(&src).ok_or(ouisync_lib::Error::EntryNotFound)?;
     let (dst_dir, dst_name) = path::decompose(&dst).ok_or(ouisync_lib::Error::EntryNotFound)?;
@@ -320,7 +324,7 @@ pub(crate) async fn create_share_token(
     password: Option<String>,
     access_mode: AccessMode,
     name: Option<String>,
-) -> Result<String> {
+) -> Result<String, ouisync_lib::Error> {
     let holder = state.get_repository(repository);
     repository::create_share_token(&holder.repository, password, access_mode, name).await
 }
@@ -333,16 +337,16 @@ pub(crate) fn access_mode(state: &State, handle: Handle<RepositoryHolder>) -> u8
 pub(crate) async fn sync_progress(
     state: &State,
     handle: Handle<RepositoryHolder>,
-) -> Result<Progress> {
-    Ok(state
+) -> Result<Progress, ouisync_lib::Error> {
+    state
         .get_repository(handle)
         .repository
         .sync_progress()
-        .await?)
+        .await
 }
 
 /// Mirror the repository to the storage servers
-pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> Result<()> {
+pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> Result<(), Error> {
     let holder = state.get_repository(handle);
     let config = state.get_remote_client_config()?;
     let hosts: Vec<_> = state
@@ -353,7 +357,9 @@ pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> R
         .cloned()
         .collect();
 
-    ouisync_bridge::repository::mirror(&holder.repository, config, &hosts).await
+    ouisync_bridge::repository::mirror(&holder.repository, config, &hosts).await?;
+
+    Ok(())
 }
 
 pub(crate) fn entry_type_to_num(entry_type: EntryType) -> u8 {

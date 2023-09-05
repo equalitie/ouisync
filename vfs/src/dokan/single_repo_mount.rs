@@ -299,9 +299,7 @@ pub fn mount(
         shutdown();
     });
 
-    if let Err(error) = on_mount_rx.recv().unwrap() {
-        return Err(error);
-    }
+    on_mount_rx.recv().unwrap()?;
 
     Ok(MountGuard {
         unmount_tx,

@@ -234,9 +234,9 @@ struct Handler {
 }
 
 impl Handler {
-    fn get_repo_and_path<'a>(
+    fn get_repo_and_path(
         &self,
-        path: &'a U16CStr,
+        path: &U16CStr,
     ) -> OperationResult<(Option<Arc<VirtualFilesystem>>, U16CString)> {
         let (repo_name, path) = match decompose_path(path)? {
             (Some(repo_name), path) => (repo_name, path),
@@ -284,6 +284,7 @@ impl MultiRepoEntryHandle {
 }
 
 impl Handler {
+    #[allow(clippy::too_many_arguments)]
     fn create_file_<'c, 'h: 'c>(
         &'h self,
         file_name: &U16CStr,
@@ -1460,10 +1461,10 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for Handler {
 // Input looks like "\", "\desktop.ini", "\reponame\desktop.ini",...
 // Returns (Some(repository name), path in repository) if there is at least one subdirectory, and
 // (None, path to element in root) if no repository is used.
-fn decompose_path<'a>(path: &'a U16CStr) -> OperationResult<(Option<U16CString>, U16CString)> {
+fn decompose_path(path: &U16CStr) -> OperationResult<(Option<U16CString>, U16CString)> {
     let slice = path.as_slice();
 
-    if slice.len() < 1 {
+    if slice.is_empty() {
         tracing::error!("MultiRepoVFS path is too short, should start with '\\' {path:?}");
         return Err(STATUS_INVALID_PARAMETER);
     }
