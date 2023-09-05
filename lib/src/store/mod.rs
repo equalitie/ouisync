@@ -41,6 +41,7 @@ use crate::{
         MultiBlockPresence, Proof, RootNode, Summary, INNER_LAYER_COUNT,
     },
     storage_size::StorageSize,
+    sync::broadcast_hash_set,
 };
 use futures_util::{Stream, TryStreamExt};
 use std::{
@@ -50,25 +51,25 @@ use std::{
     time::Duration,
 };
 // TODO: Consider creating an async `RwLock` in the `deadlock` module and use it here.
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::RwLock;
 
 /// Data store
 #[derive(Clone)]
 pub(crate) struct Store {
     db: db::Pool,
     cache: Arc<Cache>,
-    pub client_reload_index_tx: broadcast::Sender<PublicKey>,
+    pub client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Arc<RwLock<Option<Arc<BlockExpirationTracker>>>>,
 }
 
 impl Store {
     pub fn new(db: db::Pool) -> Self {
+        let client_reload_index_tx = broadcast_hash_set::channel().0;
+
         Self {
             db,
             cache: Arc::new(Cache::new()),
-            // TODO: The broadcast channel is not the best structure for this use case. Ideally
-            // we'd have something like the `watch` but that can be edited until it's received.
-            client_reload_index_tx: broadcast::channel(1024).0,
+            client_reload_index_tx,
             block_expiration_tracker: Arc::new(RwLock::new(None)),
         }
     }
@@ -240,7 +241,7 @@ impl Store {
 pub(crate) struct Reader {
     inner: Handle,
     cache: CacheTransaction,
-    client_reload_index_tx: broadcast::Sender<PublicKey>,
+    client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
@@ -321,7 +322,7 @@ impl Reader {
         tx.commit().await?;
 
         for branch_id in branches {
-            self.client_reload_index_tx.send(branch_id).unwrap_or(0);
+            self.client_reload_index_tx.insert(&branch_id);
         }
 
         Ok(true)
