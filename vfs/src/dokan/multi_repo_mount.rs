@@ -1,5 +1,5 @@
-use super::{super::MountError, EntryHandle, EntryIdGenerator, VirtualFilesystem};
-use camino::Utf8PathBuf;
+use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
+use crate::{MountError, MultiRepoMount};
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
     FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
@@ -9,7 +9,9 @@ use ouisync_lib::{deadlock::BlockingRwLock, Repository};
 use std::io;
 use std::{
     collections::{hash_map, HashMap},
-    path::Path,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc,
@@ -17,6 +19,7 @@ use std::{
     thread,
     time::UNIX_EPOCH,
 };
+use tokio::runtime::Handle as RuntimeHandle;
 use widestring::{U16CStr, U16CString, U16Str};
 use winapi::{shared::ntstatus::*, um::winnt};
 
@@ -24,7 +27,7 @@ struct RepoMap {
     // Invariant that must hold: if there exists a key in `name_to_repo`, then there must exist a
     // exactly one entry in `path_to_name` with the same value.
     name_to_repo: HashMap<U16CString, Arc<VirtualFilesystem>>,
-    path_to_name: HashMap<Utf8PathBuf, U16CString>,
+    path_to_name: HashMap<PathBuf, U16CString>,
 }
 
 impl RepoMap {
@@ -38,99 +41,98 @@ impl RepoMap {
 
 pub struct MultiRepoVFS {
     entry_id_generator: Arc<EntryIdGenerator>,
-    runtime_handle: tokio::runtime::Handle,
+    runtime_handle: RuntimeHandle,
     repos: Arc<BlockingRwLock<RepoMap>>,
     unmount_tx: mpsc::SyncSender<()>,
     // It's `Option` so we can move it out of there in `Drop::drop`.
     join_handle: Option<thread::JoinHandle<()>>,
 }
 
-impl MultiRepoVFS {
-    pub async fn mount(
-        runtime_handle: tokio::runtime::Handle,
+impl MultiRepoMount for MultiRepoVFS {
+    fn create(
         mount_point: impl AsRef<Path>,
-    ) -> Result<Self, MountError> {
-        let options = MountOptions {
-            single_thread: false,
-            flags: super::default_mount_flags(),
-            ..Default::default()
-        };
+    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
+        let mount_point = U16CString::from_os_str(mount_point.as_ref().as_os_str());
 
-        let mount_point = match U16CString::from_os_str(mount_point.as_ref().as_os_str()) {
-            Ok(mount_point) => mount_point,
-            Err(error) => {
-                tracing::error!("Failed to convert mount point to U16CString: {error:?}");
-                return Err(MountError::FailedToParseMountPoint);
-            }
-        };
+        Box::pin(async move {
+            let options = MountOptions {
+                single_thread: false,
+                flags: super::default_mount_flags(),
+                ..Default::default()
+            };
 
-        let (on_mount_tx, on_mount_rx) = tokio::sync::oneshot::channel();
-        let (unmount_tx, unmount_rx) = mpsc::sync_channel(1);
-
-        let entry_id_generator = Arc::new(EntryIdGenerator::new());
-        let repos = Arc::new(BlockingRwLock::new(RepoMap::new()));
-        let root_id = entry_id_generator.generate_id();
-
-        let join_handle = thread::spawn({
-            let repos = repos.clone();
-            move || {
-                // TODO: Ensure this is done only once.
-                init();
-
-                let handler = Handler {
-                    root_id,
-                    repos,
-                    next_debug_id: AtomicU64::new(0),
-                    debug_type: DebugType::None,
-                };
-
-                let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
-
-                let file_system = match mounter.mount() {
-                    Ok(file_system) => file_system,
-                    Err(error) => {
-                        tracing::error!("Failed to mount: {error:?}");
-                        on_mount_tx.send(Err(error)).unwrap_or(());
-                        return;
-                    }
-                };
-
-                // Tell the main thread we've successfully mounted.
-                on_mount_tx.send(Ok(())).unwrap_or(());
-
-                // Wait here to preserve `file_system`'s lifetime.
-                unmount_rx.recv().unwrap_or(());
-
-                // If we don't do this then dropping `file_system` will block.
-                if !unmount(&mount_point) {
-                    tracing::warn!("Failed to unmount {mount_point:?}");
+            let mount_point = match mount_point {
+                Ok(mount_point) => mount_point,
+                Err(error) => {
+                    tracing::error!("Failed to convert mount point to U16CString: {error:?}");
+                    return Err(MountError::InvalidMountPoint);
                 }
+            };
 
-                drop(file_system);
+            let (on_mount_tx, on_mount_rx) = tokio::sync::oneshot::channel();
+            let (unmount_tx, unmount_rx) = mpsc::sync_channel(1);
 
-                shutdown();
+            let entry_id_generator = Arc::new(EntryIdGenerator::new());
+            let repos = Arc::new(BlockingRwLock::new(RepoMap::new()));
+            let root_id = entry_id_generator.generate_id();
+
+            let join_handle = thread::spawn({
+                let repos = repos.clone();
+                move || {
+                    // TODO: Ensure this is done only once.
+                    init();
+
+                    let handler = Handler {
+                        root_id,
+                        repos,
+                        next_debug_id: AtomicU64::new(0),
+                        debug_type: DebugType::None,
+                    };
+
+                    let mut mounter = FileSystemMounter::new(&handler, &mount_point, &options);
+
+                    let file_system = match mounter.mount() {
+                        Ok(file_system) => file_system,
+                        Err(error) => {
+                            tracing::error!("Failed to mount: {error:?}");
+                            on_mount_tx.send(Err(error)).unwrap_or(());
+                            return;
+                        }
+                    };
+
+                    // Tell the main thread we've successfully mounted.
+                    on_mount_tx.send(Ok(())).unwrap_or(());
+
+                    // Wait here to preserve `file_system`'s lifetime.
+                    unmount_rx.recv().unwrap_or(());
+
+                    // If we don't do this then dropping `file_system` will block.
+                    if !unmount(&mount_point) {
+                        tracing::warn!("Failed to unmount {mount_point:?}");
+                    }
+
+                    drop(file_system);
+
+                    shutdown();
+                }
+            });
+
+            // Unwrap is OK because we make sure we always send to `on_mount_tx` above.
+            if let Err(error) = on_mount_rx.await.unwrap() {
+                return Err(error.into());
             }
-        });
 
-        // Unwrap is OK because we make sure we always send to `on_mount_tx` above.
-        if let Err(error) = on_mount_rx.await.unwrap() {
-            return Err(error.into());
-        }
-
-        Ok(Self {
-            entry_id_generator,
-            runtime_handle,
-            repos,
-            unmount_tx,
-            join_handle: Some(join_handle),
+            Ok(Self {
+                entry_id_generator,
+                runtime_handle: RuntimeHandle::current(),
+                repos,
+                unmount_tx,
+                join_handle: Some(join_handle),
+            })
         })
     }
 
-    pub fn add_repo(
-        &self,
-        store_path: Utf8PathBuf,
-        repo: Arc<Repository>,
-    ) -> Result<(), io::Error> {
+    fn insert(&self, store_path: PathBuf, repo: Arc<Repository>) -> Result<(), io::Error> {
         let name = match store_path.file_stem() {
             Some(name) => name,
             None => {
@@ -142,7 +144,7 @@ impl MultiRepoVFS {
             }
         };
 
-        let name = match U16CString::from_str(name) {
+        let name = match U16CString::from_os_str(name) {
             Ok(name) => name,
             Err(_) => {
                 return Err(io::Error::new(
@@ -196,16 +198,22 @@ impl MultiRepoVFS {
         Ok(())
     }
 
-    pub fn remove_repo(&self, store_path: Utf8PathBuf) {
+    fn remove(&self, store_path: &Path) -> Result<(), io::Error> {
         let mut repos_lock = self.repos.write().unwrap();
         let RepoMap {
             name_to_repo,
             path_to_name,
         } = &mut *repos_lock;
-        // Unwrap is OK due to the invariant in `RepoMap`.
-        let name = path_to_name.get(&store_path).unwrap();
+
+        let name = path_to_name.get(store_path).ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Repository {store_path:?} not found"),
+        ))?;
+
         name_to_repo.remove(name);
-        path_to_name.remove(&store_path);
+        path_to_name.remove(store_path);
+
+        Ok(())
     }
 }
 
@@ -1501,13 +1509,13 @@ fn decompose_path(path: &U16CStr) -> OperationResult<(Option<U16CString>, U16CSt
 impl From<FileSystemMountError> for MountError {
     fn from(error: FileSystemMountError) -> Self {
         match error {
-            FileSystemMountError::Start => MountError::Start,
-            FileSystemMountError::General => MountError::General,
-            FileSystemMountError::DriveLetter => MountError::DriveLetter,
+            FileSystemMountError::DriveLetter
+            | FileSystemMountError::Mount
+            | FileSystemMountError::MountPoint => MountError::InvalidMountPoint,
             FileSystemMountError::DriverInstall => MountError::DriverInstall,
-            FileSystemMountError::Mount => MountError::Mount,
-            FileSystemMountError::MountPoint => MountError::MountPoint,
-            FileSystemMountError::Version => MountError::Version,
+            FileSystemMountError::Start
+            | FileSystemMountError::General
+            | FileSystemMountError::Version => MountError::Backend(Box::new(error)),
         }
     }
 }

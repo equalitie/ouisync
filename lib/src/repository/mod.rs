@@ -174,14 +174,7 @@ impl Repository {
             BlockRequestMode::Greedy
         };
 
-
-        let vault = Vault::new(
-            *secrets.id(),
-            event_tx,
-            pool,
-            block_request_mode,
-            monitor,
-        );
+        let vault = Vault::new(*secrets.id(), event_tx, pool, block_request_mode, monitor);
 
         {
             let mut conn = vault.store().db().acquire().await?;

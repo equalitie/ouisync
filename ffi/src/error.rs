@@ -52,31 +52,9 @@ pub enum ErrorCode {
     /// Connection lost
     ConnectionLost = 14,
 
-    /// Failed to parse the mount point string
-    VfsFailedToParseMountPoint = 2048,
-
-    /// Mounting is not yes supported on this Operating System
-    VfsUnsupportedOs = 2048 + 1,
-
-    // These are equivalents of the dokan::file_system::FileSystemMountError errors
-    // https://github.com/dokan-dev/dokan-rust/blob/master/dokan/src/file_system.rs
-    /// A general error
-    VfsGeneral = 2048 + 3,
-    /// Bad drive letter
-    VfsDriveLetter = 2048 + 4,
-    /// Can't install the Dokan driver.
-    VfsDriverInstall = 2048 + 5,
-    /// The driver responds that something is wrong.
-    VfsStart = 2048 + 2,
-    /// Can't assign a drive letter or mount point.
-    ///
-    /// This probably means that the mount point is already used by another volume.
-    VfsMount = 2048 + 6,
-    /// The mount point is invalid.
-    VfsMountPoint = 2048 + 7,
-    /// The Dokan version that this wrapper is targeting is incompatible with the loaded Dokan
-    /// library.
-    VfsVersion = 2048 + 8,
+    VfsInvalidMountPoint = 2048,
+    VfsDriverInstall = 2048 + 1,
+    VfsBackend = 2048 + 2,
 
     /// Unspecified error
     Other = 65535,
@@ -158,15 +136,10 @@ impl ToErrorCode for OpenError {
 impl ToErrorCode for MountError {
     fn to_error_code(&self) -> ErrorCode {
         match self {
-            Self::FailedToParseMountPoint => ErrorCode::VfsFailedToParseMountPoint,
-            Self::UnsupportedOs => ErrorCode::VfsUnsupportedOs,
-            Self::Start => ErrorCode::VfsStart,
-            Self::General => ErrorCode::VfsGeneral,
-            Self::DriveLetter => ErrorCode::VfsDriveLetter,
+            Self::InvalidMountPoint => ErrorCode::VfsInvalidMountPoint,
+            Self::Unsupported => ErrorCode::OperationNotSupported,
             Self::DriverInstall => ErrorCode::VfsDriverInstall,
-            Self::Mount => ErrorCode::VfsMount,
-            Self::MountPoint => ErrorCode::VfsMountPoint,
-            Self::Version => ErrorCode::VfsVersion,
+            Self::Backend(_) => ErrorCode::VfsBackend,
         }
     }
 }

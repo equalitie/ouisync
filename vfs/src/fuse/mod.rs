@@ -1,7 +1,10 @@
 mod entry_map;
 mod inode;
+mod multi_repo_vfs;
 mod open_flags;
 mod utils;
+
+pub use multi_repo_vfs::MultiRepoVFS;
 
 use self::{
     entry_map::{EntryMap, FileHandle},

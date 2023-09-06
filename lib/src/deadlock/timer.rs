@@ -98,7 +98,7 @@ impl<T> Timer<T> {
                 entry.remove();
             }
 
-            let Some(Holder { payload, ..}) = inner.payloads.remove(&id) else {
+            let Some(Holder { payload, .. }) = inner.payloads.remove(&id) else {
                 unreachable!();
             };
 

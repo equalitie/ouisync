@@ -401,7 +401,7 @@ where
 
 // Gracefully terminate the process, unlike `Child::kill` which sends `SIGKILL` and thus doesn't
 // allow destructors to run.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "osx"))]
 fn terminate(process: &Child) {
     // SAFETY: we are just sending a `SIGTERM` signal to the process, there should be no reason for
     // undefined behaviour here.
@@ -410,7 +410,12 @@ fn terminate(process: &Child) {
     }
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
+fn terminate(_process: &Child) {
+    todo!()
+}
+
+#[cfg(target_os = "android")]
 fn terminate(_process: &Child) {
     todo!()
 }

@@ -33,7 +33,7 @@ jobs:
         run: sudo apt-get install libfuse-dev
 
       - name: "Run clippy"
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets --no-deps
 
       - name: "Run unit tests"
         run: cargo test --lib
@@ -61,9 +61,38 @@ jobs:
           path: |
             ~\cargo\bin
             ~\cargo\registry\index
-            ~\cargo\egistry\cache
+            ~\cargo\registry\cache
             ~\cargo\git\db
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-      - name: "Run clippy"
-        run: cargo clippy --all-targets
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --all-targets --no-deps
+
+  check_on_android:
+    name: check (android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: clippy
+          target: aarch64-linux-android
+          override: true
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.toml') }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --package ouisync --target aarch64-linux-android --all-targets --no-deps
+          use-cross: true

@@ -553,7 +553,9 @@ mod trash {
         }
 
         for (branch_id, locks) in locks {
-            let Ok(branch) = shared.get_branch(branch_id) else { continue };
+            let Ok(branch) = shared.get_branch(branch_id) else {
+                continue;
+            };
 
             for (blob_id, notify) in locks {
                 let mut blob_block_ids = match BlockIds::open(branch.clone(), blob_id).await {

@@ -1,4 +1,3 @@
-use ouisync_lib::deadlock::{BlockingRwLock, BlockingRwLockReadGuard};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -7,15 +6,15 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, RwLock,
     },
 };
 
-pub struct Registry<T>(BlockingRwLock<HashMap<u64, Arc<T>>>);
+pub struct Registry<T>(RwLock<HashMap<u64, Arc<T>>>);
 
 impl<T> Registry<T> {
     pub fn new() -> Self {
-        Self(BlockingRwLock::new(HashMap::new()))
+        Self(RwLock::new(HashMap::new()))
     }
 
     pub fn vacant_entry(&self) -> VacantEntry<T> {
@@ -44,8 +43,8 @@ impl<T> Registry<T> {
         }
     }
 
-    pub fn read(&self) -> BlockingRwLockReadGuard<HashMap<u64, Arc<T>>> {
-        self.0.read().unwrap()
+    pub fn get_all(&self) -> Vec<Arc<T>> {
+        self.0.read().unwrap().values().cloned().collect()
     }
 
     pub fn get(&self, handle: Handle<T>) -> Arc<T> {
