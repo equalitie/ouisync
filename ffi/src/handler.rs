@@ -172,7 +172,7 @@ impl ouisync_bridge::transport::Handler for Handler {
                     .await?
                     .into()
             }
-            Request::RepositoryMountAll { mount_point } => {
+            Request::RepositoryMountAll(mount_point) => {
                 self.state.mount_all(mount_point).await?.into()
             }
             Request::DirectoryCreate { repository, path } => {

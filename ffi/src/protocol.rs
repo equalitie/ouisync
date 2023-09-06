@@ -82,9 +82,7 @@ pub(crate) enum Request {
     RepositoryMirror {
         repository: Handle<RepositoryHolder>,
     },
-    RepositoryMountAll {
-        mount_point: PathBuf,
-    },
+    RepositoryMountAll(PathBuf),
     ShareTokenMode(#[serde(with = "as_str")] ShareToken),
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
