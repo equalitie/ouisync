@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod utils;
+mod constants;
 mod dart;
 mod directory;
 mod error;
@@ -15,6 +16,10 @@ mod share_token;
 mod state;
 mod state_monitor;
 mod transport;
+
+pub use constants::{
+    ACCESS_MODE_BLIND, ACCESS_MODE_READ, ACCESS_MODE_WRITE, ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE,
+};
 
 use crate::{
     dart::{Port, PortSender},

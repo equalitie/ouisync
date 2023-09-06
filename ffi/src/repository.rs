@@ -1,18 +1,14 @@
 use crate::{
+    constants,
     error::Error,
     registry::Handle,
     state::{State, SubscriptionHandle},
 };
 use camino::Utf8PathBuf;
-use ouisync_bridge::{
-    constants::{ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE},
-    protocol::Notification,
-    repository,
-    transport::NotificationSender,
-};
+use ouisync_bridge::{protocol::Notification, repository, transport::NotificationSender};
 use ouisync_lib::{
     network::{self, Registration},
-    path, AccessMode, EntryType, Event, Payload, Progress, Repository, ShareToken,
+    path, AccessMode, Event, Payload, Progress, Repository, ShareToken,
 };
 use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
@@ -228,7 +224,7 @@ pub(crate) async fn entry_type(
     let holder = state.get_repository(handle);
 
     match holder.repository.lookup_type(path).await {
-        Ok(entry_type) => Ok(Some(entry_type_to_num(entry_type))),
+        Ok(entry_type) => Ok(Some(constants::entry_type_to_num(entry_type))),
         Err(ouisync_lib::Error::EntryNotFound) => Ok(None),
         Err(error) => Err(error),
     }
@@ -360,11 +356,4 @@ pub(crate) async fn mirror(state: &State, handle: Handle<RepositoryHolder>) -> R
     ouisync_bridge::repository::mirror(&holder.repository, config, &hosts).await?;
 
     Ok(())
-}
-
-pub(crate) fn entry_type_to_num(entry_type: EntryType) -> u8 {
-    match entry_type {
-        EntryType::File => ENTRY_TYPE_FILE,
-        EntryType::Directory => ENTRY_TYPE_DIRECTORY,
-    }
 }
