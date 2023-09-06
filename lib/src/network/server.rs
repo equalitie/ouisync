@@ -11,7 +11,7 @@ use crate::{
     protocol::{BlockContent, BlockId, RootNode},
     repository::Vault,
     store,
-    sync::stream::RateLimit,
+    sync::stream::Throttle,
 };
 use futures_util::{
     stream::{self, FuturesUnordered},
@@ -253,7 +253,7 @@ impl<'a> Monitor<'a> {
     async fn run(self) -> Result<()> {
         self.handle_all_branches_changed().await?;
 
-        let mut events = pin!(RateLimit::throttle(
+        let mut events = pin!(Throttle::new(
             events(self.vault.event_tx.subscribe()),
             Duration::from_secs(1)
         ));

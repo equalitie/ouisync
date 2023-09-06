@@ -282,7 +282,6 @@ pub(crate) mod stream {
         ///
         /// ```ignore
         /// in:       |a|a|a|a|a| | | | | |a|a|a|a| | | |
-        /// debounce: | | | | | | |a| | | | | | | | |a| |
         /// throttle: |a| |a| |a| | | | | |a| |a| |a| | |
         /// ```
         ///
@@ -291,16 +290,14 @@ pub(crate) mod stream {
         ///
         /// ```ignore
         /// in:        |a|b|a|b| | | | |
-        /// debounced: | | | | | |a|b| |
         /// throttle:  |a| |a|b| | | | |
         /// ```
-        pub struct RateLimit<S>
+        pub struct Throttle<S>
         where
             S: Stream,
         {
             #[pin]
             inner: Fuse<S>,
-            strategy: RateLimitStrategy,
             period: Duration,
             items: IndexSet<S::Item>,
             #[pin]
@@ -308,30 +305,21 @@ pub(crate) mod stream {
         }
     }
 
-    impl<S> RateLimit<S>
+    impl<S> Throttle<S>
     where
         S: Stream,
     {
-        pub fn new(inner: S, strategy: RateLimitStrategy, period: Duration) -> Self {
+        pub fn new(inner: S, period: Duration) -> Self {
             Self {
                 inner: inner.fuse(),
-                strategy,
                 period,
                 items: IndexSet::new(),
                 sleep: None,
             }
         }
-
-        pub fn debounce(inner: S, period: Duration) -> Self {
-            Self::new(inner, RateLimitStrategy::Debounce, period)
-        }
-
-        pub fn throttle(inner: S, period: Duration) -> Self {
-            Self::new(inner, RateLimitStrategy::Throttle, period)
-        }
     }
 
-    impl<S> Stream for RateLimit<S>
+    impl<S> Stream for Throttle<S>
     where
         S: Stream,
         S::Item: Hash + Eq,
@@ -349,20 +337,14 @@ pub(crate) mod stream {
                 }
 
                 match this.inner.as_mut().poll_next(cx) {
-                    Poll::Ready(Some(item)) => match this.strategy {
-                        RateLimitStrategy::Debounce => {
+                    Poll::Ready(Some(item)) => {
+                        if this.sleep.is_none() {
                             this.sleep.set(Some(time::sleep(*this.period)));
+                            return Poll::Ready(Some(item));
+                        } else {
                             this.items.insert(item);
                         }
-                        RateLimitStrategy::Throttle => {
-                            if this.sleep.is_none() {
-                                this.sleep.set(Some(time::sleep(*this.period)));
-                                return Poll::Ready(Some(item));
-                            } else {
-                                this.items.insert(item);
-                            }
-                        }
-                    },
+                    }
                     Poll::Ready(None) => {
                         if this.sleep.is_some() {
                             this.sleep.set(None);
@@ -384,12 +366,6 @@ pub(crate) mod stream {
                 }
             }
         }
-    }
-
-    #[derive(Copy, Clone, Debug)]
-    pub enum RateLimitStrategy {
-        Debounce,
-        Throttle,
     }
 
     #[cfg(test)]
@@ -420,22 +396,13 @@ pub(crate) mod stream {
             ];
             future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
 
-            // debounced
-            let (tx, rx) = mpsc::channel(1);
-            let expected = [(0, ms(1200)), (0, ms(2700))];
-            future::join(
-                produce(tx, input),
-                verify(RateLimit::debounce(into_stream(rx), ms(1000)), expected),
-            )
-            .await;
-
             // FIXME:
             // // throttled
             // let (tx, rx) = mpsc::channel(1);
             // let expected = [(0, ms(0)), (0, ms(1000)), (0, ms(1700)), (0, ms(2700))];
             // future::join(
             //     produce(tx, input),
-            //     verify(RateLimit::throttle(into_stream(rx), ms(1000)), expected),
+            //     verify(Throttle::throttle(into_stream(rx), ms(1000)), expected),
             // )
             // .await;
         }
@@ -448,15 +415,6 @@ pub(crate) mod stream {
             let (tx, rx) = mpsc::channel(1);
             let expected = [(0, ms(0)), (1, ms(0)), (0, ms(0)), (1, ms(0))];
             future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
-
-            // debounced
-            let (tx, rx) = mpsc::channel(1);
-            let expected = [(0, ms(1000)), (1, ms(1000))];
-            future::join(
-                produce(tx, input),
-                verify(RateLimit::debounce(into_stream(rx), ms(1000)), expected),
-            )
-            .await;
         }
 
         fn ms(ms: u64) -> Duration {
