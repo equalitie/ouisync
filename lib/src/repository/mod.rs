@@ -44,7 +44,7 @@ use crate::{
     state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
-    sync::stream::RateLimit,
+    sync::stream::Throttle,
 };
 use camino::Utf8Path;
 use futures_util::{future, TryStreamExt};
@@ -866,7 +866,7 @@ async fn report_sync_progress(vault: Vault) {
             Err(RecvError::Closed) => None,
         }
     });
-    let events = RateLimit::throttle(events, Duration::from_secs(1));
+    let events = Throttle::new(events, Duration::from_secs(1));
     let mut events = pin!(events);
 
     while events.next().await.is_some() {
