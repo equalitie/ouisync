@@ -17,7 +17,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .with_src(Path::new("ffi").join("src").join("lib.rs"))
         .with_src(Path::new("bridge").join("src").join("constants.rs"))
-        .with_src(Path::new("bridge").join("src").join("error.rs"))
         .generate()?
         .write_to_file(output_path);
 

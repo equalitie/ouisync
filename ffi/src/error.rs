@@ -13,8 +13,8 @@ use thiserror::Error;
 #[derive(Debug, Error, Serialize, Deserialize)]
 #[error("{message}")]
 pub struct Error {
-    pub message: String,
     pub code: ErrorCode,
+    pub message: String,
 }
 
 #[derive(
@@ -183,8 +183,8 @@ where
 {
     fn from(src: T) -> Self {
         Self {
-            message: src.to_string(),
             code: src.to_error_code(),
+            message: src.to_string(),
         }
     }
 }
