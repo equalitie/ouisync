@@ -1,7 +1,5 @@
 use super::{EntryHandle, EntryIdGenerator, VirtualFilesystem};
 use crate::{MountError, MultiRepoMount};
-use async_trait::async_trait;
-use camino::{Utf8Path, Utf8PathBuf};
 use dokan::{
     init, shutdown, unmount, CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler,
     FileSystemMountError, FileSystemMounter, FileTimeOperation, FillDataResult, FindData,
@@ -11,7 +9,9 @@ use ouisync_lib::{deadlock::BlockingRwLock, Repository};
 use std::io;
 use std::{
     collections::{hash_map, HashMap},
-    path::Path,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc, Arc,
@@ -51,7 +51,7 @@ pub struct MultiRepoVFS {
 impl MultiRepoMount for MultiRepoVFS {
     fn create(
         mount_point: impl AsRef<Path>,
-    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>>>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Self, MountError>> + Send>> {
         let mount_point = U16CString::from_os_str(mount_point.as_ref().as_os_str());
 
         Box::pin(async move {
@@ -144,7 +144,7 @@ impl MultiRepoMount for MultiRepoVFS {
             }
         };
 
-        let name = match U16CString::from_str(name) {
+        let name = match U16CString::from_os_str(name) {
             Ok(name) => name,
             Err(_) => {
                 return Err(io::Error::new(
@@ -211,7 +211,7 @@ impl MultiRepoMount for MultiRepoVFS {
         ))?;
 
         name_to_repo.remove(name);
-        path_to_name.remove(&store_path);
+        path_to_name.remove(store_path);
 
         Ok(())
     }

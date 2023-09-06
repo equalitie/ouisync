@@ -1,0 +1,9 @@
+[target.x86_64-pc-windows-gnu]
+# The build.rs script in dokan-sys fails because it can't find 'run-detectors'
+# at '/opt/wine-stable/bin' event though it exists at '/usr/bin'.
+# Fix it with a symlink:
+pre-build = ["ln -s /usr/bin/run-detectors /opt/wine-stable/bin/run-detectors"]
+# Point this to where 'dokan.dll' is to skip building it from source. The dll
+# doesn't actually need to exists if one only wants to run 'cargo check' or
+# 'cargo clippy'.
+env = { passthrough = ["DokanLibrary2_LibraryPath_x64"] }
