@@ -9,64 +9,6 @@ use std::{
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
 
-/// MPMC broadcast channel
-pub mod broadcast {
-    use tokio::{
-        select,
-        sync::broadcast,
-        time::{self, Duration, Instant},
-    };
-
-    /// Adapter for `Receiver` which limits the rate at which messages are received. The messages
-    /// are not buffered - if the rate limit is exceeded, all but the last message are discarded.
-    pub(crate) struct ThrottleReceiver<T> {
-        rx: broadcast::Receiver<T>,
-        interval: Duration,
-        last_recv: Instant,
-    }
-
-    impl<T> ThrottleReceiver<T>
-    where
-        T: Clone,
-    {
-        pub fn new(inner: broadcast::Receiver<T>, interval: Duration) -> Self {
-            Self {
-                rx: inner,
-                interval,
-                last_recv: Instant::now()
-                    .checked_sub(interval)
-                    .expect("Interval should be smaller than the time since epoch"),
-            }
-        }
-
-        pub async fn recv(&mut self) -> Result<T, broadcast::error::RecvError> {
-            let mut item = None;
-            let end = self.last_recv + self.interval;
-
-            if Instant::now() < end {
-                loop {
-                    select! {
-                        _ = time::sleep_until(end) => break,
-                        result = self.rx.recv() => {
-                            item = Some(result?);
-                        }
-                    }
-                }
-            }
-
-            let item = if let Some(item) = item {
-                item
-            } else {
-                self.rx.recv().await?
-            };
-
-            self.last_recv = Instant::now();
-
-            Ok(item)
-        }
-    }
-}
-
 /// Similar to tokio::sync::watch, but has no initial value. Because there is no initial value the
 /// API must be sligthly different. In particular, we don't have the `borrow` function.
 pub(crate) mod uninitialized_watch {
@@ -320,5 +262,227 @@ pub(crate) mod broadcast_hash_set {
                 watch_rx,
             },
         )
+    }
+}
+
+pub(crate) mod stream {
+    use futures_util::{stream::Fuse, Stream, StreamExt};
+    use indexmap::IndexSet;
+    use pin_project_lite::pin_project;
+    use std::{
+        future::Future,
+        hash::Hash,
+        pin::Pin,
+        task::{ready, Context, Poll},
+    };
+    use tokio::time::{self, Duration, Sleep};
+
+    pin_project! {
+        /// Rate-limitting stream adapter.
+        ///
+        /// ```ignore
+        /// in:       |a|a|a|a|a| | | | | |a|a|a|a| | | |
+        /// debounce: | | | | | | |a| | | | | | | | |a| |
+        /// throttle: |a| |a| |a| | | | | |a| |a| |a| | |
+        /// ```
+        ///
+        /// Multiple occurences of the same item within the rate-limit period are reduced to a
+        /// single one but distinct items are preserved:
+        ///
+        /// ```ignore
+        /// in:        |a|b|a|b| | | | |
+        /// debounced: | | | | | |a|b| |
+        /// throttle:  |a| |a|b| | | | |
+        /// ```
+        pub struct RateLimit<S>
+        where
+            S: Stream,
+        {
+            #[pin]
+            inner: Fuse<S>,
+            strategy: RateLimitStrategy,
+            period: Duration,
+            items: IndexSet<S::Item>,
+            #[pin]
+            sleep: Option<Sleep>,
+        }
+    }
+
+    impl<S> RateLimit<S>
+    where
+        S: Stream,
+    {
+        pub fn new(inner: S, strategy: RateLimitStrategy, period: Duration) -> Self {
+            Self {
+                inner: inner.fuse(),
+                strategy,
+                period,
+                items: IndexSet::new(),
+                sleep: None,
+            }
+        }
+
+        pub fn debounce(inner: S, period: Duration) -> Self {
+            Self::new(inner, RateLimitStrategy::Debounce, period)
+        }
+
+        pub fn throttle(inner: S, period: Duration) -> Self {
+            Self::new(inner, RateLimitStrategy::Throttle, period)
+        }
+    }
+
+    impl<S> Stream for RateLimit<S>
+    where
+        S: Stream,
+        S::Item: Hash + Eq,
+    {
+        type Item = S::Item;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            let mut this = self.project();
+
+            loop {
+                if this.sleep.is_none() {
+                    if let Some(item) = this.items.pop() {
+                        return Poll::Ready(Some(item));
+                    }
+                }
+
+                match this.inner.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(item)) => match this.strategy {
+                        RateLimitStrategy::Debounce => {
+                            this.sleep.set(Some(time::sleep(*this.period)));
+                            this.items.insert(item);
+                        }
+                        RateLimitStrategy::Throttle => {
+                            if this.sleep.is_none() {
+                                this.sleep.set(Some(time::sleep(*this.period)));
+                                return Poll::Ready(Some(item));
+                            } else {
+                                this.items.insert(item);
+                            }
+                        }
+                    },
+                    Poll::Ready(None) => {
+                        if this.sleep.is_some() {
+                            this.sleep.set(None);
+                            this.items.reverse(); // keep the original order
+                            continue;
+                        } else {
+                            return Poll::Ready(None);
+                        }
+                    }
+                    Poll::Pending => (),
+                }
+
+                if let Some(sleep) = this.sleep.as_mut().as_pin_mut() {
+                    ready!(sleep.poll(cx));
+                    this.sleep.set(None);
+                    this.items.reverse(); // keep the original order
+                } else {
+                    return Poll::Pending;
+                }
+            }
+        }
+    }
+
+    #[derive(Copy, Clone, Debug)]
+    pub enum RateLimitStrategy {
+        Debounce,
+        Throttle,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use futures_util::{future, stream, StreamExt};
+        use std::fmt::Debug;
+        use tokio::{sync::mpsc, time::Instant};
+
+        #[tokio::test(start_paused = true)]
+        async fn rate_limit_equal_items() {
+            let input = [
+                (ms(0), 0),
+                (ms(100), 0),
+                (ms(100), 0),
+                (ms(1500), 0),
+                (ms(0), 0),
+            ];
+
+            // unlimitted
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [
+                (0, ms(0)),
+                (0, ms(100)),
+                (0, ms(200)),
+                (0, ms(1700)),
+                (0, ms(1700)),
+            ];
+            future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
+
+            // debounced
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(1200)), (0, ms(2700))];
+            future::join(
+                produce(tx, input),
+                verify(RateLimit::debounce(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            // FIXME:
+            // // throttled
+            // let (tx, rx) = mpsc::channel(1);
+            // let expected = [(0, ms(0)), (0, ms(1000)), (0, ms(1700)), (0, ms(2700))];
+            // future::join(
+            //     produce(tx, input),
+            //     verify(RateLimit::throttle(into_stream(rx), ms(1000)), expected),
+            // )
+            // .await;
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn rate_limit_inequal_items() {
+            let input = [(ms(0), 0), (ms(0), 1), (ms(0), 0), (ms(0), 1)];
+
+            // unlimitted
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (1, ms(0)), (0, ms(0)), (1, ms(0))];
+            future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
+
+            // debounced
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(1000)), (1, ms(1000))];
+            future::join(
+                produce(tx, input),
+                verify(RateLimit::debounce(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+        }
+
+        fn ms(ms: u64) -> Duration {
+            Duration::from_millis(ms)
+        }
+
+        fn into_stream<T>(rx: mpsc::Receiver<T>) -> impl Stream<Item = T> {
+            stream::unfold(rx, |mut rx| async move { Some((rx.recv().await?, rx)) })
+        }
+
+        async fn produce<T>(tx: mpsc::Sender<T>, input: impl IntoIterator<Item = (Duration, T)>) {
+            for (delay, item) in input {
+                time::sleep(delay).await;
+                tx.send(item).await.ok().unwrap();
+            }
+        }
+
+        async fn verify<T: Eq + Debug>(
+            stream: impl Stream<Item = T>,
+            expected: impl IntoIterator<Item = (T, Duration)>,
+        ) {
+            let start = Instant::now();
+            let actual: Vec<_> = stream.map(|item| (item, start.elapsed())).collect().await;
+            let expected: Vec<_> = expected.into_iter().collect();
+
+            assert_eq!(actual, expected);
+        }
     }
 }

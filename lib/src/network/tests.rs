@@ -374,7 +374,6 @@ async fn create_repository<R: Rng + CryptoRng>(
     let repository_id = RepositoryId::from(write_keys.public);
     let event_tx = EventSender::new(1);
 
-
     let state = Vault::new(
         repository_id,
         event_tx,
