@@ -1,3 +1,5 @@
+use std::{pin::pin, time::Duration};
+
 use super::{
     debug_payload::{DebugRequestPayload, DebugResponsePayload},
     message::{Content, Request, Response, ResponseDisambiguator},
@@ -5,15 +7,22 @@ use super::{
 use crate::{
     crypto::{sign::PublicKey, Hash},
     error::{Error, Result},
-    event::Payload,
+    event::{Event, Payload},
     protocol::{BlockContent, BlockId, RootNode},
     repository::Vault,
     store,
+    sync::stream::RateLimit,
 };
-use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
+use futures_util::{
+    stream::{self, FuturesUnordered},
+    Stream, StreamExt, TryStreamExt,
+};
 use tokio::{
     select,
-    sync::{broadcast::error::RecvError, mpsc},
+    sync::{
+        broadcast::{self, error::RecvError},
+        mpsc,
+    },
 };
 use tracing::instrument;
 
@@ -242,23 +251,17 @@ impl<'a> Monitor<'a> {
     }
 
     async fn run(self) -> Result<()> {
-        let mut subscription = self.vault.event_tx.subscribe();
-
-        // send initial branches
         self.handle_all_branches_changed().await?;
 
-        loop {
-            match subscription.recv().await.map(|event| event.payload) {
-                Ok(
-                    Payload::BranchChanged(branch_id) | Payload::BlockReceived { branch_id, .. },
-                ) => self.handle_branch_changed(branch_id).await?,
-                Ok(Payload::MaintenanceCompleted) => continue,
-                Err(RecvError::Lagged(_)) => {
-                    tracing::warn!("event receiver lagged");
-                    self.handle_all_branches_changed().await?
-                }
+        let mut events = pin!(RateLimit::throttle(
+            events(self.vault.event_tx.subscribe()),
+            Duration::from_secs(1)
+        ));
 
-                Err(RecvError::Closed) => break,
+        while let Some(event) = events.next().await {
+            match event {
+                BranchChanged::One(branch_id) => self.handle_branch_changed(branch_id).await?,
+                BranchChanged::All => self.handle_all_branches_changed().await?,
             }
         }
 
@@ -347,4 +350,28 @@ impl Sender {
     async fn send(&self, response: Response) -> bool {
         self.0.send(Content::Response(response)).await.is_ok()
     }
+}
+
+fn events(rx: broadcast::Receiver<Event>) -> impl Stream<Item = BranchChanged> {
+    stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(Event { payload, .. }) => match payload {
+                    Payload::BranchChanged(branch_id)
+                    | Payload::BlockReceived { branch_id, .. } => {
+                        return Some((BranchChanged::One(branch_id), rx))
+                    }
+                    Payload::MaintenanceCompleted => continue,
+                },
+                Err(RecvError::Lagged(_)) => return Some((BranchChanged::All, rx)),
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    })
+}
+
+#[derive(Eq, PartialEq, Hash)]
+enum BranchChanged {
+    One(PublicKey),
+    All,
 }
