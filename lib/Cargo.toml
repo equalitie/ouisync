@@ -44,6 +44,7 @@ noise-rust-crypto = { version = "0.5.0", default-features = false, features = ["
 num_enum = { workspace = true }
 once_cell = { workspace = true }
 parse-size = { version = "1.0.0", features = ["std"] }
+pin-project-lite = "0.2.13"
 rand = { workspace = true }
 ref-cast = "1.0.14"
 rupnp = { version = "1.1.0", default-features = false, features = [] }

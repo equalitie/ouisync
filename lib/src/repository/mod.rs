@@ -44,12 +44,13 @@ use crate::{
     state_monitor::StateMonitor,
     storage_size::StorageSize,
     store,
-    sync::broadcast::ThrottleReceiver,
+    sync::stream::Throttle,
 };
 use camino::Utf8Path;
 use futures_util::{future, TryStreamExt};
+use futures_util::{stream, StreamExt};
 use scoped_task::ScopedJoinHandle;
-use std::{io, path::Path, sync::Arc};
+use std::{io, path::Path, pin::pin, sync::Arc};
 use tokio::{
     fs,
     sync::broadcast::{self, error::RecvError},
@@ -858,14 +859,17 @@ async fn generate_and_store_writer_id(
 
 async fn report_sync_progress(vault: Vault) {
     let mut prev_progress = Progress { value: 0, total: 0 };
-    let mut event_rx = ThrottleReceiver::new(vault.event_tx.subscribe(), Duration::from_secs(1));
 
-    loop {
-        match event_rx.recv().await {
-            Ok(_) | Err(RecvError::Lagged(_)) => (),
-            Err(RecvError::Closed) => break,
+    let events = stream::unfold(vault.event_tx.subscribe(), |mut rx| async move {
+        match rx.recv().await {
+            Ok(_) | Err(RecvError::Lagged(_)) => Some(((), rx)),
+            Err(RecvError::Closed) => None,
         }
+    });
+    let events = Throttle::new(events, Duration::from_secs(1));
+    let mut events = pin!(events);
 
+    while events.next().await.is_some() {
         let next_progress = match vault.store().sync_progress().await {
             Ok(progress) => progress,
             Err(error) => {
