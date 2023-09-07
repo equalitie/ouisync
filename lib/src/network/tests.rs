@@ -108,7 +108,7 @@ async fn transfer_snapshot_between_two_replicas_case(
 // TODO: Make it faster and increase the cases.
 #[proptest(cases = 8)]
 fn transfer_blocks_between_two_replicas(
-    #[strategy(1usize..32)] block_count: usize,
+    #[strategy(1usize..62)] block_count: usize,
     #[strategy(test_utils::rng_seed_strategy())] rng_seed: u64,
 ) {
     test_utils::run(transfer_blocks_between_two_replicas_case(
@@ -147,8 +147,10 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
                 .await
                 .unwrap();
             tracing::info!(?id, "write block");
+        }
 
-            // Then wait until replica B receives and writes it too.
+        // Then wait until replica B receives and writes it too.
+        for (id, _block) in snapshot.blocks() {
             wait_until_block_exists(&b_vault, id).await;
         }
     };
