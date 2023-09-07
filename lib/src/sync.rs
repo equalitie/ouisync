@@ -267,15 +267,23 @@ pub(crate) mod broadcast_hash_set {
 
 pub(crate) mod stream {
     use futures_util::{stream::Fuse, Stream, StreamExt};
-    use indexmap::IndexSet;
     use pin_project_lite::pin_project;
     use std::{
+        collections::{hash_map, BTreeMap, HashMap},
+        fmt::Debug,
         future::Future,
         hash::Hash,
         pin::Pin,
         task::{ready, Context, Poll},
     };
-    use tokio::time::{self, Duration, Sleep};
+    use tokio::time::{self, Duration, Instant, Sleep};
+
+    type EntryId = u64;
+
+    struct Delay {
+        until: Instant,
+        next: Option<EntryId>,
+    }
 
     pin_project! {
         /// Rate-limitting stream adapter.
@@ -295,74 +303,145 @@ pub(crate) mod stream {
         pub struct Throttle<S>
         where
             S: Stream,
+            S::Item: Hash,
         {
             #[pin]
             inner: Fuse<S>,
             period: Duration,
-            items: IndexSet<S::Item>,
+            ready: BTreeMap<EntryId, S::Item>,
+            delays: HashMap<S::Item, Delay>,
             #[pin]
             sleep: Option<Sleep>,
+            next_id: EntryId,
         }
     }
 
     impl<S> Throttle<S>
     where
         S: Stream,
+        S::Item: Eq + Hash,
     {
         pub fn new(inner: S, period: Duration) -> Self {
             Self {
                 inner: inner.fuse(),
                 period,
-                items: IndexSet::new(),
+                ready: BTreeMap::new(),
+                delays: HashMap::new(),
                 sleep: None,
+                next_id: 0,
             }
+        }
+
+        fn is_ready(ready: &BTreeMap<EntryId, S::Item>, item: &S::Item) -> bool {
+            for v in ready.values() {
+                if v == item {
+                    return true;
+                }
+            }
+            false
         }
     }
 
     impl<S> Stream for Throttle<S>
     where
         S: Stream,
-        S::Item: Hash + Eq,
+        S::Item: Hash + Eq + Clone + Debug,
     {
         type Item = S::Item;
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let mut this = self.project();
+            let now = Instant::now();
+            let mut inner_is_finished = false;
 
+            // Take entries from `inner` into `items` ASAP so we can timestamp them.
             loop {
-                if this.sleep.is_none() {
-                    if let Some(item) = this.items.pop() {
-                        return Poll::Ready(Some(item));
-                    }
-                }
-
                 match this.inner.as_mut().poll_next(cx) {
                     Poll::Ready(Some(item)) => {
-                        if this.sleep.is_none() {
-                            this.sleep.set(Some(time::sleep(*this.period)));
-                            return Poll::Ready(Some(item));
-                        } else {
-                            this.items.insert(item);
+                        let is_ready = Self::is_ready(&this.ready, &item);
+
+                        match this.delays.entry(item.clone()) {
+                            hash_map::Entry::Occupied(mut entry) => {
+                                if !is_ready {
+                                    let delay = entry.get_mut();
+
+                                    if delay.next.is_none() {
+                                        let entry_id = *this.next_id;
+                                        *this.next_id += 1;
+                                        delay.next = Some(entry_id);
+                                    }
+                                }
+                            }
+                            hash_map::Entry::Vacant(entry) => {
+                                let entry_id = *this.next_id;
+                                *this.next_id += 1;
+
+                                if !is_ready {
+                                    this.ready.insert(entry_id, item.clone());
+                                }
+
+                                entry.insert(Delay {
+                                    until: now + *this.period,
+                                    next: None,
+                                });
+                            }
                         }
                     }
                     Poll::Ready(None) => {
-                        if this.sleep.is_some() {
-                            this.sleep.set(None);
-                            this.items.reverse(); // keep the original order
-                            continue;
-                        } else {
-                            return Poll::Ready(None);
-                        }
+                        inner_is_finished = true;
+                        break;
                     }
-                    Poll::Pending => (),
+                    Poll::Pending => {
+                        break;
+                    }
+                }
+            }
+
+            loop {
+                if let Some(first_entry) = this.ready.first_entry() {
+                    return Poll::Ready(Some(first_entry.remove()));
                 }
 
                 if let Some(sleep) = this.sleep.as_mut().as_pin_mut() {
                     ready!(sleep.poll(cx));
                     this.sleep.set(None);
-                    this.items.reverse(); // keep the original order
+                }
+
+                let mut first: Option<(&S::Item, &mut Delay)> = None;
+
+                for (item, delay) in this.delays.iter_mut() {
+                    if let Some((_, first_delay)) = &first {
+                        if (delay.until, delay.next) < (first_delay.until, first_delay.next) {
+                            first = Some((item, delay));
+                        }
+                    } else {
+                        first = Some((item, delay));
+                    }
+                }
+
+                let (first_item, first_delay) = match &mut first {
+                    Some(first) => (&first.0, &mut first.1),
+                    None => {
+                        return if inner_is_finished {
+                            Poll::Ready(None)
+                        } else {
+                            Poll::Pending
+                        }
+                    }
+                };
+
+                if first_delay.until <= now {
+                    let first_item = (*first_item).clone();
+
+                    if first_delay.next.is_some() {
+                        first_delay.until = now + *this.period;
+                        first_delay.next = None;
+                        return Poll::Ready(Some(first_item));
+                    } else {
+                        this.delays.remove(&first_item);
+                    }
                 } else {
-                    return Poll::Pending;
+                    this.sleep.set(Some(time::sleep_until(first_delay.until)));
                 }
             }
         }
@@ -377,6 +456,39 @@ pub(crate) mod stream {
 
         #[tokio::test(start_paused = true)]
         async fn rate_limit_equal_items() {
+            let input = [(ms(0), 0), (ms(0), 0)];
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (0, ms(1000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            //--------------------------------------------------------
+
+            let input = [(ms(0), 0), (ms(100), 0)];
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (0, ms(1000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            //--------------------------------------------------------
+
+            let input = [(ms(0), 0), (ms(0), 0), (ms(1001), 0)];
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (0, ms(1000)), (0, ms(2000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            //--------------------------------------------------------
+
             let input = [
                 (ms(0), 0),
                 (ms(100), 0),
@@ -385,36 +497,50 @@ pub(crate) mod stream {
                 (ms(0), 0),
             ];
 
-            // unlimitted
             let (tx, rx) = mpsc::channel(1);
-            let expected = [
-                (0, ms(0)),
-                (0, ms(100)),
-                (0, ms(200)),
-                (0, ms(1700)),
-                (0, ms(1700)),
-            ];
-            future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
-
-            // FIXME:
-            // // throttled
-            // let (tx, rx) = mpsc::channel(1);
-            // let expected = [(0, ms(0)), (0, ms(1000)), (0, ms(1700)), (0, ms(2700))];
-            // future::join(
-            //     produce(tx, input),
-            //     verify(Throttle::throttle(into_stream(rx), ms(1000)), expected),
-            // )
-            // .await;
+            let expected = [(0, ms(0)), (0, ms(1000)), (0, ms(2000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
         }
 
         #[tokio::test(start_paused = true)]
         async fn rate_limit_inequal_items() {
+            let input = [(ms(0), 0), (ms(0), 1)];
+
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (1, ms(0))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            //--------------------------------------------------------
+
             let input = [(ms(0), 0), (ms(0), 1), (ms(0), 0), (ms(0), 1)];
 
-            // unlimitted
             let (tx, rx) = mpsc::channel(1);
-            let expected = [(0, ms(0)), (1, ms(0)), (0, ms(0)), (1, ms(0))];
-            future::join(produce(tx, input), verify(into_stream(rx), expected)).await;
+            let expected = [(0, ms(0)), (1, ms(0)), (0, ms(1000)), (1, ms(1000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
+
+            //--------------------------------------------------------
+
+            let input = [(ms(0), 0), (ms(0), 1), (ms(0), 1), (ms(0), 0)];
+
+            let (tx, rx) = mpsc::channel(1);
+            let expected = [(0, ms(0)), (1, ms(0)), (1, ms(1000)), (0, ms(1000))];
+            future::join(
+                produce(tx, input),
+                verify(Throttle::new(into_stream(rx), ms(1000)), expected),
+            )
+            .await;
         }
 
         fn ms(ms: u64) -> Duration {
