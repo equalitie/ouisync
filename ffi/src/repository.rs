@@ -266,9 +266,8 @@ pub(crate) fn subscribe(
     let subscription_task = scoped_task::spawn(async move {
         loop {
             match notification_rx.recv().await {
-                // Only `BlockReceived` events cause user-observable changes
                 Ok(Event {
-                    payload: Payload::BlockReceived { .. },
+                    payload: Payload::BranchChanged(_) | Payload::BlockReceived { .. },
                     ..
                 }) => (),
                 Ok(Event { .. }) => continue,
