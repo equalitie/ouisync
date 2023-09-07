@@ -580,10 +580,10 @@ impl Inner {
     ) -> Result<()> {
         self.record_path(inode, None);
 
-        // Print state when the user does `ls <ouisync-mount-root>/`
-        if tracing::enabled!(tracing::Level::DEBUG) && inode == 1 && offset == 0 {
-            self.debug_print(DebugPrinter::new()).await;
-        }
+        // // Print state when the user does `ls <ouisync-mount-root>/`
+        // if tracing::enabled!(tracing::Level::DEBUG) && inode == 1 && offset == 0 {
+        //     self.debug_print(DebugPrinter::new()).await;
+        // }
 
         if offset < 0 {
             return Err(Error::OffsetOutOfRange);
