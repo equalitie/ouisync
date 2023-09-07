@@ -370,7 +370,7 @@ fn events(rx: broadcast::Receiver<Event>) -> impl Stream<Item = BranchChanged> {
     })
 }
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Clone, Debug, Hash)]
 enum BranchChanged {
     One(PublicKey),
     All,
