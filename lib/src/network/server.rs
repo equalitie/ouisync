@@ -211,7 +211,7 @@ impl<'a> Responder<'a> {
             .store()
             .acquire_read()
             .await?
-            .read_block_on_peer_request(&id, &mut content, &self.vault.block_tracker)
+            .read_block(&id, &mut content)
             .await;
 
         match result {

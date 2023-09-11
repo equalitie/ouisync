@@ -222,7 +222,10 @@ impl Vault {
     }
 
     pub async fn set_block_expiration(&self, duration: Option<Duration>) -> Result<()> {
-        Ok(self.store.set_block_expiration(duration).await?)
+        Ok(self
+            .store
+            .set_block_expiration(duration, self.block_tracker.clone())
+            .await?)
     }
 
     pub async fn block_expiration(&self) -> Option<Duration> {

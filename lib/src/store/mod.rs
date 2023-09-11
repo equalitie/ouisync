@@ -30,11 +30,11 @@ use self::{
     index::UpdateSummaryReason,
 };
 use crate::{
+    block_tracker::BlockTracker as BlockDownloadTracker,
     collections::HashSet,
     crypto::{sign::PublicKey, CacheHash, Hash, Hashable},
     db,
     debug::DebugPrinter,
-    future::try_collect_into,
     progress::Progress,
     protocol::{
         get_bucket, Block, BlockContent, BlockId, BlockNonce, InnerNodeMap, LeafNodeSet,
@@ -77,6 +77,7 @@ impl Store {
     pub async fn set_block_expiration(
         &self,
         expiration_time: Option<Duration>,
+        block_download_tracker: BlockDownloadTracker,
     ) -> Result<(), Error> {
         let mut tracker_lock = self.block_expiration_tracker.write().await;
 
@@ -93,8 +94,14 @@ impl Store {
             None => return Ok(()),
         };
 
-        let tracker =
-            BlockExpirationTracker::enable_expiration(self.db.clone(), expiration_time).await?;
+        let tracker = BlockExpirationTracker::enable_expiration(
+            self.db.clone(),
+            expiration_time,
+            block_download_tracker,
+            self.client_reload_index_tx.clone(),
+            self.cache.clone(),
+        )
+        .await?;
 
         *tracker_lock = Some(Arc::new(tracker));
 
@@ -114,7 +121,6 @@ impl Store {
         Ok(Reader {
             inner: Handle::Connection(self.db.acquire().await?),
             cache: self.cache.begin(),
-            client_reload_index_tx: self.client_reload_index_tx.clone(),
             block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
         })
     }
@@ -125,7 +131,6 @@ impl Store {
             inner: Reader {
                 inner: Handle::ReadTransaction(self.db.begin_read().await?),
                 cache: self.cache.begin(),
-                client_reload_index_tx: self.client_reload_index_tx.clone(),
                 block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
             },
         })
@@ -138,7 +143,6 @@ impl Store {
                 inner: Reader {
                     inner: Handle::WriteTransaction(self.db.begin_write().await?),
                     cache: self.cache.begin(),
-                    client_reload_index_tx: self.client_reload_index_tx.clone(),
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             },
@@ -241,7 +245,6 @@ impl Store {
 pub(crate) struct Reader {
     inner: Handle,
     cache: CacheTransaction,
-    client_reload_index_tx: broadcast_hash_set::Sender<PublicKey>,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
 }
 
@@ -256,76 +259,14 @@ impl Reader {
         id: &BlockId,
         content: &mut BlockContent,
     ) -> Result<BlockNonce, Error> {
-        if let Some(expiration_tracker) = &self.block_expiration_tracker {
-            expiration_tracker.handle_block_update(id);
-        }
-
         let result = block::read(self.db(), id, content).await;
 
-        if matches!(result, Err(Error::BlockNotFound)) {
-            self.set_as_missing_if_expired(id).await?;
+        if let Some(expiration_tracker) = &self.block_expiration_tracker {
+            let is_missing = matches!(result, Err(Error::BlockNotFound));
+            expiration_tracker.handle_block_update(id, is_missing);
         }
 
         result
-    }
-
-    pub async fn read_block_on_peer_request(
-        &mut self,
-        id: &BlockId,
-        content: &mut BlockContent,
-        block_tracker: &crate::block_tracker::BlockTracker,
-    ) -> Result<BlockNonce, Error> {
-        if let Some(expiration_tracker) = &self.block_expiration_tracker {
-            expiration_tracker.handle_block_update(id);
-        }
-
-        let result = block::read(self.db(), id, content).await;
-
-        if matches!(result, Err(Error::BlockNotFound)) && self.set_as_missing_if_expired(id).await?
-        {
-            block_tracker.require(*id);
-        }
-
-        result
-    }
-
-    async fn set_as_missing_if_expired(&mut self, block_id: &BlockId) -> Result<bool, Error> {
-        let expiration_tracker = match &self.block_expiration_tracker {
-            Some(expiration_tracker) => expiration_tracker,
-            None => return Ok(false),
-        };
-
-        // TODO: This actually does a DB write operation
-        let mut tx = expiration_tracker.pool().begin_write().await?;
-        let cache = &mut self.cache;
-
-        let changed = leaf_node::set_missing_if_expired(&mut tx, block_id).await?;
-
-        if !changed {
-            return Ok(false);
-        }
-
-        let nodes: Vec<_> = leaf_node::load_parent_hashes(&mut tx, block_id)
-            .try_collect()
-            .await?;
-
-        let mut branches: HashSet<PublicKey> = HashSet::default();
-
-        for (hash, _state) in
-            index::update_summaries(&mut tx, cache, nodes, UpdateSummaryReason::BlockRemoved)
-                .await?
-        {
-            try_collect_into(root_node::load_writer_ids(&mut tx, &hash), &mut branches).await?;
-        }
-
-        // TODO: Use the 'on commit' machinery to ensure the below code is executed.
-        tx.commit().await?;
-
-        for branch_id in branches {
-            self.client_reload_index_tx.insert(&branch_id);
-        }
-
-        Ok(true)
     }
 
     /// Checks whether the block exists in the store.
@@ -633,11 +574,14 @@ impl WriteTransaction {
         &mut self,
         block: &Block,
     ) -> Result<BlockReceiveStatus, Error> {
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(&block.id);
-        }
         let (db, cache) = self.db_and_cache();
-        block::receive(db, cache, block).await
+        let result = block::receive(db, cache, block).await;
+
+        if let Some(tracker) = &self.block_expiration_tracker {
+            tracker.handle_block_update(&block.id, false);
+        }
+
+        result
     }
 
     pub async fn commit(self) -> Result<(), Error> {
