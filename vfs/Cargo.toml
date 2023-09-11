@@ -22,17 +22,17 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-fuser = "0.13.0"
-libc = "0.2.139"
+fuser = { version = "0.13.0",  optional = true }
+libc  = { version = "0.2.139", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Patch to force compilation of dokan2.dll when `DOKAN_DLL_OUTPUT_PATH` is
 # defined even if dokan is installed.
 # https://github.com/dokan-dev/dokan-rust/pull/7
-dokan = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
-dokan-sys = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
-widestring = "0.4.3"
-winapi = { version = "0.3.9", features = ["ntstatus", "winnt"]  }
+dokan      = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll", optional = true }
+dokan-sys  = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll", optional = true }
+widestring = { version = "0.4.3", optional = true }
+winapi     = { version = "0.3.9", features = ["ntstatus", "winnt"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }
@@ -42,3 +42,6 @@ tempfile = "3.2"
 test-strategy = "0.2.1"
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 
+[features]
+default = ["mount"]
+mount = ["fuser", "libc", "dokan", "dokan-sys", "widestring", "winapi"]

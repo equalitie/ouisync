@@ -22,7 +22,7 @@ num_enum = { workspace = true }
 once_cell = { workspace = true }
 ouisync-bridge = { path = "../bridge" }
 ouisync-lib = { package = "ouisync", path = "../lib" }
-ouisync-vfs = { path = "../vfs" }
+ouisync-vfs = { path = "../vfs", default-features = false }
 rustls = { workspace = true }
 scoped_task = { path = "../scoped_task" }
 serde = { workspace = true }
@@ -35,3 +35,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 rmp-serde = { workspace = true }
+
+[features]
+default = ["mount"]
+mount = ["ouisync-vfs/mount"]
