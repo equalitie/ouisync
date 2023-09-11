@@ -987,7 +987,7 @@ fn redownload_expired_blocks() {
     let test_content = Arc::new(common::random_content(2 * 1024 * 1024));
 
     async fn wait_for_block_count(repo: &Repository, block_count: u64) {
-        common::eventually(&repo, || {
+        common::eventually(repo, || {
             async { repo.count_blocks().await.unwrap() == block_count }
                 .instrument(tracing::Span::current())
         })

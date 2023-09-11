@@ -111,7 +111,7 @@ impl Client {
                 branches_to_reload = reload_index_rx.changed() => {
                     if let Ok(branches_to_reload) = branches_to_reload {
                         for branch_to_reload in &branches_to_reload {
-                            self.reload_index(&branch_to_reload);
+                            self.reload_index(branch_to_reload);
                         }
                     }
                 }
