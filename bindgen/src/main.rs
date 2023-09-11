@@ -4,6 +4,7 @@ use std::path::Path;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate the C bindings header
 
+    #[cfg(feature = "env_logger")]
     env_logger::init();
 
     let output_path = Path::new("target").join("bindings.h");
