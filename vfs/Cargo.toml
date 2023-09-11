@@ -31,10 +31,8 @@ libc = "0.2.139"
 # https://github.com/dokan-dev/dokan-rust/pull/7
 dokan = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
 dokan-sys = { git = "https://github.com/inetic/dokan-rust", branch = "env-to-recompile-dll" }
-bitflags = "1.2.1"
-oneshot = "0.1.5"
 widestring = "0.4.3"
-winapi = { version = "0.3.9", features = ["std", "errhandlingapi", "handleapi", "heapapi", "ioapiset", "minwinbase", "minwindef", "ntdef", "ntstatus", "processthreadsapi", "sddl", "securitybaseapi", "synchapi", "winbase", "winerror", "winnt"] }
+winapi = { version = "0.3.9", features = ["ntstatus", "winnt"]  }
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }

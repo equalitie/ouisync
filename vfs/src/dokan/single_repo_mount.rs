@@ -254,7 +254,7 @@ pub fn mount(
         }
     };
 
-    let (on_mount_tx, on_mount_rx) = oneshot::channel();
+    let (on_mount_tx, on_mount_rx) = mpsc::sync_channel(0);
     let (unmount_tx, unmount_rx) = mpsc::sync_channel(1);
 
     let join_handle = thread::spawn(move || {
