@@ -56,7 +56,7 @@ impl BlockExpirationTracker {
         let now = SystemTime::now();
 
         while let Some(id) = ids.next().await {
-            shared.handle_block_update(&id?, now);
+            shared.insert_block(&id?, now);
         }
 
         let (watch_tx, watch_rx) = uninitialized_watch::channel();
@@ -95,7 +95,7 @@ impl BlockExpirationTracker {
     pub fn handle_block_update(&self, block_id: &BlockId, is_missing: bool) {
         // Not inlining these lines to call `SystemTime::now()` only once the `lock` is acquired.
         let mut lock = self.shared.lock().unwrap();
-        lock.handle_block_update(block_id, SystemTime::now());
+        lock.insert_block(block_id, SystemTime::now());
         if is_missing {
             lock.to_missing_if_expired.insert(*block_id);
         }
@@ -104,7 +104,7 @@ impl BlockExpirationTracker {
     }
 
     pub fn handle_block_removed(&self, block: &BlockId) {
-        self.shared.lock().unwrap().handle_block_removed(block);
+        self.shared.lock().unwrap().remove_block(block);
     }
 
     pub fn set_expiration_time(&self, expiration_time: Duration) {
@@ -134,7 +134,7 @@ struct Shared {
 impl Shared {
     /// Add the `block` into `Self`. If it's already there, remove it and add it back with the new
     /// time stamp.
-    fn handle_block_update(&mut self, block: &BlockId, ts: TimeUpdated) {
+    fn insert_block(&mut self, block: &BlockId, ts: TimeUpdated) {
         // Asserts and unwraps are OK due to the `Shared` invariants defined above.
         match self.blocks_by_id.entry(*block) {
             hash_map::Entry::Occupied(mut entry) => {
@@ -175,8 +175,7 @@ impl Shared {
         }
     }
 
-    /// Remove `block` from `Self`.
-    fn handle_block_removed(&mut self, block: &BlockId) {
+    fn remove_block(&mut self, block: &BlockId) {
         // Asserts and unwraps are OK due to the `Shared` invariants defined above.
         let ts = match self.blocks_by_id.entry(*block) {
             hash_map::Entry::Occupied(entry) => entry.remove(),
@@ -337,7 +336,7 @@ async fn run_task(
         // TODO: Should we then restart the tracker or do we rely on the fact that if committing
         // into the database fails, then we know the app will be closed? The situation would
         // resolve itself upon restart.
-        shared.lock().unwrap().handle_block_removed(&block);
+        shared.lock().unwrap().remove_block(&block);
 
         tx.commit().await?;
     }
@@ -411,25 +410,25 @@ mod test {
         let ts = SystemTime::now();
         let block: BlockId = rand::random();
 
-        shared.handle_block_update(&block, ts);
+        shared.insert_block(&block, ts);
 
         assert_eq!(*shared.blocks_by_id.get(&block).unwrap(), ts);
         shared.assert_invariants();
 
-        shared.handle_block_removed(&block);
+        shared.remove_block(&block);
 
         assert!(shared.blocks_by_id.is_empty());
         shared.assert_invariants();
 
         // add twice
 
-        shared.handle_block_update(&block, ts);
-        shared.handle_block_update(&block, ts);
+        shared.insert_block(&block, ts);
+        shared.insert_block(&block, ts);
 
         assert_eq!(*shared.blocks_by_id.get(&block).unwrap(), ts);
         shared.assert_invariants();
 
-        shared.handle_block_removed(&block);
+        shared.remove_block(&block);
 
         assert!(shared.blocks_by_id.is_empty());
         shared.assert_invariants();
