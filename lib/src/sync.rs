@@ -233,9 +233,11 @@ pub(crate) mod broadcast_hash_set {
         }
     }
 
+    type ReceiverState<T> = (uninitialized_watch::Sender<()>, HashSet<T>);
+
     struct Shared<T> {
         id_generator: AtomicUsize,
-        receivers: Mutex<HashMap<usize, (uninitialized_watch::Sender<()>, HashSet<T>)>>,
+        receivers: Mutex<HashMap<usize, ReceiverState<T>>>,
     }
 
     pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -358,7 +360,7 @@ pub(crate) mod stream {
             loop {
                 match this.inner.as_mut().poll_next(cx) {
                     Poll::Ready(Some(item)) => {
-                        let is_ready = Self::is_ready(&this.ready, &item);
+                        let is_ready = Self::is_ready(this.ready, &item);
 
                         match this.delays.entry(item.clone()) {
                             hash_map::Entry::Occupied(mut entry) => {

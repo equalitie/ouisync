@@ -148,7 +148,7 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
         }
 
         // Then wait until replica B receives and writes it too.
-        for (id, _block) in snapshot.blocks() {
+        for id in snapshot.blocks().keys() {
             wait_until_block_exists(&b_vault, id).await;
         }
     };
