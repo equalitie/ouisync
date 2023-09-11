@@ -46,11 +46,11 @@ impl Changeset {
         patch.save(tx, &self.bump, write_keys).await?;
 
         for block in self.blocks {
-            if let Some(tracker) = &tx.block_expiration_tracker {
-                tracker.handle_block_update(&block.id);
-            }
-
             block::write(tx.db(), &block).await?;
+
+            if let Some(tracker) = &tx.block_expiration_tracker {
+                tracker.handle_block_update(&block.id, false);
+            }
         }
 
         Ok(())

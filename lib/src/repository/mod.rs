@@ -180,10 +180,7 @@ impl Repository {
         {
             let mut conn = vault.store().db().acquire().await?;
             if let Some(block_expiration) = metadata::block_expiration::get(&mut conn).await? {
-                vault
-                    .store()
-                    .set_block_expiration(Some(block_expiration))
-                    .await?;
+                vault.set_block_expiration(Some(block_expiration)).await?;
             }
         }
 
