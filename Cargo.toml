@@ -51,5 +51,5 @@ turmoil = { git = "https://github.com/tokio-rs/turmoil" }
 debug = 1
 
 [patch.crates-io]
-# Contains a fix to a race condition in `sqlx`'s `flume` dependency.
-sqlx = { git = "https://github.com/inetic/sqlx.git", branch = "flume-race-fix" }
+# Updates the flume dependency to fix a race condition.
+sqlx = { git = "https://github.com/madadam/sqlx.git", branch = "bump-flume" }
