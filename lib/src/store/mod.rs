@@ -14,6 +14,8 @@ mod root_node;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use crate::sync::break_point::BreakPoint;
 
 pub use error::Error;
 
@@ -114,6 +116,11 @@ impl Store {
             .await
             .as_ref()
             .map(|tracker| tracker.block_expiration())
+    }
+
+    #[cfg(test)]
+    pub async fn block_expiration_tracker(&self) -> Option<Arc<BlockExpirationTracker>> {
+        self.block_expiration_tracker.read().await.as_ref().cloned()
     }
 
     /// Acquires a `Reader`
@@ -705,6 +712,8 @@ impl WriteTransaction {
             }
             (false, None) => inner.commit_and_then(f).await?,
         })
+
+        //Ok(inner.commit_and_then(then).await?)
     }
 
     // Access the underlying database transaction.
@@ -717,6 +726,11 @@ impl WriteTransaction {
             self.inner.inner.inner.as_write(),
             &mut self.inner.inner.cache,
         )
+    }
+
+    #[cfg(test)]
+    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
+        self.db().break_on_commit(break_point)
     }
 }
 

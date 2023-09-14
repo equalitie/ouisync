@@ -126,11 +126,10 @@ impl BlockExpirationTracker {
 
 /// This struct is used to stop tracking blocks inside the BlockExpirationTracker. The reason for
 /// "untracking" blocks in a transaction - as opposed to just removing blocks through a simple
-/// BlockExpirationTracker method - is that we only want to actually untrack the block once the
-/// blocks have been removed from the main DB and the removing DB transaction has been committed
-/// successfully.
+/// BlockExpirationTracker method - is that we only want to actually untrack a block once it's been
+/// removed from the main DB and the removing DB transaction has been committed successfully.
 ///
-/// Not doing so could result in untracking blocks while those blocks are still in the main DB,
+/// Not doing so could result in untracking blocks while those blocks still remain in the main DB,
 /// therefore they would never expire.
 pub(crate) struct UntrackTransaction {
     shared: Arc<BlockingMutex<Shared>>,
@@ -371,7 +370,7 @@ async fn run_task(
         // have been be forgotten by the tracker.
         //
         // Such situation can also happen in this current scenario where we first remove the block
-        // from `shared` and then commit if the commit fails. But that case will be detected.
+        // from `shared` and then the commit fails. But that case will be detected.
         // TODO: Should we then restart the tracker or do we rely on the fact that if committing
         // into the database fails, then we know the app will be closed? The situation would
         // resolve itself upon restart.
@@ -493,7 +492,7 @@ mod test {
         let write_keys = Keypair::random();
         let branch_id = PublicKey::random();
 
-        add_block(&write_keys, &branch_id, &store).await;
+        add_block(rand::random(), &write_keys, &branch_id, &store).await;
 
         assert_eq!(count_blocks(store.db()).await, 1);
 
@@ -509,7 +508,7 @@ mod test {
 
         sleep(Duration::from_millis(700)).await;
 
-        let block_id = add_block(&write_keys, &branch_id, &store).await;
+        let block_id = add_block(rand::random(), &write_keys, &branch_id, &store).await;
         tracker.handle_block_update(&block_id, false);
 
         assert_eq!(count_blocks(store.db()).await, 2);
@@ -523,11 +522,108 @@ mod test {
         assert_eq!(count_blocks(store.db()).await, 0);
     }
 
-    async fn add_block(write_keys: &Keypair, branch_id: &PublicKey, store: &Store) -> BlockId {
+    /// This test checks the condition that "if there is a block in the main database, then it must
+    /// be in the expiration tracker" in the presence of a race condition as described in the
+    /// following example:
+    ///
+    /// When adding a block (`add`), we do "add the block into the main database" (`add.db`), and then
+    /// "add the block into the expiration tracker" (`add.ex`). Similarly, when removing a block (`rm`)
+    /// we do "remove the block from the main database" (`rm.db`) and then "remove the block from the
+    /// expiration tracker" (`rm.ex`).
+    ///
+    /// As such calling `rm` and `add` concurrently could result in the `{add.db, add.ex, rm.db,
+    /// rm.ex}` operations to be executed in the following order:
+    ///
+    /// rm.db -> add.db -> add.ex -> rm.ex
+    ///
+    /// Unless we explicitly take care of this situation, we'll end up with the block being present
+    /// in the main database, but not in the expiration tracker. Which would be a violation of the
+    /// condition from the first paragraph of this comment.
+    #[tokio::test]
+    async fn expiration_race() {
+        let (_base_dir, store) = setup().await;
+        store
+            .set_block_expiration(
+                // Setting expiration time to something big, we don't care about blocks actually
+                // expiring in this test.
+                Some(Duration::from_secs(60 * 60 /* one hour */)),
+                BlockDownloadTracker::new(),
+            )
+            .await
+            .unwrap();
+
+        let write_keys = Arc::new(Keypair::random());
+        let branch_id = PublicKey::random();
+
+        let store = store.clone();
+        let write_keys = write_keys.clone();
+        let branch_id = branch_id.clone();
+
+        let block: Block = rand::random();
+        add_block(block.clone(), &write_keys, &branch_id, &store).await;
+
+        let (on_rm, mut on_rm_controll) = crate::sync::break_point::new();
+
+        let task_rm = tokio::task::spawn({
+            let block_id = block.id;
+            let store = store.clone();
+
+            async move {
+                let mut tx = store.begin_write().await.unwrap();
+                tx.break_on_commit(on_rm);
+                tx.remove_block(&block_id).await.unwrap();
+                tx.commit().await.unwrap();
+            }
+        });
+
+        let task_add = tokio::task::spawn({
+            let block = block.clone();
+            let store = store.clone();
+
+            async move {
+                on_rm_controll.on_hit().await.unwrap();
+
+                // At this point the other task has already committed the removal from database
+                // action (`rm.db`), but not yet the removal from the expiration tracker (`rm.ex`).
+
+                // Perform the `add.db` and `add.ex` actions.
+                let mut tx = store.begin_write().await.unwrap();
+                tx.receive_block(&block).await.unwrap();
+                tx.commit().await.unwrap();
+
+                // Resume the `rm.ex` action in `task_rm`.
+                on_rm_controll.release();
+            }
+        });
+
+        task_rm.await.unwrap();
+        task_add.await.unwrap();
+
+        let is_in_exp_tracker = store
+            .block_expiration_tracker()
+            .await
+            .unwrap()
+            .has_block(&block.id);
+
+        let is_in_db = block::exists(&mut store.db().acquire().await.unwrap(), &block.id)
+            .await
+            .unwrap();
+
+        assert!(
+            (!is_in_db) || (is_in_db && is_in_exp_tracker),
+            "is_in_db:{is_in_db:?} is_in_exp_tracker:{is_in_exp_tracker:?}"
+        );
+    }
+
+    async fn add_block(
+        block: Block,
+        write_keys: &Keypair,
+        branch_id: &PublicKey,
+        store: &Store,
+    ) -> BlockId {
         let mut writer = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
 
-        let block: Block = rand::random();
         let block_id = block.id;
 
         changeset.write_block(block);

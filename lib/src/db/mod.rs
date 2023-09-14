@@ -30,6 +30,9 @@ use tempfile::TempDir;
 use thiserror::Error;
 use tokio::{fs, sync::OwnedMutexGuard as AsyncOwnedMutexGuard, task};
 
+#[cfg(test)]
+use crate::sync::break_point::BreakPoint;
+
 const WARN_AFTER_TRANSACTION_LIFETIME: Duration = Duration::from_secs(3);
 
 pub(crate) use self::connection::Connection;
@@ -183,9 +186,10 @@ impl fmt::Debug for ReadTransaction {
 impl_executor_by_deref!(ReadTransaction);
 
 /// Transaction that allows both reading and writing.
-#[derive(Debug)]
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
+    #[cfg(test)]
+    break_on_commit: Option<BreakPoint>,
 }
 
 impl WriteTransaction {
@@ -201,6 +205,8 @@ impl WriteTransaction {
                 inner: tx,
                 track_lifetime: Some(track_lifetime),
             },
+            #[cfg(test)]
+            break_on_commit: None,
         })
     }
 
@@ -212,7 +218,16 @@ impl WriteTransaction {
     /// is guaranteed to be either committed or rolled back but there is no way to tell in advance
     /// which of the two operations happens.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.inner.inner.commit().await
+        let result = self.inner.inner.commit().await;
+
+        #[cfg(test)]
+        if let Some(mut break_point) = self.break_on_commit {
+            // Unwrap is OK because this is code is only executed in tests and we want to make sure
+            // the BreakPointController is used appropriately.
+            break_point.hit().await.unwrap();
+        }
+
+        result
     }
 
     /// Commits the transaction and if (and only if) the commit completes successfully, runs the
@@ -260,6 +275,11 @@ impl WriteTransaction {
             .await
             .unwrap()
     }
+
+    #[cfg(test)]
+    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
+        self.break_on_commit = Some(break_point);
+    }
 }
 
 impl Deref for WriteTransaction {
@@ -273,6 +293,12 @@ impl Deref for WriteTransaction {
 impl DerefMut for WriteTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl std::fmt::Debug for WriteTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(f, "WriteTransaction{{ inner:{:?} }}", self.inner)
     }
 }
 
