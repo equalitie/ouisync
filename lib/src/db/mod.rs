@@ -48,7 +48,8 @@ impl Pool {
         let common_options = connect_options
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            .pragma("recursive_triggers", "ON");
+            .pragma("recursive_triggers", "ON")
+            .optimize_on_close(true, Some(1000));
 
         let write_options = common_options.clone();
         let write = SqlitePoolOptions::new()
