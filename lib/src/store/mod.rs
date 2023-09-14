@@ -146,6 +146,7 @@ impl Store {
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             },
+            untrack_blocks: None,
         })
     }
 
@@ -435,6 +436,7 @@ impl DerefMut for ReadTransaction {
 
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
+    untrack_blocks: Option<block_expiration_tracker::UntrackTransaction>,
 }
 
 impl WriteTransaction {
@@ -450,8 +452,21 @@ impl WriteTransaction {
         index::update_summaries(db, cache, parent_hashes, UpdateSummaryReason::BlockRemoved)
             .await?;
 
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_removed(id);
+        let WriteTransaction {
+            inner:
+                ReadTransaction {
+                    inner:
+                        Reader {
+                            block_expiration_tracker,
+                            ..
+                        },
+                },
+            untrack_blocks,
+        } = self;
+
+        if let Some(tracker) = block_expiration_tracker {
+            let untrack_tx = untrack_blocks.get_or_insert_with(|| tracker.begin_untrack_blocks());
+            untrack_tx.untrack(*id);
         }
 
         Ok(())
@@ -588,11 +603,31 @@ impl WriteTransaction {
         let inner = self.inner.inner.inner.into_write();
         let cache = self.inner.inner.cache;
 
-        if cache.is_dirty() {
-            inner.commit_and_then(move || cache.commit()).await?;
-        } else {
-            inner.commit().await?;
-        }
+        match (cache.is_dirty(), self.untrack_blocks) {
+            (true, Some(tx)) => {
+                inner
+                    .commit_and_then(move || {
+                        cache.commit();
+                        tx.commit();
+                    })
+                    .await?
+            }
+            (false, Some(tx)) => {
+                inner
+                    .commit_and_then(move || {
+                        tx.commit();
+                    })
+                    .await?
+            }
+            (true, None) => {
+                inner
+                    .commit_and_then(move || {
+                        cache.commit();
+                    })
+                    .await?
+            }
+            (false, None) => inner.commit().await?,
+        };
 
         Ok(())
     }
@@ -642,15 +677,34 @@ impl WriteTransaction {
         let inner = self.inner.inner.inner.into_write();
         let cache = self.inner.inner.cache;
 
-        if cache.is_dirty() {
-            let f = move || {
-                cache.commit();
-                f()
-            };
-            Ok(inner.commit_and_then(f).await?)
-        } else {
-            Ok(inner.commit_and_then(f).await?)
-        }
+        Ok(match (cache.is_dirty(), self.untrack_blocks) {
+            (true, Some(tx)) => {
+                inner
+                    .commit_and_then(move || {
+                        cache.commit();
+                        tx.commit();
+                        f()
+                    })
+                    .await?
+            }
+            (false, Some(tx)) => {
+                inner
+                    .commit_and_then(move || {
+                        tx.commit();
+                        f()
+                    })
+                    .await?
+            }
+            (true, None) => {
+                inner
+                    .commit_and_then(move || {
+                        cache.commit();
+                        f()
+                    })
+                    .await?
+            }
+            (false, None) => inner.commit_and_then(f).await?,
+        })
     }
 
     // Access the underlying database transaction.

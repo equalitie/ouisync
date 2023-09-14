@@ -103,16 +103,55 @@ impl BlockExpirationTracker {
         self.watch_tx.send(()).unwrap_or(());
     }
 
-    pub fn handle_block_removed(&self, block: &BlockId) {
-        self.shared.lock().unwrap().remove_block(block);
-    }
-
     pub fn set_expiration_time(&self, expiration_time: Duration) {
         self.expiration_time_tx.send(expiration_time).unwrap_or(());
     }
 
     pub fn block_expiration(&self) -> Duration {
         *self.expiration_time_tx.borrow()
+    }
+
+    pub fn begin_untrack_blocks(&self) -> UntrackTransaction {
+        UntrackTransaction {
+            shared: self.shared.clone(),
+            block_ids: Default::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn has_block(&self, block: &BlockId) -> bool {
+        self.shared.lock().unwrap().blocks_by_id.contains_key(block)
+    }
+}
+
+/// This struct is used to stop tracking blocks inside the BlockExpirationTracker. The reason for
+/// "untracking" blocks in a transaction - as opposed to just removing blocks through a simple
+/// BlockExpirationTracker method - is that we only want to actually untrack the block once the
+/// blocks have been removed from the main DB and the removing DB transaction has been committed
+/// successfully.
+///
+/// Not doing so could result in untracking blocks while those blocks are still in the main DB,
+/// therefore they would never expire.
+pub(crate) struct UntrackTransaction {
+    shared: Arc<BlockingMutex<Shared>>,
+    block_ids: HashSet<BlockId>,
+}
+
+impl UntrackTransaction {
+    pub fn untrack(&mut self, block_id: BlockId) {
+        self.block_ids.insert(block_id);
+    }
+
+    pub fn commit(self) {
+        if self.block_ids.is_empty() {
+            return;
+        }
+
+        let mut shared = self.shared.lock().unwrap();
+
+        for block_id in &self.block_ids {
+            shared.remove_block(block_id);
+        }
     }
 }
 
