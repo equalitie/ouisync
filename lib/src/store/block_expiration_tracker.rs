@@ -56,7 +56,7 @@ impl BlockExpirationTracker {
         let now = SystemTime::now();
 
         while let Some(id) = ids.next().await {
-            shared.insert_block(&id?, now);
+            shared.insert_block(&id?, now, None);
         }
 
         let (watch_tx, watch_rx) = uninitialized_watch::channel();
@@ -92,10 +92,15 @@ impl BlockExpirationTracker {
         })
     }
 
-    pub fn handle_block_update(&self, block_id: &BlockId, is_missing: bool) {
+    pub fn handle_block_update(
+        &self,
+        block_id: &BlockId,
+        is_missing: bool,
+        transaction_id: Option<db::TransactionId>,
+    ) {
         // Not inlining these lines to call `SystemTime::now()` only once the `lock` is acquired.
         let mut lock = self.shared.lock().unwrap();
-        lock.insert_block(block_id, SystemTime::now());
+        lock.insert_block(block_id, SystemTime::now(), transaction_id);
         if is_missing {
             lock.to_missing_if_expired.insert(*block_id);
         }
@@ -141,7 +146,9 @@ impl UntrackTransaction {
         self.block_ids.insert(block_id);
     }
 
-    pub fn commit(self) {
+    // We require CommitId here instead of the TransactionId to ensure this function is called only
+    // after the removal of the blocks has been successfully committed into the database.
+    pub fn commit(self, commit_id: db::CommitId) {
         if self.block_ids.is_empty() {
             return;
         }
@@ -149,7 +156,7 @@ impl UntrackTransaction {
         let mut shared = self.shared.lock().unwrap();
 
         for block_id in &self.block_ids {
-            shared.remove_block(block_id);
+            shared.remove_block(block_id, commit_id);
         }
     }
 }
@@ -157,13 +164,19 @@ impl UntrackTransaction {
 // For semantics
 type TimeUpdated = SystemTime;
 
+#[derive(Eq, PartialEq, Debug)]
+struct Entry {
+    time_updated: TimeUpdated,
+    transaction_id: Option<db::TransactionId>,
+}
+
 struct Shared {
-    // Invariant #1: There exists (`block`, `ts`) in `blocks_by_id` iff there exists `block` in
-    // `blocks_by_expiration[ts]`.
+    // Invariant #1: There exists `(block, Entry { time_updated: ts, ..})` in `blocks_by_id` *iff*
+    // there exists `block` in `blocks_by_expiration[ts]`.
     //
     // Invariant #2: `blocks_by_expiration[x]` is never empty for any `x`.
     //
-    blocks_by_id: HashMap<BlockId, TimeUpdated>,
+    blocks_by_id: HashMap<BlockId, Entry>,
     blocks_by_expiration: BTreeMap<TimeUpdated, HashSet<BlockId>>,
 
     to_missing_if_expired: HashSet<BlockId>,
@@ -172,17 +185,28 @@ struct Shared {
 impl Shared {
     /// Add the `block` into `Self`. If it's already there, remove it and add it back with the new
     /// time stamp.
-    fn insert_block(&mut self, block: &BlockId, ts: TimeUpdated) {
+    fn insert_block(
+        &mut self,
+        block: &BlockId,
+        ts: TimeUpdated,
+        transaction_id: Option<db::TransactionId>,
+    ) {
         // Asserts and unwraps are OK due to the `Shared` invariants defined above.
         match self.blocks_by_id.entry(*block) {
             hash_map::Entry::Occupied(mut entry) => {
-                let old_ts = *entry.get();
+                let Entry {
+                    time_updated: old_ts,
+                    transaction_id: old_id,
+                } = *entry.get();
 
-                if old_ts == ts {
+                if (old_ts, old_id) == (ts, transaction_id) {
                     return;
                 }
 
-                entry.insert(ts);
+                entry.insert(Entry {
+                    time_updated: ts,
+                    transaction_id,
+                });
 
                 let mut entry = match self.blocks_by_expiration.entry(old_ts) {
                     btree_map::Entry::Occupied(entry) => entry,
@@ -208,19 +232,29 @@ impl Shared {
                     .or_insert_with(Default::default)
                     .insert(*block));
 
-                entry.insert(ts);
+                entry.insert(Entry {
+                    time_updated: ts,
+                    transaction_id,
+                });
             }
         }
     }
 
-    fn remove_block(&mut self, block: &BlockId) {
+    fn remove_block(&mut self, block: &BlockId, commit_id: db::CommitId) {
         // Asserts and unwraps are OK due to the `Shared` invariants defined above.
-        let ts = match self.blocks_by_id.entry(*block) {
-            hash_map::Entry::Occupied(entry) => entry.remove(),
+        let time_updated = match self.blocks_by_id.entry(*block) {
+            hash_map::Entry::Occupied(entry) => {
+                if entry.get().transaction_id >= Some(commit_id.as_transaction_id()) {
+                    // A race condition happened and operations switched order, we need to ignore
+                    // this one. See the `expiration_race` test for more information.
+                    return;
+                }
+                entry.remove().time_updated
+            }
             hash_map::Entry::Vacant(_) => return,
         };
 
-        let mut entry = match self.blocks_by_expiration.entry(ts) {
+        let mut entry = match self.blocks_by_expiration.entry(time_updated) {
             btree_map::Entry::Occupied(entry) => entry,
             btree_map::Entry::Vacant(_) => unreachable!(),
         };
@@ -235,13 +269,19 @@ impl Shared {
     #[cfg(test)]
     fn assert_invariants(&self) {
         // #1 =>
-        for (block, ts) in self.blocks_by_id.iter() {
+        for (
+            block,
+            Entry {
+                time_updated: ts, ..
+            },
+        ) in self.blocks_by_id.iter()
+        {
             assert!(self.blocks_by_expiration.get(ts).unwrap().contains(block));
         }
         // #1 <=
         for (ts, blocks) in self.blocks_by_expiration.iter() {
             for block in blocks.iter() {
-                assert_eq!(self.blocks_by_id.get(block).unwrap(), ts);
+                assert_eq!(&self.blocks_by_id.get(block).unwrap().time_updated, ts);
             }
         }
         // Degenerate case
@@ -363,20 +403,9 @@ async fn run_task(
 
         tracing::warn!("Block {block:?} has expired");
 
-        // We need to remove the block from `shared` here while the database is locked for writing.
-        // If we did it after the commit, it could happen that after the commit but between the
-        // removal someone re-adds the block into the database. That would result in there being a
-        // block in the database, but not in the BlockExpirationTracker. That is, the block will
-        // have been be forgotten by the tracker.
-        //
-        // Such situation can also happen in this current scenario where we first remove the block
-        // from `shared` and then the commit fails. But that case will be detected.
-        // TODO: Should we then restart the tracker or do we rely on the fact that if committing
-        // into the database fails, then we know the app will be closed? The situation would
-        // resolve itself upon restart.
-        shared.lock().unwrap().remove_block(&block);
+        let commit_id = tx.commit().await?;
 
-        tx.commit().await?;
+        shared.lock().unwrap().remove_block(&block, commit_id);
     }
 }
 
@@ -448,25 +477,37 @@ mod test {
         let ts = SystemTime::now();
         let block: BlockId = rand::random();
 
-        shared.insert_block(&block, ts);
+        shared.insert_block(&block, ts, Some(db::TransactionId::new(0)));
 
-        assert_eq!(*shared.blocks_by_id.get(&block).unwrap(), ts);
+        assert_eq!(
+            *shared.blocks_by_id.get(&block).unwrap(),
+            Entry {
+                time_updated: ts,
+                transaction_id: Some(db::TransactionId::new(0))
+            }
+        );
         shared.assert_invariants();
 
-        shared.remove_block(&block);
+        shared.remove_block(&block, db::CommitId::new(1));
 
         assert!(shared.blocks_by_id.is_empty());
         shared.assert_invariants();
 
         // add twice
 
-        shared.insert_block(&block, ts);
-        shared.insert_block(&block, ts);
+        shared.insert_block(&block, ts, Some(db::TransactionId::new(2)));
+        shared.insert_block(&block, ts, Some(db::TransactionId::new(3)));
 
-        assert_eq!(*shared.blocks_by_id.get(&block).unwrap(), ts);
+        assert_eq!(
+            *shared.blocks_by_id.get(&block).unwrap(),
+            Entry {
+                time_updated: ts,
+                transaction_id: Some(db::TransactionId::new(3))
+            }
+        );
         shared.assert_invariants();
 
-        shared.remove_block(&block);
+        shared.remove_block(&block, db::CommitId::new(4));
 
         assert!(shared.blocks_by_id.is_empty());
         shared.assert_invariants();
@@ -509,7 +550,7 @@ mod test {
         sleep(Duration::from_millis(700)).await;
 
         let block_id = add_block(rand::random(), &write_keys, &branch_id, &store).await;
-        tracker.handle_block_update(&block_id, false);
+        tracker.handle_block_update(&block_id, false, Some(db::TransactionId::new(1)));
 
         assert_eq!(count_blocks(store.db()).await, 2);
 
