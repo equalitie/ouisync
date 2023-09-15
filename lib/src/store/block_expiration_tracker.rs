@@ -24,6 +24,33 @@ use std::{
 };
 use tokio::{select, sync::watch, time::sleep};
 
+/// This structure keeps track (in memory) of which blocks are currently in the database. To each
+/// one block it assigns a time when it should expire to free space. Once a block is expired, it is
+/// removed from the DB and its state is changed from "Present" to "Expired" in the index.
+///
+/// One tricky thing in implementing this structure properly is to ensure the following invariant
+/// holds:
+///
+/// "If a block is present in the database, then BlockExpirationTracker must know about it"
+///
+/// If this property did not hold, we could have a block that never expires.
+///
+/// Note that the opposite property would also be desirable, but is not strictly necessary because
+/// if a block is in the expiration tracker but not in the database, it will eventually expire
+/// which will then be a noop.
+///
+/// The above invariant can be broken in two ways:
+///
+/// 1. The "remove" and "add" operation get reordered due to a race.
+/// 2. The removal of a block from the expiration tracker is done, but removal from the database
+///    fails.
+///
+/// For more information about the first case, see the `expiration_race` test below. To ensure it
+/// doesn't happen we assign to each "add" and "remove" DB operation a db::TransactionId and then
+/// require that no "remove" operation swaps order with an "add" operation.
+///
+/// The second case is enforced by requiring db::CommitId when invoking the "remove" operation to
+/// ensure the block has already been successfully removed from the DB.
 pub(crate) struct BlockExpirationTracker {
     shared: Arc<BlockingMutex<Shared>>,
     watch_tx: uninitialized_watch::Sender<()>,
