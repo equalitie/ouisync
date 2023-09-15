@@ -14,6 +14,8 @@ mod root_node;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use crate::sync::break_point::BreakPoint;
 
 pub use error::Error;
 
@@ -116,6 +118,11 @@ impl Store {
             .map(|tracker| tracker.block_expiration())
     }
 
+    #[cfg(test)]
+    pub async fn block_expiration_tracker(&self) -> Option<Arc<BlockExpirationTracker>> {
+        self.block_expiration_tracker.read().await.as_ref().cloned()
+    }
+
     /// Acquires a `Reader`
     pub async fn acquire_read(&self) -> Result<Reader, Error> {
         Ok(Reader {
@@ -146,6 +153,7 @@ impl Store {
                     block_expiration_tracker: self.block_expiration_tracker.read().await.clone(),
                 },
             },
+            untrack_blocks: None,
         })
     }
 
@@ -263,7 +271,7 @@ impl Reader {
 
         if let Some(expiration_tracker) = &self.block_expiration_tracker {
             let is_missing = matches!(result, Err(Error::BlockNotFound));
-            expiration_tracker.handle_block_update(id, is_missing);
+            expiration_tracker.handle_block_update(id, is_missing, None);
         }
 
         result
@@ -435,6 +443,7 @@ impl DerefMut for ReadTransaction {
 
 pub(crate) struct WriteTransaction {
     inner: ReadTransaction,
+    untrack_blocks: Option<block_expiration_tracker::UntrackTransaction>,
 }
 
 impl WriteTransaction {
@@ -450,8 +459,21 @@ impl WriteTransaction {
         index::update_summaries(db, cache, parent_hashes, UpdateSummaryReason::BlockRemoved)
             .await?;
 
-        if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_removed(id);
+        let WriteTransaction {
+            inner:
+                ReadTransaction {
+                    inner:
+                        Reader {
+                            block_expiration_tracker,
+                            ..
+                        },
+                },
+            untrack_blocks,
+        } = self;
+
+        if let Some(tracker) = block_expiration_tracker {
+            let untrack_tx = untrack_blocks.get_or_insert_with(|| tracker.begin_untrack_blocks());
+            untrack_tx.untrack(*id);
         }
 
         Ok(())
@@ -576,9 +598,10 @@ impl WriteTransaction {
     ) -> Result<BlockReceiveStatus, Error> {
         let (db, cache) = self.db_and_cache();
         let result = block::receive(db, cache, block).await;
+        let transaction_id = db.id();
 
         if let Some(tracker) = &self.block_expiration_tracker {
-            tracker.handle_block_update(&block.id, false);
+            tracker.handle_block_update(&block.id, false, Some(transaction_id));
         }
 
         result
@@ -588,11 +611,31 @@ impl WriteTransaction {
         let inner = self.inner.inner.inner.into_write();
         let cache = self.inner.inner.cache;
 
-        if cache.is_dirty() {
-            inner.commit_and_then(move || cache.commit()).await?;
-        } else {
-            inner.commit().await?;
-        }
+        match (cache.is_dirty(), self.untrack_blocks) {
+            (true, Some(tx)) => {
+                inner
+                    .commit_and_then(move |commit_id| {
+                        cache.commit();
+                        tx.commit(commit_id);
+                    })
+                    .await?
+            }
+            (false, Some(tx)) => {
+                inner
+                    .commit_and_then(move |commit_id| {
+                        tx.commit(commit_id);
+                    })
+                    .await?
+            }
+            (true, None) => {
+                inner
+                    .commit_and_then(move |_| {
+                        cache.commit();
+                    })
+                    .await?
+            }
+            (false, None) => inner.commit().await.map(|_| ())?,
+        };
 
         Ok(())
     }
@@ -642,15 +685,36 @@ impl WriteTransaction {
         let inner = self.inner.inner.inner.into_write();
         let cache = self.inner.inner.cache;
 
-        if cache.is_dirty() {
-            let f = move || {
-                cache.commit();
-                f()
-            };
-            Ok(inner.commit_and_then(f).await?)
-        } else {
-            Ok(inner.commit_and_then(f).await?)
-        }
+        Ok(match (cache.is_dirty(), self.untrack_blocks) {
+            (true, Some(tx)) => {
+                inner
+                    .commit_and_then(move |commit_id| {
+                        cache.commit();
+                        tx.commit(commit_id);
+                        f()
+                    })
+                    .await?
+            }
+            (false, Some(tx)) => {
+                inner
+                    .commit_and_then(move |commit_id| {
+                        tx.commit(commit_id);
+                        f()
+                    })
+                    .await?
+            }
+            (true, None) => {
+                inner
+                    .commit_and_then(move |_| {
+                        cache.commit();
+                        f()
+                    })
+                    .await?
+            }
+            (false, None) => inner.commit_and_then(|_| f()).await?,
+        })
+
+        //Ok(inner.commit_and_then(then).await?)
     }
 
     // Access the underlying database transaction.
@@ -663,6 +727,11 @@ impl WriteTransaction {
             self.inner.inner.inner.as_write(),
             &mut self.inner.inner.cache,
         )
+    }
+
+    #[cfg(test)]
+    pub fn break_on_commit(&mut self, break_point: BreakPoint) {
+        self.db().break_on_commit(break_point)
     }
 }
 
