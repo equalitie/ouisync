@@ -1,6 +1,5 @@
 pub mod remote;
 
-use crate::constants::{NETWORK_EVENT_PEER_SET_CHANGE, NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
@@ -39,8 +38,8 @@ pub enum Notification {
 #[repr(u8)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum NetworkEvent {
-    ProtocolVersionMismatch = NETWORK_EVENT_PROTOCOL_VERSION_MISMATCH,
-    PeerSetChange = NETWORK_EVENT_PEER_SET_CHANGE,
+    ProtocolVersionMismatch = 0,
+    PeerSetChange = 1,
 }
 
 #[cfg(test)]
