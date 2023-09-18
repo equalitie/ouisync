@@ -71,7 +71,7 @@ impl futures_util::Sink<Bytes> for Socket {
     }
 
     fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        self.port_sender.send_bytes(self.server_tx_port, item);
+        self.port_sender.send(self.server_tx_port, item);
         Ok(())
     }
 

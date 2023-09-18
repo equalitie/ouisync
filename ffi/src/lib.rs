@@ -26,6 +26,7 @@ use crate::{
     session::SessionHandle,
     transport::Server,
 };
+use bytes::Bytes;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use session::{Session, SessionError};
 use std::{
@@ -159,7 +160,9 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     fd: c_int,
     port: Port,
 ) {
-    use std::os::unix::io::FromRawFd;
+    use crate::error::Error;
+    use bytes::{BufMut, BytesMut};
+    use std::{io::SeekFrom, os::fd::FromRawFd};
     use tokio::fs;
 
     let session = session.get();
@@ -170,10 +173,21 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
 
     session.runtime.spawn(async move {
         let mut src = src.file.lock().await;
+        src.seek(SeekFrom::Start(0));
         let result = src.copy_to_writer(&mut dst).await;
 
-        port_sender.send_status(port, result);
+        match result {
+            Ok(()) => port_sender.send(port, Bytes::new()),
+            Err(error) => port_sender.send(port, encode_error(&error.into())),
+        }
     });
+
+    fn encode_error(error: &Error) -> Bytes {
+        let mut buffer = BytesMut::new();
+        buffer.put_u16(error.code as u16);
+        buffer.put_slice(error.message.as_bytes());
+        buffer.freeze()
+    }
 }
 
 /// Always returns `OperationNotSupported` error. Defined to avoid lookup errors on non-unix

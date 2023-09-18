@@ -3,9 +3,9 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use crate::error::{ErrorCode, ToErrorCode};
+use crate::error::ErrorCode;
 use bytes::Bytes;
-use std::{ffi::CString, mem, os::raw::c_char, result::Result};
+use std::{ffi::CString, mem, os::raw::c_char};
 
 #[repr(C)]
 pub(crate) struct DartCObject {
@@ -164,32 +164,11 @@ impl PortSender {
         Self { post_c_object_fn }
     }
 
-    pub fn send_bytes(&self, port: Port, value: Bytes) {
-        self.send_raw(port, &mut value.into())
-    }
-
-    pub fn send_status<E>(&self, port: Port, value: Result<(), E>)
-    where
-        E: ToErrorCode + std::error::Error,
-    {
-        match value {
-            Ok(()) => {
-                self.send_raw(port, &mut ErrorCode::Ok.into());
-            }
-            Err(error) => {
-                // TODO: consider packing both the code and the message into a single `Bytes` and
-                // using `send_bytes`.
-                self.send_raw(port, &mut error.to_error_code().into());
-                self.send_raw(port, &mut error.to_string().into());
-            }
-        }
-    }
-
-    fn send_raw(&self, port: Port, value: &mut DartCObject) {
-        // Safety: `self` must ben created via `PortSender::new` and its safety instructions must
-        // be followed and `self.post_c_object_fn` can't be modified afterwards.
+    pub fn send(&self, port: Port, value: Bytes) {
+        // Safety: `self` must be created via `PortSender::new` and its safety instructions must be
+        // followed and `self.post_c_object_fn` can't be modified afterwards.
         unsafe {
-            (self.post_c_object_fn)(port, value);
+            (self.post_c_object_fn)(port, &mut value.into());
         }
     }
 }
