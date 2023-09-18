@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "bindgen",
     "bridge",
     "cli",
     "ffi",
@@ -9,6 +8,7 @@ members = [
     "rand",
     "scoped_task",
     "tracing_fmt",
+    "utils/bindgen",
     "utils/btdht",
     "utils/stress-test",
     "vfs"
