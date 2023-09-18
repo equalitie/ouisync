@@ -218,7 +218,7 @@ impl WriteTransaction {
                 inner: tx,
                 track_lifetime: Some(track_lifetime),
             },
-            id: id,
+            id,
             #[cfg(test)]
             break_on_commit: None,
         })

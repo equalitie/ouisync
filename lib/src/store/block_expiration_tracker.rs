@@ -625,7 +625,6 @@ mod test {
 
         let store = store.clone();
         let write_keys = write_keys.clone();
-        let branch_id = branch_id.clone();
 
         let block: Block = rand::random();
         add_block(block.clone(), &write_keys, &branch_id, &store).await;
@@ -678,7 +677,7 @@ mod test {
             .unwrap();
 
         assert!(
-            (!is_in_db) || (is_in_db && is_in_exp_tracker),
+            !is_in_db || is_in_exp_tracker,
             "is_in_db:{is_in_db:?} is_in_exp_tracker:{is_in_exp_tracker:?}"
         );
     }
