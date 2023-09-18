@@ -1,11 +1,41 @@
 //! Dart API
 
-// Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
+// Part of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use crate::session::Sender;
+use crate::sender::Sender;
 use bytes::Bytes;
 use std::{mem, os::raw::c_char};
+
+pub(crate) struct PortSender {
+    post_c_object_fn: PostDartCObjectFn,
+    port: Port,
+}
+
+impl PortSender {
+    /// # Safety
+    ///
+    /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
+    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn, port: Port) -> Self {
+        Self {
+            post_c_object_fn,
+            port,
+        }
+    }
+}
+
+impl Sender for PortSender {
+    fn send(&self, msg: Bytes) {
+        // Safety: `self` must be created via `PortSender::new` and its safety instructions must be
+        // followed and `self.post_c_object_fn` can't be modified afterwards.
+        unsafe {
+            (self.post_c_object_fn)(self.port, &mut msg.into());
+        }
+    }
+}
+
+pub(crate) type Port = i64;
+pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
 
 #[repr(C)]
 pub(crate) struct DartCObject {
@@ -115,35 +145,4 @@ pub(crate) enum DartTypedDataType {
     // Float64 = 11,
     // Float32x4 = 12,
     // Invalid = 13,
-}
-
-pub(crate) type Port = i64;
-pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
-
-/// Utility for sending values to dart.
-pub(crate) struct PortSender {
-    post_c_object_fn: PostDartCObjectFn,
-    port: Port,
-}
-
-impl PortSender {
-    /// # Safety
-    ///
-    /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
-    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn, port: Port) -> Self {
-        Self {
-            post_c_object_fn,
-            port,
-        }
-    }
-}
-
-impl Sender for PortSender {
-    fn send(&self, msg: Bytes) {
-        // Safety: `self` must be created via `PortSender::new` and its safety instructions must be
-        // followed and `self.post_c_object_fn` can't be modified afterwards.
-        unsafe {
-            (self.post_c_object_fn)(self.port, &mut msg.into());
-        }
-    }
 }

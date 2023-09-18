@@ -1,7 +1,7 @@
 //! Client and Server than run in the same process but the Client is written in a different
 //! language than the Server.
 
-use crate::{handler::Handler, session::Sender};
+use crate::{handler::Handler, sender::Sender};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use ouisync_bridge::transport::socket_server_connection;
@@ -28,7 +28,7 @@ impl<T> Server<T> {
 
 impl<T> Server<T>
 where
-    T: Sender + Unpin,
+    T: Sender,
 {
     pub async fn run(self, handler: Handler) {
         socket_server_connection::run(self.socket, handler).await

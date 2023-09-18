@@ -1,8 +1,14 @@
-use crate::{state::State, transport::ClientSender, utils::UniqueHandle};
-use bytes::Bytes;
+use crate::{
+    error::{ErrorCode, ToErrorCode},
+    handler::Handler,
+    sender::Sender,
+    state::State,
+    transport::{ClientSender, Server},
+    utils::{self, UniqueHandle},
+};
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
-use std::{io, path::PathBuf, str::Utf8Error, sync::Arc, time::Duration};
+use std::{ffi::c_char, io, path::PathBuf, ptr, str::Utf8Error, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{runtime, time};
 
@@ -75,6 +81,54 @@ pub enum SessionError {
     InvalidUtf8(#[from] Utf8Error),
 }
 
-pub(crate) trait Sender {
-    fn send(&self, msg: Bytes);
+#[repr(C)]
+pub struct SessionCreateResult {
+    session: SessionHandle,
+    error_code: ErrorCode,
+    error_message: *const c_char,
+}
+
+impl From<Result<Session, SessionError>> for SessionCreateResult {
+    fn from(result: Result<Session, SessionError>) -> Self {
+        match result {
+            Ok(session) => Self {
+                session: SessionHandle::new(Box::new(session)),
+                error_code: ErrorCode::Ok,
+                error_message: ptr::null(),
+            },
+            Err(error) => Self {
+                session: SessionHandle::NULL,
+                error_code: error.to_error_code(),
+                error_message: utils::str_to_ptr(&error.to_string()),
+            },
+        }
+    }
+}
+
+/// Helper for creating guest-language specific FFI wrappers
+pub(crate) unsafe fn create(
+    configs_path: *const c_char,
+    log_path: *const c_char,
+    sender: impl Sender,
+) -> SessionCreateResult {
+    let configs_path = match utils::ptr_to_str(configs_path) {
+        Ok(configs_path) => PathBuf::from(configs_path),
+        Err(error) => return Err(SessionError::from(error)).into(),
+    };
+
+    let log_path = match utils::ptr_to_maybe_str(log_path) {
+        Ok(log_path) => log_path.map(PathBuf::from),
+        Err(error) => return Err(SessionError::from(error)).into(),
+    };
+
+    let (server, client_tx) = Server::new(sender);
+    let result = Session::create(configs_path, log_path, client_tx);
+
+    if let Ok(session) = &result {
+        session
+            .runtime
+            .spawn(server.run(Handler::new(session.state.clone())));
+    }
+
+    result.into()
 }
