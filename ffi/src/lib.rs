@@ -11,6 +11,7 @@ mod network;
 mod protocol;
 mod registry;
 mod repository;
+mod session;
 mod share_token;
 mod state;
 mod state_monitor;
@@ -22,29 +23,20 @@ use crate::{
     file::FileHolder,
     handler::Handler,
     registry::Handle,
-    state::State,
-    transport::{ClientSender, Server},
-    utils::UniqueHandle,
+    session::{Session, SessionError, SessionHandle},
+    transport::Server,
 };
 use bytes::Bytes;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ouisync_bridge::logger::{LogFormat, Logger};
-use ouisync_lib::StateMonitor;
 use std::{
     ffi::CString,
-    io, mem,
+    mem,
     os::raw::{c_char, c_int, c_void},
     path::PathBuf,
     ptr, slice,
-    str::Utf8Error,
-    sync::Arc,
     time::Duration,
 };
-use thiserror::Error;
-use tokio::{
-    runtime::{self, Runtime},
-    time,
-};
+use tokio::time;
 
 #[repr(C)]
 pub struct SessionCreateResult {
@@ -280,61 +272,4 @@ pub enum LogLevel {
     Info = 3,
     Debug = 4,
     Trace = 5,
-}
-
-pub struct Session {
-    pub(crate) runtime: Runtime,
-    pub(crate) state: Arc<State>,
-    client_sender: ClientSender,
-    pub(crate) port_sender: PortSender,
-    _logger: Logger,
-}
-
-impl Session {
-    pub(crate) fn create(
-        configs_path: PathBuf,
-        log_path: Option<PathBuf>,
-        port_sender: PortSender,
-        client_sender: ClientSender,
-    ) -> Result<Self, SessionError> {
-        let root_monitor = StateMonitor::make_root();
-
-        // Init logger
-        let logger = Logger::new(
-            log_path.as_deref(),
-            Some(root_monitor.clone()),
-            LogFormat::Human,
-        )
-        .map_err(SessionError::InitializeLogger)?;
-
-        // Create runtime
-        let runtime = runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(SessionError::InitializeRuntime)?;
-        let _enter = runtime.enter(); // runtime context is needed for some of the following calls
-
-        let state = Arc::new(State::new(configs_path, root_monitor));
-        let session = Session {
-            runtime,
-            state,
-            client_sender,
-            port_sender,
-            _logger: logger,
-        };
-
-        Ok(session)
-    }
-}
-
-pub type SessionHandle = UniqueHandle<Session>;
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error("failed to initialize logger")]
-    InitializeLogger(#[source] io::Error),
-    #[error("failed to initialize runtime")]
-    InitializeRuntime(#[source] io::Error),
-    #[error("invalid utf8 string")]
-    InvalidUtf8(#[from] Utf8Error),
 }
