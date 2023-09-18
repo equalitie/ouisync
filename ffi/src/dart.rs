@@ -3,36 +3,14 @@
 // Most of this file is ripped from [dart-sys](https://crates.io/crates/dart-sys) and
 // [allo-isolate](https://crates.io/crates/allo-isolate)
 
-use crate::error::ErrorCode;
+use crate::session::Sender;
 use bytes::Bytes;
-use std::{ffi::CString, mem, os::raw::c_char};
+use std::{mem, os::raw::c_char};
 
 #[repr(C)]
 pub(crate) struct DartCObject {
     type_: DartCObjectType,
     value: DartCObjectValue,
-}
-
-impl From<String> for DartCObject {
-    fn from(value: String) -> Self {
-        DartCObject {
-            type_: DartCObjectType::String,
-            value: DartCObjectValue {
-                as_string: CString::new(value).unwrap_or_default().into_raw(),
-            },
-        }
-    }
-}
-
-impl From<ErrorCode> for DartCObject {
-    fn from(value: ErrorCode) -> Self {
-        DartCObject {
-            type_: DartCObjectType::Int32,
-            value: DartCObjectValue {
-                as_int32: value as u16 as i32,
-            },
-        }
-    }
 }
 
 // TODO: consider using `ExternallyTypedData` to avoid copies
@@ -60,14 +38,6 @@ impl From<Bytes> for DartCObject {
 impl Drop for DartCObject {
     fn drop(&mut self) {
         match self.type_ {
-            DartCObjectType::Int32 => (),
-            DartCObjectType::String => {
-                // SAFETY: When `type_` is `String` then `value` is a pointer to `CString`. This is
-                // guaranteed by construction.
-                unsafe {
-                    let _ = CString::from_raw(self.value.as_string);
-                }
-            }
             DartCObjectType::TypedData => {
                 // SAFETY: When `type_` is `TypedData` then `value` is a `DartTypedData`. This is
                 // guaranteed by construction.
@@ -94,10 +64,10 @@ impl Drop for DartCObject {
 pub(crate) enum DartCObjectType {
     // Null = 0,
     // Bool = 1,
-    Int32 = 2,
+    // Int32 = 2,
     // Int64 = 3,
     // Double = 4,
-    String = 5,
+    // String = 5,
     // Array = 6,
     TypedData = 7,
     // ExternalTypedData = 8,
@@ -151,24 +121,29 @@ pub(crate) type Port = i64;
 pub(crate) type PostDartCObjectFn = unsafe extern "C" fn(Port, *mut DartCObject) -> bool;
 
 /// Utility for sending values to dart.
-#[derive(Copy, Clone)]
 pub(crate) struct PortSender {
     post_c_object_fn: PostDartCObjectFn,
+    port: Port,
 }
 
 impl PortSender {
     /// # Safety
     ///
     /// `post_c_object_fn` must be a valid pointer to the `NativeApi.postCObject` dart function.
-    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn) -> Self {
-        Self { post_c_object_fn }
+    pub unsafe fn new(post_c_object_fn: PostDartCObjectFn, port: Port) -> Self {
+        Self {
+            post_c_object_fn,
+            port,
+        }
     }
+}
 
-    pub fn send(&self, port: Port, value: Bytes) {
+impl Sender for PortSender {
+    fn send(&self, msg: Bytes) {
         // Safety: `self` must be created via `PortSender::new` and its safety instructions must be
         // followed and `self.post_c_object_fn` can't be modified afterwards.
         unsafe {
-            (self.post_c_object_fn)(port, &mut value.into());
+            (self.post_c_object_fn)(self.port, &mut msg.into());
         }
     }
 }

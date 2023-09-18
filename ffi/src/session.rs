@@ -1,4 +1,5 @@
-use crate::{dart::PortSender, state::State, transport::ClientSender, utils::UniqueHandle};
+use crate::{state::State, transport::ClientSender, utils::UniqueHandle};
+use bytes::Bytes;
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
 use std::{io, path::PathBuf, str::Utf8Error, sync::Arc, time::Duration};
@@ -9,7 +10,6 @@ pub struct Session {
     pub(crate) runtime: runtime::Runtime,
     pub(crate) state: Arc<State>,
     pub(crate) client_sender: ClientSender,
-    pub(crate) port_sender: PortSender,
     _logger: Logger,
 }
 
@@ -17,7 +17,6 @@ impl Session {
     pub(crate) fn create(
         configs_path: PathBuf,
         log_path: Option<PathBuf>,
-        port_sender: PortSender,
         client_sender: ClientSender,
     ) -> Result<Self, SessionError> {
         let root_monitor = StateMonitor::make_root();
@@ -42,7 +41,6 @@ impl Session {
             runtime,
             state,
             client_sender,
-            port_sender,
             _logger: logger,
         };
 
@@ -75,4 +73,8 @@ pub enum SessionError {
     InitializeRuntime(#[source] io::Error),
     #[error("invalid utf8 string")]
     InvalidUtf8(#[from] Utf8Error),
+}
+
+pub(crate) trait Sender {
+    fn send(&self, msg: Bytes);
 }

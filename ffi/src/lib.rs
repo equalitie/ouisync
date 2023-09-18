@@ -71,12 +71,12 @@ impl From<Result<Session, SessionError>> for SessionCreateResult {
 /// - `configs_path` must be a pointer to a nul-terminated utf-8 encoded string
 #[no_mangle]
 pub unsafe extern "C" fn session_create(
-    post_c_object_fn: *const c_void,
     configs_path: *const c_char,
     log_path: *const c_char,
-    server_tx_port: Port,
+    post_c_object_fn: *const c_void,
+    port: Port,
 ) -> SessionCreateResult {
-    let port_sender = PortSender::new(mem::transmute(post_c_object_fn));
+    let sender = PortSender::new(mem::transmute(post_c_object_fn), port);
 
     let configs_path = match utils::ptr_to_str(configs_path) {
         Ok(configs_path) => PathBuf::from(configs_path),
@@ -88,8 +88,8 @@ pub unsafe extern "C" fn session_create(
         Err(error) => return Err(SessionError::from(error)).into(),
     };
 
-    let (server, client_tx) = Server::new(port_sender, server_tx_port);
-    let result = Session::create(configs_path, log_path, port_sender, client_tx);
+    let (server, client_tx) = Server::new(sender);
+    let result = Session::create(configs_path, log_path, client_tx);
 
     if let Ok(session) = &result {
         session
@@ -150,23 +150,27 @@ pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHand
 ///
 /// # Safety
 ///
-/// `session` must be a valid session handle, `handle` must be a valid file holder handle, `fd`
-/// must be a valid and open file descriptor and `port` must be a valid dart native port.
+/// - `session` must be a valid session handle
+/// - `handle` must be a valid file holder handle
+/// - `fd` must be a valid and open file descriptor
+/// - `post_c_object_fn` must be a pointer to the dart's `NativeApi.postCObject` function
+/// - `port` must be a valid dart native port
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn file_copy_to_raw_fd(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
+    post_c_object_fn: *const c_void,
     port: Port,
 ) {
-    use crate::error::Error;
+    use crate::{error::Error, session::Sender};
     use bytes::{BufMut, BytesMut};
     use std::{io::SeekFrom, os::fd::FromRawFd};
     use tokio::fs;
 
     let session = session.get();
-    let port_sender = session.port_sender;
+    let sender = PortSender::new(mem::transmute(post_c_object_fn), port);
 
     let src = session.state.files.get(handle);
     let mut dst = fs::File::from_raw_fd(fd);
@@ -177,8 +181,8 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
         let result = src.copy_to_writer(&mut dst).await;
 
         match result {
-            Ok(()) => port_sender.send(port, Bytes::new()),
-            Err(error) => port_sender.send(port, encode_error(&error.into())),
+            Ok(()) => sender.send(Bytes::new()),
+            Err(error) => sender.send(encode_error(&error.into())),
         }
     });
 
