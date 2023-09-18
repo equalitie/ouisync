@@ -1,16 +1,16 @@
 use crate::{dart::PortSender, state::State, transport::ClientSender, utils::UniqueHandle};
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
-use std::{io, path::PathBuf, str::Utf8Error, sync::Arc};
+use std::{io, path::PathBuf, str::Utf8Error, sync::Arc, time::Duration};
 use thiserror::Error;
-use tokio::runtime::{self, Runtime};
+use tokio::{runtime, time};
 
 pub struct Session {
-    pub(crate) runtime: Runtime,
+    pub(crate) runtime: runtime::Runtime,
     pub(crate) state: Arc<State>,
     pub(crate) client_sender: ClientSender,
     pub(crate) port_sender: PortSender,
-    pub(crate) _logger: Logger,
+    _logger: Logger,
 }
 
 impl Session {
@@ -47,6 +47,21 @@ impl Session {
         };
 
         Ok(session)
+    }
+
+    pub(crate) fn shutdown_network_and_close(self) {
+        let Self {
+            runtime,
+            state,
+            _logger,
+            ..
+        } = self;
+
+        runtime.block_on(async move {
+            time::timeout(Duration::from_millis(500), state.network.shutdown())
+                .await
+                .unwrap_or(())
+        });
     }
 }
 

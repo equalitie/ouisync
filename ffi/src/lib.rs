@@ -23,20 +23,18 @@ use crate::{
     file::FileHolder,
     handler::Handler,
     registry::Handle,
-    session::{Session, SessionError, SessionHandle},
+    session::SessionHandle,
     transport::Server,
 };
-use bytes::Bytes;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use session::{Session, SessionError};
 use std::{
     ffi::CString,
     mem,
     os::raw::{c_char, c_int, c_void},
     path::PathBuf,
     ptr, slice,
-    time::Duration,
 };
-use tokio::time;
 
 #[repr(C)]
 pub struct SessionCreateResult {
@@ -75,7 +73,7 @@ pub unsafe extern "C" fn session_create(
     post_c_object_fn: *const c_void,
     configs_path: *const c_char,
     log_path: *const c_char,
-    server_tx_port: Port<Bytes>,
+    server_tx_port: Port,
 ) -> SessionCreateResult {
     let port_sender = PortSender::new(mem::transmute(post_c_object_fn));
 
@@ -140,18 +138,7 @@ pub unsafe extern "C" fn session_channel_send(
 /// `session` must be a valid session handle.
 #[no_mangle]
 pub unsafe extern "C" fn session_shutdown_network_and_close(session: SessionHandle) {
-    let Session {
-        runtime,
-        state,
-        _logger,
-        ..
-    } = *session.release();
-
-    runtime.block_on(async move {
-        time::timeout(Duration::from_millis(500), state.network.shutdown())
-            .await
-            .unwrap_or(())
-    });
+    session.release().shutdown_network_and_close();
 }
 
 /// Copy the file contents into the provided raw file descriptor.
@@ -170,7 +157,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
     session: SessionHandle,
     handle: Handle<FileHolder>,
     fd: c_int,
-    port: Port<Result<(), ouisync_lib::Error>>,
+    port: Port,
 ) {
     use std::os::unix::io::FromRawFd;
     use tokio::fs;
@@ -185,7 +172,7 @@ pub unsafe extern "C" fn file_copy_to_raw_fd(
         let mut src = src.file.lock().await;
         let result = src.copy_to_writer(&mut dst).await;
 
-        port_sender.send_result(port, result);
+        port_sender.send_status(port, result);
     });
 }
 

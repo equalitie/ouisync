@@ -21,7 +21,7 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub fn new(port_sender: PortSender, sender_tx_port: Port<Bytes>) -> (Self, ClientSender) {
+    pub fn new(port_sender: PortSender, sender_tx_port: Port) -> (Self, ClientSender) {
         let (socket, client_tx) = Socket::new(port_sender, sender_tx_port);
         let server = Self { socket };
 
@@ -37,12 +37,12 @@ pub(crate) type ClientSender = mpsc::UnboundedSender<BytesMut>;
 
 struct Socket {
     port_sender: PortSender,
-    server_tx_port: Port<Bytes>,
+    server_tx_port: Port,
     server_rx: UnboundedReceiverStream<BytesMut>,
 }
 
 impl Socket {
-    fn new(port_sender: PortSender, server_tx_port: Port<Bytes>) -> (Self, ClientSender) {
+    fn new(port_sender: PortSender, server_tx_port: Port) -> (Self, ClientSender) {
         let (client_tx, server_rx) = mpsc::unbounded_channel();
 
         let socket = Self {
@@ -71,7 +71,7 @@ impl futures_util::Sink<Bytes> for Socket {
     }
 
     fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        self.port_sender.send(self.server_tx_port, item);
+        self.port_sender.send_bytes(self.server_tx_port, item);
         Ok(())
     }
 
