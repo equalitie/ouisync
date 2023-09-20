@@ -41,24 +41,14 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
-tasks.register('buildNative', CargoBuildTask) {
-    group 'build'
+tasks.register('buildTestNative', Exec) {
     description 'Build the native library'
-
-    crate = 'ouisync-ffi'
-    libname = 'ouisync_ffi'
-    // target = 'aarch64-linux-android'
-    workingDir = file('../..')
-}
-
-tasks.named('classes') {
-    dependsOn('buildNative')
+    workingDir '../..'
+    commandLine 'cargo', 'build', '--package', 'ouisync-ffi', '--lib'
 }
 
 tasks.named('test') {
-    systemProperty(
-        'jna.library.path',
-        layout.buildDirectory.dir('native').get().getAsFile()
-    )
+    dependsOn('buildTestNative')
+    systemProperty('jna.library.path', '../../target/debug')
 }
 
