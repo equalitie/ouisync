@@ -115,13 +115,13 @@ pub unsafe extern "C" fn session_create(
     result.into()
 }
 
-/// Destroys the ouisync session.
+/// Closes the ouisync session.
 ///
 /// # Safety
 ///
 /// `session` must be a valid session handle.
 #[no_mangle]
-pub unsafe extern "C" fn session_destroy(session: SessionHandle) {
+pub unsafe extern "C" fn session_close(session: SessionHandle) {
     session.release();
 }
 
