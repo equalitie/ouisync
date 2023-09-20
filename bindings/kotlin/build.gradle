@@ -12,15 +12,15 @@ repositories {
 }
 
 dependencies {
-    // Use the Kotlin JUnit 5 integration.
-    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+    implementation 'net.java.dev.jna:jna:5.13.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+    implementation 'org.msgpack:msgpack-core:0.9.5'
 
-    // Use the JUnit 5 integration.
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.3'
 
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-
-    implementation group: 'net.java.dev.jna', name: 'jna', version: '5.13.0'
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
