@@ -134,13 +134,13 @@ pub(crate) enum Request {
     NetworkInit(NetworkDefaults),
     NetworkSubscribe,
     NetworkBind {
-        #[serde(with = "as_option_str")]
+        #[serde(with = "as_option_str", default)]
         quic_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str")]
+        #[serde(with = "as_option_str", default)]
         quic_v6: Option<SocketAddrV6>,
-        #[serde(with = "as_option_str")]
+        #[serde(with = "as_option_str", default)]
         tcp_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str")]
+        #[serde(with = "as_option_str", default)]
         tcp_v6: Option<SocketAddrV6>,
     },
     NetworkTcpListenerLocalAddrV4,

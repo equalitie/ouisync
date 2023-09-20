@@ -5,7 +5,8 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
-import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
 
 class SessionTest {
@@ -33,5 +34,24 @@ class SessionTest {
             defaultPortForwardingEnabled = false,
             defaultLocalDiscoveryEnabled = false,
         )
+    }
+
+    @Test
+    fun bindNetwork() = runTest {
+        session.bindNetwork(quicV4 = "0.0.0.0:0")
+
+        assertNotNull(session.quicListenerLocalAddrV4())
+        assertNull(session.quicListenerLocalAddrV6())
+        assertNull(session.tcpListenerLocalAddrV4())
+        assertNull(session.tcpListenerLocalAddrV6())
+    }
+
+    @Test
+    fun addAndRemoveUserProvidedPeer() = runTest {
+        val addr = "quic/192.0.2.0:1234"
+        session.addUserProvidedPeer(addr)
+        session.removeUserProvidedPeer(addr)
+
+        // TODO: check peer list
     }
 }

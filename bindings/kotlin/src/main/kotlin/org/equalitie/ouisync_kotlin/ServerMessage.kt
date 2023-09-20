@@ -17,8 +17,8 @@ internal sealed interface ServerMessage {
             val kind = unpacker.unpackString()
 
             when (kind) {
-                "success" -> return Response.unpack(unpacker)
-                "failure" -> throw Error.unpack(unpacker)
+                "success" -> return Success.unpack(unpacker)
+                "failure" -> return Failure.unpack(unpacker)
                 "notification" -> return Notification.unpack(unpacker)
                 else -> throw InvalidMessage()
             }
@@ -26,21 +26,60 @@ internal sealed interface ServerMessage {
     }
 }
 
-internal class Response(val content: Any?) : ServerMessage {
+internal sealed interface Response : ServerMessage
+
+internal class Success(val value: Any?) : Response {
     companion object {
         fun unpack(unpacker: MessageUnpacker): Response {
             when (unpacker.getNextFormat().getValueType()) {
                 ValueType.STRING -> {
                     if (unpacker.unpackString() == "none") {
-                        return Response(null)
+                        return Success(null)
                     } else {
                         throw InvalidResponse()
                     }
                 }
                 ValueType.MAP -> {
-                    throw Exception("TODO")
+                    if (unpacker.unpackMapHeader() < 1) {
+                        throw InvalidResponse()
+                    }
+
+                    val name = unpacker.unpackString()
+                    val value = unpackValue(name, unpacker)
+
+                    return Success(value)
                 }
                 else -> throw InvalidResponse()
+            }
+        }
+
+        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any? =
+            when (unpacker.getNextFormat().getValueType()) {
+                ValueType.STRING -> unpacker.unpackString()
+                else -> throw InvalidResponse()
+            }
+
+    }
+}
+
+internal class Failure(val error: Error) : Response {
+    companion object {
+        fun unpack(unpacker: MessageUnpacker): Response {
+            if (unpacker.getNextFormat().getValueType() != ValueType.ARRAY) {
+                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
+            }
+
+            if (unpacker.unpackArrayHeader() < 2) {
+                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
+            }
+
+            try {
+                val code = ErrorCode.fromShort(unpacker.unpackShort())
+                val message = unpacker.unpackString()
+
+                return Failure(Error(code, message))
+            } catch (e: Exception) {
+                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
             }
         }
     }

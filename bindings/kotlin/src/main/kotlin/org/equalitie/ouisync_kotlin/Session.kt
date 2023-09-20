@@ -1,21 +1,7 @@
 package org.equalitie.ouisync_kotlin
 
 import com.sun.jna.Pointer
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
-import java.io.EOFException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import org.msgpack.core.MessagePack
-
-import org.equalitie.ouisync_kotlin.NetworkInitRequest
-import org.equalitie.ouisync_kotlin.Request
-import org.equalitie.ouisync_kotlin.Response
-import org.equalitie.ouisync_kotlin.ServerMessage
 
 class Session private constructor(val handle: Long, private val client: Client) {
     companion object {
@@ -71,80 +57,37 @@ class Session private constructor(val handle: Long, private val client: Client) 
 
         assert(response == null)
     }
-}
 
-private class Client {
-    internal var sessionHandle: Long = 0
-
-    val mutex = Mutex()
-    var nextMessageId: Long = 0
-    val responses: HashMap<Long, CompletableDeferred<Any?>> = HashMap()
-
-    suspend fun invoke(request: Request): Any? {
-        val id = getMessageId()
-
-        val stream = ByteArrayOutputStream()
-        DataOutputStream(stream).writeLong(id)
-        val packer = MessagePack.newDefaultPacker(stream)
-        request.pack(packer)
-        packer.close()
-        val message = stream.toByteArray()
-
-        val deferred = CompletableDeferred<Any?>()
-
-        mutex.withLock {
-            responses.put(id, deferred)
-        }
-
-        Session.bindings.session_channel_send(sessionHandle, message, message.size)
-
-        return deferred.await()
+    suspend fun bindNetwork(
+        quicV4: String? = null,
+        quicV6: String? = null,
+        tcpV4: String? = null,
+        tcpV6: String? = null,
+    ) {
+        val response = client.invoke(NetworkBindRequest(quicV4, quicV6, tcpV4, tcpV6))
+        assert(response == null)
     }
 
-    suspend fun receive(buffer: ByteArray) {
-        val stream = ByteArrayInputStream(buffer)
+    suspend fun quicListenerLocalAddrV4(): String? =
+        client.invoke(NetworkQuicListenerLocalAddrV4Request()) as String?
 
-        val id = try {
-            DataInputStream(stream).readLong()
-        } catch (e: EOFException) {
-            return
-        }
+    suspend fun quicListenerLocalAddrV6(): String? =
+        client.invoke(NetworkQuicListenerLocalAddrV6Request()) as String?
 
-        try {
-            val unpacker = MessagePack.newDefaultUnpacker(stream)
-            val message = ServerMessage.unpack(unpacker)
+    suspend fun tcpListenerLocalAddrV4(): String? =
+        client.invoke(NetworkTcpListenerLocalAddrV4Request()) as String?
 
-            when (message) {
-                is Response -> handleResponse(id, message.content)
-                is Notification -> handleNotification(id, message.content)
-            }
-        } catch (e: Exception) {
-            handleInvalidMessage(id)
-        }
+    suspend fun tcpListenerLocalAddrV6(): String? =
+        client.invoke(NetworkTcpListenerLocalAddrV6Request()) as String?
+
+    suspend fun addUserProvidedPeer(addr: String) {
+        val response = client.invoke(NetworkAddUserProvidedPeerRequest(addr))
+        assert(response == null)
     }
 
-    private suspend fun handleResponse(id: Long, content: Any?) {
-        mutex.withLock {
-            responses.remove(id)?.complete(content)
-        }
-    }
-
-    private suspend fun handleNotification(id: Long, content: Any?) {
-        // ...
-    }
-
-    private suspend fun handleInvalidMessage(id: Long) {
-        // ...
-    }
-
-    private fun getMessageId(): Long {
-        val id = nextMessageId
-        nextMessageId += 1
-        return id
+    suspend fun removeUserProvidedPeer(addr: String) {
+        val response = client.invoke(NetworkRemoveUserProvidedPeerRequest(addr))
+        assert(response == null)
     }
 }
-
-private data class ServerEnvelope(val id: Long, val content: ServerMessage)
-
-
 

@@ -38,6 +38,17 @@ private fun String.toSnakeCase(): String {
     return builder.toString()
 }
 
+internal open class EmptyRequest : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packNil()
+    }
+}
+
+internal open class StringRequest(val value: String) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packString(value)
+    }
+}
 
 /*
     RepositoryCreate {
@@ -171,25 +182,46 @@ internal data class NetworkInitRequest(
     }
 }
 
+internal data class NetworkBindRequest(
+    val quicV4: String?,
+    val quicV6: String?,
+    val tcpV4:  String?,
+    val tcpV6:  String?,
+) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        val entries = arrayOf(
+            "quic_v4" to quicV4,
+            "quic_v6" to quicV6,
+            "tcp_v4" to tcpV4,
+            "tcp_v6" to tcpV6
+        ).filter { it.second != null }
 
+        packer.packMapHeader(entries.size)
+
+        for ((key, value) in entries) {
+            packer.packString(key)
+            packer.packString(value)
+        }
+    }
+}
 /*
     NetworkSubscribe,
-    NetworkBind {
-        #[serde(with = "as_option_str")]
-        quic_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str")]
-        quic_v6: Option<SocketAddrV6>,
-        #[serde(with = "as_option_str")]
-        tcp_v4: Option<SocketAddrV4>,
-        #[serde(with = "as_option_str")]
-        tcp_v6: Option<SocketAddrV6>,
-    },
-    NetworkTcpListenerLocalAddrV4,
-    NetworkTcpListenerLocalAddrV6,
-    NetworkQuicListenerLocalAddrV4,
-    NetworkQuicListenerLocalAddrV6,
-    NetworkAddUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
-    NetworkRemoveUserProvidedPeer(#[serde(with = "as_str")] PeerAddr),
+*/
+
+internal class NetworkTcpListenerLocalAddrV4Request : EmptyRequest()
+internal class NetworkTcpListenerLocalAddrV6Request : EmptyRequest()
+internal class NetworkQuicListenerLocalAddrV4Request : EmptyRequest()
+internal class NetworkQuicListenerLocalAddrV6Request : EmptyRequest()
+
+internal class NetworkAddUserProvidedPeerRequest : StringRequest {
+    constructor(value: String) : super(value)
+}
+
+internal class NetworkRemoveUserProvidedPeerRequest : StringRequest {
+    constructor(value: String) : super(value)
+}
+
+/*
     NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
