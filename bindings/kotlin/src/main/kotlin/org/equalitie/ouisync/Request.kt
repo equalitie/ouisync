@@ -50,6 +50,12 @@ internal open class BooleanRequest(val value: Boolean) : Request() {
     }
 }
 
+internal open class LongRequest(val value: Long) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packLong(value)
+    }
+}
+
 internal open class StringRequest(val value: String) : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packString(value)
@@ -210,13 +216,15 @@ internal data class NetworkBind(
         }
     }
 }
-/*
-    NetworkSubscribe,
-*/
+
+internal class NetworkSubscribe : EmptyRequest()
 
 internal class NetworkTcpListenerLocalAddrV4 : EmptyRequest()
+
 internal class NetworkTcpListenerLocalAddrV6 : EmptyRequest()
+
 internal class NetworkQuicListenerLocalAddrV4 : EmptyRequest()
+
 internal class NetworkQuicListenerLocalAddrV6 : EmptyRequest()
 
 internal class NetworkAddUserProvidedPeer : StringRequest {
@@ -228,8 +236,11 @@ internal class NetworkRemoveUserProvidedPeer : StringRequest {
 }
 
 internal class NetworkKnownPeers : EmptyRequest()
+
 internal class NetworkThisRuntimeId : EmptyRequest()
+
 internal class NetworkCurrentProtocolVersion : EmptyRequest()
+
 internal class NetworkHighestSeenProtocolVersion : EmptyRequest()
 
 internal class NetworkIsPortForwardingEnabled : EmptyRequest()
@@ -250,8 +261,11 @@ internal class NetworkAddStorageServer : StringRequest {
 
 internal class NetworkShutdown : EmptyRequest()
 
+internal class Unsubscribe : LongRequest {
+    constructor(value: Long) : super(value)
+}
+
 /*
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
-    Unsubscribe(SubscriptionHandle),
 */

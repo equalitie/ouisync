@@ -6,6 +6,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -51,10 +52,23 @@ class SessionTest {
     @Test
     fun addAndRemoveUserProvidedPeer() = runTest {
         val addr = "quic/127.0.0.1:1234"
-        session.addUserProvidedPeer(addr)
-        session.removeUserProvidedPeer(addr)
+        val events = session.subscribeToNetworkEvents()
 
-        // TODO: check peer list
+        val peers0 = session.peers()
+        assertTrue(peers0.isEmpty())
+
+        session.addUserProvidedPeer(addr)
+        assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
+
+        val peers1 = session.peers()
+        assertEquals(1, peers1.size)
+        assertEquals(addr, "quic/${peers1[0].ip}:${peers1[0].port}")
+
+        session.removeUserProvidedPeer(addr)
+        assertEquals(NetworkEvent.PEER_SET_CHANGE, events.receive())
+
+        val peers2 = session.peers()
+        assertTrue(peers2.isEmpty())
     }
 
     @Test

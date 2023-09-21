@@ -1,6 +1,7 @@
 package org.equalitie.ouisync
 
 import com.sun.jna.Pointer
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 
 class Session private constructor(val handle: Long, private val client: Client) {
@@ -70,6 +71,9 @@ class Session private constructor(val handle: Long, private val client: Client) 
         assert(response == null)
     }
 
+    suspend fun subscribeToNetworkEvents(): EventReceiver<NetworkEvent> =
+        client.subscribe(NetworkSubscribe())
+
     suspend fun quicListenerLocalAddrV4(): String? =
         client.invoke(NetworkQuicListenerLocalAddrV4()) as String?
 
@@ -135,20 +139,6 @@ class Session private constructor(val handle: Long, private val client: Client) 
 
     // Future<void> addStorageServer(String host) =>
     //     client.invoke<void>('network_add_storage_server', host);
-
-    // /// Destroys the session.
-    // Future<void> dispose() async {
-    //   if (debugTrace) {
-    //     print("Session.dispose");
-    //   }
-
-    //   await _networkSubscription.close();
-
-    //   if (handle != 0) {
-    //     b.bindings.session_destroy(handle);
-    //     NativeChannels.session = null;
-    //   }
-    // }
 
     // /// Try to gracefully close connections to peers.
     // Future<void> shutdownNetwork() async {

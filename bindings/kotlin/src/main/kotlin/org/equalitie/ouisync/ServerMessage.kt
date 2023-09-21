@@ -50,6 +50,26 @@ data class PeerInfo(
     }
 }
 
+enum class NetworkEvent {
+    PROTOCOL_VERSION_MISMATCH, // 0
+    PEER_SET_CHANGE, // = 1
+
+    ;
+
+    companion object {
+        fun fromByte(n: Byte): NetworkEvent = when (n.toInt()) {
+            0 -> PROTOCOL_VERSION_MISMATCH
+            1 -> PEER_SET_CHANGE
+            else -> throw IllegalArgumentException()
+        }
+    }
+
+    fun toByte(): Byte = when (this) {
+        PROTOCOL_VERSION_MISMATCH -> 0
+        PEER_SET_CHANGE -> 1
+    }
+}
+
 internal sealed interface ServerMessage {
     companion object {
         fun unpack(unpacker: MessageUnpacker): ServerMessage {
@@ -87,7 +107,7 @@ internal class Success(val value: Any?) : Response {
                     }
                 }
                 ValueType.MAP -> {
-                    if (unpacker.unpackMapHeader() < 1) {
+                    if (unpacker.unpackMapHeader() != 1) {
                         throw InvalidResponse()
                     }
 
@@ -109,7 +129,14 @@ internal class Success(val value: Any?) : Response {
                     }
                 }
                 ValueType.BOOLEAN -> unpacker.unpackBoolean()
-                ValueType.INTEGER -> unpacker.unpackInt()
+                ValueType.INTEGER -> {
+                    when (name) {
+                        "u8" -> unpacker.unpackByte()
+                        "u32" -> unpacker.unpackInt()
+                        "u64", "handle" -> unpacker.unpackLong()
+                        else -> throw InvalidResponse()
+                    }
+                }
                 ValueType.STRING -> unpacker.unpackString()
                 else -> throw InvalidResponse()
             }
@@ -130,7 +157,7 @@ internal class Failure(val error: Error) : Response {
                 return Failure(INVALID_ERROR)
             }
 
-            if (unpacker.unpackArrayHeader() < 2) {
+            if (unpacker.unpackArrayHeader() != 2) {
                 return Failure(INVALID_ERROR)
             }
 
@@ -146,10 +173,31 @@ internal class Failure(val error: Error) : Response {
     }
 }
 
-internal class Notification(val content: Any) : ServerMessage {
+internal class Notification(val content: Any?) : ServerMessage {
     companion object {
         fun unpack(unpacker: MessageUnpacker): Notification {
-            throw Exception("TODO")
+            val name = when (unpacker.getNextFormat().getValueType()) {
+                ValueType.STRING -> unpacker.unpackString()
+                ValueType.MAP -> {
+                    if (unpacker.unpackMapHeader() != 1) {
+                        throw InvalidNotification()
+                    }
+
+                    unpacker.unpackString()
+                }
+                else -> throw InvalidNotification()
+            }
+
+            val value = unpackValue(name, unpacker)
+
+            return Notification(value)
+        }
+
+        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any? {
+            when (name) {
+                "network" -> return NetworkEvent.fromByte(unpacker.unpackByte())
+                else -> throw InvalidNotification()
+            }
         }
     }
 }
@@ -160,10 +208,10 @@ internal open class InvalidMessage : Exception {
 }
 
 internal class InvalidResponse : InvalidMessage("invalid response")
+internal class InvalidNotification : InvalidMessage("invalid notification")
 
 // pub(crate) enum Response {
 //     Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
-//     Handle(u64),
 //     Directory(Directory),
 //     StateMonitor(StateMonitor),
 //     Progress(Progress),
