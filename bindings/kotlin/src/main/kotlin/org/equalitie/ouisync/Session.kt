@@ -28,13 +28,15 @@ class Session private constructor(val handle: Long, private val client: Client) 
                 callback,
             )
 
-            if (result.error_code == ErrorCode.OK) {
+            val errorCode = ErrorCode.fromShort(result.error_code)
+
+            if (errorCode == ErrorCode.OK) {
                 return Session(result.handle, client)
             } else {
                 val message = result.error_message?.getString(0) ?: "unknown error"
                 bindings.free_string(result.error_message)
 
-                throw Error(result.error_code, message)
+                throw Error(errorCode, message)
             }
         }
     }
@@ -47,6 +49,9 @@ class Session private constructor(val handle: Long, private val client: Client) 
         bindings.session_destroy(handle)
     }
 
+    /**
+     * Initializes the network according to the stored configuration.
+     */
     suspend fun initNetwork(
         defaultPortForwardingEnabled: Boolean,
         defaultLocalDiscoveryEnabled: Boolean,
@@ -61,6 +66,9 @@ class Session private constructor(val handle: Long, private val client: Client) 
         assert(response == null)
     }
 
+    /**
+     * Binds the network listeners to the specified interfaces.
+     */
     suspend fun bindNetwork(
         quicV4: String? = null,
         quicV6: String? = null,
@@ -137,11 +145,11 @@ class Session private constructor(val handle: Long, private val client: Client) 
      */
     suspend fun thisRuntimeId(): String = client.invoke(NetworkThisRuntimeId()) as String
 
-    // Future<void> addStorageServer(String host) =>
-    //     client.invoke<void>('network_add_storage_server', host);
+    suspend fun addStorageServer(host: String) =
+        client.invoke(NetworkAddStorageServer(host))
 
-    // /// Try to gracefully close connections to peers.
-    // Future<void> shutdownNetwork() async {
-    //   await client.invoke<void>('network_shutdown');
-    // }
+    /**
+     * Try to gracefully close connections to peers.
+     */
+    suspend fun shutdownNetwork() = client.invoke(NetworkShutdown())
 }

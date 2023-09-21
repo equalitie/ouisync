@@ -1,9 +1,9 @@
+// TODO: This file should be auto-generated
+
 package org.equalitie.ouisync
 
-import com.sun.jna.FromNativeContext
 import com.sun.jna.Library
 import com.sun.jna.Native
-import com.sun.jna.NativeMapped
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.Structure.FieldOrder
@@ -39,11 +39,11 @@ interface Callback : JnaCallback {
 @FieldOrder("handle", "error_code", "error_message")
 internal class SessionCreateResult(
     @JvmField var handle: Handle = 0,
-    @JvmField var error_code: ErrorCode = ErrorCode.OK,
+    @JvmField var error_code: Short = ErrorCode.OK.toShort(),
     @JvmField var error_message: Pointer? = null,
 ) : Structure(), Structure.ByValue
 
-enum class ErrorCode : NativeMapped {
+enum class ErrorCode {
     OK,
     STORE,
     PERMISSION_DENIED,
@@ -90,32 +90,44 @@ enum class ErrorCode : NativeMapped {
         }
     }
 
-    override fun fromNative(nativeValue: Any, context: FromNativeContext): Any =
-        fromShort(nativeValue as Short)
+    internal fun toShort(): Short = when (this) {
+        OK -> 0
+        STORE -> 1
+        PERMISSION_DENIED -> 2
+        MALFORMED_DATA -> 3
+        ENTRY_EXISTS -> 4
+        ENTRY_NOT_FOUND -> 5
+        AMBIGUOUS_ENTRY -> 6
+        DIRECTORY_NOT_EMPTY -> 7
+        OPERATION_NOT_SUPPORTED -> 8
+        CONFIG -> 10
+        INVALID_ARGUMENT -> 11
+        MALFORMED_MESSAGE -> 12
+        STORAGE_VERSION_MISMATCH -> 13
+        CONNECTION_LOST -> 14
+        VFS_INVALID_MOUNT_POINT -> 2048
+        VFS_DRIVER_INSTALL -> 2049
+        VFS_BACKEND -> 2050
+        OTHER -> 65535
+    }.toShort()
+}
 
-    override fun toNative(): Any =
-        when (this) {
-            OK -> 0
-            STORE -> 1
-            PERMISSION_DENIED -> 2
-            MALFORMED_DATA -> 3
-            ENTRY_EXISTS -> 4
-            ENTRY_NOT_FOUND -> 5
-            AMBIGUOUS_ENTRY -> 6
-            DIRECTORY_NOT_EMPTY -> 7
-            OPERATION_NOT_SUPPORTED -> 8
-            CONFIG -> 10
-            INVALID_ARGUMENT -> 11
-            MALFORMED_MESSAGE -> 12
-            STORAGE_VERSION_MISMATCH -> 13
-            CONNECTION_LOST -> 14
-            VFS_INVALID_MOUNT_POINT -> 2048
-            VFS_DRIVER_INSTALL -> 2049
-            VFS_BACKEND -> 2050
-            OTHER -> 65535
-        }.toShort()
+enum class NetworkEvent {
+    PROTOCOL_VERSION_MISMATCH, // 0
+    PEER_SET_CHANGE, // 1
 
-    override fun nativeType(): Class<Short> {
-        return Short::class.java
+    ;
+
+    companion object {
+        fun fromByte(n: Byte): NetworkEvent = when (n.toInt()) {
+            0 -> PROTOCOL_VERSION_MISMATCH
+            1 -> PEER_SET_CHANGE
+            else -> throw IllegalArgumentException()
+        }
+    }
+
+    fun toByte(): Byte = when (this) {
+        PROTOCOL_VERSION_MISMATCH -> 0
+        PEER_SET_CHANGE -> 1
     }
 }

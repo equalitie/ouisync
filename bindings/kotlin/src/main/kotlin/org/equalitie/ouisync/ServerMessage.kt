@@ -50,26 +50,6 @@ data class PeerInfo(
     }
 }
 
-enum class NetworkEvent {
-    PROTOCOL_VERSION_MISMATCH, // 0
-    PEER_SET_CHANGE, // = 1
-
-    ;
-
-    companion object {
-        fun fromByte(n: Byte): NetworkEvent = when (n.toInt()) {
-            0 -> PROTOCOL_VERSION_MISMATCH
-            1 -> PEER_SET_CHANGE
-            else -> throw IllegalArgumentException()
-        }
-    }
-
-    fun toByte(): Byte = when (this) {
-        PROTOCOL_VERSION_MISMATCH -> 0
-        PEER_SET_CHANGE -> 1
-    }
-}
-
 internal sealed interface ServerMessage {
     companion object {
         fun unpack(unpacker: MessageUnpacker): ServerMessage {
