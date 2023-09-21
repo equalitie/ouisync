@@ -100,7 +100,7 @@ internal class Success(val value: Any?) : Response {
             }
         }
 
-        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any? =
+        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any =
             when (unpacker.getNextFormat().getValueType()) {
                 ValueType.ARRAY -> {
                     when (name) {
@@ -153,7 +153,7 @@ internal class Failure(val error: Error) : Response {
     }
 }
 
-internal class Notification(val content: Any?) : ServerMessage {
+internal class Notification(val content: Any) : ServerMessage {
     companion object {
         fun unpack(unpacker: MessageUnpacker): Notification {
             val name = when (unpacker.getNextFormat().getValueType()) {
@@ -173,7 +173,7 @@ internal class Notification(val content: Any?) : ServerMessage {
             return Notification(value)
         }
 
-        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any? {
+        private fun unpackValue(name: String, unpacker: MessageUnpacker): Any {
             when (name) {
                 "network" -> return NetworkEvent.fromByte(unpacker.unpackByte())
                 else -> throw InvalidNotification()

@@ -38,49 +38,60 @@ private fun String.toSnakeCase(): String {
     return builder.toString()
 }
 
-internal open class EmptyRequest : Request() {
+internal abstract class EmptyRequest : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packNil()
     }
 }
 
-internal open class BooleanRequest(val value: Boolean) : Request() {
+internal abstract class ValueRequest<T : Any>(val value: T) : Request() {
     override fun packContent(packer: MessagePacker) {
-        packer.packBoolean(value)
+        packer.packAny(value)
     }
 }
 
-internal open class LongRequest(val value: Long) : Request() {
+internal data class RepositoryCreate(
+    val path: String,
+    val readPassword: String?,
+    val writePassword: String?,
+    val shareToken: String?,
+) : Request() {
     override fun packContent(packer: MessagePacker) {
-        packer.packLong(value)
+        packer.packMap(
+            mapOf(
+                "path" to path,
+                "readPassword" to readPassword,
+                "writePassword" to writePassword,
+                "shareToken" to shareToken,
+            ),
+        )
     }
 }
 
-internal open class StringRequest(val value: String) : Request() {
+internal data class RepositoryOpen(val path: String, val password: String?) : Request() {
     override fun packContent(packer: MessagePacker) {
-        packer.packString(value)
+        packer.packMap(mapOf("path" to path, "password" to password))
     }
+}
+
+internal class RepositoryClose : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
 }
 
 /*
-    RepositoryCreate {
-        path: Utf8PathBuf,
-        read_password: Option<String>,
-        write_password: Option<String>,
-        share_token: Option<ShareToken>,
-    },
-    RepositoryOpen {
-        path: Utf8PathBuf,
-        password: Option<String>,
-    },
-    RepositoryClose(Handle<RepositoryHolder>),
     RepositoryCreateReopenToken(Handle<RepositoryHolder>),
     RepositoryReopen {
         path: Utf8PathBuf,
         #[serde(with = "serde_bytes")]
         token: Vec<u8>,
     },
-    RepositorySubscribe(Handle<RepositoryHolder>),
+*/
+
+internal class RepositorySubscribe : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+/*
     RepositorySetReadAccess {
         repository: Handle<RepositoryHolder>,
         password: Option<String>,
@@ -96,7 +107,13 @@ internal open class StringRequest(val value: String) : Request() {
     RepositoryRemoveWriteKey(Handle<RepositoryHolder>),
     RepositoryRequiresLocalPasswordForReading(Handle<RepositoryHolder>),
     RepositoryRequiresLocalPasswordForWriting(Handle<RepositoryHolder>),
-    RepositoryInfoHash(Handle<RepositoryHolder>),
+*/
+
+internal class RepositoryInfoHash : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+/*
     RepositoryDatabaseId(Handle<RepositoryHolder>),
     RepositoryEntryType {
         repository: Handle<RepositoryHolder>,
@@ -107,22 +124,44 @@ internal open class StringRequest(val value: String) : Request() {
         src: Utf8PathBuf,
         dst: Utf8PathBuf,
     },
-    RepositoryIsDhtEnabled(Handle<RepositoryHolder>),
-    RepositorySetDhtEnabled {
-        repository: Handle<RepositoryHolder>,
-        enabled: bool,
-    },
-    RepositoryIsPexEnabled(Handle<RepositoryHolder>),
-    RepositorySetPexEnabled {
-        repository: Handle<RepositoryHolder>,
-        enabled: bool,
-    },
-    RepositoryCreateShareToken {
-        repository: Handle<RepositoryHolder>,
-        password: Option<String>,
-        access_mode: AccessMode,
-        name: Option<String>,
-    },
+*/
+
+internal class RepositoryIsDhtEnabled : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositorySetDhtEnabled(val repository: Long, val enabled: Boolean) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("repository" to repository, "enabled" to enabled))
+}
+
+internal class RepositoryIsPexEnabled : ValueRequest<Long> {
+    constructor(value: Long) : super(value)
+}
+
+internal class RepositorySetPexEnabled(val repository: Long, val enabled: Boolean) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(mapOf("repository" to repository, "enabled" to enabled))
+}
+
+internal data class RepositoryCreateShareToken(
+    val repository: Long,
+    val password: String?,
+    val accessMode: AccessMode,
+    val name: String?,
+) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "password" to password,
+                "access_mode" to accessMode.toByte(),
+                "name" to name,
+            ),
+        )
+}
+
+/*
     RepositoryAccessMode(Handle<RepositoryHolder>),
     RepositorySyncProgress(Handle<RepositoryHolder>),
     RepositoryMirror {
@@ -201,19 +240,14 @@ internal data class NetworkBind(
     val tcpV6: String?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
-        val entries = arrayOf(
-            "quic_v4" to quicV4,
-            "quic_v6" to quicV6,
-            "tcp_v4" to tcpV4,
-            "tcp_v6" to tcpV6,
-        ).filter { it.second != null }
-
-        packer.packMapHeader(entries.size)
-
-        for ((key, value) in entries) {
-            packer.packString(key)
-            packer.packString(value)
-        }
+        packer.packMap(
+            mapOf(
+                "quic_v4" to quicV4,
+                "quic_v6" to quicV6,
+                "tcp_v4" to tcpV4,
+                "tcp_v6" to tcpV6,
+            ),
+        )
     }
 }
 
@@ -227,11 +261,11 @@ internal class NetworkQuicListenerLocalAddrV4 : EmptyRequest()
 
 internal class NetworkQuicListenerLocalAddrV6 : EmptyRequest()
 
-internal class NetworkAddUserProvidedPeer : StringRequest {
+internal class NetworkAddUserProvidedPeer : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
-internal class NetworkRemoveUserProvidedPeer : StringRequest {
+internal class NetworkRemoveUserProvidedPeer : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
@@ -245,23 +279,23 @@ internal class NetworkHighestSeenProtocolVersion : EmptyRequest()
 
 internal class NetworkIsPortForwardingEnabled : EmptyRequest()
 
-internal class NetworkSetPortForwardingEnabled : BooleanRequest {
+internal class NetworkSetPortForwardingEnabled : ValueRequest<Boolean> {
     constructor(value: Boolean) : super(value)
 }
 
 internal class NetworkIsLocalDiscoveryEnabled : EmptyRequest()
 
-internal class NetworkSetLocalDiscoveryEnabled : BooleanRequest {
+internal class NetworkSetLocalDiscoveryEnabled : ValueRequest<Boolean> {
     constructor(value: Boolean) : super(value)
 }
 
-internal class NetworkAddStorageServer : StringRequest {
+internal class NetworkAddStorageServer : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
 internal class NetworkShutdown : EmptyRequest()
 
-internal class Unsubscribe : LongRequest {
+internal class Unsubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
 
@@ -269,3 +303,28 @@ internal class Unsubscribe : LongRequest {
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
 */
+
+private fun MessagePacker.packMap(map: Map<String, Any?>) {
+    packMapHeader(map.count { it.value != null })
+
+    for ((key, value) in map) {
+        if (value == null) {
+            continue
+        }
+
+        packString(key)
+        packAny(value)
+    }
+}
+
+private fun MessagePacker.packAny(value: Any) {
+    when (value) {
+        is Boolean -> packBoolean(value)
+        is Byte -> packByte(value)
+        is Int -> packInt(value)
+        is Long -> packLong(value)
+        is Short -> packShort(value)
+        is String -> packString(value)
+        else -> throw IllegalArgumentException("can't pack ${value::class.qualifiedName}")
+    }
+}

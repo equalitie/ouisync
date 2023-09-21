@@ -131,3 +131,26 @@ enum class NetworkEvent {
         PEER_SET_CHANGE -> 1
     }
 }
+
+enum class AccessMode {
+    BLIND, // 0
+    READ, // 1
+    WRITE, // 2
+
+    ;
+
+    companion object {
+        fun fromByte(n: Byte): AccessMode = when (n.toInt()) {
+            0 -> BLIND
+            1 -> READ
+            2 -> WRITE
+            else -> throw IllegalArgumentException()
+        }
+    }
+
+    fun toByte(): Byte = when (this) {
+        BLIND -> 0
+        READ -> 1
+        WRITE -> 2
+    }
+}

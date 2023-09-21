@@ -4,7 +4,7 @@ import com.sun.jna.Pointer
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 
-class Session private constructor(val handle: Long, private val client: Client) {
+class Session private constructor(private val handle: Long, internal val client: Client) {
     companion object {
         internal val bindings = Bindings.INSTANCE
 
