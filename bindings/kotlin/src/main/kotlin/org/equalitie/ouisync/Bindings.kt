@@ -1,6 +1,5 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
-import com.sun.jna.Callback as JnaCallback
 import com.sun.jna.FromNativeContext
 import com.sun.jna.Library
 import com.sun.jna.Native
@@ -8,8 +7,7 @@ import com.sun.jna.NativeMapped
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.Structure.FieldOrder
-import com.sun.jna.Structure.StructField
-import com.sun.jna.TypeMapper
+import com.sun.jna.Callback as JnaCallback
 
 internal interface Bindings : Library {
     companion object {
@@ -35,7 +33,7 @@ internal interface Bindings : Library {
 internal typealias Handle = Long
 
 interface Callback : JnaCallback {
-    fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long);
+    fun invoke(context: Pointer?, msg_ptr: Pointer, msg_len: Long)
 }
 
 @FieldOrder("handle", "error_code", "error_message")
@@ -65,7 +63,9 @@ enum class ErrorCode : NativeMapped {
     VFS_DRIVER_INSTALL,
     VFS_BACKEND,
 
-    OTHER;
+    OTHER,
+
+    ;
 
     companion object {
         internal fun fromShort(n: Short): ErrorCode = when (n.toInt()) {
@@ -119,4 +119,3 @@ enum class ErrorCode : NativeMapped {
         return Short::class.java
     }
 }
-

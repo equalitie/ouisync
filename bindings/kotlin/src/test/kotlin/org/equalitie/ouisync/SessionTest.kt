@@ -1,13 +1,13 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
+import kotlinx.coroutines.test.runTest
 import java.io.File
 import kotlin.io.path.createTempDirectory
-import kotlin.test.Test
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
+import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlinx.coroutines.test.runTest
 
 class SessionTest {
     lateinit var tempDir: File
@@ -17,9 +17,9 @@ class SessionTest {
     fun setup() {
         tempDir = File(createTempDirectory().toString())
         session = Session.create(
-            configsPath = "${tempDir}/config",
-            logPath = "${tempDir}/test.log",
-        );
+            configsPath = "$tempDir/config",
+            logPath = "$tempDir/test.log",
+        )
     }
 
     @AfterTest

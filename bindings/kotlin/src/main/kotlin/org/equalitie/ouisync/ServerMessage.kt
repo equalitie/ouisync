@@ -1,7 +1,52 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
 import org.msgpack.core.MessageUnpacker
 import org.msgpack.value.ValueType
+
+data class PeerInfo(
+    val ip: String,
+    val port: UShort,
+    val source: String,
+    val state: String,
+    val runtimeId: String?,
+) {
+    companion object {
+        fun unpack(unpacker: MessageUnpacker): PeerInfo {
+            val count = unpacker.unpackArrayHeader()
+
+            if (count < 4) {
+                throw InvalidResponse()
+            }
+
+            val ip = unpacker.unpackString()
+            val port = unpacker.unpackInt().toUShort()
+            val source = unpacker.unpackString()
+
+            var state: String = ""
+            var runtimeId: String? = null
+
+            when (unpacker.getNextFormat().getValueType()) {
+                ValueType.STRING -> {
+                    state = unpacker.unpackString()
+                }
+                ValueType.MAP -> {
+                    if (unpacker.unpackMapHeader() < 1) {
+                        throw InvalidResponse()
+                    }
+
+                    state = unpacker.unpackString()
+
+                    val length = unpacker.unpackBinaryHeader()
+                    // TODO:
+                    // runtimeId = unpacker.readPayload(length).toHexString()
+                }
+                else -> throw InvalidResponse()
+            }
+
+            return PeerInfo(ip, port, source, state, runtimeId)
+        }
+    }
+}
 
 internal sealed interface ServerMessage {
     companion object {
@@ -58,7 +103,6 @@ internal class Success(val value: Any?) : Response {
                 ValueType.STRING -> unpacker.unpackString()
                 else -> throw InvalidResponse()
             }
-
     }
 }
 
@@ -99,7 +143,6 @@ internal open class InvalidMessage : Exception {
 }
 
 internal class InvalidResponse : InvalidMessage("invalid response")
-
 
 // pub(crate) enum Response {
 //     None,

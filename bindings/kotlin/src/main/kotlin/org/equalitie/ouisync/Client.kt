@@ -1,14 +1,14 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.msgpack.core.MessagePack
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import org.msgpack.core.MessagePack
 
 internal class Client {
     var sessionHandle: Long = 0
@@ -85,6 +85,3 @@ internal class Client {
 }
 
 private data class ServerEnvelope(val id: Long, val content: ServerMessage)
-
-
-

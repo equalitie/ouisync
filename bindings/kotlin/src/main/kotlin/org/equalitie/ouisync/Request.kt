@@ -1,4 +1,4 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
 import org.msgpack.core.MessagePacker
 
@@ -185,15 +185,15 @@ internal data class NetworkInitRequest(
 internal data class NetworkBindRequest(
     val quicV4: String?,
     val quicV6: String?,
-    val tcpV4:  String?,
-    val tcpV6:  String?,
+    val tcpV4: String?,
+    val tcpV6: String?,
 ) : Request() {
     override fun packContent(packer: MessagePacker) {
         val entries = arrayOf(
             "quic_v4" to quicV4,
             "quic_v6" to quicV6,
             "tcp_v4" to tcpV4,
-            "tcp_v6" to tcpV6
+            "tcp_v6" to tcpV6,
         ).filter { it.second != null }
 
         packer.packMapHeader(entries.size)
@@ -221,8 +221,9 @@ internal class NetworkRemoveUserProvidedPeerRequest : StringRequest {
     constructor(value: String) : super(value)
 }
 
+internal class NetworkKnownPeers : EmptyRequest()
+
 /*
-    NetworkKnownPeers,
     NetworkThisRuntimeId,
     NetworkCurrentProtocolVersion,
     NetworkHighestSeenProtocolVersion,

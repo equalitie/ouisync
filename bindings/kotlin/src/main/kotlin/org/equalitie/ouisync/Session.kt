@@ -1,4 +1,4 @@
-package org.equalitie.ouisync_kotlin
+package org.equalitie.ouisync
 
 import com.sun.jna.Pointer
 import kotlinx.coroutines.runBlocking
@@ -24,7 +24,7 @@ class Session private constructor(val handle: Long, private val client: Client) 
                 configsPath,
                 logPath,
                 null,
-                callback
+                callback,
             )
 
             if (result.error_code == ErrorCode.OK) {
@@ -50,10 +50,12 @@ class Session private constructor(val handle: Long, private val client: Client) 
         defaultPortForwardingEnabled: Boolean,
         defaultLocalDiscoveryEnabled: Boolean,
     ) {
-        val response = client.invoke(NetworkInitRequest(
-            defaultLocalDiscoveryEnabled,
-            defaultPortForwardingEnabled
-        ))
+        val response = client.invoke(
+            NetworkInitRequest(
+                defaultLocalDiscoveryEnabled,
+                defaultPortForwardingEnabled,
+            ),
+        )
 
         assert(response == null)
     }
@@ -90,4 +92,3 @@ class Session private constructor(val handle: Long, private val client: Client) 
         assert(response == null)
     }
 }
-
