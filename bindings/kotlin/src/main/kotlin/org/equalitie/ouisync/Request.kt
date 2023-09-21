@@ -13,7 +13,7 @@ internal sealed class Request {
     protected abstract fun packContent(packer: MessagePacker)
 
     private fun name(): String {
-        return this::class.simpleName!!.stripSuffix("Request").toSnakeCase()
+        return this::class.simpleName!!.toSnakeCase()
     }
 }
 
@@ -41,6 +41,12 @@ private fun String.toSnakeCase(): String {
 internal open class EmptyRequest : Request() {
     override fun packContent(packer: MessagePacker) {
         packer.packNil()
+    }
+}
+
+internal open class BooleanRequest(val value: Boolean) : Request() {
+    override fun packContent(packer: MessagePacker) {
+        packer.packBoolean(value)
     }
 }
 
@@ -167,7 +173,7 @@ internal open class StringRequest(val value: String) : Request() {
     FileClose(Handle<FileHolder>),
 */
 
-internal data class NetworkInitRequest(
+internal data class NetworkInit(
     val portForwardingEnabled: Boolean,
     val localDiscoveryEnabled: Boolean,
 ) : Request() {
@@ -182,7 +188,7 @@ internal data class NetworkInitRequest(
     }
 }
 
-internal data class NetworkBindRequest(
+internal data class NetworkBind(
     val quicV4: String?,
     val quicV6: String?,
     val tcpV4: String?,
@@ -208,33 +214,44 @@ internal data class NetworkBindRequest(
     NetworkSubscribe,
 */
 
-internal class NetworkTcpListenerLocalAddrV4Request : EmptyRequest()
-internal class NetworkTcpListenerLocalAddrV6Request : EmptyRequest()
-internal class NetworkQuicListenerLocalAddrV4Request : EmptyRequest()
-internal class NetworkQuicListenerLocalAddrV6Request : EmptyRequest()
+internal class NetworkTcpListenerLocalAddrV4 : EmptyRequest()
+internal class NetworkTcpListenerLocalAddrV6 : EmptyRequest()
+internal class NetworkQuicListenerLocalAddrV4 : EmptyRequest()
+internal class NetworkQuicListenerLocalAddrV6 : EmptyRequest()
 
-internal class NetworkAddUserProvidedPeerRequest : StringRequest {
+internal class NetworkAddUserProvidedPeer : StringRequest {
     constructor(value: String) : super(value)
 }
 
-internal class NetworkRemoveUserProvidedPeerRequest : StringRequest {
+internal class NetworkRemoveUserProvidedPeer : StringRequest {
     constructor(value: String) : super(value)
 }
 
 internal class NetworkKnownPeers : EmptyRequest()
+internal class NetworkThisRuntimeId : EmptyRequest()
+internal class NetworkCurrentProtocolVersion : EmptyRequest()
+internal class NetworkHighestSeenProtocolVersion : EmptyRequest()
+
+internal class NetworkIsPortForwardingEnabled : EmptyRequest()
+
+internal class NetworkSetPortForwardingEnabled : BooleanRequest {
+    constructor(value: Boolean) : super(value)
+}
+
+internal class NetworkIsLocalDiscoveryEnabled : EmptyRequest()
+
+internal class NetworkSetLocalDiscoveryEnabled : BooleanRequest {
+    constructor(value: Boolean) : super(value)
+}
+
+internal class NetworkAddStorageServer : StringRequest {
+    constructor(value: String) : super(value)
+}
+
+internal class NetworkShutdown : EmptyRequest()
 
 /*
-    NetworkThisRuntimeId,
-    NetworkCurrentProtocolVersion,
-    NetworkHighestSeenProtocolVersion,
-    NetworkIsPortForwardingEnabled,
-    NetworkSetPortForwardingEnabled(bool),
-    NetworkIsLocalDiscoveryEnabled,
-    NetworkSetLocalDiscoveryEnabled(bool),
-    NetworkAddStorageServer(String),
-    NetworkShutdown,
     StateMonitorGet(Vec<MonitorId>),
     StateMonitorSubscribe(Vec<MonitorId>),
     Unsubscribe(SubscriptionHandle),
-}
 */

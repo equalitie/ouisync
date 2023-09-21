@@ -22,7 +22,7 @@ data class PeerInfo(
             val port = unpacker.unpackInt().toUShort()
             val source = unpacker.unpackString()
 
-            var state: String = ""
+            var state: String
             var runtimeId: String? = null
 
             when (unpacker.getNextFormat().getValueType()) {
@@ -37,8 +37,10 @@ data class PeerInfo(
                     state = unpacker.unpackString()
 
                     val length = unpacker.unpackBinaryHeader()
-                    // TODO:
-                    // runtimeId = unpacker.readPayload(length).toHexString()
+                    val runtimeIdBytes = unpacker.readPayload(length)
+
+                    @OptIn(kotlin.ExperimentalStdlibApi::class)
+                    runtimeId = runtimeIdBytes.toHexString()
                 }
                 else -> throw InvalidResponse()
             }
@@ -100,21 +102,36 @@ internal class Success(val value: Any?) : Response {
 
         private fun unpackValue(name: String, unpacker: MessageUnpacker): Any? =
             when (unpacker.getNextFormat().getValueType()) {
+                ValueType.ARRAY -> {
+                    when (name) {
+                        "peer_info" -> unpackPeerInfo(unpacker)
+                        else -> throw InvalidResponse()
+                    }
+                }
+                ValueType.BOOLEAN -> unpacker.unpackBoolean()
+                ValueType.INTEGER -> unpacker.unpackInt()
                 ValueType.STRING -> unpacker.unpackString()
                 else -> throw InvalidResponse()
             }
+
+        private fun unpackPeerInfo(unpacker: MessageUnpacker): List<PeerInfo> {
+            val count = unpacker.unpackArrayHeader()
+            return 0.rangeUntil(count).map { PeerInfo.unpack(unpacker) }
+        }
     }
 }
 
 internal class Failure(val error: Error) : Response {
     companion object {
+        private val INVALID_ERROR = Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response")
+
         fun unpack(unpacker: MessageUnpacker): Response {
             if (unpacker.getNextFormat().getValueType() != ValueType.ARRAY) {
-                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
+                return Failure(INVALID_ERROR)
             }
 
             if (unpacker.unpackArrayHeader() < 2) {
-                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
+                return Failure(INVALID_ERROR)
             }
 
             try {
@@ -123,7 +140,7 @@ internal class Failure(val error: Error) : Response {
 
                 return Failure(Error(code, message))
             } catch (e: Exception) {
-                return Failure(Error(ErrorCode.MALFORMED_MESSAGE, "invalid error response"))
+                return Failure(INVALID_ERROR)
             }
         }
     }
@@ -145,16 +162,9 @@ internal open class InvalidMessage : Exception {
 internal class InvalidResponse : InvalidMessage("invalid response")
 
 // pub(crate) enum Response {
-//     None,
-//     Bool(bool),
-//     U8(u8),
-//     U32(u32),
-//     U64(u64),
 //     Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
-//     String(String),
 //     Handle(u64),
 //     Directory(Directory),
 //     StateMonitor(StateMonitor),
 //     Progress(Progress),
-//     PeerInfo(Vec<PeerInfo>),
 // }

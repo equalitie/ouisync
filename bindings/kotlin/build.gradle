@@ -43,6 +43,7 @@ spotless {
     kotlin {
         ktfmt()
         ktlint()
+        // diktat()
     }
 }
 

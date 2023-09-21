@@ -6,8 +6,10 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SessionTest {
     lateinit var tempDir: File
@@ -48,10 +50,39 @@ class SessionTest {
 
     @Test
     fun addAndRemoveUserProvidedPeer() = runTest {
-        val addr = "quic/192.0.2.0:1234"
+        val addr = "quic/127.0.0.1:1234"
         session.addUserProvidedPeer(addr)
         session.removeUserProvidedPeer(addr)
 
         // TODO: check peer list
+    }
+
+    @Test
+    fun thisRuntimeId() = runTest {
+        val runtimeId = session.thisRuntimeId()
+        assertTrue(runtimeId.isNotEmpty())
+    }
+
+    @Test
+    fun protocolVersion() = runTest {
+        session.currentProtocolVersion()
+        session.highestSeenProtocolVersion()
+    }
+
+    @Test
+    fun portForwarding() = runTest {
+        assertFalse(session.isPortForwardingEnabled())
+        session.setPortForwardingEnabled(true)
+        assertTrue(session.isPortForwardingEnabled())
+    }
+
+    @Test
+    fun localDiscovery() = runTest {
+        // Local discovery requires a running listener
+        session.bindNetwork(quicV4 = "0.0.0.0:0")
+
+        assertFalse(session.isLocalDiscoveryEnabled())
+        session.setLocalDiscoveryEnabled(true)
+        assertTrue(session.isLocalDiscoveryEnabled())
     }
 }
