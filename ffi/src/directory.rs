@@ -1,4 +1,4 @@
-use crate::{constants, registry::Handle, repository::RepositoryHolder, state::State};
+use crate::{registry::Handle, repository::RepositoryHolder, state::State};
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ pub(crate) async fn open(
         .entries()
         .map(|entry| DirEntry {
             name: entry.unique_name().into_owned(),
-            entry_type: constants::entry_type_to_num(entry.entry_type()),
+            entry_type: entry.entry_type().into(),
         })
         .collect();
 

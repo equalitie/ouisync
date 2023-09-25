@@ -1,27 +1,43 @@
-use cbindgen::{Builder, EnumConfig, Language, RenameRule};
-use std::path::Path;
+mod dart;
+mod parse;
+
+use clap::{Parser, ValueEnum};
+use parse::{parse_file, Source};
+use std::io;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Generate the C bindings header
+    let options = Options::parse();
 
-    #[cfg(feature = "env_logger")]
-    env_logger::init();
+    let source_files = [
+        "bridge/src/protocol/mod.rs",
+        "ffi/src/lib.rs",
+        "lib/src/access_control/access_mode.rs",
+        "lib/src/directory/entry_type.rs",
+    ];
+    let mut source = Source::new();
 
-    let output_path = Path::new("target").join("bindings.h");
+    for source_file in source_files {
+        parse_file(source_file, &mut source)?;
+    }
 
-    Builder::new()
-        .with_config(cbindgen::Config {
-            language: Language::C,
-            enumeration: EnumConfig {
-                rename_variants: RenameRule::CamelCase,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .with_src(Path::new("ffi").join("src").join("lib.rs"))
-        .with_src(Path::new("bridge").join("src").join("constants.rs"))
-        .generate()?
-        .write_to_file(output_path);
+    match options.language {
+        Language::Dart => dart::generate(&source, &mut io::stdout())?,
+        Language::Kotlin => todo!(),
+    }
 
     Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(about)]
+struct Options {
+    /// Language to generate the bindings for
+    #[arg(short, long)]
+    language: Language,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Language {
+    Dart,
+    Kotlin,
 }

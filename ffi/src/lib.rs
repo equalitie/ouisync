@@ -2,7 +2,6 @@
 
 #[macro_use]
 mod utils;
-mod constants;
 mod dart;
 mod directory;
 mod error;
@@ -17,10 +16,6 @@ mod state;
 mod state_monitor;
 mod transport;
 
-pub use constants::{
-    ACCESS_MODE_BLIND, ACCESS_MODE_READ, ACCESS_MODE_WRITE, ENTRY_TYPE_DIRECTORY, ENTRY_TYPE_FILE,
-};
-
 use crate::{
     dart::{Port, PortSender},
     error::{ErrorCode, ToErrorCode},
@@ -32,6 +27,7 @@ use crate::{
 #[cfg(unix)]
 use crate::{file::FileHolder, registry::Handle};
 use bytes::Bytes;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ouisync_bridge::logger::{LogFormat, Logger};
 use ouisync_lib::StateMonitor;
 #[cfg(unix)]
@@ -246,23 +242,25 @@ pub unsafe extern "C" fn log_print(
         }
     };
 
-    match level {
-        LOG_LEVEL_ERROR => tracing::error!("{}", message),
-        LOG_LEVEL_WARN => tracing::warn!("{}", message),
-        LOG_LEVEL_INFO => tracing::info!("{}", message),
-        LOG_LEVEL_DEBUG => tracing::debug!("{}", message),
-        LOG_LEVEL_TRACE => tracing::trace!("{}", message),
-        _ => {
-            tracing::error!(level, "invalid log level");
-        }
+    match level.try_into() {
+        Ok(LogLevel::Error) => tracing::error!("{}", message),
+        Ok(LogLevel::Warn) => tracing::warn!("{}", message),
+        Ok(LogLevel::Info) => tracing::info!("{}", message),
+        Ok(LogLevel::Debug) => tracing::debug!("{}", message),
+        Ok(LogLevel::Trace) => tracing::trace!("{}", message),
+        Err(_) => tracing::error!(level, "invalid log level"),
     }
 }
 
-pub const LOG_LEVEL_ERROR: u8 = 1;
-pub const LOG_LEVEL_WARN: u8 = 2;
-pub const LOG_LEVEL_INFO: u8 = 3;
-pub const LOG_LEVEL_DEBUG: u8 = 4;
-pub const LOG_LEVEL_TRACE: u8 = 5;
+#[derive(Copy, Clone, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
+pub enum LogLevel {
+    Error = 1,
+    Warn = 2,
+    Info = 3,
+    Debug = 4,
+    Trace = 5,
+}
 
 pub struct Session {
     pub(crate) runtime: Runtime,

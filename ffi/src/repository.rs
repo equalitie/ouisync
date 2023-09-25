@@ -1,5 +1,4 @@
 use crate::{
-    constants,
     error::Error,
     registry::Handle,
     state::{State, SubscriptionHandle},
@@ -224,7 +223,7 @@ pub(crate) async fn entry_type(
     let holder = state.get_repository(handle);
 
     match holder.repository.lookup_type(path).await {
-        Ok(entry_type) => Ok(Some(constants::entry_type_to_num(entry_type))),
+        Ok(entry_type) => Ok(Some(entry_type.into())),
         Err(ouisync_lib::Error::EntryNotFound) => Ok(None),
         Err(error) => Err(error),
     }
