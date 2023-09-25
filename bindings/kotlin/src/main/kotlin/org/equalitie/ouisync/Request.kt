@@ -155,7 +155,7 @@ internal data class RepositoryCreateShareToken(
             mapOf(
                 "repository" to repository,
                 "password" to password,
-                "access_mode" to accessMode.toByte(),
+                "access_mode" to accessMode.encode(),
                 "name" to name,
             ),
         )

@@ -142,7 +142,7 @@ internal class Failure(val error: Error) : Response {
             }
 
             try {
-                val code = ErrorCode.fromShort(unpacker.unpackShort())
+                val code = ErrorCode.decode(unpacker.unpackShort())
                 val message = unpacker.unpackString()
 
                 return Failure(Error(code, message))
@@ -175,7 +175,7 @@ internal class Notification(val content: Any) : ServerMessage {
 
         private fun unpackValue(name: String, unpacker: MessageUnpacker): Any {
             when (name) {
-                "network" -> return NetworkEvent.fromByte(unpacker.unpackByte())
+                "network" -> return NetworkEvent.decode(unpacker.unpackByte())
                 else -> throw InvalidNotification()
             }
         }

@@ -28,7 +28,7 @@ class Session private constructor(private val handle: Long, internal val client:
                 callback,
             )
 
-            val errorCode = ErrorCode.fromShort(result.error_code)
+            val errorCode = ErrorCode.decode(result.error_code)
 
             if (errorCode == ErrorCode.OK) {
                 return Session(result.handle, client)

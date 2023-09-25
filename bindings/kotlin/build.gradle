@@ -26,6 +26,14 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+sourceSets {
+    main {
+        kotlin {
+            srcDir layout.buildDirectory.dir('gen')
+        }
+    }
+}
+
 // Apply a specific Java toolchain to ease working on different environments.
 java {
     toolchain {
@@ -48,6 +56,27 @@ spotless {
         ktlint()
         // diktat()
     }
+}
+
+tasks.register('prepareGeneratedDir') {
+    description 'Create directory for generated source files'
+
+    doLast {
+        mkdir layout.buildDirectory.dir('gen')
+    }
+}
+
+tasks.register('generateBindings', Exec) {
+    description 'Generate bindings'
+    workingDir '../..'
+    commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
+    standardOutput = new FileOutputStream('build/gen/Bindings.kt')
+
+    dependsOn 'prepareGeneratedDir'
+}
+
+tasks.named('compileKotlin') {
+    dependsOn('generateBindings')
 }
 
 tasks.register('buildTestNative', Exec) {
