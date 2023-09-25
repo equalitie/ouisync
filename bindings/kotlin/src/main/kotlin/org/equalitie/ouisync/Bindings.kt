@@ -21,7 +21,7 @@ internal interface Bindings : Library {
         callback: Callback,
     ): SessionCreateResult
 
-    fun session_destroy(handle: Handle)
+    fun session_close(handle: Handle)
 
     fun session_channel_send(handle: Handle, msg: ByteArray, msg_len: Int)
 

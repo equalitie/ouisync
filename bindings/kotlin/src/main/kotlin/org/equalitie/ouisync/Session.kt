@@ -46,7 +46,7 @@ class Session private constructor(private val handle: Long, internal val client:
     }
 
     fun dispose() {
-        bindings.session_destroy(handle)
+        bindings.session_close(handle)
     }
 
     /**
