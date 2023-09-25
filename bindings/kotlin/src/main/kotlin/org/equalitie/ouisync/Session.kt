@@ -3,8 +3,9 @@ package org.equalitie.ouisync
 import com.sun.jna.Pointer
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import java.io.Closeable
 
-class Session private constructor(private val handle: Long, internal val client: Client) {
+class Session private constructor(private val handle: Long, internal val client: Client) : Closeable {
     companion object {
         internal val bindings = Bindings.INSTANCE
 
@@ -45,7 +46,7 @@ class Session private constructor(private val handle: Long, internal val client:
         client.sessionHandle = handle
     }
 
-    fun dispose() {
+    override fun close() {
         bindings.session_close(handle)
     }
 

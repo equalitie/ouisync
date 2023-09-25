@@ -24,7 +24,7 @@ class RepositoryTest {
 
     @AfterTest
     fun teardown() {
-        session.dispose()
+        session.close()
         tempDir.deleteRecursively()
     }
 
