@@ -219,6 +219,33 @@ class RepositoryTest {
         }
     }
 
+    @Test
+    fun directoryOperations() = runTest {
+        val dirName = "dir"
+        val fileName = "test.txt"
+
+        withRepo { repo ->
+            assertNull(repo.entryType(dirName))
+
+            Directory.create(repo, dirName)
+            assertEquals(EntryType.DIRECTORY, repo.entryType(dirName))
+
+            val dir0 = Directory.open(repo, dirName)
+            assertEquals(0, dir0.size)
+
+
+            File.create(repo, "$dirName/$fileName").close()
+
+            val dir1 = Directory.open(repo, dirName)
+            assertEquals(1, dir1.size)
+            assertEquals(fileName, dir1.elementAt(0).name)
+            assertEquals(EntryType.FILE, dir1.elementAt(0).entryType)
+
+            Directory.remove(repo, dirName, recursive = true)
+            assertNull(repo.entryType(dirName))
+        }
+    }
+
     private suspend fun createRepo(): Repository =
         Repository.create(session, repoPath, readPassword = null, writePassword = null)
 

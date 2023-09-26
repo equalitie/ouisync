@@ -227,20 +227,38 @@ internal class RepositoryMountAll : ValueRequest<String> {
     ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
     ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
     ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
-    DirectoryCreate {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-    },
-    DirectoryOpen {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-    },
-    DirectoryRemove {
-        repository: Handle<RepositoryHolder>,
-        path: Utf8PathBuf,
-        recursive: bool,
-    },
 */
+
+internal class DirectoryCreate(val repository: Long, val path: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "path" to path,
+            ),
+        )
+}
+
+internal class DirectoryOpen(val repository: Long, val path: String) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "path" to path,
+            ),
+        )
+}
+
+internal class DirectoryRemove(val repository: Long, val path: String, val recursive: Boolean) : Request() {
+    override fun packContent(packer: MessagePacker) =
+        packer.packMap(
+            mapOf(
+                "repository" to repository,
+                "path" to path,
+                "recursive" to recursive,
+            ),
+        )
+}
 
 internal class FileOpen(val repository: Long, val path: String) : Request() {
     override fun packContent(packer: MessagePacker) =

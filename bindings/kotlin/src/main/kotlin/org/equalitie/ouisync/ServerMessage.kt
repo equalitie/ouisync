@@ -119,6 +119,7 @@ internal class Success(val value: Any?) : Response {
             when (unpacker.getNextFormat().getValueType()) {
                 ValueType.ARRAY -> {
                     when (name) {
+                        "directory" -> Directory.unpack(unpacker)
                         "peer_info" -> unpackPeerInfo(unpacker)
                         "progress" -> Progress.unpack(unpacker)
                         else -> throw InvalidResponse()
@@ -212,6 +213,5 @@ internal class InvalidResponse : InvalidMessage("invalid response")
 internal class InvalidNotification : InvalidMessage("invalid notification")
 
 // pub(crate) enum Response {
-//     Directory(Directory),
 //     StateMonitor(StateMonitor),
 // }
