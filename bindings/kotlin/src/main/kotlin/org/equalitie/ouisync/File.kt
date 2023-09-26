@@ -56,5 +56,4 @@ class File private constructor(private val handle: Long, private val client: Cli
      * Sync progress of this file, that is, what part of this file (in bytes) is available locally.
      */
     suspend fun progress() = client.invoke(FileProgress(handle)) as Long
-
 }

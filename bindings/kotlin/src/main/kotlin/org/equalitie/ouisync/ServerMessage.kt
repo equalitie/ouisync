@@ -211,7 +211,3 @@ internal open class InvalidMessage : Exception {
 
 internal class InvalidResponse : InvalidMessage("invalid response")
 internal class InvalidNotification : InvalidMessage("invalid notification")
-
-// pub(crate) enum Response {
-//     StateMonitor(StateMonitor),
-// }

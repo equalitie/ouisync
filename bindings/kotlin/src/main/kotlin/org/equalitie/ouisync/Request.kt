@@ -222,12 +222,21 @@ internal class RepositoryMountAll : ValueRequest<String> {
     constructor(value: String) : super(value)
 }
 
-/*
-    ShareTokenMode(#[serde(with = "as_str")] ShareToken),
-    ShareTokenInfoHash(#[serde(with = "as_str")] ShareToken),
-    ShareTokenSuggestedName(#[serde(with = "as_str")] ShareToken),
-    ShareTokenNormalize(#[serde(with = "as_str")] ShareToken),
-*/
+internal class ShareTokenMode : ValueRequest<String> {
+    constructor(value: String) : super(value)
+}
+
+internal class ShareTokenInfoHash : ValueRequest<String> {
+    constructor(value: String) : super(value)
+}
+
+internal class ShareTokenSuggestedName : ValueRequest<String> {
+    constructor(value: String) : super(value)
+}
+
+internal class ShareTokenNormalize : ValueRequest<String> {
+    constructor(value: String) : super(value)
+}
 
 internal class DirectoryCreate(val repository: Long, val path: String) : Request() {
     override fun packContent(packer: MessagePacker) =
@@ -386,11 +395,6 @@ internal class NetworkShutdown : EmptyRequest()
 internal class Unsubscribe : ValueRequest<Long> {
     constructor(value: Long) : super(value)
 }
-
-/*
-    StateMonitorGet(Vec<MonitorId>),
-    StateMonitorSubscribe(Vec<MonitorId>),
-*/
 
 private fun MessagePacker.packMap(map: Map<String, Any?>) {
     packMapHeader(map.count { it.value != null })

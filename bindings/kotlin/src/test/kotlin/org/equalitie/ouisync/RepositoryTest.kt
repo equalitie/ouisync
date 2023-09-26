@@ -1,7 +1,6 @@
 package org.equalitie.ouisync
 
 import kotlinx.coroutines.test.runTest
-import java.io.File as JFile
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -10,6 +9,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
+import java.io.File as JFile
 
 class RepositoryTest {
     lateinit var tempDir: JFile
@@ -72,13 +73,6 @@ class RepositoryTest {
             assertFalse(it.isPexEnabled())
             it.setPexEnabled(true)
             assertTrue(it.isPexEnabled())
-        }
-    }
-
-    @Test
-    fun shareToken() = runTest {
-        withRepo {
-            assertTrue(it.createShareToken().isNotEmpty())
         }
     }
 
@@ -220,6 +214,18 @@ class RepositoryTest {
     }
 
     @Test
+    fun fileOpenError() = runTest {
+        withRepo { repo ->
+            try {
+                File.open(repo, "missing.txt")
+                fail("unexpected successs - expected 'entry not found'")
+            } catch (e: Error) {
+                assertEquals(ErrorCode.ENTRY_NOT_FOUND, e.code)
+            }
+        }
+    }
+
+    @Test
     fun directoryOperations() = runTest {
         val dirName = "dir"
         val fileName = "test.txt"
@@ -233,7 +239,6 @@ class RepositoryTest {
             val dir0 = Directory.open(repo, dirName)
             assertEquals(0, dir0.size)
 
-
             File.create(repo, "$dirName/$fileName").close()
 
             val dir1 = Directory.open(repo, dirName)
@@ -243,6 +248,16 @@ class RepositoryTest {
 
             Directory.remove(repo, dirName, recursive = true)
             assertNull(repo.entryType(dirName))
+        }
+    }
+
+    @Test
+    fun shareTokenOperations() = runTest {
+        withRepo { repo ->
+            var token = repo.createShareToken(name = "foo")
+
+            assertEquals(AccessMode.WRITE, token.accessMode())
+            assertEquals("foo", token.suggestedName())
         }
     }
 

@@ -1,11 +1,10 @@
 package org.equalitie.ouisync
 
 import org.msgpack.core.MessageUnpacker
-import org.msgpack.value.ValueType
 
 data class DirectoryEntry(val name: String, val entryType: EntryType) {
     companion object {
-        internal fun unpack(unpacker: MessageUnpacker) : DirectoryEntry {
+        internal fun unpack(unpacker: MessageUnpacker): DirectoryEntry {
             if (unpacker.unpackArrayHeader() != 2) {
                 throw InvalidResponse()
             }
@@ -56,7 +55,7 @@ class Directory private constructor(private val entries: List<DirectoryEntry>) :
 
     override fun iterator() = entries.iterator()
 
-    override operator fun contains(element: DirectoryEntry) =  entries.contains(element)
+    override operator fun contains(element: DirectoryEntry) = entries.contains(element)
 
-    override fun containsAll(elements: Collection<DirectoryEntry>) =  entries.containsAll(elements)
+    override fun containsAll(elements: Collection<DirectoryEntry>) = entries.containsAll(elements)
 }

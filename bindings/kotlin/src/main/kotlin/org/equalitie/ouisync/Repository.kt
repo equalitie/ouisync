@@ -7,7 +7,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
             path: String,
             readPassword: String?,
             writePassword: String?,
-            shareToken: String? = null,
+            shareToken: ShareToken? = null,
         ): Repository {
             val client = session.client
             val handle = client.invoke(
@@ -15,7 +15,7 @@ class Repository private constructor(internal val handle: Long, internal val cli
                     path,
                     readPassword,
                     writePassword,
-                    shareToken,
+                    shareToken?.toString(),
                 ),
             ) as Long
 
@@ -55,7 +55,10 @@ class Repository private constructor(internal val handle: Long, internal val cli
         password: String? = null,
         accessMode: AccessMode = AccessMode.WRITE,
         name: String? = null,
-    ) = client.invoke(RepositoryCreateShareToken(handle, password, accessMode, name)) as String
+    ): ShareToken {
+        val raw = client.invoke(RepositoryCreateShareToken(handle, password, accessMode, name)) as String
+        return ShareToken(raw, client)
+    }
 
     suspend fun createReopenToken() =
         client.invoke(RepositoryCreateReopenToken(handle)) as ByteArray
@@ -66,11 +69,11 @@ class Repository private constructor(internal val handle: Long, internal val cli
     suspend fun requiresLocalPasswordForWriting() =
         client.invoke(RepositoryRequiresLocalPasswordForWriting(handle)) as Boolean
 
-    suspend fun setReadAccess(password: String?, shareToken: String? = null) =
-        client.invoke(RepositorySetReadAccess(handle, password, shareToken))
+    suspend fun setReadAccess(password: String?, shareToken: ShareToken? = null) =
+        client.invoke(RepositorySetReadAccess(handle, password, shareToken?.toString()))
 
-    suspend fun setReadAndWriteAccess(oldPassword: String?, newPassword: String?, shareToken: String? = null) =
-        client.invoke(RepositorySetReadAndWriteAccess(handle, oldPassword, newPassword, shareToken))
+    suspend fun setReadAndWriteAccess(oldPassword: String?, newPassword: String?, shareToken: ShareToken? = null) =
+        client.invoke(RepositorySetReadAndWriteAccess(handle, oldPassword, newPassword, shareToken?.toString()))
 
     suspend fun removeReadKey() = client.invoke(RepositoryRemoveReadKey(handle))
 
@@ -116,5 +119,4 @@ class Repository private constructor(internal val handle: Long, internal val cli
      */
     suspend fun moveEntry(src: String, dst: String) =
         client.invoke(RepositoryMoveEntry(handle, src, dst))
-
 }

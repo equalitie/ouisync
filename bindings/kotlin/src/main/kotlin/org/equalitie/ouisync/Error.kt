@@ -1,3 +1,3 @@
 package org.equalitie.ouisync
 
-class Error(code: ErrorCode, message: String) : Exception(message)
+class Error(val code: ErrorCode, message: String) : Exception(message)
