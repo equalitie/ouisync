@@ -50,6 +50,21 @@ data class PeerInfo(
     }
 }
 
+data class Progress(val value: Long, val total: Long) {
+    companion object {
+        fun unpack(unpacker: MessageUnpacker): Progress {
+            if (unpacker.unpackArrayHeader() != 2) {
+                throw InvalidResponse()
+            }
+
+            val value = unpacker.unpackLong()
+            val total = unpacker.unpackLong()
+
+            return Progress(value, total)
+        }
+    }
+}
+
 internal sealed interface ServerMessage {
     companion object {
         fun unpack(unpacker: MessageUnpacker): ServerMessage {
@@ -105,6 +120,7 @@ internal class Success(val value: Any?) : Response {
                 ValueType.ARRAY -> {
                     when (name) {
                         "peer_info" -> unpackPeerInfo(unpacker)
+                        "progress" -> Progress.unpack(unpacker)
                         else -> throw InvalidResponse()
                     }
                 }
@@ -118,6 +134,10 @@ internal class Success(val value: Any?) : Response {
                     }
                 }
                 ValueType.STRING -> unpacker.unpackString()
+                ValueType.BINARY -> {
+                    val length = unpacker.unpackBinaryHeader()
+                    unpacker.readPayload(length)
+                }
                 else -> throw InvalidResponse()
             }
 
@@ -191,7 +211,6 @@ internal class InvalidResponse : InvalidMessage("invalid response")
 internal class InvalidNotification : InvalidMessage("invalid notification")
 
 // pub(crate) enum Response {
-//     Bytes(#[serde(with = "serde_bytes")] Vec<u8>),
 //     Directory(Directory),
 //     StateMonitor(StateMonitor),
 //     Progress(Progress),

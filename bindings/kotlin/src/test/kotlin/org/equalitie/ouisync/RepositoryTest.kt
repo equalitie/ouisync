@@ -6,7 +6,9 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RepositoryTest {
@@ -40,7 +42,7 @@ class RepositoryTest {
 
         try {
             repo.close()
-            repo = Repository.open(session, "$tempDir/repo.db")
+            repo = Repository.open(session, repoPath)
         } finally {
             repo.close()
         }
@@ -80,8 +82,72 @@ class RepositoryTest {
         }
     }
 
+    @Test
+    fun reopen() = runTest {
+        var repo = createRepo()
+
+        try {
+            val token = repo.createReopenToken()
+            repo.close()
+            repo = Repository.reopen(session, repoPath, token)
+        } finally {
+            repo.close()
+        }
+    }
+
+    @Test
+    fun localPasswords() = runTest {
+        withRepo {
+            assertFalse(it.requiresLocalPasswordForReading())
+            assertFalse(it.requiresLocalPasswordForWriting())
+
+            it.setReadAndWriteAccess(oldPassword = null, newPassword = "banana")
+            assertTrue(it.requiresLocalPasswordForReading())
+            assertTrue(it.requiresLocalPasswordForWriting())
+
+            it.setReadAccess(password = null)
+            assertFalse(it.requiresLocalPasswordForReading())
+            assertTrue(it.requiresLocalPasswordForWriting())
+
+            it.setReadAndWriteAccess(oldPassword = null, newPassword = null)
+            assertFalse(it.requiresLocalPasswordForReading())
+            assertFalse(it.requiresLocalPasswordForWriting())
+        }
+    }
+
+    @Test
+    fun accessMode() = runTest {
+        withRepo {
+            assertEquals(AccessMode.WRITE, it.accessMode())
+        }
+    }
+
+    @Test
+    fun databaseId() = runTest {
+        withRepo {
+            assertTrue(it.databaseId().isNotEmpty())
+        }
+    }
+
+    @Test
+    fun syncProgress() = runTest {
+        withRepo {
+            val progress = it.syncProgress()
+            assertEquals(0, progress.value)
+            assertEquals(0, progress.total)
+        }
+    }
+
+    @Test
+    fun entryType() = runTest {
+        withRepo {
+            assertEquals(EntryType.DIRECTORY, it.entryType("/"))
+            assertNull(it.entryType("missing.txt"))
+        }
+    }
+
     private suspend fun createRepo(): Repository =
-        Repository.create(session, "$tempDir/repo.db", readPassword = null, writePassword = null)
+        Repository.create(session, repoPath, readPassword = null, writePassword = null)
 
     private suspend fun <R> withRepo(block: suspend (repo: Repository) -> R): R {
         val repo = createRepo()
@@ -92,4 +158,7 @@ class RepositoryTest {
             repo.close()
         }
     }
+
+    private val repoPath: String
+        get() = "$tempDir/repo.db"
 }

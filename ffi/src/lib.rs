@@ -10,6 +10,7 @@ mod directory;
 mod error;
 mod file;
 mod handler;
+mod log;
 mod network;
 mod protocol;
 mod registry;
@@ -21,8 +22,10 @@ mod state;
 mod state_monitor;
 mod transport;
 
-use crate::session::{SessionCreateResult, SessionHandle};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use crate::{
+    log::LogLevel,
+    session::{SessionCreateResult, SessionHandle},
+};
 use std::{ffi::CString, os::raw::c_char, slice};
 
 #[cfg(feature = "dart")]
@@ -250,14 +253,4 @@ pub unsafe extern "C" fn log_print(
         Ok(LogLevel::Trace) => tracing::trace!("{}", message),
         Err(_) => tracing::error!(level, "invalid log level"),
     }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
-#[repr(u8)]
-pub enum LogLevel {
-    Error = 1,
-    Warn = 2,
-    Info = 3,
-    Debug = 4,
-    Trace = 5,
 }

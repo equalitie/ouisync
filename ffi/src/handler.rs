@@ -34,6 +34,8 @@ impl ouisync_bridge::transport::Handler for Handler {
         request: Self::Request,
         notification_tx: &NotificationSender,
     ) -> Result<Self::Response, Self::Error> {
+        tracing::debug!(?request);
+
         let response = match request {
             Request::RepositoryCreate {
                 path,

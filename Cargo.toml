@@ -24,7 +24,7 @@ edition = "2021"
 rust-version = "1.65.0"
 
 [workspace.dependencies]
-async-trait = "0.1.67"
+async-trait = "0.1.73"
 btdht = { git = "https://github.com/equalitie/btdht.git", rev = "4b8dc478e3e5f011a45b8f50c424519019f7b70d" }
 bytes = "1.4.0"
 camino = "1.0.9"
@@ -43,7 +43,7 @@ thiserror = "1.0.31"
 tokio = { version = "1.28.2", default-features = false }
 tokio-stream = { version = "0.1.9", default-features = false }
 tokio-util = "0.7.4"
-tracing = { version = "0.1.35" }
+tracing = { version = "0.1.37" }
 tracing-subscriber = { version = "0.3.17" }
 turmoil = { git = "https://github.com/tokio-rs/turmoil" }
 

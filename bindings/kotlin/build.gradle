@@ -6,7 +6,7 @@ plugins {
     id 'java-library'
 
     // Formatter and linter
-    id "com.diffplug.spotless" version "6.21.0"
+    id 'com.diffplug.spotless' version '6.21.0'
 }
 
 repositories {
@@ -70,13 +70,16 @@ tasks.register('generateBindings', Exec) {
     description 'Generate bindings'
     workingDir '../..'
     commandLine 'cargo', 'run', '--package', 'ouisync-bindgen', '--', '--language', 'kotlin'
-    standardOutput = new FileOutputStream('build/gen/Bindings.kt')
 
     dependsOn 'prepareGeneratedDir'
+
+    doFirst {
+        standardOutput = new FileOutputStream(layout.buildDirectory.file('gen/Bindings.kt').get().getAsFile())
+    }
 }
 
 tasks.named('compileKotlin') {
-    dependsOn('generateBindings')
+    dependsOn 'generateBindings'
 }
 
 tasks.register('buildTestNative', Exec) {
@@ -86,7 +89,7 @@ tasks.register('buildTestNative', Exec) {
 }
 
 tasks.named('test') {
-    dependsOn('buildTestNative')
+    dependsOn 'buildTestNative'
     systemProperty('jna.library.path', '../../target/debug')
 }
 
